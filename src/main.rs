@@ -1,349 +1,317 @@
-//! neb — the nebula CLI.
-//!
-//! Arguments are parsed by hand rather than with a framework. The surface is
-//! five verbs, and `capture` has a five-second budget it must never miss.
+//! `neb` — capture a half-formed thought in five seconds, and trace where any
+//! idea came from years later.
 
 mod check;
+mod commands;
 mod model;
+mod render;
+mod store;
 
-use anyhow::{Result, bail};
-use model::*;
-use std::path::{Path, PathBuf};
+use clap::{Parser, Subcommand};
+use model::{EdgeType, Status, Strength, Verdict};
+use std::path::PathBuf;
 
-/// The corpus lives outside this repository. See README, "Repository boundary".
-fn root() -> Result<PathBuf> {
-    if let Ok(p) = std::env::var("NEBULA_ROOT") {
-        return Ok(PathBuf::from(p));
-    }
-    let home = std::env::var("HOME")?;
-    let default = PathBuf::from(&home).join(".nebula");
-    if default.exists() {
-        return Ok(default);
-    }
-    bail!("no corpus found. Set NEBULA_ROOT, or run `neb init <path>`.")
+#[derive(Parser)]
+#[command(
+    name = "neb",
+    version,
+    about = "Idea lineage graph",
+    long_about = "Capture a half-formed thought in five seconds. Trace where any idea came \
+                  from years later.\n\nIdeas branch, merge and die, so the structure is a \
+                  directed acyclic graph. Nothing is ever deleted: refuted and abandoned \
+                  ideas are what stop you re-treading ground.",
+    after_help = "The corpus lives outside this repository. It is found via --root, else \
+                  $NEBULA_ROOT, else ~/.nebula."
+)]
+struct Cli {
+    /// Corpus location. Defaults to `$NEBULA_ROOT`, else `~/.nebula`.
+    #[arg(long, global = true, value_name = "DIR")]
+    root: Option<PathBuf>,
+
+    /// Emit JSON instead of text, for scripts and agents.
+    #[arg(long, global = true)]
+    json: bool,
+
+    #[command(subcommand)]
+    command: Command,
 }
 
-fn today() -> String {
-    use time::{OffsetDateTime, macros::format_description};
-    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-    now.format(format_description!("[year]-[month]-[day]"))
-        .unwrap_or_default()
+#[derive(Subcommand)]
+enum Command {
+    /// Create an empty corpus.
+    Init {
+        /// Where to create it. Defaults to the resolved corpus location.
+        path: Option<PathBuf>,
+    },
+
+    /// Append a thought to the inbox. One line, no decisions, no parent.
+    ///
+    /// This is the five-second path. It deliberately asks nothing of you,
+    /// because a capture step that requires decisions is a capture step you
+    /// will skip at the exact moment the idea arrives.
+    Capture {
+        /// The thought, as you would say it out loud.
+        #[arg(required = true, trailing_var_arg = true)]
+        text: Vec<String>,
+    },
+
+    /// List captures that have not been promoted or dropped.
+    Inbox,
+
+    /// Discard an inbox entry. Struck through, never deleted.
+    Drop {
+        /// Inbox entry id, from `neb inbox`.
+        entry: String,
+    },
+
+    /// Turn an inbox entry into a seed node.
+    ///
+    /// Deliberately separate from capture. Most captures should never be
+    /// promoted, and dropping one is a normal outcome rather than a failure.
+    Promote {
+        /// Inbox entry id, from `neb inbox`.
+        entry: String,
+        /// Node title. Defaults to the captured text.
+        #[arg(long)]
+        title: Option<String>,
+        /// A parent this descends from. Repeat for a merge.
+        #[arg(long = "parent", value_name = "ID")]
+        parents: Vec<String>,
+        /// Labels.
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
+    },
+
+    /// Create a node directly, without going through the inbox.
+    New {
+        /// Node title.
+        title: String,
+        /// A parent this descends from. Repeat for a merge.
+        #[arg(long = "parent", value_name = "ID")]
+        parents: Vec<String>,
+        /// What would falsify this. Required to start above seed.
+        #[arg(long)]
+        kill: Option<String>,
+        /// Starting status.
+        #[arg(long, default_value = "seed")]
+        status: Status,
+        /// Labels.
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
+    },
+
+    /// Sharpen a seed into a hypothesis by naming what would kill it.
+    Sharpen {
+        /// Node id.
+        node: String,
+        /// The falsifier, written before any evidence arrives.
+        #[arg(long)]
+        kill: String,
+    },
+
+    /// Add a typed edge between two nodes.
+    Link {
+        /// Node the edge starts at.
+        from: String,
+        /// The relation.
+        kind: EdgeType,
+        /// Node the edge points at.
+        to: String,
+    },
+
+    /// Attach something that bears on whether the idea is true.
+    Evidence {
+        /// Node id.
+        node: String,
+        /// Which way it cuts.
+        #[arg(long)]
+        verdict: Verdict,
+        /// How much it is worth.
+        #[arg(long, default_value = "suggestive")]
+        strength: Strength,
+        /// Where it came from.
+        #[arg(long)]
+        source: String,
+        /// What it showed, and what is shaky about it.
+        #[arg(long)]
+        note: Option<String>,
+        /// Orbit task that produced it.
+        #[arg(long)]
+        task: Option<String>,
+    },
+
+    /// Attach context. A reference explains; it never bears on truth.
+    Cite {
+        /// Node id.
+        node: String,
+        /// Where it lives. A URL, DOI, path, or almanac wikilink.
+        #[arg(long)]
+        uri: String,
+        /// paper, study, article, note, discussion, book, dataset, thread, other.
+        #[arg(long, default_value = "other")]
+        kind: String,
+        /// Human-readable name.
+        #[arg(long)]
+        title: Option<String>,
+        /// Why this is attached. The only field that matters in a year.
+        #[arg(long)]
+        note: Option<String>,
+    },
+
+    /// Promote a reference into evidence, once you know which way it cuts.
+    Weigh {
+        /// Node id.
+        node: String,
+        /// Reference id, from `neb show`.
+        reference: String,
+        /// Which way it cuts.
+        #[arg(long)]
+        verdict: Verdict,
+        /// How much it is worth.
+        #[arg(long, default_value = "suggestive")]
+        strength: Strength,
+    },
+
+    /// Move a node to a new status, with the transition guards applied.
+    Status {
+        /// Node id.
+        node: String,
+        /// Target status.
+        status: Status,
+    },
+
+    /// Record work spawned to settle this node.
+    Task {
+        /// Node id.
+        node: String,
+        /// Orbit task id.
+        id: String,
+        /// What it is meant to settle.
+        #[arg(long)]
+        why: Option<String>,
+        /// Mark an existing link done or dropped.
+        #[arg(long)]
+        state: Option<String>,
+    },
+
+    /// Hand a node downstream to principia or orbit-research.
+    Graduate {
+        /// Node id.
+        node: String,
+        /// Where it went.
+        #[arg(long)]
+        to: String,
+    },
+
+    /// Walk ancestry. The feature the whole system exists for.
+    Trace {
+        /// Node id.
+        node: String,
+        /// Walk descendants instead of ancestors.
+        #[arg(long)]
+        down: bool,
+    },
+
+    /// What collapses if this node dies.
+    Impact {
+        /// Node id.
+        node: String,
+    },
+
+    /// Nodes that need attention.
+    Open,
+
+    /// Show one node in full.
+    Show {
+        /// Node id.
+        node: String,
+    },
+
+    /// List nodes.
+    List {
+        /// Only this status.
+        #[arg(long)]
+        status: Option<Status>,
+        /// Only nodes carrying this tag.
+        #[arg(long)]
+        tag: Option<String>,
+    },
+
+    /// Run the invariants. Exits non-zero on any error.
+    Check,
 }
 
-fn stamp() -> String {
-    use time::{OffsetDateTime, macros::format_description};
-    let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
-    now.format(format_description!("[year]-[month]-[day]T[hour]:[minute]"))
-        .unwrap_or_default()
-}
-
-/// Short, stable, pronounceable enough to retype from a glance.
-fn short_id(seed: &str) -> String {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in seed.as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x1000_0000_01b3);
-    }
-    format!("{:04x}", (h & 0xffff) as u16)
-}
-
-fn slugify(s: &str) -> String {
-    let mut out = String::new();
-    let mut dash = false;
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-            dash = false;
-        } else if !dash && !out.is_empty() {
-            out.push('-');
-            dash = true;
+fn main() -> std::process::ExitCode {
+    let cli = Cli::parse();
+    match run(cli) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("{} {e:#}", render::paint("31;1", "error:"));
+            std::process::ExitCode::FAILURE
         }
     }
-    out.trim_end_matches('-').chars().take(60).collect()
 }
 
-fn node_path(root: &Path, id: &str) -> PathBuf {
-    root.join("nodes").join(format!("{id}.md"))
-}
+fn run(cli: Cli) -> anyhow::Result<std::process::ExitCode> {
+    use commands as c;
+    let ok = std::process::ExitCode::SUCCESS;
+    let root = cli.root.clone();
+    let json = cli.json;
 
-/// Load every node in the corpus. Small corpus, so a full scan is cheaper
-/// than maintaining an index that could drift.
-fn load_all(root: &Path) -> Result<Vec<Doc>> {
-    let dir = root.join("nodes");
-    if !dir.exists() {
-        return Ok(vec![]);
-    }
-    let mut out = vec![];
-    for entry in std::fs::read_dir(&dir)? {
-        let p = entry?.path();
-        if p.extension().is_some_and(|e| e == "md") {
-            out.push(model::read(&p)?);
-        }
-    }
-    out.sort_by(|a, b| a.node.id.cmp(&b.node.id));
-    Ok(out)
-}
-
-// ---------------------------------------------------------------- capture --
-
-/// The five-second path. One line, no fields, no decisions. If this ever asks
-/// you to pick a parent you will stop using it, and the corpus dies with it.
-fn cmd_capture(args: &[String]) -> Result<()> {
-    let text = args.join(" ");
-    if text.trim().is_empty() {
-        bail!("neb capture \"the thought\"");
-    }
-    let root = root()?;
-    let dir = root.join("inbox");
-    std::fs::create_dir_all(&dir)?;
-    let now = stamp();
-    let month = &now[..7];
-    let id = short_id(&format!("{now}{text}"));
-    let line = format!("- [{id}] {now} {}\n", text.trim());
-
-    use std::io::Write;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join(format!("{month}.md")))?;
-    f.write_all(line.as_bytes())?;
-    println!("{id}");
-    Ok(())
-}
-
-fn cmd_inbox() -> Result<()> {
-    let root = root()?;
-    let dir = root.join("inbox");
-    if !dir.exists() {
-        println!("inbox is empty");
-        return Ok(());
-    }
-    let mut files: Vec<_> = std::fs::read_dir(&dir)?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .collect();
-    files.sort();
-    for f in files {
-        for line in std::fs::read_to_string(&f)?.lines() {
-            if !line.trim().is_empty() && !line.trim_start().starts_with("- ~~") {
-                println!("{line}");
-            }
-        }
-    }
-    Ok(())
-}
-
-// ---------------------------------------------------------------- promote --
-
-/// An inbox entry becomes a seed node. Deliberately a separate, explicit act:
-/// most captures should never be promoted, and dropping one is a normal
-/// outcome rather than a failure.
-fn cmd_promote(args: &[String]) -> Result<()> {
-    let mut entry = None;
-    let mut title = None;
-    let mut parents: Vec<String> = vec![];
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--title" => title = it.next().cloned(),
-            "--parent" => parents.extend(it.next().cloned()),
-            _ if entry.is_none() => entry = Some(a.clone()),
-            _ => bail!("unexpected argument: {a}"),
-        }
-    }
-    let entry = entry.ok_or_else(|| anyhow::anyhow!("neb promote <inbox-id> [--title T] [--parent ID]"))?;
-    let root = root()?;
-
-    // Find the inbox line and lift its text as the node's opening prose.
-    let mut found = None;
-    let dir = root.join("inbox");
-    let mut files: Vec<_> = std::fs::read_dir(&dir)?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .collect();
-    files.sort();
-    for f in &files {
-        let content = std::fs::read_to_string(f)?;
-        for line in content.lines() {
-            if line.contains(&format!("[{entry}]")) {
-                let text = line.splitn(3, ' ').nth(2).unwrap_or("").trim().to_string();
-                found = Some((f.clone(), line.to_string(), text));
-            }
-        }
-    }
-    let Some((file, line, text)) = found else {
-        bail!("no inbox entry [{entry}]");
-    };
-
-    let title = title.unwrap_or_else(|| text.clone());
-    let id = slugify(&title);
-    let path = node_path(&root, &id);
-    if path.exists() {
-        bail!("node {id} already exists");
-    }
-    std::fs::create_dir_all(root.join("nodes"))?;
-
-    let now = today();
-    let doc = Doc {
-        node: Node {
-            id: id.clone(),
+    match cli.command {
+        Command::Init { path } => c::init(root, path).map(|()| ok),
+        Command::Capture { text } => c::capture(root, &text.join(" ")).map(|()| ok),
+        Command::Inbox => c::inbox(root, json).map(|()| ok),
+        Command::Drop { entry } => c::drop_entry(root, &entry).map(|()| ok),
+        Command::Promote {
+            entry,
             title,
-            status: Status::Seed,
-            created: now.clone(),
-            updated: now,
-            kill: None,
-            tags: vec![],
-            edges: parents
-                .iter()
-                .map(|p| Edge { kind: EdgeType::DerivesFrom, to: p.clone() })
-                .collect(),
-            evidence: vec![],
-            references: vec![],
-            tasks: vec![],
-            origin: None,
-            graduated_to: None,
-        },
-        body: format!("{text}\n"),
-    };
-    model::write(&path, &doc)?;
-
-    // Strike the inbox entry rather than deleting it. Nothing in this system
-    // is ever removed, including the record of what a node started as.
-    let content = std::fs::read_to_string(&file)?;
-    let struck = content.replace(&line, &format!("- ~~{}~~ -> {id}", line.trim_start_matches("- ")));
-    std::fs::write(&file, struck)?;
-
-    println!("{}", path.display());
-    Ok(())
-}
-
-// ------------------------------------------------------------------- cite --
-
-fn cmd_cite(args: &[String]) -> Result<()> {
-    let (mut id, mut kind, mut uri, mut note, mut title) = (None, None, None, None, None);
-    let mut it = args.iter();
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--kind" => kind = it.next().cloned(),
-            "--uri" => uri = it.next().cloned(),
-            "--note" => note = it.next().cloned(),
-            "--title" => title = it.next().cloned(),
-            _ if id.is_none() => id = Some(a.clone()),
-            _ => bail!("unexpected argument: {a}"),
-        }
-    }
-    let id = id.ok_or_else(|| anyhow::anyhow!("neb cite <node> --uri U [--kind K] [--note N]"))?;
-    let uri = uri.ok_or_else(|| anyhow::anyhow!("--uri is required"))?;
-    let root = root()?;
-    let path = node_path(&root, &id);
-    let mut doc = model::read(&path)?;
-    let rid = format!("r{}", doc.node.references.len() + 1);
-    doc.node.references.push(Reference {
-        id: rid.clone(),
-        kind: kind.unwrap_or_else(|| "other".into()),
-        uri,
-        title,
-        note,
-        added: today(),
-        promoted_to: None,
-        origin: None,
-    });
-    doc.node.updated = today();
-    model::write(&path, &doc)?;
-    println!("{id} {rid}");
-    Ok(())
-}
-
-// ------------------------------------------------------------------ trace --
-
-/// Walk genealogy upward. This is the feature the whole system exists for;
-/// everything else is bookkeeping that keeps this walk honest.
-fn cmd_trace(args: &[String]) -> Result<()> {
-    let id = args.first().ok_or_else(|| anyhow::anyhow!("neb trace <node>"))?;
-    let root = root()?;
-    let docs = load_all(&root)?;
-    let by_id: std::collections::HashMap<&str, &Doc> =
-        docs.iter().map(|d| (d.node.id.as_str(), d)).collect();
-    if !by_id.contains_key(id.as_str()) {
-        bail!("no node {id}");
-    }
-    let mut seen = std::collections::HashSet::new();
-    walk(id, &by_id, "", 0, true, &mut seen);
-    Ok(())
-}
-
-fn walk(
-    id: &str,
-    by_id: &std::collections::HashMap<&str, &Doc>,
-    prefix: &str,
-    depth: usize,
-    last: bool,
-    seen: &mut std::collections::HashSet<String>,
-) {
-    let branch = if depth == 0 {
-        String::new()
-    } else if last {
-        format!("{prefix}`- ")
-    } else {
-        format!("{prefix}|- ")
-    };
-    let Some(doc) = by_id.get(id) else {
-        println!("{branch}{id}  [missing]");
-        return;
-    };
-    let n = &doc.node;
-    // A node reachable by two paths is a diamond, which is legal and expected.
-    // Print it in both places, but only expand it once.
-    let repeat = !seen.insert(id.to_string());
-    println!(
-        "{branch}{} [{}] {}{}",
-        n.id,
-        format!("{:?}", n.status).to_lowercase(),
-        n.title,
-        if repeat { "  (shown above)" } else { "" }
-    );
-    if repeat {
-        return;
-    }
-    let parents: Vec<&str> = n.parents().collect();
-    let child_prefix = if depth == 0 {
-        String::new()
-    } else {
-        format!("{prefix}{}", if last { "   " } else { "|  " })
-    };
-    for (i, p) in parents.iter().enumerate() {
-        walk(p, by_id, &child_prefix, depth + 1, i + 1 == parents.len(), seen);
-    }
-}
-
-// -------------------------------------------------------------------------
-
-fn usage() -> ! {
-    eprintln!(
-        "neb — idea lineage graph\n\
-         \n\
-           capture <text>            append a thought to the inbox\n\
-           inbox                     list unprocessed captures\n\
-           promote <id> [--title T] [--parent ID]\n\
-           cite <node> --uri U [--kind K] [--note N]\n\
-           trace <node>              walk ancestry\n\
-           check                     run the invariants\n\
-         \n\
-         corpus location: $NEBULA_ROOT, else ~/.nebula"
-    );
-    std::process::exit(2)
-}
-
-fn main() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some(cmd) = args.first() else { usage() };
-    let rest = &args[1..];
-    match cmd.as_str() {
-        "capture" => cmd_capture(rest),
-        "inbox" => cmd_inbox(),
-        "promote" => cmd_promote(rest),
-        "cite" => cmd_cite(rest),
-        "trace" => cmd_trace(rest),
-        "check" => check::run(&root()?),
-        "-h" | "--help" | "help" => usage(),
-        other => bail!("unknown command: {other}"),
+            parents,
+            tags,
+        } => c::promote(root, &entry, title, &parents, &tags).map(|()| ok),
+        Command::New {
+            title,
+            parents,
+            kill,
+            status,
+            tags,
+        } => c::new_node(root, &title, &parents, kill, status, &tags).map(|()| ok),
+        Command::Sharpen { node, kill } => c::sharpen(root, &node, &kill).map(|()| ok),
+        Command::Link { from, kind, to } => c::link(root, &from, kind, &to).map(|()| ok),
+        Command::Evidence {
+            node,
+            verdict,
+            strength,
+            source,
+            note,
+            task,
+        } => c::evidence(root, &node, verdict, strength, &source, note, task).map(|()| ok),
+        Command::Cite {
+            node,
+            uri,
+            kind,
+            title,
+            note,
+        } => c::cite(root, &node, &uri, &kind, title, note).map(|()| ok),
+        Command::Weigh {
+            node,
+            reference,
+            verdict,
+            strength,
+        } => c::weigh(root, &node, &reference, verdict, strength).map(|()| ok),
+        Command::Status { node, status } => c::set_status(root, &node, status).map(|()| ok),
+        Command::Task {
+            node,
+            id,
+            why,
+            state,
+        } => c::task(root, &node, &id, why, state).map(|()| ok),
+        Command::Graduate { node, to } => c::graduate(root, &node, &to).map(|()| ok),
+        Command::Trace { node, down } => c::trace(root, &node, down, json).map(|()| ok),
+        Command::Impact { node } => c::impact(root, &node, json).map(|()| ok),
+        Command::Open => c::open(root, json).map(|()| ok),
+        Command::Show { node } => c::show(root, &node, json).map(|()| ok),
+        Command::List { status, tag } => c::list(root, status, tag.as_deref(), json).map(|()| ok),
+        Command::Check => c::check(root, json),
     }
 }

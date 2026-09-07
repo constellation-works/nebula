@@ -1,0 +1,567 @@
+//! End-to-end tests over a real corpus in a temporary directory.
+//!
+//! These drive the built binary rather than library functions, because the
+//! things most likely to break are the transition guards and the exit codes,
+//! and both live at the edge.
+//!
+//! Paths are used exactly as the temporary directory reports them and are never
+//! canonicalized or compared against a resolved form. On macOS the temporary
+//! directory sits under a symlink, and a checker that resolved paths would pass
+//! on Linux and fail here.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+fn bin() -> PathBuf {
+    let mut p = std::env::current_exe().expect("test binary path");
+    p.pop();
+    if p.ends_with("deps") {
+        p.pop();
+    }
+    p.join("neb")
+}
+
+struct Corpus {
+    _dir: tempfile::TempDir,
+    root: PathBuf,
+}
+
+impl Corpus {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("corpus");
+        let me = Self { _dir: dir, root };
+        me.run(&["init"]).assert_ok();
+        me
+    }
+
+    fn run(&self, args: &[&str]) -> Run {
+        let out = Command::new(bin())
+            .arg("--root")
+            .arg(&self.root)
+            .args(args)
+            .env("NO_COLOR", "1")
+            .env_remove("NEBULA_ROOT")
+            .output()
+            .expect("running neb");
+        Run {
+            args: args.join(" "),
+            out,
+        }
+    }
+
+    fn node_file(&self, id: &str) -> PathBuf {
+        self.root.join("nodes").join(format!("{id}.md"))
+    }
+
+    /// Create a seed by capturing then promoting, the normal path.
+    fn seed(&self, text: &str, title: &str) -> String {
+        let id = self.run(&["capture", text]).stdout_trim();
+        self.run(&["promote", &id, "--title", title])
+            .assert_ok()
+            .stdout_trim()
+    }
+}
+
+struct Run {
+    args: String,
+    out: Output,
+}
+
+impl Run {
+    fn assert_ok(self) -> Self {
+        assert!(
+            self.out.status.success(),
+            "`neb {}` failed:\n{}\n{}",
+            self.args,
+            String::from_utf8_lossy(&self.out.stdout),
+            String::from_utf8_lossy(&self.out.stderr)
+        );
+        self
+    }
+    fn assert_fails(self) -> Self {
+        assert!(
+            !self.out.status.success(),
+            "`neb {}` unexpectedly succeeded",
+            self.args
+        );
+        self
+    }
+    fn stdout(&self) -> String {
+        String::from_utf8_lossy(&self.out.stdout).to_string()
+    }
+    fn stderr(&self) -> String {
+        String::from_utf8_lossy(&self.out.stderr).to_string()
+    }
+    fn stdout_trim(&self) -> String {
+        self.stdout()
+            .split_whitespace()
+            .next()
+            .unwrap_or_default()
+            .to_string()
+    }
+    fn says(self, needle: &str) -> Self {
+        let all = format!("{}{}", self.stdout(), self.stderr());
+        assert!(
+            all.contains(needle),
+            "expected `{needle}` in output of `neb {}`:\n{all}",
+            self.args
+        );
+        self
+    }
+}
+
+fn write(path: &Path, s: &str) {
+    std::fs::write(path, s).expect("writing fixture");
+}
+
+// ------------------------------------------------------------------ capture --
+
+#[test]
+fn capture_then_promote_leaves_the_original_text_in_the_node() {
+    let c = Corpus::new();
+    let entry = c
+        .run(&[
+            "capture",
+            "ranking decay looks like a half-life, not a cliff",
+        ])
+        .assert_ok();
+    let id = entry.stdout_trim();
+    c.run(&["inbox"]).assert_ok().says(&id).says("half-life");
+
+    let node = c
+        .run(&["promote", &id, "--title", "Ranking decay half-life"])
+        .assert_ok();
+    let node_id = node.stdout_trim();
+    assert_eq!(node_id, "ranking-decay-half-life");
+
+    let body = std::fs::read_to_string(c.node_file(&node_id)).unwrap();
+    assert!(
+        body.contains("half-life, not a cliff"),
+        "capture text should survive promotion"
+    );
+}
+
+#[test]
+fn promoted_and_dropped_entries_leave_the_inbox_but_stay_on_disk() {
+    let c = Corpus::new();
+    let keep = c.run(&["capture", "worth keeping"]).stdout_trim();
+    let toss = c.run(&["capture", "not worth keeping"]).stdout_trim();
+
+    c.run(&["promote", &keep, "--title", "Worth keeping"])
+        .assert_ok();
+    c.run(&["drop", &toss]).assert_ok();
+
+    let listing = c.run(&["inbox"]).assert_ok().stdout();
+    assert!(
+        !listing.contains(&keep) && !listing.contains(&toss),
+        "both should be settled"
+    );
+
+    // Nothing is deleted: the record of what was captured, and what became of
+    // it, is the part that stops you re-treading ground.
+    let month = std::fs::read_dir(c.root.join("inbox"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
+    let raw = std::fs::read_to_string(month.path()).unwrap();
+    assert!(
+        raw.contains("not worth keeping"),
+        "dropped text must remain on disk"
+    );
+    assert!(raw.contains("dropped"), "drop should be recorded");
+    assert!(
+        raw.contains("worth-keeping"),
+        "promotion should name the node it became"
+    );
+}
+
+#[test]
+fn capture_works_before_a_corpus_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("fresh");
+    let out = Command::new(bin())
+        .arg("--root")
+        .arg(&root)
+        .args(["capture", "the thought arrives before the setup"])
+        .env_remove("NEBULA_ROOT")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "capture must never be blocked by missing setup"
+    );
+    assert!(root.join("inbox").is_dir());
+}
+
+// ------------------------------------------------------------------- graph --
+
+#[test]
+fn a_node_can_descend_from_two_parents_and_trace_shows_the_diamond() {
+    let c = Corpus::new();
+    let a = c.seed("gravity might be about scarcity", "Gravity as scarcity");
+    let b = c.seed(
+        "a moving source should drag the field",
+        "Moving source drag",
+    );
+
+    c.run(&[
+        "new",
+        "Retardation in the wake",
+        "--parent",
+        &a,
+        "--parent",
+        &b,
+    ])
+    .assert_ok();
+
+    let tree = c
+        .run(&["trace", "retardation-in-the-wake"])
+        .assert_ok()
+        .stdout();
+    assert!(
+        tree.contains(&a) && tree.contains(&b),
+        "both parents belong in the trace:\n{tree}"
+    );
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+#[test]
+fn a_shared_ancestor_is_reached_by_both_branches_and_expanded_once() {
+    let c = Corpus::new();
+    let root_id = c.seed("space might have a density of something", "Density hunch");
+    c.run(&["new", "Left branch", "--parent", &root_id])
+        .assert_ok();
+    c.run(&["new", "Right branch", "--parent", &root_id])
+        .assert_ok();
+    c.run(&[
+        "new",
+        "Synthesis",
+        "--parent",
+        "left-branch",
+        "--parent",
+        "right-branch",
+    ])
+    .assert_ok();
+
+    let tree = c.run(&["trace", "synthesis"]).assert_ok().stdout();
+    assert_eq!(
+        tree.matches(&root_id).count(),
+        2,
+        "the shared ancestor appears on both branches"
+    );
+    assert!(
+        tree.contains("shown above"),
+        "but it is only expanded once:\n{tree}"
+    );
+}
+
+#[test]
+fn genealogy_cycles_are_refused_at_the_point_of_linking() {
+    let c = Corpus::new();
+    let a = c.seed("first", "First");
+    c.run(&["new", "Second", "--parent", &a]).assert_ok();
+    c.run(&["link", &a, "derives-from", "second"])
+        .assert_fails()
+        .says("its own ancestor");
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+#[test]
+fn a_supports_cycle_is_a_warning_not_an_error() {
+    let c = Corpus::new();
+    let a = c.seed("first", "First");
+    let b = c.seed("second", "Second");
+    c.run(&["link", &a, "supports", &b]).assert_ok();
+    c.run(&["link", &b, "supports", &a]).assert_ok();
+    // Circular reasoning is worth noticing and not worth blocking on: sometimes
+    // two ideas really do lean on each other and saying so is the honest record.
+    c.run(&["check"])
+        .assert_ok()
+        .says("circular reasoning")
+        .says("0 errors");
+}
+
+#[test]
+fn contradicts_is_recorded_on_both_nodes() {
+    let c = Corpus::new();
+    let a = c.seed("first", "First");
+    let b = c.seed("second", "Second");
+    c.run(&["link", &a, "contradicts", &b]).assert_ok();
+    c.run(&["show", &b])
+        .assert_ok()
+        .says("contradicts")
+        .says(&a);
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+#[test]
+fn impact_reports_what_leans_on_a_node() {
+    let c = Corpus::new();
+    let base = c.seed("foundation", "Foundation");
+    let dep = c.seed("built on it", "Dependent");
+    c.run(&["link", &dep, "depends-on", &base]).assert_ok();
+    c.run(&["impact", &base])
+        .assert_ok()
+        .says(&dep)
+        .says("dies with it");
+}
+
+// -------------------------------------------------------------- discipline --
+
+#[test]
+fn a_hypothesis_must_name_what_would_kill_it() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&["status", &id, "hypothesis"])
+        .assert_fails()
+        .says("kill condition");
+    c.run(&[
+        "sharpen",
+        &id,
+        "--kill",
+        "if the effect vanishes under control",
+    ])
+    .assert_ok();
+    c.run(&["show", &id])
+        .assert_ok()
+        .says("hypothesis")
+        .says("vanishes under control");
+}
+
+#[test]
+fn a_verdict_must_rest_on_evidence() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
+    c.run(&["status", &id, "supported"])
+        .assert_fails()
+        .says("nothing supports");
+
+    c.run(&[
+        "evidence",
+        &id,
+        "--verdict",
+        "supports",
+        "--source",
+        "sim://run-1",
+    ])
+    .assert_ok();
+    c.run(&["status", &id, "supported"]).assert_ok();
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+#[test]
+fn a_refuted_idea_cannot_quietly_come_back() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
+    c.run(&[
+        "evidence",
+        &id,
+        "--verdict",
+        "undermines",
+        "--source",
+        "sim://run-2",
+    ])
+    .assert_ok();
+    c.run(&["status", &id, "refuted"]).assert_ok();
+
+    // Reviving it takes a new node with a `reopens` edge, so the fact that it
+    // was once ruled out stays visible in the graph.
+    c.run(&["status", &id, "hypothesis"])
+        .assert_fails()
+        .says("cannot simply reopen");
+    c.run(&[
+        "new",
+        "Second attempt",
+        "--kill",
+        "if Y",
+        "--status",
+        "hypothesis",
+    ])
+    .assert_ok();
+    c.run(&["link", "second-attempt", "reopens", &id])
+        .assert_ok();
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+#[test]
+fn a_reference_cannot_smuggle_in_a_verdict() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let mut raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    raw = raw.replace(
+        "status: seed",
+        "status: seed\nreferences:\n- id: r1\n  kind: paper\n  uri: http://example.com\n  added: 2026-09-06\n  verdict: supports",
+    );
+    write(&c.node_file(&id), &raw);
+    // The separation between context and evidence is the discipline the whole
+    // system exists to impose, so it fails to parse rather than merely warning.
+    c.run(&["check"])
+        .assert_fails()
+        .says("unknown field `verdict`");
+}
+
+#[test]
+fn weighing_a_reference_keeps_the_reading_history() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&[
+        "cite",
+        &id,
+        "--uri",
+        "doi:10.1000/x",
+        "--kind",
+        "paper",
+        "--note",
+        "read this",
+    ])
+    .assert_ok();
+    c.run(&[
+        "weigh",
+        &id,
+        "r1",
+        "--verdict",
+        "undermines",
+        "--strength",
+        "strong",
+    ])
+    .assert_ok();
+
+    let shown = c.run(&["show", &id]).assert_ok().stdout();
+    assert!(shown.contains("r1"), "the reference stays put");
+    assert!(
+        shown.contains("ev1"),
+        "and the evidence it became appears too"
+    );
+    c.run(&["weigh", &id, "r1", "--verdict", "supports"])
+        .assert_fails()
+        .says("already weighed");
+}
+
+#[test]
+fn evidence_ids_are_never_reused() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&["evidence", &id, "--verdict", "supports", "--source", "a"])
+        .assert_ok();
+    c.run(&["evidence", &id, "--verdict", "supports", "--source", "b"])
+        .assert_ok();
+
+    let mut raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    raw = raw.replace("  id: ev1\n", "  id: evX\n"); // simulate a removal
+    write(&c.node_file(&id), &raw);
+    c.run(&["evidence", &id, "--verdict", "supports", "--source", "c"])
+        .assert_ok();
+
+    let shown = c.run(&["show", &id]).assert_ok().stdout();
+    assert!(
+        shown.contains("ev3"),
+        "the next id counts past the highest ever issued:\n{shown}"
+    );
+}
+
+#[test]
+fn graduating_must_say_where_the_idea_went() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&["status", &id, "graduated"])
+        .assert_fails()
+        .says("--to");
+    // Downstream demands a falsifier, so graduating without one is refused here
+    // rather than exporting the gap to principia.
+    c.run(&["graduate", &id, "--to", "principia://x"])
+        .assert_fails()
+        .says("no kill condition");
+    c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
+    c.run(&["graduate", &id, "--to", "principia://theory/an-idea"])
+        .assert_ok();
+    c.run(&["show", &id])
+        .assert_ok()
+        .says("principia://theory/an-idea");
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+#[test]
+fn malformed_task_ids_are_caught() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&["task", &id, "ORB-oops"]).assert_ok();
+    c.run(&["check"])
+        .assert_fails()
+        .says("malformed Orbit task id");
+    c.run(&["task", &id, "ORB-11440", "--state", "open"])
+        .assert_ok();
+}
+
+#[test]
+fn dangling_edges_are_caught() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let mut raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    raw = raw.replace(
+        "status: seed",
+        "status: seed\nedges:\n- type: derives-from\n  to: ghost",
+    );
+    write(&c.node_file(&id), &raw);
+    c.run(&["check"]).assert_fails().says("missing node");
+}
+
+// ------------------------------------------------------------------ triage --
+
+#[test]
+fn open_finds_the_hypothesis_with_nothing_running() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
+    c.run(&["open"])
+        .assert_ok()
+        .says("no evidence and no task running");
+
+    c.run(&["task", &id, "ORB-11440", "--why", "run the sim"])
+        .assert_ok();
+    let after = c.run(&["open"]).assert_ok().stdout();
+    assert!(
+        !after.contains("no task running"),
+        "a spawned task closes the gap:\n{after}"
+    );
+}
+
+#[test]
+fn json_output_is_machine_readable() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let out = c.run(&["--json", "show", &id]).assert_ok().stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).expect("show --json is valid JSON");
+    assert_eq!(v["id"], id);
+
+    let out = c.run(&["--json", "check"]).assert_ok().stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).expect("check --json is valid JSON");
+    assert_eq!(v["nodes"], 1);
+}
+
+#[test]
+fn an_empty_corpus_is_valid() {
+    let c = Corpus::new();
+    c.run(&["check"]).assert_ok().says("0 nodes, 0 errors");
+    c.run(&["list"]).assert_ok().says("no nodes match");
+}
+
+#[test]
+fn round_tripping_a_node_preserves_prose_and_fields() {
+    let c = Corpus::new();
+    let id = c.seed("the original thought", "The original thought");
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    c.run(&["cite", &id, "--uri", "http://example.com", "--note", "why"])
+        .assert_ok();
+    let after = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(
+        after.contains("the original thought"),
+        "prose survives a write:\n{after}"
+    );
+    assert!(
+        before.contains("id: the-original-thought") && after.contains("id: the-original-thought")
+    );
+}
