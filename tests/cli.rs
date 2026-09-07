@@ -195,6 +195,15 @@ fn capture_works_before_a_corpus_exists() {
     assert!(root.join("inbox").is_dir());
 }
 
+#[test]
+fn zsh_completions_include_the_cli_commands() {
+    let c = Corpus::new();
+    c.run(&["completions", "zsh"])
+        .assert_ok()
+        .says("#compdef neb")
+        .says("capture");
+}
+
 // ------------------------------------------------------------------- graph --
 
 #[test]

@@ -2,7 +2,7 @@
 //! arguments to `commands`. Nothing else in the crate depends on clap.
 
 use crate::corpus::{EdgeType, Status, Strength, Verdict};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -261,6 +261,12 @@ enum Command {
 
     /// Run the invariants. Exits non-zero on any error.
     Check,
+
+    /// Generate shell completion scripts.
+    Completions {
+        /// The shell to generate completions for.
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Subcommand)]
@@ -382,5 +388,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
         .map(|()| ok),
         Command::Check => c::check(root, json),
+        Command::Completions { shell } => {
+            clap_complete::generate(shell, &mut Cli::command(), "neb", &mut std::io::stdout());
+            Ok(ok)
+        }
     }
 }
