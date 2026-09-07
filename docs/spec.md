@@ -10,6 +10,12 @@ related: ["[[principia]]", "[[orbit-research]]"]
 
 # Nebula
 
+> This is the original design conversation, kept as the record of why the system
+> is shaped this way. The maintained documentation is
+> [docs/design/lineage-graph/](design/lineage-graph/1_overview.md) for design and
+> [docs/runbooks/](runbooks/corpus-setup.md) for operation. Where they disagree,
+> those are right and this is history.
+
 A place to put an idea the moment you have it, and a way to trace where any
 idea came from years later.
 
@@ -381,17 +387,16 @@ allowed, rebuilt from the markdown, never the source of truth.
 
 ## Milestone
 
-v0.1 is `capture`, `promote`, `cite`, `trace`, and `check`. Nothing else.
-`cite` earns its place because a node with no context is not worth reopening,
-and attaching a link is nearly as cheap as capture itself.
+**Shipped in v0.1**, wider than this document originally planned because the
+lifecycle verbs turned out to be unusable without each other: `capture`, `inbox`,
+`promote`, `drop`, `new`, `sharpen`, `link`, `evidence`, `cite`, `weigh`,
+`status`, `task`, `graduate`, `trace`, `impact`, `open`, `show`, `list`, `check`,
+plus `--json` on every read command.
 
-The `origin` and `tasks` fields are written into the schema from day one so
-there is no migration later, but the `neb task` command and the online
-reconciliation in `check` are v0.2. Until then those fields are filled in by
-hand or by an agent that already knows the task id. Live on it
-for two weeks with real ideas, accumulate roughly fifty real nodes, and only
-then decide whether the rest of this schema survives contact with your actual
-habits. Everything above the capture path is a guess until then.
+What has not been built is everything above the corpus: no maintenance agent, no
+browser, no Orbit tool surface. Those wait on evidence. Live on this for two
+weeks, accumulate roughly fifty real nodes, and only then decide whether the rest
+of this document survives contact with your actual habits.
 
 ## Worked example
 
