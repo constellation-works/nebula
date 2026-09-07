@@ -19,5 +19,6 @@ jobs:
         with: { components: rustfmt, clippy }
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
+      - run: ./scripts/release-check.sh
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all-targets
