@@ -6,7 +6,7 @@ name: dependabot-alert-sweep-nebula
 description: >
   Daily host-side collection of bounded, redacted Dependabot alert evidence,
   followed by deterministic filing of deduped dependency-remediation tasks.
-enabled: false
+enabled: true
 hosts:
   - Daniels-Mac-mini.local
 trigger:
