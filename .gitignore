@@ -2,3 +2,9 @@
 .DS_Store
 # The corpus never lives in this repo. See docs/spec.md, "Repository boundary".
 /corpus
+.orbit/*
+!.orbit/auto_tasks/
+!.orbit/resources/
+!.orbit/routines/
+!.orbit/config.toml
+.orbit/**/*.lock
