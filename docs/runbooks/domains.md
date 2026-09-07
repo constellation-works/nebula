@@ -74,12 +74,14 @@ what it descends from.
 
 A corpus created before `config.yaml` existed loads with a single `general`
 domain and nodes that name none. `neb check` reports each as rule 15, and
-`neb domain list` counts them. Place them:
+`neb domain list` counts them. Place them all at once:
 
 ```sh
-neb list --all --json | jq -r '.[] | select(.domain == null) | .id' \
-  | xargs -I{} neb domain set {} general
+neb domain set --unplaced general
 ```
+
+This prints each node it places and a final count. Nodes that already have a
+domain are left untouched.
 
 Then declare the domains you actually want and move nodes into them.
 

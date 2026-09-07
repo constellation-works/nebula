@@ -303,10 +303,14 @@ enum DomainCommand {
     },
     /// Move a node to a domain.
     Set {
-        /// Node id.
-        node: String,
-        /// A declared domain.
-        name: String,
+        /// Node id. Omit when using `--unplaced`.
+        #[arg(conflicts_with = "unplaced")]
+        node: Option<String>,
+        /// A declared domain for a single node.
+        name: Option<String>,
+        /// Place every node whose domain is empty into this declared domain.
+        #[arg(long, value_name = "DOMAIN", conflicts_with = "node")]
+        unplaced: Option<String>,
     },
 }
 
@@ -421,7 +425,11 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             DomainCommand::List => c::domain_list(root, json),
             DomainCommand::Add { name } => c::domain_add(root, &name),
             DomainCommand::Default { name } => c::domain_default(root, &name),
-            DomainCommand::Set { node, name } => c::domain_set(root, &node, &name),
+            DomainCommand::Set {
+                node,
+                name,
+                unplaced,
+            } => c::domain_set(root, node.as_deref(), name.as_deref(), unplaced.as_deref()),
         }
         .map(|()| ok),
         Command::Check => c::check(root, json),
