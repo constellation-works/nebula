@@ -207,6 +207,55 @@ fn zsh_completions_include_the_cli_commands() {
 // ------------------------------------------------------------------- graph --
 
 #[test]
+fn orbit_provenance_is_recorded_only_when_supplied() {
+    let c = Corpus::new();
+    c.run(&[
+        "new",
+        "Orbit-produced idea",
+        "--task",
+        "ORB-12345",
+        "--run",
+        "jrun-20260907-0001",
+    ])
+    .assert_ok();
+    let raw = std::fs::read_to_string(c.node_file("orbit-produced-idea")).unwrap();
+    assert!(raw.contains("origin:\n  task: ORB-12345\n  run: jrun-20260907-0001"));
+
+    c.run(&["new", "Unattributed idea"]).assert_ok();
+    let raw = std::fs::read_to_string(c.node_file("unattributed-idea")).unwrap();
+    assert!(!raw.contains("origin:"));
+
+    let cited = c.seed("context", "Context");
+    c.run(&[
+        "cite",
+        &cited,
+        "--uri",
+        "https://example.com",
+        "--task",
+        "ORB-12345",
+    ])
+    .assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&cited)).unwrap();
+    assert!(raw.contains("references:"));
+    assert!(raw.contains("task: ORB-12345"));
+
+    let entry = c
+        .run(&["capture", "promoted with provenance"])
+        .stdout_trim();
+    c.run(&[
+        "promote",
+        &entry,
+        "--title",
+        "Promoted with provenance",
+        "--run",
+        "jrun-20260907-0002",
+    ])
+    .assert_ok();
+    let raw = std::fs::read_to_string(c.node_file("promoted-with-provenance")).unwrap();
+    assert!(raw.contains("run: jrun-20260907-0002"));
+}
+
+#[test]
 fn a_node_can_descend_from_two_parents_and_trace_shows_the_diamond() {
     let c = Corpus::new();
     let a = c.seed("gravity might be about scarcity", "Gravity as scarcity");

@@ -56,6 +56,7 @@ pub fn evidence(
 }
 
 /// Attach context that does not bear on truth.
+#[allow(clippy::too_many_arguments)]
 pub fn cite(
     root: Option<PathBuf>,
     node_id: &str,
@@ -63,6 +64,8 @@ pub fn cite(
     kind: &str,
     title: Option<String>,
     note: Option<String>,
+    task: Option<String>,
+    run: Option<String>,
 ) -> Result<()> {
     let store = store_at(root)?;
     let mut doc = store.load(node_id)?;
@@ -76,7 +79,11 @@ pub fn cite(
         note,
         added: store::today(),
         promoted_to: None,
-        origin: None,
+        origin: (task.is_some() || run.is_some()).then_some(Origin {
+            task,
+            run,
+            ..Origin::default()
+        }),
     });
     store.save(&mut doc)?;
     println!("{} {}", bold(node_id), bold(&id));
