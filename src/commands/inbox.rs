@@ -2,8 +2,8 @@
 
 use super::node::{NodeSpec, build};
 use super::{out_json, store_at};
-use crate::corpus::Status;
 use crate::corpus::Store;
+use crate::corpus::{Origin, Status};
 use crate::render::{bold, dim};
 use anyhow::{Result, bail};
 use std::path::PathBuf;
@@ -91,6 +91,7 @@ pub fn drop_entry(root: Option<PathBuf>, entry: &str) -> Result<()> {
 }
 
 /// Inbox entry becomes a seed node.
+#[allow(clippy::too_many_arguments)]
 pub fn promote(
     root: Option<PathBuf>,
     entry: &str,
@@ -98,6 +99,8 @@ pub fn promote(
     domain: Option<&str>,
     parents: &[String],
     tags: &[String],
+    task: Option<String>,
+    run: Option<String>,
 ) -> Result<()> {
     let store = store_at(root)?;
     let e = store.inbox_entry(entry)?;
@@ -109,6 +112,11 @@ pub fn promote(
         kill: None,
         status: Status::Seed,
         tags,
+        origin: (task.is_some() || run.is_some()).then_some(Origin {
+            task,
+            run,
+            ..Origin::default()
+        }),
         body: &e.text,
     };
     let doc = build(&store, &spec)?;

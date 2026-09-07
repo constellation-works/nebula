@@ -78,6 +78,12 @@ enum Command {
         /// Labels.
         #[arg(long = "tag", value_name = "TAG")]
         tags: Vec<String>,
+        /// Orbit task that produced it.
+        #[arg(long)]
+        task: Option<String>,
+        /// Orbit run that produced it.
+        #[arg(long)]
+        run: Option<String>,
     },
 
     /// Create a node directly, without going through the inbox.
@@ -99,6 +105,12 @@ enum Command {
         /// Labels.
         #[arg(long = "tag", value_name = "TAG")]
         tags: Vec<String>,
+        /// Orbit task that produced it.
+        #[arg(long)]
+        task: Option<String>,
+        /// Orbit run that produced it.
+        #[arg(long)]
+        run: Option<String>,
     },
 
     /// Sharpen a seed into a hypothesis by naming what would kill it.
@@ -157,6 +169,12 @@ enum Command {
         /// Why this is attached. The only field that matters in a year.
         #[arg(long)]
         note: Option<String>,
+        /// Orbit task that produced it.
+        #[arg(long)]
+        task: Option<String>,
+        /// Orbit run that produced it.
+        #[arg(long)]
+        run: Option<String>,
     },
 
     /// Promote a reference into evidence, once you know which way it cuts.
@@ -304,6 +322,7 @@ pub fn main() -> ExitCode {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     use crate::commands as c;
     let ok = ExitCode::SUCCESS;
@@ -321,7 +340,19 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             domain,
             parents,
             tags,
-        } => c::promote(root, &entry, title, domain.as_deref(), &parents, &tags).map(|()| ok),
+            task,
+            run,
+        } => c::promote(
+            root,
+            &entry,
+            title,
+            domain.as_deref(),
+            &parents,
+            &tags,
+            task,
+            run,
+        )
+        .map(|()| ok),
         Command::New {
             title,
             domain,
@@ -329,6 +360,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             kill,
             status,
             tags,
+            task,
+            run,
         } => c::new_node(
             root,
             &title,
@@ -337,6 +370,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             kill,
             status,
             &tags,
+            task,
+            run,
         )
         .map(|()| ok),
         Command::Sharpen { node, kill } => c::sharpen(root, &node, &kill).map(|()| ok),
@@ -355,7 +390,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             kind,
             title,
             note,
-        } => c::cite(root, &node, &uri, &kind, title, note).map(|()| ok),
+            task,
+            run,
+        } => c::cite(root, &node, &uri, &kind, title, note, task, run).map(|()| ok),
         Command::Weigh {
             node,
             reference,

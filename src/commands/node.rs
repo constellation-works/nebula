@@ -1,13 +1,14 @@
 //! Node lifecycle: create, sharpen, link, move status, record work, graduate.
 
 use super::store_at;
-use crate::corpus::{Doc, Store};
+use crate::corpus::{Doc, Origin, Store};
 use crate::corpus::{Edge, EdgeType, Node, Status, TaskLink, Verdict, store};
 use crate::render::{bold, dim};
 use anyhow::{Result, bail};
 use std::path::PathBuf;
 
 /// Create a node directly.
+#[allow(clippy::too_many_arguments)]
 pub fn new_node(
     root: Option<PathBuf>,
     title: &str,
@@ -16,6 +17,8 @@ pub fn new_node(
     kill: Option<String>,
     status: Status,
     tags: &[String],
+    task: Option<String>,
+    run: Option<String>,
 ) -> Result<()> {
     let store = store_at(root)?;
     if status.needs_kill() && kill.is_none() {
@@ -28,6 +31,11 @@ pub fn new_node(
         kill,
         status,
         tags,
+        origin: (task.is_some() || run.is_some()).then_some(Origin {
+            task,
+            run,
+            ..Origin::default()
+        }),
         body: "",
     };
     let doc = build(&store, &spec)?;
@@ -50,6 +58,7 @@ pub(super) struct NodeSpec<'a> {
     pub(super) kill: Option<String>,
     pub(super) status: Status,
     pub(super) tags: &'a [String],
+    pub(super) origin: Option<Origin>,
     pub(super) body: &'a str,
 }
 
@@ -86,7 +95,7 @@ pub(super) fn build(store: &Store, spec: &NodeSpec<'_>) -> Result<Doc> {
             evidence: vec![],
             references: vec![],
             tasks: vec![],
-            origin: None,
+            origin: spec.origin.clone(),
             graduated_to: None,
         },
         body: spec.body.to_string(),
