@@ -6,8 +6,13 @@ use crate::corpus::{Doc, EdgeType, Status, Store, Verdict};
 use std::collections::HashSet;
 
 fn is_task_id(s: &str) -> bool {
-    s.strip_prefix("ORB-")
-        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    let Some((prefix, digits)) = s.split_once('-') else {
+        return false;
+    };
+    (2..=5).contains(&prefix.len())
+        && prefix.bytes().all(|b| b.is_ascii_uppercase())
+        && !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
 fn is_local_path(uri: &str) -> bool {
@@ -203,7 +208,9 @@ fn provenance_rules(doc: &Doc, store: &Store, r: &mut Report) {
                 Level::Error,
                 13,
                 id,
-                format!("malformed Orbit task id `{t}` (expected ORB-nnnnn)"),
+                format!(
+                    "malformed Orbit task id `{t}` (expected PREFIX-nnnnn, e.g. ORB-11440 or DANI-10293)"
+                ),
             );
         }
     }
