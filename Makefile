@@ -1,4 +1,4 @@
-.PHONY: help build release run dev check test fmt fmt-check clippy audit tree ci ci-fast install uninstall clean corpus-check watch
+.PHONY: help build release run dev check test fmt fmt-check release-check clippy audit tree ci ci-fast install uninstall clean corpus-check watch
 
 # ------------------------------------------------------------
 # Config
@@ -41,6 +41,7 @@ help:
 	@echo "  make test          Run all tests"
 	@echo "  make fmt           Format code"
 	@echo "  make fmt-check     Check formatting"
+	@echo "  make release-check Verify Cargo/CHANGELOG version lockstep"
 	@echo "  make clippy        Lint with clippy (deny warnings)"
 	@echo "  make audit         Supply-chain audit (cargo-deny)"
 	@echo "  make tree          Print dependency tree"
@@ -87,6 +88,9 @@ fmt:
 fmt-check:
 	$(CARGO) fmt --all -- --check
 
+release-check:
+	./scripts/release-check.sh
+
 clippy:
 	$(CARGO) clippy --all-targets -- -D warnings
 
@@ -100,7 +104,7 @@ tree:
 	$(CARGO) tree -e features
 
 # Full CI pass. Keep aligned with .github/workflows/ci.yml.
-ci: fmt-check clippy test
+ci: fmt-check release-check clippy test
 
 # Pre-handoff gate for agents: no compile.
 ci-fast: fmt-check
