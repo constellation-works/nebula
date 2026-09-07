@@ -1,0 +1,4 @@
+/target
+.DS_Store
+# The corpus never lives in this repo. See docs/spec.md, "Repository boundary".
+/corpus
