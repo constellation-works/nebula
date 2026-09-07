@@ -62,6 +62,30 @@ Use a second corpus only for a second owner. Work and personal ideas belong in
 separate corpora, each with its own `NEBULA_ROOT`; principia and economics
 belong in one.
 
+## Shell completions
+
+For zsh, generate the completion function and load it from your zsh startup:
+
+```sh
+mkdir -p ~/.zfunc
+neb completions zsh > ~/.zfunc/_neb
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit && compinit
+```
+
+For bash:
+
+```sh
+neb completions bash > ~/.neb-completion.bash
+source ~/.neb-completion.bash
+```
+
+For fish:
+
+```sh
+neb completions fish > ~/.config/fish/completions/neb.fish
+```
+
 ## Verify
 
 ```sh

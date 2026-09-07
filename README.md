@@ -39,6 +39,7 @@ neb domain add principia
 neb domain default principia
 neb new "Shear law from scarcity" --domain principia --kill "..."
 neb list --all
+neb completions zsh > ~/.zfunc/_neb
 ```
 
 ## Status
