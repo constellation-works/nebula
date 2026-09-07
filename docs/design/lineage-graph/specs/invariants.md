@@ -36,6 +36,10 @@ schema is a suggestion until something refuses a corpus that violates it.
 | 14 | Local paths resolve | warn | `check` |
 | 15 | Every node names a declared domain | error | `new`, `promote`, `domain set`; `check` |
 
+Rule 13 accepts task ids in the form `<PREFIX>-<digits>`, where `PREFIX` is
+two to five ASCII uppercase letters and the digits part is non-empty (for
+example, `ORB-11440` or `DANI-10293`).
+
 ## Where a rule lives matters
 
 Three placements, chosen per rule.

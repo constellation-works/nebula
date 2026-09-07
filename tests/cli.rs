@@ -500,9 +500,29 @@ fn malformed_task_ids_are_caught() {
     c.run(&["task", &id, "ORB-oops"]).assert_ok();
     c.run(&["check"])
         .assert_fails()
-        .says("malformed Orbit task id");
-    c.run(&["task", &id, "ORB-11440", "--state", "open"])
+        .says("malformed Orbit task id")
+        .says("expected PREFIX-nnnnn");
+    for task_id in ["orb-1", "ORB-", "-123", "ORB-12-3"] {
+        let malformed = Corpus::new();
+        let malformed_id = malformed.seed("another idea", "Another idea");
+        malformed
+            .run(&["task", &malformed_id, "--", task_id])
+            .assert_ok();
+        malformed
+            .run(&["check"])
+            .assert_fails()
+            .says("malformed Orbit task id");
+    }
+    let valid = Corpus::new();
+    let valid_id = valid.seed("another idea", "Another idea");
+    valid
+        .run(&["task", &valid_id, "DANI-10293", "--state", "open"])
         .assert_ok();
+    valid.run(&["check"]).assert_ok().says("0 errors");
+    valid
+        .run(&["task", &valid_id, "ORB-11440", "--state", "open"])
+        .assert_ok();
+    valid.run(&["check"]).assert_ok().says("0 errors");
 }
 
 #[test]
