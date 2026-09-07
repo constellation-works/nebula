@@ -774,6 +774,35 @@ fn a_node_without_a_domain_fails_check_until_placed() {
 }
 
 #[test]
+fn unplaced_domain_set_bulk_places_only_empty_nodes() {
+    let c = Corpus::new();
+    let unplaced = c.seed("a legacy idea", "A legacy idea");
+    let placed = c.seed("an existing idea", "An existing idea");
+    let raw = std::fs::read_to_string(c.node_file(&unplaced)).unwrap();
+    write(
+        &c.node_file(&unplaced),
+        &raw.replace("domain: general\n", ""),
+    );
+
+    c.run(&["domain", "set", "--unplaced", "general"])
+        .assert_ok()
+        .says("(none) -> general")
+        .says("placed 1 nodes");
+    let unplaced_raw = std::fs::read_to_string(c.node_file(&unplaced)).unwrap();
+    let placed_raw = std::fs::read_to_string(c.node_file(&placed)).unwrap();
+    assert!(unplaced_raw.contains("domain: general"), "{unplaced_raw}");
+    assert!(placed_raw.contains("domain: general"), "{placed_raw}");
+    c.run(&["check"]).assert_ok().says("0 errors");
+
+    c.run(&["domain", "set", &placed, "--unplaced", "general"])
+        .assert_fails()
+        .says("cannot be used with");
+    c.run(&["domain", "set", "--unplaced", "missing"])
+        .assert_fails()
+        .says("no domain `missing`");
+}
+
+#[test]
 fn domain_names_are_slugs_and_never_declared_twice() {
     let c = Corpus::new();
     c.run(&["domain", "add", "Principia"])

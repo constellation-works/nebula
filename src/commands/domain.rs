@@ -76,10 +76,34 @@ pub fn domain_default(root: Option<PathBuf>, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Move a node between domains. Also how a corpus that predates domains
-/// gets its nodes placed.
-pub fn domain_set(root: Option<PathBuf>, node_id: &str, name: &str) -> Result<()> {
+/// Move a node between domains, or place every unplaced node in a domain.
+pub fn domain_set(
+    root: Option<PathBuf>,
+    node_id: Option<&str>,
+    name: Option<&str>,
+    unplaced: Option<&str>,
+) -> Result<()> {
     let store = store_at(root)?;
+    if let Some(domain) = unplaced {
+        store.config().require(domain)?;
+        let mut placed = 0;
+        for mut doc in store
+            .load_all()?
+            .into_iter()
+            .filter(|d| d.node.domain.is_empty())
+        {
+            let id = doc.node.id.clone();
+            doc.node.domain = domain.to_string();
+            store.save(&mut doc)?;
+            println!("{} {} -> {}", bold(&id), dim("(none)"), domain);
+            placed += 1;
+        }
+        println!("placed {placed} nodes in {domain}");
+        return Ok(());
+    }
+
+    let node_id = node_id.ok_or_else(|| anyhow::anyhow!("a node and domain are required"))?;
+    let name = name.ok_or_else(|| anyhow::anyhow!("a node and domain are required"))?;
     store.config().require(name)?;
     let mut doc = store.load(node_id)?;
     if doc.node.domain == name {
