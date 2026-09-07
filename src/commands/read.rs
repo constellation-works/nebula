@@ -183,7 +183,10 @@ pub fn show(root: Option<PathBuf>, node_id: &str, json: bool) -> Result<()> {
     let store = store_at(root)?;
     let doc = store.load(node_id)?;
     if json {
-        return out_json(&doc.node);
+        return out_json(&serde_json::json!({
+            "node": &doc.node,
+            "body": doc.body.trim(),
+        }));
     }
     let n = &doc.node;
     println!(

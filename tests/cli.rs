@@ -535,11 +535,17 @@ fn json_output_is_machine_readable() {
     let id = c.seed("an idea", "An idea");
     let out = c.run(&["--json", "show", &id]).assert_ok().stdout();
     let v: serde_json::Value = serde_json::from_str(&out).expect("show --json is valid JSON");
-    assert_eq!(v["id"], id);
+    assert_eq!(v["node"]["id"], id);
+    assert_eq!(v["body"], "an idea");
+
+    let empty = c.run(&["new", "Empty prose"]).assert_ok().stdout_trim();
+    let out = c.run(&["--json", "show", &empty]).assert_ok().stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).expect("show --json is valid JSON");
+    assert_eq!(v["body"], "");
 
     let out = c.run(&["--json", "check"]).assert_ok().stdout();
     let v: serde_json::Value = serde_json::from_str(&out).expect("check --json is valid JSON");
-    assert_eq!(v["nodes"], 1);
+    assert_eq!(v["nodes"], 2);
 }
 
 #[test]
