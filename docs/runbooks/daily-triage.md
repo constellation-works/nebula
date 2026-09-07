@@ -47,6 +47,10 @@ neb open
 With several domains declared this narrows to the default one and says so in
 its last line; `neb open --all` crosses, and `--domain <name>` picks another.
 
+If a live inbox capture is older than fourteen days, `neb open` puts one inbox
+finding first: promote or drop the captures waiting in the inbox. It appears
+regardless of domain scope, and `neb open --json` reports it with id `inbox`.
+
 The finding that matters most is a hypothesis with no evidence and no task
 running against it. That is an idea you committed to testing and then did not.
 Close the gap by filing work and recording it:

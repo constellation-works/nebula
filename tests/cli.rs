@@ -608,6 +608,41 @@ fn open_finds_the_hypothesis_with_nothing_running() {
 }
 
 #[test]
+fn open_finds_inbox_captures_waiting_over_fourteen_days() {
+    let c = Corpus::new();
+    c.run(&["capture", "an old capture"]);
+
+    let inbox_file = std::fs::read_dir(c.root.join("inbox"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let mut raw = std::fs::read_to_string(&inbox_file).unwrap();
+    let stamp_start = raw.find("] ").unwrap() + 2;
+    let stamp_end = stamp_start + raw[stamp_start..].find(' ').unwrap();
+    raw.replace_range(stamp_start..stamp_end, "2020-01-01T00:00");
+    std::fs::write(inbox_file, raw).unwrap();
+
+    c.run(&["open"])
+        .assert_ok()
+        .says("1 captures waiting over fourteen days; promote or drop them");
+    c.run(&["open", "--all"])
+        .assert_ok()
+        .says("1 captures waiting over fourteen days; promote or drop them");
+    c.run(&["open", "--domain", "general"])
+        .assert_ok()
+        .says("1 captures waiting over fourteen days; promote or drop them");
+
+    let json = c.run(&["open", "--json"]).assert_ok().stdout();
+    let items: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    assert!(
+        items.iter().any(|item| item["id"] == "inbox"),
+        "inbox finding missing: {json}"
+    );
+}
+
+#[test]
 fn json_output_is_machine_readable() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");

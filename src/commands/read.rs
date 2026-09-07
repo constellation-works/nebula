@@ -130,6 +130,20 @@ pub fn open(root: Option<PathBuf>, domain: Option<&str>, all: bool, json: bool) 
     let scope = store.config().resolve_view(domain, all)?;
     let docs = store.load_all()?;
     let mut items: Vec<(String, String)> = Vec::new();
+    let inbox = store.inbox()?;
+    let stale_inbox_count = inbox
+        .iter()
+        .filter_map(|entry| store::days_since_stamp(&entry.at))
+        .filter(|days| *days > 14)
+        .count();
+    if stale_inbox_count > 0 {
+        items.push((
+            "inbox".into(),
+            format!(
+                "{stale_inbox_count} captures waiting over fourteen days; promote or drop them"
+            ),
+        ));
+    }
     for d in docs.iter().filter(|d| in_scope(d, scope.as_deref())) {
         let n = &d.node;
         // The genuinely actionable gap: a hypothesis that names what would kill

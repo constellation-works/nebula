@@ -250,6 +250,11 @@ pub fn days_since(date: &str) -> Option<i64> {
     Some((now().date() - d).whole_days())
 }
 
+/// Whole days between the date in a `YYYY-MM-DDTHH:MM` stamp and today.
+pub fn days_since_stamp(stamp: &str) -> Option<i64> {
+    days_since(stamp.get(..10)?)
+}
+
 /// A short id for an inbox entry, retried until it is unique in the file.
 fn unique_entry_id(seed: &str, existing: &str) -> String {
     let mut h = fnv(seed);
