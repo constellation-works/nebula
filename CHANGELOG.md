@@ -16,3 +16,4 @@ First working version.
 - `src/` laid out as one module directory per layer, `main.rs` the only file
   at the top.
 - `--json` on every read command, for the maintenance loop.
+- `show --json` now includes the node's trimmed prose body alongside its metadata.
