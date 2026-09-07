@@ -9,7 +9,7 @@ doc_role: spec
 type: design
 summary: The five-second capture budget, the inbox format, and why promotion is a separate act.
 tags: [lineage-graph, capture]
-paths: ["src/store.rs", "src/commands.rs"]
+paths: ["src/corpus/store.rs", "src/commands/inbox.rs"]
 related_features: [lineage-graph]
 related_artifacts: []
 ---

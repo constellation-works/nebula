@@ -268,6 +268,12 @@ pub struct Node {
     pub id: String,
     /// One line naming the idea.
     pub title: String,
+    /// Which declared domain this belongs to: `principia`, `ranking`, and so
+    /// on. A view within the corpus, not a wall: edges cross domains freely.
+    /// Defaults to empty on load so corpora that predate domains still open,
+    /// and `check` reports the gap.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub domain: String,
     /// Where it is in its lifecycle.
     pub status: Status,
     /// When it entered the graph.
@@ -279,8 +285,8 @@ pub struct Node {
     /// honest instead of retroactive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kill: Option<String>,
-    /// Free-form labels. The only thing distinguishing domains, since the
-    /// schema is deliberately identical for physics and ranking signals.
+    /// Free-form labels, open and multi-valued. Finer than `domain` and
+    /// deliberately unvalidated.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     /// Typed links to other nodes, across both graphs.

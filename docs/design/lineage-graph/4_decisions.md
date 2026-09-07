@@ -91,3 +91,29 @@ is not currently scarce. Revisit when a scan is measurably slow.
 
 principia and orbit-research both demand a kill condition, so nebula refuses to
 graduate a node without one rather than exporting the gap downstream.
+
+## Domains inside a corpus, corpora per trust boundary
+
+Tags were the only thing distinguishing physics from ranking signals, and tags
+are open and optional, so a year of typing produces `principia`, `Principia` and
+`physics` for one thing and nodes with nothing at all. A required `domain` field
+validated against a closed set in `config.yaml` cannot drift or be forgotten.
+
+Making each domain its own corpus was rejected. Edges cannot cross corpora, the
+checker would flag any that tried as dangling, and `trace` would stop dead at
+the boundary. The graph is the product, and the cross-domain edges are the ones
+worth finding later. So principia is a domain inside the personal corpus, not a
+corpus of its own. The split that does justify a second corpus is ownership:
+work ideas and personal ideas have different owners, backups and legal standing.
+
+The domain is chosen at `promote` or `new`, where a title and parents are
+already being decided, and never at `capture`, which must stay decision-free.
+
+## A module tree, not a flat `src/`
+
+The tool is small enough that a flat directory would work today. It is laid
+out as a tree anyway, with `main.rs` as the sole file under `src/`, because the
+layering is the part worth keeping honest over years: `corpus` must never learn
+about the terminal, and `commands` must never learn about clap. A directory per
+layer makes a violation visible in an import path. The layering also fixes the
+seam for a future library crate without deciding now whether one is needed.

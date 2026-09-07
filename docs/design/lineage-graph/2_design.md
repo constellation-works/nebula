@@ -43,16 +43,49 @@ node's frontmatter routinely outgrows its prose, or if a second writer appears.
 Every node write is rendered to a sibling temporary file and renamed, so an
 interrupted write cannot leave half a node behind.
 
+`config.yaml` at the corpus root carries a `schema_version`, an opaque
+`corpus_id`, the closed list of `domains`, and an optional `default_domain`.
+`neb init` writes it; `neb domain` edits it; a corpus without one loads as a
+single `general` domain so nothing predating the file breaks.
+
+## Domains
+
+Every node names exactly one domain, and the set of domains is declared in
+`config.yaml` rather than inferred from use. Two things follow.
+
+A domain is a view, not a wall. Edges cross domains without restriction and
+`trace` and `impact` always walk the whole corpus, because an observation in one
+field feeding a hypothesis in another is precisely the link the graph exists to
+surface. Only `list` and `open` scope, and only when more than one domain is
+declared: they narrow to `default_domain`, take `--domain` to pick another, and
+`--all` to cross. A single-domain corpus never sees any of this.
+
+The domain is assigned at `promote` and `new`, never at `capture`. Capture is
+the five-second path and choosing a domain is a decision; a seed often does not
+have one yet, which is part of what makes it a seed.
+
+The boundary that does need separate storage is trust, not topic. Work and
+personal ideas belong to different owners, so they are separate corpora with
+separate configs, and a lineage that genuinely crosses that line is recorded as
+a reference rather than an edge.
+
 ## Modules
+
+`src/main.rs` is the only file directly under `src/`; everything else is a
+module directory. Dependencies point downward only.
 
 | module | holds |
 |---|---|
-| `model` | the schema, parse and render, atomic write |
-| `store` | corpus location, load, save, inbox, dates, slugs |
-| `check` | the invariants, and cycle detection over both graphs |
-| `render` | terminal output, status colour, tree drawing |
-| `commands` | one function per verb |
-| `main` | the clap surface and dispatch |
+| `cli` | the clap tree and dispatch; the only module that knows clap |
+| `commands` | one function per verb, grouped by subject: `inbox`, `node`, `attach`, `read`, `domain`, `check` |
+| `check` | `mod` runs the whole-corpus rules; `rules` the per-node ones; `graph` cycle detection |
+| `render` | terminal output; `tree` draws ancestry |
+| `corpus` | the data layer: `model` (schema, parse, atomic write), `store` (location, load, save, inbox), `config` (`config.yaml`) |
+
+`corpus`, `check` and `render` know nothing about the layers above them. That
+is deliberate: if a second consumer appears, an MCP server or orbit-research
+reading the graph directly, those three become a library crate by adding
+`lib.rs` and leaving `cli` and `commands` in the binary.
 
 ## Traversal
 

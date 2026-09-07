@@ -2,7 +2,7 @@
 type: runbook
 summary: Clear the inbox, find hypotheses with nothing running, and keep the corpus honest.
 tags: [operations, triage, routine]
-paths: ["src/commands.rs"]
+paths: ["src/commands/**"]
 related_features: [lineage-graph]
 related_artifacts: []
 last_validated: 2026-09-07
@@ -43,6 +43,9 @@ thought you discarded is still findable by grep a year later.
 ```sh
 neb open
 ```
+
+With several domains declared this narrows to the default one and says so in
+its last line; `neb open --all` crosses, and `--domain <name>` picks another.
 
 The finding that matters most is a hypothesis with no evidence and no task
 running against it. That is an idea you committed to testing and then did not.

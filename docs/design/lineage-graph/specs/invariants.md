@@ -9,7 +9,7 @@ doc_role: spec
 type: design
 summary: What neb check enforces, where each rule is enforced, and which failures block.
 tags: [lineage-graph, invariants]
-paths: ["src/check.rs", "src/model.rs"]
+paths: ["src/check/**", "src/corpus/model.rs", "src/corpus/config.rs"]
 related_features: [lineage-graph]
 related_artifacts: []
 ---
@@ -34,6 +34,7 @@ schema is a suggestion until something refuses a corpus that violates it.
 | 12 | Attachment ids are unique and never reused | error | `check` |
 | 13 | Task ids are well-formed | error | `check` |
 | 14 | Local paths resolve | warn | `check` |
+| 15 | Every node names a declared domain | error | `new`, `promote`, `domain set`; `check` |
 
 ## Where a rule lives matters
 
@@ -44,7 +45,7 @@ fail to load rather than producing a finding. The separation between context and
 evidence is the discipline the system exists to impose, and a rule that merely
 warned would be routed around the moment it was inconvenient.
 
-**Point of action**, for rules 1, 5 and 7. `neb link` refuses a cycle-closing
+**Point of action**, for rules 1, 5, 7 and 15. `neb link` refuses a cycle-closing
 edge and writes both halves of a `contradicts` pair. `neb status` refuses to
 reopen a refuted node. Catching these when you act is worth more than catching
 them later, because you still remember what you meant.

@@ -26,7 +26,22 @@ nebula   = the CLI, the checker, the index builder   (this repo)
 corpus   = nodes/ and inbox/                          (elsewhere, private)
 ```
 
+## Domains
+
+A corpus is partitioned into declared domains (`principia`, `ranking`, ...)
+so one area's noise does not swamp another's. A domain is a view, not a wall:
+edges cross domains freely and `trace` always walks the whole graph; only
+`list` and `open` narrow, and `--all` crosses. Use a second corpus only for a
+second owner, which is what keeps work and personal material apart.
+
+```sh
+neb domain add principia
+neb domain default principia
+neb new "Shear law from scarcity" --domain principia --kill "..."
+neb list --all
+```
+
 ## Status
 
-v0.1 is deliberately small: `capture`, `promote`, `cite`, `trace`, `check`.
-Everything else in the spec is a guess until roughly fifty real nodes exist.
+v0.1: the full lifecycle from capture to graduation, fifteen invariants, and
+domains. Everything past that is a guess until roughly fifty real nodes exist.

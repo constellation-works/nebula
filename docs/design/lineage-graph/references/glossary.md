@@ -9,7 +9,7 @@ doc_role: reference
 type: design
 summary: Terms used across nebula's docs and code, with the distinctions that matter.
 tags: [lineage-graph, glossary]
-paths: ["src/model.rs"]
+paths: ["src/corpus/model.rs"]
 related_features: [lineage-graph]
 related_artifacts: []
 ---
@@ -49,4 +49,11 @@ you stopped caring. Both persist forever.
 **Graduated.** Handed downstream to principia or orbit-research, with a link out.
 The node stays here, so lineage crosses the boundary.
 
-**Corpus.** The nodes and inbox, living outside this repository.
+**Domain.** The one declared area a node belongs to: `principia`, `ranking`,
+and so on. A view inside a corpus, not a boundary: edges cross domains freely,
+and only `list` and `open` scope to one. Declared in `config.yaml`; a node naming
+anything else fails `check`.
+
+**Corpus.** The nodes, inbox and `config.yaml`, living outside this repository.
+One corpus per owner: work and personal are separate corpora, since that line is
+about who owns the material rather than what it is about.

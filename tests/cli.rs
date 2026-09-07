@@ -565,3 +565,139 @@ fn round_tripping_a_node_preserves_prose_and_fields() {
         before.contains("id: the-original-thought") && after.contains("id: the-original-thought")
     );
 }
+
+// ----------------------------------------------------------------- domains --
+
+#[test]
+fn a_fresh_corpus_has_one_domain_and_asks_nothing() {
+    let c = Corpus::new();
+    c.run(&["domain", "list"])
+        .assert_ok()
+        .says("general")
+        .says("(default)");
+    let id = c.seed("an idea", "An idea");
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(raw.contains("domain: general"), "{raw}");
+    // One domain: no scope footer, nothing to cross.
+    let out = c.run(&["list"]).assert_ok().stdout();
+    assert!(!out.contains("--all"), "{out}");
+}
+
+#[test]
+fn several_domains_without_a_default_make_new_a_decision() {
+    let c = Corpus::new();
+    c.run(&["domain", "add", "work"]).assert_ok();
+    // A fresh corpus defaults to `general`, so a second domain alone is
+    // still decision-free. Remove the default by hand to reach the case.
+    let cfg = c.root.join("config.yaml");
+    let raw = std::fs::read_to_string(&cfg).unwrap();
+    let kept: Vec<&str> = raw
+        .lines()
+        .filter(|l| !l.starts_with("default_domain"))
+        .collect();
+    write(&cfg, &(kept.join("\n") + "\n"));
+    c.run(&["new", "Undecided"]).assert_fails().says("--domain");
+    c.run(&["new", "Placed", "--domain", "work"]).assert_ok();
+    c.run(&["new", "Nowhere", "--domain", "nope"])
+        .assert_fails()
+        .says("no domain `nope`")
+        .says("general, work");
+    c.run(&["domain", "default", "work"]).assert_ok();
+    let id = c.run(&["new", "Defaulted"]).assert_ok().stdout_trim();
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(raw.contains("domain: work"), "{raw}");
+}
+
+#[test]
+fn list_scopes_to_the_default_domain_and_all_crosses() {
+    let c = Corpus::new();
+    c.run(&["domain", "add", "work"]).assert_ok();
+    c.run(&["domain", "default", "general"]).assert_ok();
+    c.run(&["new", "Personal thing"]).assert_ok();
+    c.run(&["new", "Work thing", "--domain", "work"])
+        .assert_ok();
+
+    let scoped = c
+        .run(&["list"])
+        .assert_ok()
+        .says("domain: general")
+        .stdout();
+    assert!(
+        scoped.contains("personal-thing") && !scoped.contains("work-thing"),
+        "{scoped}"
+    );
+
+    let all = c.run(&["list", "--all"]).assert_ok().stdout();
+    assert!(
+        all.contains("personal-thing") && all.contains("work-thing"),
+        "{all}"
+    );
+    assert!(all.contains("[work]") && all.contains("[general]"), "{all}");
+
+    let work = c.run(&["list", "--domain", "work"]).assert_ok().stdout();
+    assert!(
+        !work.contains("personal-thing") && work.contains("work-thing"),
+        "{work}"
+    );
+
+    c.run(&["list", "--domain", "work", "--all"]).assert_fails();
+}
+
+#[test]
+fn edges_cross_domains_because_a_domain_is_a_view_not_a_wall() {
+    let c = Corpus::new();
+    c.run(&["domain", "add", "physics"]).assert_ok();
+    c.run(&["domain", "default", "general"]).assert_ok();
+    c.run(&["new", "Ranking decay"]).assert_ok();
+    c.run(&[
+        "new",
+        "Dissipation analogy",
+        "--domain",
+        "physics",
+        "--parent",
+        "ranking-decay",
+    ])
+    .assert_ok();
+    c.run(&["trace", "dissipation-analogy"])
+        .assert_ok()
+        .says("ranking-decay");
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+#[test]
+fn a_node_without_a_domain_fails_check_until_placed() {
+    let c = Corpus::new();
+    let id = c.seed("a legacy idea", "A legacy idea");
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    write(&c.node_file(&id), &raw.replace("domain: general\n", ""));
+    c.run(&["check"]).assert_fails().says("no domain");
+    c.run(&["domain", "list"])
+        .assert_ok()
+        .says("1 nodes name no declared domain");
+
+    c.run(&["domain", "set", &id, "general"])
+        .assert_ok()
+        .says("(none) -> general");
+    c.run(&["check"]).assert_ok().says("0 errors");
+
+    // An undeclared spelling is caught the same way.
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    write(
+        &c.node_file(&id),
+        &raw.replace("domain: general", "domain: General"),
+    );
+    c.run(&["check"]).assert_fails().says("not declared");
+}
+
+#[test]
+fn domain_names_are_slugs_and_never_declared_twice() {
+    let c = Corpus::new();
+    c.run(&["domain", "add", "Principia"])
+        .assert_fails()
+        .says("lowercase");
+    c.run(&["domain", "add", "principia"]).assert_ok();
+    c.run(&["domain", "add", "principia"])
+        .assert_fails()
+        .says("already");
+    c.run(&["domain", "default", "nope"]).assert_fails();
+}

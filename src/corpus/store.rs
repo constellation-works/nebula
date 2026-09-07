@@ -4,7 +4,8 @@
 //! is the only thing here that is irreplaceable. Every write goes through this
 //! module so the atomicity and never-delete rules hold in one place.
 
-use crate::model::{self, Doc};
+use crate::corpus::config::Config;
+use crate::corpus::model::{self, Doc};
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -16,19 +17,25 @@ use time::{
 #[derive(Debug, Clone)]
 pub struct Store {
     root: PathBuf,
+    config: Config,
 }
 
 impl Store {
+    /// Where a corpus would be, given `--root`, else `NEBULA_ROOT`, else `~/.nebula`.
+    pub fn resolve_root(explicit: Option<PathBuf>) -> Result<PathBuf> {
+        if let Some(p) = explicit {
+            return Ok(p);
+        }
+        if let Ok(p) = std::env::var("NEBULA_ROOT") {
+            return Ok(PathBuf::from(p));
+        }
+        let home = std::env::var("HOME").context("HOME is not set")?;
+        Ok(PathBuf::from(home).join(".nebula"))
+    }
+
     /// Open the corpus named by `--root`, else `NEBULA_ROOT`, else `~/.nebula`.
     pub fn open(explicit: Option<PathBuf>) -> Result<Self> {
-        let root = if let Some(p) = explicit {
-            p
-        } else if let Ok(p) = std::env::var("NEBULA_ROOT") {
-            PathBuf::from(p)
-        } else {
-            let home = std::env::var("HOME").context("HOME is not set")?;
-            PathBuf::from(home).join(".nebula")
-        };
+        let root = Self::resolve_root(explicit)?;
         if !root.join("nodes").is_dir() {
             bail!(
                 "no corpus at {}\n\nCreate one with:  neb init {}",
@@ -36,21 +43,37 @@ impl Store {
                 root.display()
             );
         }
-        Ok(Self { root })
+        let config = Config::load(&root, || corpus_id(&root))?;
+        Ok(Self { root, config })
     }
 
-    /// Create an empty corpus.
+    /// Create an empty corpus, with a config declaring one domain.
     pub fn init(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root.join("nodes"))?;
         std::fs::create_dir_all(root.join("inbox"))?;
+        let config = Config::fresh(corpus_id(root));
+        config.save(root)?;
         Ok(Self {
             root: root.to_path_buf(),
+            config,
         })
     }
 
     /// Where the corpus lives.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The corpus configuration.
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    /// Replace the configuration on disk and in memory.
+    pub fn save_config(&mut self, config: Config) -> Result<()> {
+        config.save(&self.root)?;
+        self.config = config;
+        Ok(())
     }
 
     /// Path of a node file, whether or not it exists.
@@ -238,6 +261,13 @@ fn unique_entry_id(seed: &str, existing: &str) -> String {
         h = fnv(&format!("{h}"));
     }
     format!("{:04x}", (fnv(seed) & 0xffff) as u16)
+}
+
+/// A stable id for a corpus, derived from where it was created and when.
+/// Opaque by design: it identifies, it does not describe.
+fn corpus_id(root: &Path) -> String {
+    let seed = format!("{}{}", root.display(), stamp());
+    format!("neb-{:06x}", fnv(&seed) & 0xff_ffff)
 }
 
 fn fnv(s: &str) -> u64 {

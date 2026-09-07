@@ -9,5 +9,10 @@ First working version.
   transition guards enforced at the point of action.
 - `evidence`, `cite`, `weigh` — findings, context, and promoting one to the other.
 - `trace`, `impact`, `open`, `show`, `list` — reading the graph.
-- `check` — fourteen invariants, exiting non-zero on any error.
+- `domain list|add|default|set` — declared domains inside one corpus, with
+  `--domain`/`--all` scoping on `list` and `open`. Edges cross domains; only
+  the views narrow.
+- `check` — fifteen invariants, exiting non-zero on any error.
+- `src/` laid out as one module directory per layer, `main.rs` the only file
+  at the top.
 - `--json` on every read command, for the maintenance loop.
