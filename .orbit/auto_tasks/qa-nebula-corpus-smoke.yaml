@@ -1,0 +1,21 @@
+schemaVersion: 1
+name: qa-nebula-corpus-smoke
+description: Weekly smoke of the neb CLI against a throwaway corpus
+enabled: false
+schedule:
+  cron: 0 9 * * 1
+template:
+  title: Smoke-test neb against a fresh corpus
+  description: Create a temp corpus with neb init, run capture/promote/sharpen/link/check/trace, and file any regression as a bug task.
+  acceptance_criteria:
+  - Every lifecycle verb was exercised on a fresh corpus
+  task_type: chore
+  tags:
+  - qa-smoke
+  priority: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: unknown
+created_at: 2026-09-12T03:05:50.832075+00:00
+updated_by: unknown
+updated_at: 2026-09-12T03:05:58.759144+00:00
