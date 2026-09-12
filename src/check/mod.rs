@@ -6,6 +6,7 @@
 //! honest rather than merely tidy.
 
 mod graph;
+mod online;
 mod rules;
 
 use crate::corpus::{EdgeType, Store};
@@ -76,7 +77,7 @@ impl Report {
 /// Some invariants never reach this function: a reference carrying a
 /// `verdict`, or a node with an unknown field, fails to deserialize, so the
 /// corpus load itself errors out.
-pub fn run(store: &Store) -> Result<Report> {
+pub fn run(store: &Store, online: bool) -> Result<Report> {
     // Note that some invariants are enforced before this function is reached.
     // A reference carrying a verdict, or a node with an unknown field, fails to
     // deserialize, so `load_all` returns an error rather than a finding.
@@ -146,6 +147,10 @@ pub fn run(store: &Store) -> Result<Report> {
             None,
             format!("circular reasoning in supports: {}", cycle.join(" -> ")),
         );
+    }
+
+    if online {
+        online::check_tasks(&docs, &mut r);
     }
 
     r.findings

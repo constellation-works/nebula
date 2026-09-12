@@ -5,7 +5,7 @@ use super::{Level, Report};
 use crate::corpus::{Doc, EdgeType, Status, Store, Verdict};
 use std::collections::HashSet;
 
-fn is_task_id(s: &str) -> bool {
+pub(in crate::check) fn is_task_id(s: &str) -> bool {
     let Some((prefix, digits)) = s.split_once('-') else {
         return false;
     };
