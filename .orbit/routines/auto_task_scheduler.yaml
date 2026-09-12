@@ -24,8 +24,6 @@ description: >
   dedupe are enforced by the scheduler; each definition's own schedule
   governs its cadence.
 enabled: true
-hosts:
-  - Daniels-Mac-mini.local
 trigger:
   cron: "* * * * *"
   missed_run: skip
