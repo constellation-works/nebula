@@ -716,6 +716,158 @@ fn malformed_task_ids_are_caught() {
 }
 
 #[test]
+fn a_reference_with_no_note_warns_and_a_noted_one_does_not() {
+    let c = Corpus::new();
+    let bare = c.seed("an idea", "An idea");
+    c.run(&[
+        "cite",
+        &bare,
+        "--uri",
+        "https://example.org",
+        "--kind",
+        "paper",
+        "--note",
+        "",
+    ])
+    .assert_ok();
+    c.run(&["check"])
+        .assert_ok()
+        .says("[11]")
+        .says("reference `r1` has no note saying why it is here")
+        .says(&bare)
+        .says("0 errors, 1 warnings");
+
+    let omitted = Corpus::new();
+    let omitted_id = omitted.seed("another idea", "Another idea");
+    omitted
+        .run(&[
+            "cite",
+            &omitted_id,
+            "--uri",
+            "https://example.org",
+            "--kind",
+            "paper",
+        ])
+        .assert_ok();
+    omitted
+        .run(&["check"])
+        .assert_ok()
+        .says("[11]")
+        .says("0 errors, 1 warnings");
+
+    let noted = Corpus::new();
+    let noted_id = noted.seed("a third idea", "A third idea");
+    noted
+        .run(&[
+            "cite",
+            &noted_id,
+            "--uri",
+            "https://example.org",
+            "--kind",
+            "paper",
+            "--note",
+            "explains the mechanism",
+        ])
+        .assert_ok();
+    noted
+        .run(&["check"])
+        .assert_ok()
+        .says("0 errors, 0 warnings");
+}
+
+#[test]
+fn an_unresolved_local_uri_warns_until_the_file_exists_and_external_urls_never_trip_it() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&[
+        "evidence",
+        &id,
+        "--verdict",
+        "supports",
+        "--source",
+        "./notes/missing.md",
+        "--note",
+        "n",
+    ])
+    .assert_ok();
+    c.run(&["check"])
+        .assert_ok()
+        .says("[14]")
+        .says("points at a path that does not resolve: ./notes/missing.md")
+        .says("0 errors, 1 warnings");
+
+    std::fs::create_dir_all(c.root.join("nodes").join("notes")).unwrap();
+    write(
+        &c.root.join("nodes").join("notes").join("missing.md"),
+        "here now",
+    );
+    c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
+
+    // External URLs are never fetched, so an https:// source never trips rule 14
+    // even though it obviously does not resolve as a local path.
+    let online = Corpus::new();
+    let online_id = online.seed("an online idea", "An online idea");
+    online
+        .run(&[
+            "evidence",
+            &online_id,
+            "--verdict",
+            "supports",
+            "--source",
+            "https://example.org/paper",
+            "--note",
+            "n",
+        ])
+        .assert_ok();
+    online
+        .run(&["check"])
+        .assert_ok()
+        .says("0 errors, 0 warnings");
+}
+
+#[test]
+fn check_json_exposes_rule_and_level_for_warn_findings() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&[
+        "cite",
+        &id,
+        "--uri",
+        "https://example.org",
+        "--kind",
+        "paper",
+    ])
+    .assert_ok();
+    c.run(&[
+        "evidence",
+        &id,
+        "--verdict",
+        "supports",
+        "--source",
+        "./notes/missing.md",
+        "--note",
+        "n",
+    ])
+    .assert_ok();
+
+    let out = c.run(&["--json", "check"]).assert_ok().stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).expect("check --json is valid JSON");
+    let findings = v["findings"].as_array().expect("findings array");
+
+    let rule11 = findings
+        .iter()
+        .find(|f| f["rule"] == 11)
+        .expect("rule 11 finding present");
+    assert_eq!(rule11["level"], "warn");
+
+    let rule14 = findings
+        .iter()
+        .find(|f| f["rule"] == 14)
+        .expect("rule 14 finding present");
+    assert_eq!(rule14["level"], "warn");
+}
+
+#[test]
 fn check_online_accepts_a_task_that_resolves_and_is_still_open() {
     let c = Corpus::new();
     let stub = OrbitStub::install(c.workdir());
