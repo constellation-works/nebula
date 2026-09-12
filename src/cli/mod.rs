@@ -253,6 +253,22 @@ enum Command {
         node: String,
     },
 
+    /// The weekly maintenance report: stale hypotheses, untouched seeds,
+    /// nodes with no references, and inbox entries waiting too long.
+    ///
+    /// Read-only, by the spec's hard rule: this proposes and never mutates a
+    /// node, an inbox entry, or the manifest.
+    Review {
+        /// Override the day thresholds for stale hypotheses (default 30) and
+        /// untouched seeds (default 90). The inbox's fourteen-day rule is
+        /// unaffected; it is `open`'s rule, reused rather than duplicated.
+        #[arg(long)]
+        since: Option<i64>,
+        /// Write the report here instead of stdout.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+
     /// List nodes.
     List {
         /// Only this status.
@@ -419,6 +435,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Impact { node } => c::impact(root, &node, json).map(|()| ok),
         Command::Open { domain, all } => c::open(root, domain.as_deref(), all, json).map(|()| ok),
         Command::Show { node } => c::show(root, &node, json).map(|()| ok),
+        Command::Review { since, out } => c::review(root, since, out.as_deref(), json).map(|()| ok),
         Command::List {
             status,
             tag,
