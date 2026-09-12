@@ -1,10 +1,64 @@
 //! The command-line surface: the clap tree and the dispatch from parsed
 //! arguments to `commands`. Nothing else in the crate depends on clap.
+//!
+//! The grouped sections in `neb --help` are a render concern, not a structure
+//! one. Clap's derive has no per-variant `help_heading` for subcommands
+//! (`next_help_heading` is args-only and `subcommand_help_heading` only renames
+//! the single `Commands:` block), so [`Cli`] carries a hand-rolled
+//! `help_template` with the rows written out by hand. When adding a command,
+//! add the variant to [`Command`] in the position its section dictates *and*
+//! add its row to the template; a `#[test]` below checks the two stay in sync.
 
 use crate::corpus::{EdgeType, Status, Strength, Verdict};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
+
+/// `neb --help`, with the subcommands grouped by lifecycle stage. Each row's
+/// one-liner is the first line of that variant's doc comment, minus the
+/// trailing period clap strips; `help_rows_match_the_variants` enforces it.
+const HELP_TEMPLATE: &str = "\
+{before-help}{about-with-newline}
+{usage-heading} {usage}
+
+Corpus:
+  init         Create an empty corpus
+  domain       Declare domains and move nodes between them
+  check        Run the invariants. Exits non-zero on any error
+  completions  Generate shell completion scripts
+
+Inbox:
+  capture      Append a thought to the inbox. One line, no decisions, no parent
+  inbox        List captures that have not been promoted or dropped
+  promote      Turn an inbox entry into a seed node
+  drop         Discard an inbox entry. Struck through, never deleted
+
+Nodes:
+  new          Create a node directly, without going through the inbox
+  sharpen      Sharpen a seed into a hypothesis by naming what would kill it
+  status       Move a node to a new status, with the transition guards applied
+  graduate     Hand a node downstream to principia or orbit-research
+  link         Add a typed edge between two nodes
+
+References:
+  cite         Attach context. A reference explains; it never bears on truth
+  evidence     Attach something that bears on whether the idea is true
+  weigh        Promote a reference into evidence, once you know which way it cuts
+  task         Record work spawned to settle this node
+
+Query:
+  show         Show one node in full
+  list         List nodes
+  trace        Walk ancestry. The feature the whole system exists for
+  impact       What collapses if this node dies
+
+Maintenance:
+  open         Nodes that need attention
+  review       The weekly maintenance report: stale hypotheses, untouched seeds,
+               nodes with no references, and inbox entries waiting too long
+
+Options:
+{options}{after-help}";
 
 #[derive(Parser)]
 #[command(
@@ -16,7 +70,9 @@ use std::process::ExitCode;
                   directed acyclic graph. Nothing is ever deleted: refuted and abandoned \
                   ideas are what stop you re-treading ground.",
     after_help = "The corpus lives outside this repository. It is found via --root, else \
-                  $NEBULA_ROOT, else ~/.nebula."
+                  $NEBULA_ROOT, else ~/.nebula.",
+    disable_help_subcommand = true,
+    help_template = HELP_TEMPLATE
 )]
 struct Cli {
     /// Corpus location. Defaults to `$NEBULA_ROOT`, else `~/.nebula`.
@@ -39,6 +95,27 @@ enum Command {
         path: Option<PathBuf>,
     },
 
+    /// Declare domains and move nodes between them.
+    ///
+    /// A domain is a view inside one corpus, so `trace` and `impact` cross
+    /// them freely. The boundary that needs separate storage, work against
+    /// personal, is a separate corpus.
+    #[command(subcommand)]
+    Domain(DomainCommand),
+
+    /// Run the invariants. Exits non-zero on any error.
+    Check {
+        /// Resolve cited Orbit task ids and confirm open `tasks` entries are still open.
+        #[arg(long)]
+        online: bool,
+    },
+
+    /// Generate shell completion scripts.
+    Completions {
+        /// The shell to generate completions for.
+        shell: clap_complete::Shell,
+    },
+
     /// Append a thought to the inbox. One line, no decisions, no parent.
     ///
     /// This is the five-second path. It deliberately asks nothing of you,
@@ -52,12 +129,6 @@ enum Command {
 
     /// List captures that have not been promoted or dropped.
     Inbox,
-
-    /// Discard an inbox entry. Struck through, never deleted.
-    Drop {
-        /// Inbox entry id, from `neb inbox`.
-        entry: String,
-    },
 
     /// Turn an inbox entry into a seed node.
     ///
@@ -84,6 +155,12 @@ enum Command {
         /// Orbit run that produced it.
         #[arg(long)]
         run: Option<String>,
+    },
+
+    /// Discard an inbox entry. Struck through, never deleted.
+    Drop {
+        /// Inbox entry id, from `neb inbox`.
+        entry: String,
     },
 
     /// Create a node directly, without going through the inbox.
@@ -122,6 +199,23 @@ enum Command {
         kill: String,
     },
 
+    /// Move a node to a new status, with the transition guards applied.
+    Status {
+        /// Node id.
+        node: String,
+        /// Target status.
+        status: Status,
+    },
+
+    /// Hand a node downstream to principia or orbit-research.
+    Graduate {
+        /// Node id.
+        node: String,
+        /// Where it went.
+        #[arg(long)]
+        to: String,
+    },
+
     /// Add a typed edge between two nodes.
     Link {
         /// Node the edge starts at.
@@ -130,27 +224,6 @@ enum Command {
         kind: EdgeType,
         /// Node the edge points at.
         to: String,
-    },
-
-    /// Attach something that bears on whether the idea is true.
-    Evidence {
-        /// Node id.
-        node: String,
-        /// Which way it cuts.
-        #[arg(long)]
-        verdict: Verdict,
-        /// How much it is worth.
-        #[arg(long, default_value = "suggestive")]
-        strength: Strength,
-        /// Where it came from.
-        #[arg(long)]
-        source: String,
-        /// What it showed, and what is shaky about it.
-        #[arg(long)]
-        note: Option<String>,
-        /// Orbit task that produced it.
-        #[arg(long)]
-        task: Option<String>,
     },
 
     /// Attach context. A reference explains; it never bears on truth.
@@ -177,6 +250,27 @@ enum Command {
         run: Option<String>,
     },
 
+    /// Attach something that bears on whether the idea is true.
+    Evidence {
+        /// Node id.
+        node: String,
+        /// Which way it cuts.
+        #[arg(long)]
+        verdict: Verdict,
+        /// How much it is worth.
+        #[arg(long, default_value = "suggestive")]
+        strength: Strength,
+        /// Where it came from.
+        #[arg(long)]
+        source: String,
+        /// What it showed, and what is shaky about it.
+        #[arg(long)]
+        note: Option<String>,
+        /// Orbit task that produced it.
+        #[arg(long)]
+        task: Option<String>,
+    },
+
     /// Promote a reference into evidence, once you know which way it cuts.
     Weigh {
         /// Node id.
@@ -189,14 +283,6 @@ enum Command {
         /// How much it is worth.
         #[arg(long, default_value = "suggestive")]
         strength: Strength,
-    },
-
-    /// Move a node to a new status, with the transition guards applied.
-    Status {
-        /// Node id.
-        node: String,
-        /// Target status.
-        status: Status,
     },
 
     /// Record work spawned to settle this node.
@@ -213,13 +299,26 @@ enum Command {
         state: Option<String>,
     },
 
-    /// Hand a node downstream to principia or orbit-research.
-    Graduate {
+    /// Show one node in full.
+    Show {
         /// Node id.
         node: String,
-        /// Where it went.
+    },
+
+    /// List nodes.
+    List {
+        /// Only this status.
         #[arg(long)]
-        to: String,
+        status: Option<Status>,
+        /// Only nodes carrying this tag.
+        #[arg(long)]
+        tag: Option<String>,
+        /// Only this domain. Defaults to the corpus default when several exist.
+        #[arg(long)]
+        domain: Option<String>,
+        /// Every domain.
+        #[arg(long, conflicts_with = "domain")]
+        all: bool,
     },
 
     /// Walk ancestry. The feature the whole system exists for.
@@ -247,12 +346,6 @@ enum Command {
         all: bool,
     },
 
-    /// Show one node in full.
-    Show {
-        /// Node id.
-        node: String,
-    },
-
     /// The weekly maintenance report: stale hypotheses, untouched seeds,
     /// nodes with no references, and inbox entries waiting too long.
     ///
@@ -267,43 +360,6 @@ enum Command {
         /// Write the report here instead of stdout.
         #[arg(long)]
         out: Option<PathBuf>,
-    },
-
-    /// List nodes.
-    List {
-        /// Only this status.
-        #[arg(long)]
-        status: Option<Status>,
-        /// Only nodes carrying this tag.
-        #[arg(long)]
-        tag: Option<String>,
-        /// Only this domain. Defaults to the corpus default when several exist.
-        #[arg(long)]
-        domain: Option<String>,
-        /// Every domain.
-        #[arg(long, conflicts_with = "domain")]
-        all: bool,
-    },
-
-    /// Declare domains and move nodes between them.
-    ///
-    /// A domain is a view inside one corpus, so `trace` and `impact` cross
-    /// them freely. The boundary that needs separate storage, work against
-    /// personal, is a separate corpus.
-    #[command(subcommand)]
-    Domain(DomainCommand),
-
-    /// Run the invariants. Exits non-zero on any error.
-    Check {
-        /// Resolve cited Orbit task ids and confirm open `tasks` entries are still open.
-        #[arg(long)]
-        online: bool,
-    },
-
-    /// Generate shell completion scripts.
-    Completions {
-        /// The shell to generate completions for.
-        shell: clap_complete::Shell,
     },
 }
 
@@ -458,5 +514,84 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             clap_complete::generate(shell, &mut Cli::command(), "neb", &mut std::io::stdout());
             Ok(ok)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn help() -> String {
+        Cli::command().render_long_help().to_string()
+    }
+
+    fn squash(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// Every subcommand clap knows about has a row in the template, and the
+    /// row's text is the variant's own one-liner, so the two cannot drift.
+    #[test]
+    fn help_rows_match_the_variants() {
+        let flat = squash(&help());
+        let mut seen = 0;
+        for sub in Cli::command().get_subcommands() {
+            let about = sub.get_about().map(ToString::to_string).unwrap_or_default();
+            let row = squash(&format!("{} {about}", sub.get_name()));
+            assert!(flat.contains(&row), "help is missing the row {row:?}");
+            seen += 1;
+        }
+        assert_eq!(seen, 23, "template rows need updating for a new subcommand");
+        assert!(
+            Cli::command().find_subcommand("help").is_none(),
+            "clap's `help` subcommand should be disabled"
+        );
+    }
+
+    /// The sections appear in lifecycle order, and clap's own usage line and
+    /// global options are still rendered around them.
+    #[test]
+    fn help_sections_are_in_lifecycle_order() {
+        let text = help();
+        let headings = [
+            "Corpus:",
+            "Inbox:",
+            "Nodes:",
+            "References:",
+            "Query:",
+            "Maintenance:",
+            "Options:",
+        ];
+        let mut last = 0;
+        for h in headings {
+            let at = text
+                .find(&format!("\n{h}\n"))
+                .unwrap_or_else(|| panic!("no {h} section"));
+            assert!(at > last, "{h} is out of order");
+            last = at;
+        }
+        assert!(text.contains("Usage: neb [OPTIONS] <COMMAND>"));
+        assert!(text.contains("--root <DIR>"));
+        assert!(text.contains("The corpus lives outside this repository"));
+    }
+
+    /// The variant order mirrors the template's section order, so a command
+    /// left out of the template would still surface next to its group.
+    #[test]
+    fn variant_order_matches_the_template() {
+        let names: Vec<_> = Cli::command()
+            .get_subcommands()
+            .map(|s| s.get_name().to_string())
+            .collect();
+        let expected = [
+            ["init", "domain", "check", "completions"].as_slice(),
+            &["capture", "inbox", "promote", "drop"],
+            &["new", "sharpen", "status", "graduate", "link"],
+            &["cite", "evidence", "weigh", "task"],
+            &["show", "list", "trace", "impact"],
+            &["open", "review"],
+        ]
+        .concat();
+        assert_eq!(names, expected);
     }
 }

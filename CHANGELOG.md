@@ -17,6 +17,8 @@ First working version.
   at the top.
 - `--json` on every read command, for the maintenance loop.
 - `show --json` now includes the node's trimmed prose body alongside its metadata.
+- `neb --help` groups the commands into Corpus, Inbox, Nodes, References,
+  Query and Maintenance sections; the `help` subcommand is gone, use `--help`.
 - `review [--since <days>] [--out <path>]` — the deterministic half of the weekly
   maintenance pass: stale hypotheses, untouched seeds, nodes with no references,
   and stale inbox entries, as Markdown or `--json`. Read-only: it never edits a
