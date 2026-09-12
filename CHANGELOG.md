@@ -17,3 +17,7 @@ First working version.
   at the top.
 - `--json` on every read command, for the maintenance loop.
 - `show --json` now includes the node's trimmed prose body alongside its metadata.
+- `review [--since <days>] [--out <path>]` — the deterministic half of the weekly
+  maintenance pass: stale hypotheses, untouched seeds, nodes with no references,
+  and stale inbox entries, as Markdown or `--json`. Read-only: it never edits a
+  node, an inbox entry, or the manifest.

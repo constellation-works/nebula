@@ -7,7 +7,7 @@ use crate::corpus::{EdgeType, Status, store};
 use crate::render::{self, Tree};
 use crate::render::{bold, dim};
 use anyhow::{Result, bail};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Walk ancestry, or descent.
 pub fn trace(root: Option<PathBuf>, node_id: &str, down: bool, json: bool) -> Result<()> {
@@ -297,6 +297,140 @@ pub fn list(
         );
     }
     scope_footer(scope.as_deref());
+    Ok(())
+}
+
+/// One finding from `review`.
+#[derive(serde::Serialize)]
+struct ReviewItem {
+    rule: &'static str,
+    id: String,
+    title: String,
+    reason: String,
+}
+
+/// The weekly maintenance report: hypotheses starved of evidence, seeds gone
+/// cold, nodes nobody has situated, and inbox captures rotting unprocessed.
+///
+/// Read-only by design — see `docs/spec.md`, "The maintenance loop". This
+/// walks the corpus and writes a report; it never edits a node, an inbox
+/// entry, or the manifest. The judgement calls (kill conditions that look
+/// satisfied, likely `contradicts` pairs) stay out of scope for the same
+/// reason: they belong to the agent that reads this report, not to this
+/// query.
+pub fn review(
+    root: Option<PathBuf>,
+    since: Option<i64>,
+    out: Option<&Path>,
+    json: bool,
+) -> Result<()> {
+    let store = store_at(root)?;
+    let docs = store.load_all()?;
+    let inbox = store.inbox()?;
+
+    let hypothesis_days = since.unwrap_or(30);
+    let seed_days = since.unwrap_or(90);
+
+    let mut stale_hypotheses = Vec::new();
+    let mut untouched_seeds = Vec::new();
+    let mut no_references = Vec::new();
+
+    for d in &docs {
+        let n = &d.node;
+        if n.status == Status::Hypothesis
+            && n.evidence.is_empty()
+            && store::days_since(&n.updated).is_some_and(|days| days > hypothesis_days)
+        {
+            stale_hypotheses.push(ReviewItem {
+                rule: "stale-hypothesis",
+                id: n.id.clone(),
+                title: n.title.clone(),
+                reason: format!("hypothesis with no evidence for over {hypothesis_days} days"),
+            });
+        }
+        if n.status == Status::Seed
+            && store::days_since(&n.updated).is_some_and(|days| days > seed_days)
+        {
+            untouched_seeds.push(ReviewItem {
+                rule: "untouched-seed",
+                id: n.id.clone(),
+                title: n.title.clone(),
+                reason: format!(
+                    "seed untouched for over {seed_days} days; propose: status abandoned"
+                ),
+            });
+        }
+        if n.status.is_open() && n.references.is_empty() {
+            no_references.push(ReviewItem {
+                rule: "no-references",
+                id: n.id.clone(),
+                title: n.title.clone(),
+                reason: "no references attached".into(),
+            });
+        }
+    }
+
+    let stale_inbox_count = inbox
+        .iter()
+        .filter_map(|entry| store::days_since_stamp(&entry.at))
+        .filter(|days| *days > 14)
+        .count();
+    let stale_inbox = if stale_inbox_count > 0 {
+        vec![ReviewItem {
+            rule: "stale-inbox",
+            id: "inbox".into(),
+            title: "inbox".into(),
+            reason: format!(
+                "{stale_inbox_count} captures waiting over fourteen days; promote or drop them"
+            ),
+        }]
+    } else {
+        Vec::new()
+    };
+
+    let sections = [
+        (
+            format!("Hypotheses with no evidence for {hypothesis_days} days"),
+            stale_hypotheses,
+        ),
+        (
+            format!("Seeds untouched for {seed_days} days"),
+            untouched_seeds,
+        ),
+        ("Nodes with no references".to_string(), no_references),
+        (
+            "Inbox entries waiting more than 14 days".to_string(),
+            stale_inbox,
+        ),
+    ];
+
+    if json {
+        let items: Vec<&ReviewItem> = sections.iter().flat_map(|(_, v)| v.iter()).collect();
+        write_report(out, &serde_json::to_string_pretty(&items)?)
+    } else {
+        use std::fmt::Write as _;
+        let mut text = String::new();
+        for (heading, items) in &sections {
+            let _ = writeln!(text, "## {heading}\n");
+            if items.is_empty() {
+                text.push_str("_none_\n\n");
+            } else {
+                for item in items {
+                    let _ = writeln!(text, "- `{}` {} — {}", item.id, item.title, item.reason);
+                }
+                text.push('\n');
+            }
+        }
+        write_report(out, text.trim_end())
+    }
+}
+
+/// Send the rendered report to a file, or print it, per `--out`.
+fn write_report(out: Option<&Path>, text: &str) -> Result<()> {
+    match out {
+        Some(path) => std::fs::write(path, format!("{text}\n"))?,
+        None => println!("{text}"),
+    }
     Ok(())
 }
 

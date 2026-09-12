@@ -14,7 +14,7 @@ pub use check::check;
 pub use domain::{domain_add, domain_default, domain_list, domain_set};
 pub use inbox::{capture, drop_entry, inbox, init, promote};
 pub use node::{graduate, link, new_node, set_status, sharpen, task};
-pub use read::{impact, list, open, show, trace};
+pub use read::{impact, list, open, review, show, trace};
 
 use crate::corpus::{Doc, Store};
 use crate::render::dim;

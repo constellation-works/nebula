@@ -316,6 +316,7 @@ neb promote ab3f --parent gravity-as-scarcity-seed
 | `trace <id>` | walk ancestry, the headline feature |
 | `impact <id>` | reverse walk: what dies if this dies |
 | `open` | nodes needing attention |
+| `review [--since <days>] [--out <path>]` | weekly maintenance report: stale hypotheses, untouched seeds, nodes with no references, stale inbox entries — proposes, never mutates |
 | `check` | run the invariants |
 | `graduate <id> --to <uri>` | hand off downstream |
 

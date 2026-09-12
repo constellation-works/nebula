@@ -126,6 +126,56 @@ fn write(path: &Path, s: &str) {
     std::fs::write(path, s).expect("writing fixture");
 }
 
+/// `YYYY-MM-DD` for `days` ago, computed the same way `store::days_since`
+/// computes "now", so fixtures land unambiguously on one side of a threshold
+/// regardless of what day the suite actually runs.
+fn date_days_ago(days: i64) -> String {
+    use time::{OffsetDateTime, macros::format_description};
+    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
+    let date = now.date() - time::Duration::days(days);
+    date.format(format_description!("[year]-[month]-[day]"))
+        .expect("formatting a date")
+}
+
+/// The inbox stamp format is the date plus a time-of-day, but only the date
+/// half feeds the fourteen-day rule.
+fn stamp_days_ago(days: i64) -> String {
+    format!("{}T00:00", date_days_ago(days))
+}
+
+/// Back-date a node's `updated` field in place, to land it on a chosen side
+/// of a staleness threshold without waiting for real time to pass.
+fn set_updated(path: &Path, date: &str) {
+    let raw = std::fs::read_to_string(path).unwrap();
+    let needle = "\nupdated: ";
+    let start = raw.find(needle).unwrap() + needle.len();
+    let end = start + 10;
+    let mut raw = raw;
+    raw.replace_range(start..end, date);
+    write(path, &raw);
+}
+
+/// Back-date one capture's timestamp in place, found by its own text rather
+/// than by position, since `Corpus::seed` leaves earlier settled captures in
+/// the same monthly inbox file ahead of whichever one a test cares about.
+fn set_inbox_stamp_for(root: &Path, capture_text: &str, stamp: &str) {
+    let inbox_dir = root.join("inbox");
+    for entry in std::fs::read_dir(&inbox_dir).unwrap() {
+        let path = entry.unwrap().path();
+        let mut raw = std::fs::read_to_string(&path).unwrap();
+        let Some(text_at) = raw.find(capture_text) else {
+            continue;
+        };
+        let line_start = raw[..text_at].rfind('\n').map_or(0, |i| i + 1);
+        let stamp_start = raw[line_start..].find("] ").unwrap() + line_start + 2;
+        let stamp_end = stamp_start + "2020-01-01T00:00".len();
+        raw.replace_range(stamp_start..stamp_end, stamp);
+        std::fs::write(&path, raw).unwrap();
+        return;
+    }
+    panic!("no inbox entry contains `{capture_text}`");
+}
+
 fn make_executable(path: &Path) {
     #[cfg(unix)]
     {
@@ -1070,4 +1120,222 @@ fn domain_names_are_slugs_and_never_declared_twice() {
         .assert_fails()
         .says("already");
     c.run(&["domain", "default", "nope"]).assert_fails();
+}
+
+// ------------------------------------------------------------------ review --
+
+#[test]
+fn review_reports_stale_hypotheses_on_both_sides_of_thirty_days() {
+    let c = Corpus::new();
+    let stale = c.seed("an old hypothesis", "An old hypothesis");
+    c.run(&["sharpen", &stale, "--kill", "if X"]).assert_ok();
+    c.run(&["cite", &stale, "--uri", "http://example.com", "--note", "n"])
+        .assert_ok();
+    set_updated(&c.node_file(&stale), &date_days_ago(45));
+
+    let fresh = c.seed("a fresh hypothesis", "A fresh hypothesis");
+    c.run(&["sharpen", &fresh, "--kill", "if Y"]).assert_ok();
+    c.run(&["cite", &fresh, "--uri", "http://example.com", "--note", "n"])
+        .assert_ok();
+    set_updated(&c.node_file(&fresh), &date_days_ago(15));
+
+    let out = c.run(&["review"]).assert_ok().stdout();
+    assert!(
+        out.contains(&format!("`{stale}`")),
+        "stale hypothesis missing:\n{out}"
+    );
+    assert!(
+        !out.contains(&format!("`{fresh}`")),
+        "fresh hypothesis should not be flagged:\n{out}"
+    );
+}
+
+#[test]
+fn review_reports_untouched_seeds_on_both_sides_of_ninety_days() {
+    let c = Corpus::new();
+    let stale = c.seed("an old seed", "An old seed");
+    c.run(&["cite", &stale, "--uri", "http://example.com", "--note", "n"])
+        .assert_ok();
+    set_updated(&c.node_file(&stale), &date_days_ago(120));
+
+    let fresh = c.seed("a fresh seed", "A fresh seed");
+    c.run(&["cite", &fresh, "--uri", "http://example.com", "--note", "n"])
+        .assert_ok();
+    set_updated(&c.node_file(&fresh), &date_days_ago(60));
+
+    let out = c.run(&["review"]).assert_ok().stdout();
+    assert!(
+        out.contains(&format!("`{stale}`")) && out.contains("propose: status abandoned"),
+        "stale seed missing:\n{out}"
+    );
+    assert!(
+        !out.contains(&format!("`{fresh}`")),
+        "fresh seed should not be flagged:\n{out}"
+    );
+}
+
+#[test]
+fn review_reports_nodes_with_no_references() {
+    let c = Corpus::new();
+    let bare = c.seed("a bare idea", "A bare idea");
+
+    let cited = c.seed("a cited idea", "A cited idea");
+    c.run(&["cite", &cited, "--uri", "http://example.com", "--note", "n"])
+        .assert_ok();
+
+    let abandoned = c.seed("an abandoned idea", "An abandoned idea");
+    c.run(&["status", &abandoned, "abandoned"]).assert_ok();
+
+    let out = c.run(&["review"]).assert_ok().stdout();
+    assert!(out.contains(&format!("`{bare}`")), "{out}");
+    assert!(!out.contains(&format!("`{cited}`")), "{out}");
+    assert!(!out.contains(&format!("`{abandoned}`")), "{out}");
+}
+
+#[test]
+fn review_reports_stale_inbox_entries_on_both_sides_of_fourteen_days() {
+    let c = Corpus::new();
+    c.run(&["capture", "an old capture"]).assert_ok();
+    set_inbox_stamp_for(&c.root, "an old capture", &stamp_days_ago(20));
+    let out = c.run(&["review"]).assert_ok().stdout();
+    assert!(
+        out.contains("1 captures waiting over fourteen days; promote or drop them"),
+        "{out}"
+    );
+
+    let fresh = Corpus::new();
+    fresh.run(&["capture", "a recent capture"]).assert_ok();
+    set_inbox_stamp_for(&fresh.root, "a recent capture", &stamp_days_ago(10));
+    let out = fresh.run(&["review"]).assert_ok().stdout();
+    assert!(
+        !out.contains("captures waiting over fourteen days"),
+        "{out}"
+    );
+}
+
+#[test]
+fn review_json_emits_all_four_rule_names() {
+    let c = Corpus::new();
+
+    let stale_hyp = c.seed("stale hypothesis", "Stale hypothesis");
+    c.run(&["sharpen", &stale_hyp, "--kill", "if X"])
+        .assert_ok();
+    c.run(&[
+        "cite",
+        &stale_hyp,
+        "--uri",
+        "http://example.com",
+        "--note",
+        "n",
+    ])
+    .assert_ok();
+    set_updated(&c.node_file(&stale_hyp), &date_days_ago(45));
+
+    let stale_seed = c.seed("stale seed", "Stale seed");
+    c.run(&[
+        "cite",
+        &stale_seed,
+        "--uri",
+        "http://example.com",
+        "--note",
+        "n",
+    ])
+    .assert_ok();
+    set_updated(&c.node_file(&stale_seed), &date_days_ago(120));
+
+    c.seed("bare idea", "Bare idea");
+
+    c.run(&["capture", "an old capture"]).assert_ok();
+    set_inbox_stamp_for(&c.root, "an old capture", &stamp_days_ago(20));
+
+    let json = c.run(&["review", "--json"]).assert_ok().stdout();
+    let items: Vec<serde_json::Value> =
+        serde_json::from_str(&json).expect("review --json is valid JSON");
+    let rules: std::collections::HashSet<&str> =
+        items.iter().map(|i| i["rule"].as_str().unwrap()).collect();
+    for rule in [
+        "stale-hypothesis",
+        "untouched-seed",
+        "no-references",
+        "stale-inbox",
+    ] {
+        assert!(rules.contains(rule), "missing rule `{rule}` in {json}");
+    }
+    for item in &items {
+        assert!(item["id"].is_string());
+        assert!(item["title"].is_string());
+        assert!(item["reason"].is_string());
+    }
+}
+
+#[test]
+fn review_out_writes_the_report_and_prints_nothing_else() {
+    let c = Corpus::new();
+    let bare = c.seed("an idea needing a look", "An idea needing a look");
+    let out_path = c.workdir().join("review.md");
+    let run = c
+        .run(&["review", "--out", out_path.to_str().unwrap()])
+        .assert_ok();
+    assert_eq!(
+        run.stdout(),
+        "",
+        "stdout must stay empty when writing to a file"
+    );
+    let report = std::fs::read_to_string(&out_path).unwrap();
+    assert!(report.contains(&format!("`{bare}`")));
+    assert!(report.contains("## Nodes with no references"));
+}
+
+#[test]
+fn an_empty_corpus_produces_an_empty_review() {
+    let c = Corpus::new();
+    let out = c.run(&["review"]).assert_ok().stdout();
+    assert!(out.contains("## Hypotheses with no evidence for 30 days"));
+    assert!(out.contains("## Seeds untouched for 90 days"));
+    assert!(out.contains("## Nodes with no references"));
+    assert!(out.contains("## Inbox entries waiting more than 14 days"));
+    assert_eq!(
+        out.matches("_none_").count(),
+        4,
+        "every section is empty:\n{out}"
+    );
+
+    let json = c.run(&["review", "--json"]).assert_ok().stdout();
+    let items: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    assert!(items.is_empty(), "{json}");
+}
+
+/// Every file under `nodes/` and `inbox/`, by path, for a before/after diff.
+fn snapshot_corpus_files(root: &Path) -> std::collections::BTreeMap<PathBuf, String> {
+    let mut map = std::collections::BTreeMap::new();
+    for sub in ["nodes", "inbox"] {
+        let dir = root.join(sub);
+        if !dir.is_dir() {
+            continue;
+        }
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let content = std::fs::read_to_string(&path).unwrap();
+            map.insert(path, content);
+        }
+    }
+    map
+}
+
+#[test]
+fn review_never_touches_nodes_or_inbox_on_disk() {
+    let c = Corpus::new();
+    let hyp = c.seed("an idea", "An idea");
+    c.run(&["sharpen", &hyp, "--kill", "if X"]).assert_ok();
+    c.run(&["capture", "a thought"]).assert_ok();
+
+    let before = snapshot_corpus_files(&c.root);
+    c.run(&["review"]).assert_ok();
+    c.run(&["review", "--json"]).assert_ok();
+    let out_path = c.workdir().join("review.md");
+    c.run(&["review", "--out", out_path.to_str().unwrap()])
+        .assert_ok();
+    let after = snapshot_corpus_files(&c.root);
+
+    assert_eq!(before, after, "review must never mutate nodes/ or inbox/");
 }
