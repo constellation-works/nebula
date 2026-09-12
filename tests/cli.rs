@@ -22,7 +22,7 @@ fn bin() -> PathBuf {
 }
 
 struct Corpus {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     root: PathBuf,
 }
 
@@ -30,24 +30,35 @@ impl Corpus {
     fn new() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("corpus");
-        let me = Self { _dir: dir, root };
+        let me = Self { dir, root };
         me.run(&["init"]).assert_ok();
         me
     }
 
     fn run(&self, args: &[&str]) -> Run {
-        let out = Command::new(bin())
-            .arg("--root")
+        self.run_with_env(args, &[])
+    }
+
+    fn run_with_env(&self, args: &[&str], extra: &[(&str, &str)]) -> Run {
+        let mut cmd = Command::new(bin());
+        cmd.arg("--root")
             .arg(&self.root)
             .args(args)
             .env("NO_COLOR", "1")
             .env_remove("NEBULA_ROOT")
-            .output()
-            .expect("running neb");
+            .env_remove("NEBULA_ORBIT_BIN");
+        for (key, value) in extra {
+            cmd.env(key, value);
+        }
+        let out = cmd.output().expect("running neb");
         Run {
             args: args.join(" "),
             out,
         }
+    }
+
+    fn workdir(&self) -> &Path {
+        self.dir.path()
     }
 
     fn node_file(&self, id: &str) -> PathBuf {
@@ -113,6 +124,86 @@ impl Run {
 
 fn write(path: &Path, s: &str) {
     std::fs::write(path, s).expect("writing fixture");
+}
+
+fn make_executable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod +x");
+    }
+}
+
+/// A fake `orbit` that records each resolved id and serves canned JSON.
+struct OrbitStub {
+    bin: PathBuf,
+    log: PathBuf,
+    resp_dir: PathBuf,
+}
+
+impl OrbitStub {
+    fn install(workdir: &Path) -> Self {
+        let bin = workdir.join("nebula-orbit-stub");
+        let resp_dir = workdir.join("orbit-resp");
+        std::fs::create_dir_all(&resp_dir).expect("orbit-resp");
+        write(
+            &bin,
+            r#"#!/bin/sh
+dir=$(dirname "$0")
+log="$dir/orbit-calls.log"
+resp="$dir/orbit-resp"
+input=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--input" ]; then
+    input=$arg
+  fi
+  prev=$arg
+done
+id=$(printf '%s' "$input" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+printf '%s\n' "$id" >> "$log"
+if [ -f "$resp/$id" ]; then
+  cat "$resp/$id"
+  exit 0
+fi
+if [ -f "$resp/$id.err" ]; then
+  cat "$resp/$id.err" >&2
+  exit 1
+fi
+printf 'task not found: %s\n' "$id" >&2
+exit 1
+"#,
+        );
+        make_executable(&bin);
+        Self {
+            bin,
+            log: workdir.join("orbit-calls.log"),
+            resp_dir,
+        }
+    }
+
+    fn ok(&self, id: &str, status: &str) {
+        write(
+            &self.resp_dir.join(id),
+            &serde_json::json!(status).to_string(),
+        );
+    }
+
+    fn err(&self, id: &str, stderr: &str) {
+        write(&self.resp_dir.join(format!("{id}.err")), stderr);
+    }
+
+    fn bin_str(&self) -> &str {
+        self.bin.to_str().expect("utf8 stub path")
+    }
+
+    fn calls(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
 }
 
 // ------------------------------------------------------------------ capture --
@@ -572,6 +663,137 @@ fn malformed_task_ids_are_caught() {
         .run(&["task", &valid_id, "ORB-11440", "--state", "open"])
         .assert_ok();
     valid.run(&["check"]).assert_ok().says("0 errors");
+}
+
+#[test]
+fn check_online_accepts_a_task_that_resolves_and_is_still_open() {
+    let c = Corpus::new();
+    let stub = OrbitStub::install(c.workdir());
+    stub.ok("DANI-10001", "in-progress");
+    let id = c.seed("an idea", "An idea");
+    c.run(&["task", &id, "DANI-10001"]).assert_ok();
+    c.run_with_env(
+        &["check", "--online"],
+        &[("NEBULA_ORBIT_BIN", stub.bin_str())],
+    )
+    .assert_ok()
+    .says("0 errors, 0 warnings");
+}
+
+#[test]
+fn check_online_warns_when_an_open_task_is_terminal_in_orbit() {
+    let c = Corpus::new();
+    let stub = OrbitStub::install(c.workdir());
+    stub.ok("DANI-20001", "done");
+    stub.ok("DANI-20002", "rejected");
+    stub.ok("DANI-20003", "archived");
+    let id = c.seed("an idea", "An idea");
+    c.run(&["task", &id, "DANI-20001"]).assert_ok();
+    c.run(&["task", &id, "DANI-20002"]).assert_ok();
+    c.run(&["task", &id, "DANI-20003"]).assert_ok();
+    // origin.task is resolve-only: a terminal Orbit status is not a warning.
+    c.run(&["new", "Produced by a finished task", "--task", "DANI-20001"])
+        .assert_ok();
+    c.run_with_env(
+        &["check", "--online"],
+        &[("NEBULA_ORBIT_BIN", stub.bin_str())],
+    )
+    .assert_ok()
+    .says("task DANI-20001 is done in Orbit but marked open on this node")
+    .says("task DANI-20002 is rejected in Orbit but marked open on this node")
+    .says("task DANI-20003 is archived in Orbit but marked open on this node")
+    .says("[13]")
+    .says("0 errors, 3 warnings");
+}
+
+#[test]
+fn check_online_errors_when_a_cited_task_does_not_resolve() {
+    let c = Corpus::new();
+    let stub = OrbitStub::install(c.workdir());
+    stub.err("DANI-99991", "no such task DANI-99991\n");
+    let origin = c
+        .run(&["new", "From a missing task", "--task", "DANI-99991"])
+        .assert_ok()
+        .stdout_trim();
+    let linked = c.seed("needs a task", "Needs a task");
+    c.run(&["task", &linked, "DANI-99992"]).assert_ok();
+    c.run_with_env(
+        &["check", "--online"],
+        &[("NEBULA_ORBIT_BIN", stub.bin_str())],
+    )
+    .assert_fails()
+    .says(&origin)
+    .says("Orbit task `DANI-99991` did not resolve: no such task DANI-99991")
+    .says("Orbit task `DANI-99992` did not resolve: task not found: DANI-99992")
+    .says("[13]");
+}
+
+#[test]
+fn check_online_missing_resolver_is_a_single_error() {
+    let c = Corpus::new();
+    let missing = c.workdir().join("no-such-orbit");
+    let a = c.seed("first", "First");
+    let b = c.seed("second", "Second");
+    c.run(&["task", &a, "DANI-30001"]).assert_ok();
+    c.run(&["task", &b, "DANI-30002"]).assert_ok();
+    c.run_with_env(
+        &["check", "--online"],
+        &[(
+            "NEBULA_ORBIT_BIN",
+            missing.to_str().expect("utf8 missing path"),
+        )],
+    )
+    .assert_fails()
+    .says("orbit binary not found")
+    .says("skipping online task resolution")
+    .says("2 nodes, 1 errors");
+}
+
+#[test]
+fn check_without_online_does_not_spawn_the_resolver() {
+    let c = Corpus::new();
+    let panic_bin = c.workdir().join("orbit-must-not-run");
+    write(
+        &panic_bin,
+        "#!/bin/sh\necho 'orbit stub must not be invoked' >&2\nexit 99\n",
+    );
+    make_executable(&panic_bin);
+    let id = c.seed("an idea", "An idea");
+    c.run(&["task", &id, "DANI-40001"]).assert_ok();
+    c.run_with_env(
+        &["check"],
+        &[(
+            "NEBULA_ORBIT_BIN",
+            panic_bin.to_str().expect("utf8 panic stub"),
+        )],
+    )
+    .assert_ok()
+    .says("0 errors");
+}
+
+#[test]
+fn check_online_resolves_each_distinct_id_once() {
+    let c = Corpus::new();
+    let stub = OrbitStub::install(c.workdir());
+    stub.ok("DANI-50001", "in-progress");
+    let origin = c
+        .run(&["new", "Shared origin", "--task", "DANI-50001"])
+        .assert_ok()
+        .stdout_trim();
+    let linked = c.seed("shared task", "Shared task");
+    c.run(&["task", &linked, "DANI-50001"]).assert_ok();
+    c.run(&["task", &origin, "DANI-50001"]).assert_ok();
+    c.run_with_env(
+        &["check", "--online"],
+        &[("NEBULA_ORBIT_BIN", stub.bin_str())],
+    )
+    .assert_ok()
+    .says("0 errors");
+    assert_eq!(
+        stub.calls(),
+        ["DANI-50001"],
+        "each distinct task id must be resolved once, not once per citation"
+    );
 }
 
 #[test]

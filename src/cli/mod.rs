@@ -278,7 +278,11 @@ enum Command {
     Domain(DomainCommand),
 
     /// Run the invariants. Exits non-zero on any error.
-    Check,
+    Check {
+        /// Resolve cited Orbit task ids and confirm open `tasks` entries are still open.
+        #[arg(long)]
+        online: bool,
+    },
 
     /// Generate shell completion scripts.
     Completions {
@@ -432,7 +436,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             } => c::domain_set(root, node.as_deref(), name.as_deref(), unplaced.as_deref()),
         }
         .map(|()| ok),
-        Command::Check => c::check(root, json),
+        Command::Check { online } => c::check(root, json, online),
         Command::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "neb", &mut std::io::stdout());
             Ok(ok)
