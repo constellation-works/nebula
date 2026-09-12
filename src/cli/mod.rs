@@ -334,8 +334,115 @@ enum DomainCommand {
     },
 }
 
+/// The top-level command list, grouped by lifecycle stage instead of clap's
+/// default flat, alphabetical-ish order. Order within a group follows the
+/// flow described in the task that introduced this grouping.
+///
+/// Clap has no derive-level way to split one enum's subcommands across
+/// several named headings (`help_heading`/`next_help_heading` only affect an
+/// individual subcommand's own argument list, not its entry in the parent's
+/// listing; nesting into sub-enums would change invocation, e.g. `neb corpus
+/// init`). So the grouping is applied here as a text transform over clap's
+/// own rendered help, re-slotting its already-wrapped, already-aligned
+/// per-command lines rather than duplicating their descriptions.
+const HELP_GROUPS: &[(&str, &[&str])] = &[
+    ("Corpus", &["init", "domain", "check", "completions"]),
+    ("Inbox", &["capture", "inbox", "promote", "drop"]),
+    ("Nodes", &["new", "sharpen", "status", "graduate", "link"]),
+    ("References", &["cite", "evidence", "weigh", "task"]),
+    ("Query", &["show", "list", "trace", "impact"]),
+    ("Maintenance", &["open", "review"]),
+];
+
+/// Render `neb --help` (`long`) or `neb -h` (`!long`) with the flat
+/// `Commands:` section split into [`HELP_GROUPS`]. Everything else (about
+/// text, usage, options, after-help) comes straight from clap.
+fn print_grouped_help(long: bool) {
+    let mut cmd = Cli::command();
+    let rendered = if long {
+        cmd.render_long_help()
+    } else {
+        cmd.render_help()
+    }
+    .to_string();
+
+    let mut lines = rendered.lines();
+    let mut preamble = String::new();
+    for line in lines.by_ref() {
+        if line == "Commands:" {
+            break;
+        }
+        preamble.push_str(line);
+        preamble.push('\n');
+    }
+
+    // One entry per subcommand: its first (name-bearing) line, plus any
+    // wrapped continuation lines, which clap indents further than the
+    // two-space entry indent.
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for line in lines.by_ref() {
+        if line.is_empty() {
+            break;
+        }
+        let indent = line.len() - line.trim_start().len();
+        if indent == 2 {
+            let name = line.split_whitespace().next().unwrap_or("");
+            entries.push((name.to_string(), line.to_string()));
+        } else if let Some((_, text)) = entries.last_mut() {
+            text.push('\n');
+            text.push_str(line);
+        }
+    }
+
+    let mut grouped = String::new();
+    for (heading, names) in HELP_GROUPS {
+        grouped.push_str(heading);
+        grouped.push_str(":\n");
+        for name in *names {
+            if let Some((_, text)) = entries.iter().find(|(n, _)| n == name) {
+                grouped.push_str(text);
+                grouped.push('\n');
+            }
+        }
+        grouped.push('\n');
+    }
+
+    // Anything not placed in a group (in practice, just clap's auto-added
+    // `help`) keeps its original trailing position.
+    let grouped_names: std::collections::HashSet<&str> = HELP_GROUPS
+        .iter()
+        .flat_map(|(_, names)| names.iter().copied())
+        .collect();
+    for (name, text) in &entries {
+        if !grouped_names.contains(name.as_str()) {
+            grouped.push_str(text);
+            grouped.push('\n');
+        }
+    }
+    grouped.push('\n');
+
+    let rest: Vec<&str> = lines.collect();
+    print!("{preamble}{grouped}");
+    println!("{}", rest.join("\n"));
+}
+
 /// Parse the command line, run it, and turn the outcome into an exit code.
 pub fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.len() == 1 {
+        match args[0].as_str() {
+            "--help" | "help" => {
+                print_grouped_help(true);
+                return ExitCode::SUCCESS;
+            }
+            "-h" => {
+                print_grouped_help(false);
+                return ExitCode::SUCCESS;
+            }
+            _ => {}
+        }
+    }
+
     let cli = Cli::parse();
     match run(cli) {
         Ok(code) => code,
