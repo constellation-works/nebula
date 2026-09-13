@@ -1,0 +1,218 @@
+/* Plain CSS, system font, light and dark from the OS. No component library. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfd;
+  --bg-raised: #ffffff;
+  --fg: #1c1c22;
+  --fg-muted: #6b6b78;
+  --line: #e3e3ea;
+  --accent: #4f57c8;
+  --accent-fg: #ffffff;
+  --danger: #b3261e;
+  --ok: #2b7a4b;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1b21;
+    --bg-raised: #24242c;
+    --fg: #ececf2;
+    --fg-muted: #9a9aab;
+    --line: #34343f;
+    --accent: #8d94ff;
+    --accent-fg: #14142a;
+    --danger: #ff8a80;
+    --ok: #7bd39a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+
+/* Main window ------------------------------------------------------------ */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  padding: 6px 10px 8px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: default;
+}
+
+.tab[aria-selected="true"] {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+}
+
+.tab__count {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: 0.8em;
+  font-variant-numeric: tabular-nums;
+}
+
+.view {
+  flex: 1;
+  overflow: auto;
+  padding: 14px;
+}
+
+/* Capture box ------------------------------------------------------------ */
+
+.capture {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.capture__input {
+  flex: 1;
+  font: inherit;
+  font-size: 15px;
+  padding: 9px 12px;
+  color: var(--fg);
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: none;
+}
+
+.capture__input:focus {
+  border-color: var(--accent);
+}
+
+.capture__status {
+  min-width: 5em;
+  font-size: 0.9em;
+  color: var(--fg-muted);
+}
+
+.capture__status--captured {
+  color: var(--ok);
+}
+
+.capture__status--error {
+  color: var(--danger);
+}
+
+/* Inbox ------------------------------------------------------------------ */
+
+.inbox__list {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+}
+
+.entry {
+  display: grid;
+  grid-template-columns: 4.5em 3em 1fr;
+  gap: 10px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--line);
+  align-items: baseline;
+}
+
+.entry__id,
+.entry__age {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.entry__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inbox__empty,
+.placeholder {
+  color: var(--fg-muted);
+}
+
+/* Corpus error ----------------------------------------------------------- */
+
+.error {
+  max-width: 34em;
+  margin: 12vh auto 0;
+  padding: 0 20px;
+}
+
+.error__title {
+  font-size: 1.15em;
+  margin: 0 0 8px;
+}
+
+.error__message {
+  color: var(--danger);
+}
+
+.error__path,
+.error__hint {
+  color: var(--fg-muted);
+}
+
+.error__reload {
+  font: inherit;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg-raised);
+  color: var(--fg);
+}
+
+/* Capture window --------------------------------------------------------- */
+
+.capture-window {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+}
+
+.capture-window .capture__input {
+  font-size: 18px;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+}

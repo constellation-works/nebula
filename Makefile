@@ -1,4 +1,4 @@
-.PHONY: help build release run dev check test types fmt fmt-check release-check clippy audit tree ci ci-fast install uninstall skill-link clean corpus-check watch
+.PHONY: help build release run dev check test types fmt fmt-check release-check clippy audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
 
 # ------------------------------------------------------------
 # Config
@@ -9,6 +9,10 @@ BINARY := neb
 CORE := nebula-core
 INSTALL_PROFILE ?= release
 INSTALL_BIN_DIR ?= $(HOME)/.cargo/bin
+# The Tauri app. pnpm owns its frontend; cargo builds its shell as a
+# workspace member, so `make build`/`clippy`/`test` cover it too.
+DESKTOP := apps/desktop
+PNPM ?= pnpm
 
 # Detect profile
 PROFILE ?= debug
@@ -51,6 +55,9 @@ help:
 	@echo "  make ci-fast       Pre-handoff gate (fmt-check only; no compile)"
 	@echo "  make corpus-check  Run the invariant checker over your corpus"
 	@echo "                     (ROOT=/path optional; defaults to \$$NEBULA_ROOT or ~/.nebula)"
+	@echo "  make desktop-dev   Run the desktop app with live reload (pnpm tauri dev)"
+	@echo "  make desktop       Build the desktop .app, unsigned (pnpm tauri build)"
+	@echo "  make desktop-check Type-check and unit-test the desktop frontend"
 	@echo "  make install       Install the binary (INSTALL_PROFILE=debug optional)"
 	@echo "  make uninstall     Remove the installed binary"
 	@echo "  make skill-link    Symlink skills/nebula into ~/.claude/skills/nebula"
@@ -112,7 +119,7 @@ tree:
 	$(CARGO) tree -e features
 
 # Full CI pass. Keep aligned with .github/workflows/ci.yml.
-ci: fmt-check release-check clippy test types
+ci: fmt-check release-check clippy test types desktop-check
 
 # Pre-handoff gate for agents: no compile.
 ci-fast: fmt-check
@@ -124,6 +131,25 @@ ci-fast: fmt-check
 # $NEBULA_ROOT / ~/.nebula resolution.
 corpus-check: build
 	$(TARGET_DIR)/$(BINARY) $(if $(ROOT),--root $(ROOT),) check
+
+# ------------------------------------------------------------
+# Desktop
+# ------------------------------------------------------------
+# The lockfile is the contract: a fresh clone gets exactly what CI tests.
+desktop-deps:
+	$(PNPM) --dir $(DESKTOP) install --frozen-lockfile
+
+desktop-dev: desktop-deps
+	$(PNPM) --dir $(DESKTOP) tauri dev
+
+# A local .app under target/release/bundle/macos; not signed or notarised.
+desktop: desktop-deps
+	$(PNPM) --dir $(DESKTOP) tauri build
+
+# `exec`, because `pnpm --dir <path> <bin>` only resolves scripts, not bins.
+desktop-check: desktop-deps
+	$(PNPM) --dir $(DESKTOP) exec tsc --noEmit
+	$(PNPM) --dir $(DESKTOP) exec vitest run
 
 # ------------------------------------------------------------
 # Install

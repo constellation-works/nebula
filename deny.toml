@@ -3,6 +3,9 @@
 [advisories]
  # Yanked crates can change independently of the locked dependency graph.
  yanked = "deny"
+ # Unmaintained crates deep in Tauri's tree (unic-*, proc-macro-error via gtk)
+ # are not ours to replace; flag only what this workspace depends on directly.
+ unmaintained = "workspace"
 
 [licenses]
  # MIT: anyhow, clap, serde, serde_json, serde_yaml_ng, time, and their transitive dependencies.
@@ -10,7 +13,20 @@
  # Apache-2.0: clap, serde, serde_json, time, and their transitive dependencies.
  "Apache-2.0",
  # Unicode-3.0: unicode-ident and its transitive dependencies.
- "Unicode-3.0"]
+ "Unicode-3.0",
+ # The rest arrive with the desktop's Tauri tree.
+ # Apache-2.0 WITH LLVM-exception: target-lexicon.
+ "Apache-2.0 WITH LLVM-exception",
+ # BSD-3-Clause: brotli, alloc-no-stdlib, alloc-stdlib.
+ "BSD-3-Clause",
+ # CC0-1.0: notify.
+ "CC0-1.0",
+ # ISC: inotify, libloading.
+ "ISC",
+ # MPL-2.0: cssparser, selectors, dtoa-short, option-ext.
+ "MPL-2.0",
+ # Zlib: foldhash.
+ "Zlib"]
 
 [bans]
  multiple-versions = "warn"
