@@ -1,4 +1,4 @@
-.PHONY: help build release run dev check test types fmt fmt-check release-check clippy audit tree ci ci-fast install uninstall clean corpus-check watch
+.PHONY: help build release run dev check test types fmt fmt-check release-check clippy audit tree ci ci-fast install uninstall skill-link clean corpus-check watch
 
 # ------------------------------------------------------------
 # Config
@@ -53,6 +53,7 @@ help:
 	@echo "                     (ROOT=/path optional; defaults to \$$NEBULA_ROOT or ~/.nebula)"
 	@echo "  make install       Install the binary (INSTALL_PROFILE=debug optional)"
 	@echo "  make uninstall     Remove the installed binary"
+	@echo "  make skill-link    Symlink skills/nebula into ~/.claude/skills/nebula"
 	@echo "  make clean         Clean build artifacts"
 	@echo "  make watch         Continuous check + test"
 
@@ -134,6 +135,13 @@ install:
 
 uninstall:
 	rm -f $(INSTALL_BIN_DIR)/$(BINARY)
+
+# The agent skill, linked rather than copied so edits here are live.
+SKILL_DIR ?= $(HOME)/.claude/skills
+skill-link:
+	install -d $(SKILL_DIR)
+	ln -sfn $(CURDIR)/skills/nebula $(SKILL_DIR)/nebula
+	@echo "linked $(SKILL_DIR)/nebula -> $(CURDIR)/skills/nebula"
 
 # ------------------------------------------------------------
 # Clean

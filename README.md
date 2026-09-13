@@ -53,10 +53,11 @@ roughly fifty real nodes exist.
 
 ## Three ways in
 
-`neb` is the CLI documented above, and the only one that exists today. Two
-more consumers are being built on the same corpus, both scoped in
-[docs/design/v0.2/](docs/design/v0.2/2_architecture.md): an agent skill that
-teaches a session-directed or unattended agent the verbs and their `--json`
-shapes, and a desktop app that draws the whole corpus as a graph and captures
-from a global shortcut. All three read and write the same `nodes/` and
+`neb` is the CLI documented above. The agent skill in
+[skills/nebula/](skills/nebula/SKILL.md) teaches a session-directed or
+unattended agent the verbs, their `--json` shapes, the invariants and the two
+operating modes — `make skill-link` symlinks it into `~/.claude/skills`. A
+desktop app that draws the whole corpus as a graph and captures from a global
+shortcut is being built on the same `nebula-core`, scoped in
+[docs/design/v0.2/](docs/design/v0.2/2_architecture.md). All three read and write the same `nodes/` and
 `inbox/` — there is one corpus underneath, never three.

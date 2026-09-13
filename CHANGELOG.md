@@ -70,6 +70,13 @@ habit. This cut keeps what a person actually uses.
   (`cite`), Query, Maintenance.
 - `neb graph --json`: the whole corpus as `{nodes, edges}`, for a tool that
   draws it. JSON only; without `--json` it prints a hint and exits 2.
+- `skills/nebula/`: the agent skill. `SKILL.md` states the two modes (session:
+  act and `neb check` after every write; routine: read-only, proposals into
+  `review.md`), corpus resolution, capture-from-conversation, provenance and
+  triage heuristics; `references/` carry every verb's flags and real `--json`
+  shape, the ten invariants with each typed refusal and its remedy, and a
+  worked transcript per mode. `make skill-link` symlinks it into
+  `~/.claude/skills/nebula`.
 
 ### Changed
 
