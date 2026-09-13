@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// Run the invariants.
-pub fn check(root: Option<PathBuf>, json: bool, online: bool) -> Result<ExitCode> {
+pub fn check(root: Option<PathBuf>, json: bool) -> Result<ExitCode> {
     let store = store_at(root)?;
-    let report = check::run(&store, online)?;
+    let report = check::run(&store)?;
     if json {
         out_json(&report)?;
     } else {

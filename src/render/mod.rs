@@ -38,12 +38,10 @@ pub fn bold(s: &str) -> String {
 /// A status badge, coloured by whether the node still asks anything of you.
 pub fn status_badge(s: Status) -> String {
     let code = match s {
-        Status::Seed => "36",                         // cyan, unformed
-        Status::Hypothesis => "33",                   // yellow, live and owing evidence
-        Status::Testing => "35",                      // magenta, in flight
-        Status::Supported => "32",                    // green, standing
-        Status::Refuted => "31",                      // red, dead
-        Status::Abandoned | Status::Graduated => "2", // dim, settled elsewhere
+        Status::Seed => "36",       // cyan, unformed
+        Status::Hypothesis => "33", // yellow, live and owing a look
+        Status::Refuted => "31",    // red, dead
+        Status::Abandoned => "2",   // dim, settled
     };
     paint(code, &format!("{s:<10}"))
 }
@@ -51,11 +49,15 @@ pub fn status_badge(s: Status) -> String {
 /// One node as a single line.
 pub fn line(doc: &Doc) -> String {
     let n = &doc.node;
+    let tags = if n.tags.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", dim(&format!("[{}]", n.tags.join(", "))))
+    };
     format!(
-        "{} {} {} {}",
+        "{} {}{tags} {}",
         status_badge(n.status),
         bold(&n.id),
-        dim(&format!("[{}]", n.domain)),
         dim(&n.title)
     )
 }

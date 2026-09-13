@@ -17,7 +17,6 @@ use time::{
 #[derive(Debug, Clone)]
 pub struct Store {
     root: PathBuf,
-    config: Config,
 }
 
 impl Store {
@@ -43,37 +42,25 @@ impl Store {
                 root.display()
             );
         }
-        let config = Config::load(&root, || corpus_id(&root))?;
-        Ok(Self { root, config })
+        // Loaded for its schema check alone: a corpus at an older schema
+        // refuses to open until `neb migrate` has brought it forward.
+        Config::load(&root, || corpus_id(&root))?;
+        Ok(Self { root })
     }
 
-    /// Create an empty corpus, with a config declaring one domain.
+    /// Create an empty corpus.
     pub fn init(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root.join("nodes"))?;
         std::fs::create_dir_all(root.join("inbox"))?;
-        let config = Config::fresh(corpus_id(root));
-        config.save(root)?;
+        Config::fresh(corpus_id(root)).save(root)?;
         Ok(Self {
             root: root.to_path_buf(),
-            config,
         })
     }
 
     /// Where the corpus lives.
     pub fn root(&self) -> &Path {
         &self.root
-    }
-
-    /// The corpus configuration.
-    pub fn config(&self) -> &Config {
-        &self.config
-    }
-
-    /// Replace the configuration on disk and in memory.
-    pub fn save_config(&mut self, config: Config) -> Result<()> {
-        config.save(&self.root)?;
-        self.config = config;
-        Ok(())
     }
 
     /// Path of a node file, whether or not it exists.
@@ -270,7 +257,7 @@ fn unique_entry_id(seed: &str, existing: &str) -> String {
 
 /// A stable id for a corpus, derived from where it was created and when.
 /// Opaque by design: it identifies, it does not describe.
-fn corpus_id(root: &Path) -> String {
+pub fn corpus_id(root: &Path) -> String {
     let seed = format!("{}{}", root.display(), stamp());
     format!("neb-{:06x}", fnv(&seed) & 0xff_ffff)
 }

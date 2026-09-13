@@ -1,13 +1,20 @@
-//! Reading the graph: trace, impact, open, show, list.
+//! Reading the graph: trace, impact, open, show, list, review.
 
-use super::{in_scope, scope_footer};
 use super::{out_json, store_at};
 use crate::corpus::Doc;
-use crate::corpus::{EdgeType, Status, store};
+use crate::corpus::{EdgeType, Status, model, store};
 use crate::render::{self, Tree};
 use crate::render::{bold, dim};
 use anyhow::{Result, bail};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+
+/// Days a seed may sit untouched before `open` and `review` raise it.
+const SEED_DAYS: i64 = 90;
+/// Days a hypothesis may sit untouched before `review` calls it stale.
+const HYPOTHESIS_DAYS: i64 = 30;
+/// Days an inbox capture may wait before `open` and `review` raise it.
+const INBOX_DAYS: i64 = 14;
 
 /// Walk ancestry, or descent.
 pub fn trace(root: Option<PathBuf>, node_id: &str, down: bool, json: bool) -> Result<()> {
@@ -19,29 +26,12 @@ pub fn trace(root: Option<PathBuf>, node_id: &str, down: bool, json: bool) -> Re
     }
     if json {
         let mut acc = Vec::new();
-        collect(
-            node_id,
-            &by_id,
-            down,
-            &mut std::collections::HashSet::new(),
-            &mut acc,
-        );
+        collect(node_id, &by_id, down, &mut HashSet::new(), &mut acc);
         return out_json(&acc);
     }
     let tree = Tree::new(&by_id);
     let text = if down {
-        let children: std::collections::HashMap<&str, Vec<String>> = by_id
-            .keys()
-            .map(|k| {
-                (
-                    *k,
-                    docs.iter()
-                        .filter(|d| d.node.parents().any(|p| p == *k))
-                        .map(|d| d.node.id.clone())
-                        .collect(),
-                )
-            })
-            .collect();
+        let children = children_index(&docs);
         tree.draw(node_id, &|d: &Doc| {
             children
                 .get(d.node.id.as_str())
@@ -57,11 +47,23 @@ pub fn trace(root: Option<PathBuf>, node_id: &str, down: bool, json: bool) -> Re
     Ok(())
 }
 
+/// Every node's genealogical children, so descent can be walked without
+/// rescanning the corpus at each step.
+fn children_index(docs: &[Doc]) -> HashMap<&str, Vec<String>> {
+    let mut out: HashMap<&str, Vec<String>> = HashMap::new();
+    for d in docs {
+        for p in d.node.parents() {
+            out.entry(p).or_default().push(d.node.id.clone());
+        }
+    }
+    out
+}
+
 fn collect(
     id: &str,
-    by_id: &std::collections::HashMap<&str, &Doc>,
+    by_id: &HashMap<&str, &Doc>,
     down: bool,
-    seen: &mut std::collections::HashSet<String>,
+    seen: &mut HashSet<String>,
     acc: &mut Vec<serde_json::Value>,
 ) {
     if !seen.insert(id.to_string()) {
@@ -88,54 +90,71 @@ fn collect(
     }
 }
 
-/// What collapses if this node dies.
+/// What this node touches: everything that descends from it, and whatever
+/// it contradicts.
 pub fn impact(root: Option<PathBuf>, node_id: &str, json: bool) -> Result<()> {
     let store = store_at(root)?;
     let docs = store.load_all()?;
-    store.load(node_id)?;
-    let mut hit: Vec<(&str, EdgeType)> = Vec::new();
-    for d in &docs {
-        for e in &d.node.edges {
-            if e.to == node_id && matches!(e.kind, EdgeType::DependsOn | EdgeType::Supports) {
-                hit.push((d.node.id.as_str(), e.kind));
+    let doc = store.load(node_id)?;
+    let children = children_index(&docs);
+
+    // Descendants by reverse genealogy, breadth-first so nearer ones print
+    // first, each reported once even when reached along two branches.
+    let mut descendants: Vec<String> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::from([node_id]);
+    let mut frontier = vec![node_id];
+    while !frontier.is_empty() {
+        let mut next = Vec::new();
+        for at in frontier {
+            for c in children.get(at).map(Vec::as_slice).unwrap_or_default() {
+                if seen.insert(c.as_str()) {
+                    descendants.push(c.clone());
+                    next.push(c.as_str());
+                }
             }
         }
+        frontier = next;
     }
+    let contradicts: Vec<&str> = doc.node.edges_of(EdgeType::Contradicts).collect();
+
     if json {
-        let v: Vec<_> = hit
+        let v: Vec<_> = descendants
             .iter()
-            .map(|(id, k)| serde_json::json!({"id": id, "via": k.to_string()}))
+            .map(|id| serde_json::json!({"id": id, "via": "descends"}))
+            .chain(
+                contradicts
+                    .iter()
+                    .map(|id| serde_json::json!({"id": id, "via": "contradicts"})),
+            )
             .collect();
         return out_json(&v);
     }
-    if hit.is_empty() {
-        println!("{}", dim("nothing leans on this node"));
+    if descendants.is_empty() && contradicts.is_empty() {
+        println!("{}", dim("nothing descends from or contradicts this node"));
         return Ok(());
     }
-    println!("{}", dim(&format!("if `{node_id}` dies:")));
-    for (id, kind) in hit {
-        let severity = if kind == EdgeType::DependsOn {
-            "dies with it"
-        } else {
-            "loses support"
-        };
-        println!("  {} {} {}", bold(id), dim(&kind.to_string()), severity);
+    if !descendants.is_empty() {
+        println!("{}", dim(&format!("descends from `{node_id}`:")));
+        for id in &descendants {
+            println!("  {}", bold(id));
+        }
+    }
+    if !contradicts.is_empty() {
+        println!("{}", dim(&format!("contradicts `{node_id}`:")));
+        for id in &contradicts {
+            println!("  {}", bold(id));
+        }
     }
     Ok(())
 }
 
 /// Nodes that need attention.
-pub fn open(root: Option<PathBuf>, domain: Option<&str>, all: bool, json: bool) -> Result<()> {
+pub fn open(root: Option<PathBuf>, tags: &[String], json: bool) -> Result<()> {
     let store = store_at(root)?;
-    let scope = store.config().resolve_view(domain, all)?;
+    let tags = model::normalize_tags(tags);
     let docs = store.load_all()?;
     let mut items: Vec<(String, String)> = Vec::new();
-    let inbox = store.inbox()?;
-    let stale_inbox_count = inbox
-        .iter()
-        .filter_map(|entry| store::days_since_stamp(&entry.at))
-        .filter(|days| *days > 14)
-        .count();
+    let stale_inbox_count = stale_inbox(&store.inbox()?);
     if stale_inbox_count > 0 {
         items.push((
             "inbox".into(),
@@ -144,35 +163,18 @@ pub fn open(root: Option<PathBuf>, domain: Option<&str>, all: bool, json: bool) 
             ),
         ));
     }
-    for d in docs.iter().filter(|d| in_scope(d, scope.as_deref())) {
+    for d in docs.iter().filter(|d| d.node.has_all_tags(&tags)) {
         let n = &d.node;
-        // The genuinely actionable gap: a hypothesis that names what would kill
-        // it, has found nothing either way, and has nothing running to find out.
-        if matches!(n.status, Status::Hypothesis)
-            && n.evidence.is_empty()
-            && n.open_tasks().next().is_none()
-        {
+        // The genuinely actionable gap: a hypothesis that names what would
+        // kill it and has nothing attached that bears on the question.
+        if n.status == Status::Hypothesis && n.references.is_empty() {
+            items.push((n.id.clone(), "hypothesis with no references".into()));
+        }
+        if n.status == Status::Seed && older_than(&n.updated, SEED_DAYS) {
             items.push((
                 n.id.clone(),
-                "hypothesis with no evidence and no task running".into(),
+                "seed untouched for ninety days; abandon it?".into(),
             ));
-        }
-        if n.status == Status::Seed && store::days_since(&n.updated).is_some_and(|d| d > 90) {
-            items.push((
-                n.id.clone(),
-                "seed untouched for over ninety days; abandon it?".into(),
-            ));
-        }
-        if n.status == Status::Testing && store::days_since(&n.updated).is_some_and(|d| d > 30) {
-            items.push((
-                n.id.clone(),
-                "testing, but nothing has moved in a month".into(),
-            ));
-        }
-        for r in &n.references {
-            if r.note.as_ref().is_none_or(|s| s.trim().is_empty()) {
-                items.push((n.id.clone(), format!("reference `{}` has no note", r.id)));
-            }
         }
     }
     if json {
@@ -188,8 +190,21 @@ pub fn open(root: Option<PathBuf>, domain: Option<&str>, all: bool, json: bool) 
     for (id, why) in &items {
         println!("{} {}", bold(id), why);
     }
-    scope_footer(scope.as_deref());
     Ok(())
+}
+
+/// Whether a `YYYY-MM-DD` date is at least `days` old.
+fn older_than(date: &str, days: i64) -> bool {
+    store::days_since(date).is_some_and(|d| d >= days)
+}
+
+/// Captures waiting at least fourteen days.
+fn stale_inbox(inbox: &[store::InboxEntry]) -> usize {
+    inbox
+        .iter()
+        .filter_map(|entry| store::days_since_stamp(&entry.at))
+        .filter(|days| *days >= INBOX_DAYS)
+        .count()
 }
 
 /// Show one node in full.
@@ -207,11 +222,14 @@ pub fn show(root: Option<PathBuf>, node_id: &str, json: bool) -> Result<()> {
         "{} {} {}",
         render::status_badge(n.status),
         bold(&n.id),
-        dim(&n.domain)
+        dim(&n.tags.join(", "))
     );
     println!("{}\n", n.title);
     if let Some(k) = &n.kill {
         println!("{} {k}\n", dim("kill:"));
+    }
+    if let Some(c) = &n.closed {
+        println!("{} {} {}\n", dim("closed:"), c.why, dim(&c.at));
     }
     if !doc.body.trim().is_empty() {
         println!("{}\n", doc.body.trim());
@@ -220,18 +238,6 @@ pub fn show(root: Option<PathBuf>, node_id: &str, json: bool) -> Result<()> {
         println!("{}", dim("edges"));
         for e in &n.edges {
             println!("  {:<14} {}", e.kind.to_string(), e.to);
-        }
-        println!();
-    }
-    if !n.evidence.is_empty() {
-        println!("{}", dim("evidence"));
-        for e in &n.evidence {
-            let v = format!("{:?}", e.verdict).to_lowercase();
-            let s = format!("{:?}", e.strength).to_lowercase();
-            println!("  {} {:<12} {:<10} {}", bold(&e.id), v, s, e.source);
-            if let Some(note) = &e.note {
-                println!("     {}", dim(note.trim()));
-            }
         }
         println!();
     }
@@ -244,41 +250,23 @@ pub fn show(root: Option<PathBuf>, node_id: &str, json: bool) -> Result<()> {
         }
         println!();
     }
-    if !n.tasks.is_empty() {
-        println!("{}", dim("tasks"));
-        for t in &n.tasks {
-            println!(
-                "  {} {:<8} {}",
-                bold(&t.id),
-                t.state,
-                t.why.as_deref().unwrap_or("")
-            );
-        }
-        println!();
-    }
-    if let Some(g) = &n.graduated_to {
-        println!("{} {g}", dim("graduated to:"));
-    }
     Ok(())
 }
 
-/// List nodes.
+/// List nodes. Several `--tag`s narrow to nodes carrying all of them.
 pub fn list(
     root: Option<PathBuf>,
     status: Option<Status>,
-    tag: Option<&str>,
-    domain: Option<&str>,
-    all: bool,
+    tags: &[String],
     json: bool,
 ) -> Result<()> {
     let store = store_at(root)?;
-    let scope = store.config().resolve_view(domain, all)?;
+    let tags = model::normalize_tags(tags);
     let docs = store.load_all()?;
     let picked: Vec<&Doc> = docs
         .iter()
-        .filter(|d| in_scope(d, scope.as_deref()))
         .filter(|d| status.is_none_or(|s| d.node.status == s))
-        .filter(|d| tag.is_none_or(|t| d.node.tags.iter().any(|x| x == t)))
+        .filter(|d| d.node.has_all_tags(&tags))
         .collect();
     if json {
         let v: Vec<_> = picked.iter().map(|d| &d.node).collect();
@@ -296,7 +284,6 @@ pub fn list(
             dim(&format!("{} of {} nodes", picked.len(), docs.len()))
         );
     }
-    scope_footer(scope.as_deref());
     Ok(())
 }
 
@@ -309,15 +296,14 @@ struct ReviewItem {
     reason: String,
 }
 
-/// The weekly maintenance report: hypotheses starved of evidence, seeds gone
-/// cold, nodes nobody has situated, and inbox captures rotting unprocessed.
+/// The weekly maintenance report: hypotheses gone quiet, seeds gone cold,
+/// nodes nobody has situated, and inbox captures rotting unprocessed.
 ///
-/// Read-only by design — see `docs/spec.md`, "The maintenance loop". This
-/// walks the corpus and writes a report; it never edits a node, an inbox
-/// entry, or the manifest. The judgement calls (kill conditions that look
-/// satisfied, likely `contradicts` pairs) stay out of scope for the same
-/// reason: they belong to the agent that reads this report, not to this
-/// query.
+/// Read-only by design. This walks the corpus and writes a report; it never
+/// edits a node, an inbox entry, or the config. The judgement calls (kill
+/// conditions that look satisfied, likely `contradicts` pairs) stay out of
+/// scope for the same reason: they belong to the agent that reads this
+/// report, not to this query.
 pub fn review(
     root: Option<PathBuf>,
     since: Option<i64>,
@@ -328,8 +314,8 @@ pub fn review(
     let docs = store.load_all()?;
     let inbox = store.inbox()?;
 
-    let hypothesis_days = since.unwrap_or(30);
-    let seed_days = since.unwrap_or(90);
+    let hypothesis_days = since.unwrap_or(HYPOTHESIS_DAYS);
+    let seed_days = since.unwrap_or(SEED_DAYS);
 
     let mut stale_hypotheses = Vec::new();
     let mut untouched_seeds = Vec::new();
@@ -337,27 +323,20 @@ pub fn review(
 
     for d in &docs {
         let n = &d.node;
-        if n.status == Status::Hypothesis
-            && n.evidence.is_empty()
-            && store::days_since(&n.updated).is_some_and(|days| days > hypothesis_days)
-        {
+        if n.status == Status::Hypothesis && older_than(&n.updated, hypothesis_days) {
             stale_hypotheses.push(ReviewItem {
                 rule: "stale-hypothesis",
                 id: n.id.clone(),
                 title: n.title.clone(),
-                reason: format!("hypothesis with no evidence for over {hypothesis_days} days"),
+                reason: format!("hypothesis untouched for {hypothesis_days} days"),
             });
         }
-        if n.status == Status::Seed
-            && store::days_since(&n.updated).is_some_and(|days| days > seed_days)
-        {
+        if n.status == Status::Seed && older_than(&n.updated, seed_days) {
             untouched_seeds.push(ReviewItem {
                 rule: "untouched-seed",
                 id: n.id.clone(),
                 title: n.title.clone(),
-                reason: format!(
-                    "seed untouched for over {seed_days} days; propose: status abandoned"
-                ),
+                reason: format!("seed untouched for {seed_days} days; propose: status abandoned"),
             });
         }
         if n.status.is_open() && n.references.is_empty() {
@@ -370,11 +349,7 @@ pub fn review(
         }
     }
 
-    let stale_inbox_count = inbox
-        .iter()
-        .filter_map(|entry| store::days_since_stamp(&entry.at))
-        .filter(|days| *days > 14)
-        .count();
+    let stale_inbox_count = stale_inbox(&inbox);
     let stale_inbox = if stale_inbox_count > 0 {
         vec![ReviewItem {
             rule: "stale-inbox",
@@ -390,7 +365,7 @@ pub fn review(
 
     let sections = [
         (
-            format!("Hypotheses with no evidence for {hypothesis_days} days"),
+            format!("Hypotheses untouched for {hypothesis_days} days"),
             stale_hypotheses,
         ),
         (
@@ -399,7 +374,7 @@ pub fn review(
         ),
         ("Nodes with no references".to_string(), no_references),
         (
-            "Inbox entries waiting more than 14 days".to_string(),
+            format!("Inbox entries waiting {INBOX_DAYS} days or more"),
             stale_inbox,
         ),
     ];
@@ -433,5 +408,3 @@ fn write_report(out: Option<&Path>, text: &str) -> Result<()> {
     }
     Ok(())
 }
-
-// ------------------------------------------------------------------ domains --

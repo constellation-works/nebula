@@ -9,7 +9,7 @@
 //! add the variant to [`Command`] in the position its section dictates *and*
 //! add its row to the template; a `#[test]` below checks the two stay in sync.
 
-use crate::corpus::{EdgeType, Status, Strength, Verdict};
+use crate::corpus::{EdgeType, Status};
 use clap::{CommandFactory, Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -23,8 +23,8 @@ const HELP_TEMPLATE: &str = "\
 
 Corpus:
   init         Create an empty corpus
-  domain       Declare domains and move nodes between them
   check        Run the invariants. Exits non-zero on any error
+  migrate      Bring a v1 corpus forward to the v2 schema, in place
   completions  Generate shell completion scripts
 
 Inbox:
@@ -37,20 +37,17 @@ Nodes:
   new          Create a node directly, without going through the inbox
   sharpen      Sharpen a seed into a hypothesis by naming what would kill it
   status       Move a node to a new status, with the transition guards applied
-  graduate     Hand a node downstream to principia or orbit-research
   link         Add a typed edge between two nodes
+  tag          Edit a node's tags, or list every tag with its node count
 
 References:
-  cite         Attach context. A reference explains; it never bears on truth
-  evidence     Attach something that bears on whether the idea is true
-  weigh        Promote a reference into evidence, once you know which way it cuts
-  task         Record work spawned to settle this node
+  cite         Attach context, with a note saying why it is here
 
 Query:
   show         Show one node in full
   list         List nodes
   trace        Walk ancestry. The feature the whole system exists for
-  impact       What collapses if this node dies
+  impact       What descends from this node, and what contradicts it
 
 Maintenance:
   open         Nodes that need attention
@@ -95,20 +92,15 @@ enum Command {
         path: Option<PathBuf>,
     },
 
-    /// Declare domains and move nodes between them.
-    ///
-    /// A domain is a view inside one corpus, so `trace` and `impact` cross
-    /// them freely. The boundary that needs separate storage, work against
-    /// personal, is a separate corpus.
-    #[command(subcommand)]
-    Domain(DomainCommand),
-
     /// Run the invariants. Exits non-zero on any error.
-    Check {
-        /// Resolve cited Orbit task ids and confirm open `tasks` entries are still open.
-        #[arg(long)]
-        online: bool,
-    },
+    Check,
+
+    /// Bring a v1 corpus forward to the v2 schema, in place.
+    ///
+    /// Idempotent, and refused while the corpus has uncommitted git changes
+    /// so the migration lands as its own commit. Evidence, task links and
+    /// the removed edge kinds become references; nothing is dropped.
+    Migrate,
 
     /// Generate shell completion scripts.
     Completions {
@@ -140,9 +132,6 @@ enum Command {
         /// Node title. Defaults to the captured text.
         #[arg(long)]
         title: Option<String>,
-        /// Domain it belongs to. Defaults to the corpus default.
-        #[arg(long)]
-        domain: Option<String>,
         /// A parent this descends from. Repeat for a merge.
         #[arg(long = "parent", value_name = "ID")]
         parents: Vec<String>,
@@ -167,18 +156,12 @@ enum Command {
     New {
         /// Node title.
         title: String,
-        /// Domain it belongs to. Defaults to the corpus default.
-        #[arg(long)]
-        domain: Option<String>,
         /// A parent this descends from. Repeat for a merge.
         #[arg(long = "parent", value_name = "ID")]
         parents: Vec<String>,
-        /// What would falsify this. Required to start above seed.
+        /// What would falsify this. Naming one starts the node as a hypothesis.
         #[arg(long)]
         kill: Option<String>,
-        /// Starting status.
-        #[arg(long, default_value = "seed")]
-        status: Status,
         /// Labels.
         #[arg(long = "tag", value_name = "TAG")]
         tags: Vec<String>,
@@ -194,26 +177,24 @@ enum Command {
     Sharpen {
         /// Node id.
         node: String,
-        /// The falsifier, written before any evidence arrives.
+        /// The falsifier, written before anything is read.
         #[arg(long)]
         kill: String,
     },
 
     /// Move a node to a new status, with the transition guards applied.
+    ///
+    /// `refuted` needs `--why`, saying how the kill condition fired, and is
+    /// final: reviving the idea takes a new node with a `reopens` edge.
+    /// `abandoned` takes `--why` optionally.
     Status {
         /// Node id.
         node: String,
         /// Target status.
         status: Status,
-    },
-
-    /// Hand a node downstream to principia or orbit-research.
-    Graduate {
-        /// Node id.
-        node: String,
-        /// Where it went.
+        /// Why it closed. Required for refuted, optional for abandoned.
         #[arg(long)]
-        to: String,
+        why: Option<String>,
     },
 
     /// Add a typed edge between two nodes.
@@ -226,7 +207,21 @@ enum Command {
         to: String,
     },
 
-    /// Attach context. A reference explains; it never bears on truth.
+    /// Edit a node's tags, or list every tag with its node count.
+    ///
+    /// Tags are normalised to lowercase kebab-case on the way in.
+    Tag {
+        /// Node id, or `list` to show every tag in the corpus with a count.
+        target: String,
+        /// A tag to add. Repeatable.
+        #[arg(long = "add", value_name = "TAG")]
+        add: Vec<String>,
+        /// A tag to remove. Repeatable.
+        #[arg(long = "remove", value_name = "TAG")]
+        remove: Vec<String>,
+    },
+
+    /// Attach context, with a note saying why it is here.
     Cite {
         /// Node id.
         node: String,
@@ -250,55 +245,6 @@ enum Command {
         run: Option<String>,
     },
 
-    /// Attach something that bears on whether the idea is true.
-    Evidence {
-        /// Node id.
-        node: String,
-        /// Which way it cuts.
-        #[arg(long)]
-        verdict: Verdict,
-        /// How much it is worth.
-        #[arg(long, default_value = "suggestive")]
-        strength: Strength,
-        /// Where it came from.
-        #[arg(long)]
-        source: String,
-        /// What it showed, and what is shaky about it.
-        #[arg(long)]
-        note: Option<String>,
-        /// Orbit task that produced it.
-        #[arg(long)]
-        task: Option<String>,
-    },
-
-    /// Promote a reference into evidence, once you know which way it cuts.
-    Weigh {
-        /// Node id.
-        node: String,
-        /// Reference id, from `neb show`.
-        reference: String,
-        /// Which way it cuts.
-        #[arg(long)]
-        verdict: Verdict,
-        /// How much it is worth.
-        #[arg(long, default_value = "suggestive")]
-        strength: Strength,
-    },
-
-    /// Record work spawned to settle this node.
-    Task {
-        /// Node id.
-        node: String,
-        /// Orbit task id.
-        id: String,
-        /// What it is meant to settle.
-        #[arg(long)]
-        why: Option<String>,
-        /// Mark an existing link done or dropped.
-        #[arg(long)]
-        state: Option<String>,
-    },
-
     /// Show one node in full.
     Show {
         /// Node id.
@@ -310,15 +256,9 @@ enum Command {
         /// Only this status.
         #[arg(long)]
         status: Option<Status>,
-        /// Only nodes carrying this tag.
-        #[arg(long)]
-        tag: Option<String>,
-        /// Only this domain. Defaults to the corpus default when several exist.
-        #[arg(long)]
-        domain: Option<String>,
-        /// Every domain.
-        #[arg(long, conflicts_with = "domain")]
-        all: bool,
+        /// Only nodes carrying this tag. Repeat to require every one.
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
     },
 
     /// Walk ancestry. The feature the whole system exists for.
@@ -330,20 +270,20 @@ enum Command {
         down: bool,
     },
 
-    /// What collapses if this node dies.
+    /// What descends from this node, and what contradicts it.
     Impact {
         /// Node id.
         node: String,
     },
 
     /// Nodes that need attention.
+    ///
+    /// Hypotheses with no references, seeds untouched for ninety days, and
+    /// inbox captures waiting fourteen days or more.
     Open {
-        /// Only this domain. Defaults to the corpus default when several exist.
-        #[arg(long)]
-        domain: Option<String>,
-        /// Every domain.
-        #[arg(long, conflicts_with = "domain")]
-        all: bool,
+        /// Only nodes carrying this tag. Repeat to require every one.
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
     },
 
     /// The weekly maintenance report: stale hypotheses, untouched seeds,
@@ -363,33 +303,6 @@ enum Command {
     },
 }
 
-#[derive(Subcommand)]
-enum DomainCommand {
-    /// Declared domains, with node counts.
-    List,
-    /// Declare a domain.
-    Add {
-        /// Lowercase letters, digits and dashes.
-        name: String,
-    },
-    /// Choose where bare `list` and `open` look.
-    Default {
-        /// A declared domain.
-        name: String,
-    },
-    /// Move a node to a domain.
-    Set {
-        /// Node id. Omit when using `--unplaced`.
-        #[arg(conflicts_with = "unplaced")]
-        node: Option<String>,
-        /// A declared domain for a single node.
-        name: Option<String>,
-        /// Place every node whose domain is empty into this declared domain.
-        #[arg(long, value_name = "DOMAIN", conflicts_with = "node")]
-        unplaced: Option<String>,
-    },
-}
-
 /// Parse the command line, run it, and turn the outcome into an exit code.
 pub fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -402,7 +315,6 @@ pub fn main() -> ExitCode {
     }
 }
 
-#[allow(clippy::too_many_lines)]
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     use crate::commands as c;
     let ok = ExitCode::SUCCESS;
@@ -417,53 +329,21 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Promote {
             entry,
             title,
-            domain,
             parents,
             tags,
             task,
             run,
-        } => c::promote(
-            root,
-            &entry,
-            title,
-            domain.as_deref(),
-            &parents,
-            &tags,
-            task,
-            run,
-        )
-        .map(|()| ok),
+        } => c::promote(root, &entry, title, &parents, &tags, task, run).map(|()| ok),
         Command::New {
             title,
-            domain,
             parents,
             kill,
-            status,
             tags,
             task,
             run,
-        } => c::new_node(
-            root,
-            &title,
-            domain.as_deref(),
-            &parents,
-            kill,
-            status,
-            &tags,
-            task,
-            run,
-        )
-        .map(|()| ok),
+        } => c::new_node(root, &title, &parents, kill, &tags, task, run).map(|()| ok),
         Command::Sharpen { node, kill } => c::sharpen(root, &node, &kill).map(|()| ok),
         Command::Link { from, kind, to } => c::link(root, &from, kind, &to).map(|()| ok),
-        Command::Evidence {
-            node,
-            verdict,
-            strength,
-            source,
-            note,
-            task,
-        } => c::evidence(root, &node, verdict, strength, &source, note, task).map(|()| ok),
         Command::Cite {
             node,
             uri,
@@ -473,43 +353,29 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             task,
             run,
         } => c::cite(root, &node, &uri, &kind, title, note, task, run).map(|()| ok),
-        Command::Weigh {
-            node,
-            reference,
-            verdict,
-            strength,
-        } => c::weigh(root, &node, &reference, verdict, strength).map(|()| ok),
-        Command::Status { node, status } => c::set_status(root, &node, status).map(|()| ok),
-        Command::Task {
-            node,
-            id,
-            why,
-            state,
-        } => c::task(root, &node, &id, why, state).map(|()| ok),
-        Command::Graduate { node, to } => c::graduate(root, &node, &to).map(|()| ok),
+        Command::Status { node, status, why } => {
+            c::set_status(root, &node, status, why).map(|()| ok)
+        }
+        Command::Tag {
+            target,
+            add,
+            remove,
+        } if target == "list" && add.is_empty() && remove.is_empty() => {
+            c::tag_list(root, json).map(|()| ok)
+        }
+        Command::Tag {
+            target,
+            add,
+            remove,
+        } => c::tag(root, &target, &add, &remove).map(|()| ok),
         Command::Trace { node, down } => c::trace(root, &node, down, json).map(|()| ok),
         Command::Impact { node } => c::impact(root, &node, json).map(|()| ok),
-        Command::Open { domain, all } => c::open(root, domain.as_deref(), all, json).map(|()| ok),
+        Command::Open { tags } => c::open(root, &tags, json).map(|()| ok),
         Command::Show { node } => c::show(root, &node, json).map(|()| ok),
         Command::Review { since, out } => c::review(root, since, out.as_deref(), json).map(|()| ok),
-        Command::List {
-            status,
-            tag,
-            domain,
-            all,
-        } => c::list(root, status, tag.as_deref(), domain.as_deref(), all, json).map(|()| ok),
-        Command::Domain(cmd) => match cmd {
-            DomainCommand::List => c::domain_list(root, json),
-            DomainCommand::Add { name } => c::domain_add(root, &name),
-            DomainCommand::Default { name } => c::domain_default(root, &name),
-            DomainCommand::Set {
-                node,
-                name,
-                unplaced,
-            } => c::domain_set(root, node.as_deref(), name.as_deref(), unplaced.as_deref()),
-        }
-        .map(|()| ok),
-        Command::Check { online } => c::check(root, json, online),
+        Command::List { status, tags } => c::list(root, status, &tags, json).map(|()| ok),
+        Command::Check => c::check(root, json),
+        Command::Migrate => c::migrate(root).map(|()| ok),
         Command::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "neb", &mut std::io::stdout());
             Ok(ok)
@@ -541,7 +407,7 @@ mod tests {
             assert!(flat.contains(&row), "help is missing the row {row:?}");
             seen += 1;
         }
-        assert_eq!(seen, 23, "template rows need updating for a new subcommand");
+        assert_eq!(seen, 20, "template rows need updating for a new subcommand");
         assert!(
             Cli::command().find_subcommand("help").is_none(),
             "clap's `help` subcommand should be disabled"
@@ -584,10 +450,10 @@ mod tests {
             .map(|s| s.get_name().to_string())
             .collect();
         let expected = [
-            ["init", "domain", "check", "completions"].as_slice(),
+            ["init", "check", "migrate", "completions"].as_slice(),
             &["capture", "inbox", "promote", "drop"],
-            &["new", "sharpen", "status", "graduate", "link"],
-            &["cite", "evidence", "weigh", "task"],
+            &["new", "sharpen", "status", "link", "tag"],
+            &["cite"],
             &["show", "list", "trace", "impact"],
             &["open", "review"],
         ]

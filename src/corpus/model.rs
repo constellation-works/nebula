@@ -1,8 +1,8 @@
 //! The node schema.
 //!
 //! One markdown file per node, YAML frontmatter plus prose. Everything about a
-//! node lives in that one file: edges, evidence, references, provenance and the
-//! argument itself. See `docs/spec.md`, "One file, and why it holds".
+//! node lives in that one file: edges, references, provenance and the
+//! argument itself. See `docs/design/v0.2/1_spec.md`, "Node".
 
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::Path;
 
-/// Lifecycle. The four stages of an inquiry are a status, not sub-structure.
+/// Lifecycle. `seed → hypothesis → refuted | abandoned`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 #[value(rename_all = "lowercase")]
@@ -19,31 +19,23 @@ pub enum Status {
     Seed,
     /// Sharpened into something that could be wrong. Requires a kill condition.
     Hypothesis,
-    /// Evidence is being gathered.
-    Testing,
-    /// Evidence favours it, for now. Never terminal, never certain.
-    Supported,
-    /// The kill condition fired.
+    /// The kill condition fired. Requires `closed.why`.
     Refuted,
     /// Lost interest. Deliberately distinct from refuted.
     Abandoned,
-    /// Promoted downstream to principia or orbit-research.
-    Graduated,
 }
 
 impl Status {
-    /// Statuses that must name what would falsify them.
+    /// Statuses that must name what would falsify them. A refuted node is
+    /// included because "the kill condition fired" presumes there was one.
     pub fn needs_kill(self) -> bool {
-        !matches!(self, Self::Seed | Self::Abandoned)
+        matches!(self, Self::Hypothesis | Self::Refuted)
     }
 
-    /// Whether the inquiry is still live. Refuted, abandoned and graduated
-    /// nodes stay in the graph forever but no longer ask anything of you.
+    /// Whether the inquiry is still live. Refuted and abandoned nodes stay in
+    /// the graph forever but no longer ask anything of you.
     pub fn is_open(self) -> bool {
-        matches!(
-            self,
-            Self::Seed | Self::Hypothesis | Self::Testing | Self::Supported
-        )
+        matches!(self, Self::Seed | Self::Hypothesis)
     }
 
     /// A node that has been ruled out cannot quietly return to active work.
@@ -59,17 +51,14 @@ impl fmt::Display for Status {
         let s = match self {
             Self::Seed => "seed",
             Self::Hypothesis => "hypothesis",
-            Self::Testing => "testing",
-            Self::Supported => "supported",
             Self::Refuted => "refuted",
             Self::Abandoned => "abandoned",
-            Self::Graduated => "graduated",
         };
         f.write_str(s)
     }
 }
 
-/// Edge kinds, spanning the two graphs that share one node set.
+/// Edge kinds: the genealogy DAG plus one symmetric relation between ideas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 #[value(rename_all = "kebab-case")]
@@ -82,19 +71,13 @@ pub enum EdgeType {
     Generalizes,
     /// Genealogy: this revives a refuted node.
     Reopens,
-    /// Evidence: this being true makes that more likely.
-    Supports,
-    /// Evidence: this being true makes that less likely.
-    Undermines,
-    /// Dependency: if that dies, this dies with it.
-    DependsOn,
     /// Mutual exclusion. Symmetric, and the checker enforces the symmetry.
     Contradicts,
 }
 
 impl EdgeType {
     /// Genealogy edges form the DAG that `trace` walks and `check` proves
-    /// acyclic. The evidence graph is deliberately not constrained this way.
+    /// acyclic. `contradicts` is a relation between ideas, not a lineage.
     pub fn is_genealogy(self) -> bool {
         matches!(
             self,
@@ -110,9 +93,6 @@ impl fmt::Display for EdgeType {
             Self::Refines => "refines",
             Self::Generalizes => "generalizes",
             Self::Reopens => "reopens",
-            Self::Supports => "supports",
-            Self::Undermines => "undermines",
-            Self::DependsOn => "depends-on",
             Self::Contradicts => "contradicts",
         };
         f.write_str(s)
@@ -129,34 +109,7 @@ pub struct Edge {
     pub to: String,
 }
 
-/// Which way a piece of evidence cuts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
-#[serde(rename_all = "lowercase")]
-#[value(rename_all = "lowercase")]
-pub enum Verdict {
-    /// Makes the claim more likely.
-    Supports,
-    /// Makes the claim less likely.
-    Undermines,
-    /// Looked, learned nothing. Worth recording so you do not look twice.
-    Inconclusive,
-}
-
-/// How much the evidence is worth. Three levels on purpose: rigor belongs
-/// downstream, and finer grain here would be false precision.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
-#[serde(rename_all = "lowercase")]
-#[value(rename_all = "lowercase")]
-pub enum Strength {
-    /// One observation, no control, easily fooled.
-    Anecdote,
-    /// Points somewhere, does not settle it.
-    Suggestive,
-    /// Would be hard to explain away.
-    Strong,
-}
-
-/// What produced a node, an evidence entry or a reference.
+/// What produced a node or a reference.
 ///
 /// Every field is optional, because plenty of ideas genuinely do arrive in the
 /// shower and a provenance block that demanded filling would just go unfilled.
@@ -183,33 +136,11 @@ pub struct Origin {
     pub at: Option<String>,
 }
 
-/// Something that bears on whether the idea is true.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Evidence {
-    /// Unique within the node, never reused.
-    pub id: String,
-    /// Which way it cuts.
-    pub verdict: Verdict,
-    /// How much it is worth.
-    pub strength: Strength,
-    /// A URL, DOI, sim path, study note, screenshot or memory.
-    pub source: String,
-    /// When it was attached.
-    pub date: String,
-    /// What it actually showed, and what is shaky about it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-    /// What produced it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub origin: Option<Origin>,
-}
-
-/// Context, never evidence.
+/// Context attached to a node. The note is the field that matters.
 ///
-/// `deny_unknown_fields` is what enforces the separation: a reference that
-/// tried to carry a verdict fails to parse, so findings cannot be routed
-/// through references to dodge the discipline evidence demands.
+/// `deny_unknown_fields` is what enforces invariant 7: a reference that tries
+/// to carry a `verdict` or `strength` fails to parse, so the truth-rating
+/// ladder v0.2 removed cannot creep back in through the side door.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Reference {
@@ -228,36 +159,20 @@ pub struct Reference {
     pub note: Option<String>,
     /// When it was attached.
     pub added: String,
-    /// Set when this reference was later promoted into evidence. The original
-    /// stays put, so the reading history survives.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub promoted_to: Option<String>,
     /// What produced it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
 }
 
-/// Work this node has spawned.
-///
-/// The forward half of provenance, and what lets `open` find the genuinely
-/// actionable gap: a hypothesis with no evidence and nothing running to get any.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Why and when a node left active work. Present only on refuted and
+/// abandoned nodes; required, with a non-empty `why`, on refuted ones.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct TaskLink {
-    /// Orbit task id.
-    pub id: String,
-    /// `open`, `done` or `dropped`.
-    pub state: String,
-    /// What it is meant to settle.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub why: Option<String>,
-}
-
-impl TaskLink {
-    /// Whether this task is still expected to produce something.
-    pub fn is_open(&self) -> bool {
-        self.state == "open"
-    }
+pub struct Closed {
+    /// What settled it. For a refuted node, how the kill condition fired.
+    pub why: String,
+    /// When, as `YYYY-MM-DD`.
+    pub at: String,
 }
 
 /// One unit of inquiry.
@@ -268,12 +183,6 @@ pub struct Node {
     pub id: String,
     /// One line naming the idea.
     pub title: String,
-    /// Which declared domain this belongs to: `principia`, `ranking`, and so
-    /// on. A view within the corpus, not a wall: edges cross domains freely.
-    /// Defaults to empty on load so corpora that predate domains still open,
-    /// and `check` reports the gap.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub domain: String,
     /// Where it is in its lifecycle.
     pub status: Status,
     /// When it entered the graph.
@@ -281,32 +190,26 @@ pub struct Node {
     /// When it last changed.
     pub updated: String,
     /// What would falsify this, written when the hypothesis is stated and
-    /// before any evidence arrives. This is what keeps the later verdict
-    /// honest instead of retroactive.
+    /// before anything is read. This is what keeps the later verdict honest
+    /// instead of retroactive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kill: Option<String>,
-    /// Free-form labels, open and multi-valued. Finer than `domain` and
-    /// deliberately unvalidated.
+    /// Free-form labels, lowercase kebab-case, normalised on every write.
+    /// No declared list: `check` warns on drift instead of walling it off.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
-    /// Typed links to other nodes, across both graphs.
+    /// Typed links to other nodes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edges: Vec<Edge>,
-    /// Things that bear on the truth of this node.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub evidence: Vec<Evidence>,
-    /// Context that does not bear on truth.
+    /// Context, with a note saying why each piece is here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<Reference>,
-    /// Work spawned to settle this.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tasks: Vec<TaskLink>,
+    /// Why and when it was closed. Only on refuted and abandoned nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed: Option<Closed>,
     /// What produced this node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
-    /// Where it went when it outgrew this system.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub graduated_to: Option<String>,
 }
 
 impl Node {
@@ -326,39 +229,54 @@ impl Node {
             .map(|e| e.to.as_str())
     }
 
-    /// Whether any evidence carries this verdict.
-    pub fn has_verdict(&self, v: Verdict) -> bool {
-        self.evidence.iter().any(|e| e.verdict == v)
+    /// Whether every one of `tags` is on this node. An empty filter matches.
+    pub fn has_all_tags(&self, tags: &[String]) -> bool {
+        tags.iter().all(|t| self.tags.iter().any(|x| x == t))
     }
 
-    /// Tasks still expected to produce something.
-    pub fn open_tasks(&self) -> impl Iterator<Item = &TaskLink> {
-        self.tasks.iter().filter(|t| t.is_open())
-    }
-
-    /// Next free evidence id. Ids are never reused, so this counts past the
-    /// highest ever issued rather than filling gaps left by removals.
-    pub fn next_evidence_id(&self) -> String {
-        format!(
-            "ev{}",
-            next_index(self.evidence.iter().map(|e| e.id.as_str()), "ev")
-        )
-    }
-
-    /// Next free reference id, under the same never-reuse rule.
+    /// Next free reference id.
     pub fn next_reference_id(&self) -> String {
-        format!(
-            "r{}",
-            next_index(self.references.iter().map(|r| r.id.as_str()), "r")
-        )
+        format!("r{}", next_reference_index(&self.references))
     }
 }
 
-fn next_index<'a>(ids: impl Iterator<Item = &'a str>, prefix: &str) -> usize {
-    ids.filter_map(|id| id.strip_prefix(prefix)?.parse::<usize>().ok())
+/// The `n` of the next free `r<n>`. Ids are never reused, so this counts
+/// past the highest ever issued rather than filling gaps left by removals.
+pub fn next_reference_index(refs: &[Reference]) -> usize {
+    refs.iter()
+        .filter_map(|r| r.id.strip_prefix('r')?.parse::<usize>().ok())
         .max()
         .unwrap_or(0)
         + 1
+}
+
+/// A tag as it is written: lowercase kebab-case. `Physics` becomes `physics`,
+/// `Machine Learning` becomes `machine-learning`. Applied on every write path
+/// so the corpus never holds two spellings of one label.
+pub fn normalize_tag(raw: &str) -> String {
+    let mut out = String::new();
+    let mut dash = false;
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            dash = false;
+        } else if !dash && !out.is_empty() {
+            out.push('-');
+            dash = true;
+        }
+    }
+    out.trim_end_matches('-').to_string()
+}
+
+/// Normalise a list of tags, dropping empties and duplicates, keeping order.
+pub fn normalize_tags(raw: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in raw.iter().map(|t| normalize_tag(t)) {
+        if !t.is_empty() && !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    out
 }
 
 /// A node file: frontmatter plus the prose you actually wrote.
@@ -377,18 +295,24 @@ pub fn read(path: &Path) -> Result<Doc> {
     parse(&raw).with_context(|| format!("in {}", path.display()))
 }
 
-/// Parse node text. Split out from [`read`] so it can be tested without a disk.
-pub fn parse(raw: &str) -> Result<Doc> {
+/// Split node text into its YAML frontmatter and its prose.
+pub fn split_frontmatter(raw: &str) -> Result<(&str, &str)> {
     let Some(rest) = raw.strip_prefix("---\n") else {
         bail!("missing YAML frontmatter (a node file starts with a `---` line)");
     };
     let Some(end) = rest.find("\n---\n") else {
         bail!("frontmatter is not terminated by a `---` line");
     };
-    let node: Node = serde_yaml_ng::from_str(&rest[..end]).context("parsing frontmatter")?;
+    Ok((&rest[..end], rest[end + 5..].trim_start_matches('\n')))
+}
+
+/// Parse node text. Split out from [`read`] so it can be tested without a disk.
+pub fn parse(raw: &str) -> Result<Doc> {
+    let (front, body) = split_frontmatter(raw)?;
+    let node: Node = serde_yaml_ng::from_str(front).context("parsing frontmatter")?;
     Ok(Doc {
         node,
-        body: rest[end + 5..].trim_start_matches('\n').to_string(),
+        body: body.to_string(),
     })
 }
 
@@ -410,4 +334,21 @@ pub fn write(path: &Path, doc: &Doc) -> Result<()> {
     std::fs::write(&tmp, out).with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, path).with_context(|| format!("renaming into {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tags_are_lowercase_kebab_case() {
+        assert_eq!(normalize_tag("Physics"), "physics");
+        assert_eq!(normalize_tag("Machine Learning"), "machine-learning");
+        assert_eq!(normalize_tag("foo_bar--baz "), "foo-bar-baz");
+        assert_eq!(normalize_tag("  "), "");
+        assert_eq!(
+            normalize_tags(&["A".into(), "a".into(), String::new(), "B c".into()]),
+            vec!["a", "b-c"]
+        );
+    }
 }

@@ -3,18 +3,19 @@
 //! This is the lock, the same role `check-theory.py` plays in principia. A
 //! schema is a suggestion until something refuses to accept a corpus that
 //! violates it, and the invariants here are the ones that keep the record
-//! honest rather than merely tidy.
+//! honest rather than merely tidy. The numbering follows the table in
+//! `docs/design/v0.2/1_spec.md`, "Invariants".
 
 mod graph;
-mod online;
 mod rules;
 
 use crate::corpus::{EdgeType, Store};
 use anyhow::Result;
 use graph::find_cycle;
 use rules::check_node;
+pub use rules::{is_local_path, resolve_local};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// How badly a finding breaks the corpus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -31,7 +32,7 @@ pub enum Level {
 pub struct Finding {
     /// Error or warning.
     pub level: Level,
-    /// Which invariant, by its number in `docs/spec.md`.
+    /// Which invariant, by its number in `docs/design/v0.2/1_spec.md`.
     pub rule: u8,
     /// The node it belongs to, where there is one.
     pub node: Option<String>,
@@ -74,13 +75,10 @@ impl Report {
 
 /// Run every invariant over the corpus.
 ///
-/// Some invariants never reach this function: a reference carrying a
-/// `verdict`, or a node with an unknown field, fails to deserialize, so the
-/// corpus load itself errors out.
-pub fn run(store: &Store, online: bool) -> Result<Report> {
-    // Note that some invariants are enforced before this function is reached.
-    // A reference carrying a verdict, or a node with an unknown field, fails to
-    // deserialize, so `load_all` returns an error rather than a finding.
+/// Rule 7 never reaches this function: a reference carrying a `verdict` or
+/// `strength`, or a node with an unknown field, fails to deserialize, so the
+/// corpus load itself errors out rather than producing a finding.
+pub fn run(store: &Store) -> Result<Report> {
     let docs = store.load_all()?;
     let ids: HashSet<&str> = docs.iter().map(|d| d.node.id.as_str()).collect();
     let mut r = Report {
@@ -89,10 +87,10 @@ pub fn run(store: &Store, online: bool) -> Result<Report> {
     };
 
     for doc in &docs {
-        check_node(doc, &docs, &ids, store, &mut r);
+        check_node(doc, &ids, store, &mut r);
     }
 
-    // 5. `contradicts` is a claim about both nodes, so a one-sided declaration
+    // 4. `contradicts` is a claim about both nodes, so a one-sided declaration
     //    is a half-recorded fact that will read as settled later.
     for doc in &docs {
         for target in doc.node.edges_of(EdgeType::Contradicts) {
@@ -104,7 +102,7 @@ pub fn run(store: &Store, online: bool) -> Result<Report> {
             if !mutual {
                 r.push(
                     Level::Error,
-                    5,
+                    4,
                     Some(&doc.node.id),
                     format!("contradicts `{target}`, which does not contradict back"),
                 );
@@ -112,9 +110,8 @@ pub fn run(store: &Store, online: bool) -> Result<Report> {
         }
     }
 
-    // 1. Genealogy must be acyclic: an idea cannot be its own ancestor. This
-    //    constrains genealogy alone. Diamonds are legal, and the evidence graph
-    //    below is allowed to cycle.
+    // 1. Genealogy must be acyclic: an idea cannot be its own ancestor.
+    //    Diamonds are legal; only a loop is not.
     let genealogy: HashMap<&str, Vec<&str>> = docs
         .iter()
         .map(|d| (d.node.id.as_str(), d.node.parents().collect()))
@@ -128,32 +125,56 @@ pub fn run(store: &Store, online: bool) -> Result<Report> {
         );
     }
 
-    // 9. A cycle in `supports` is circular reasoning. Surfaced, not forbidden,
-    //    because noticing it is the point and sometimes the honest answer is
-    //    that two ideas really do lean on each other.
-    let supports: HashMap<&str, Vec<&str>> = docs
+    // 10. Two tags that differ only by case or a trailing `s` are one label
+    //     drifting into two. Writes normalise case, so this mostly catches
+    //     hand edits and plurals; a warning keeps drift visible without a
+    //     declared list to maintain.
+    let tags: BTreeSet<&str> = docs
         .iter()
-        .map(|d| {
-            (
-                d.node.id.as_str(),
-                d.node.edges_of(EdgeType::Supports).collect(),
-            )
-        })
+        .flat_map(|d| d.node.tags.iter().map(String::as_str))
         .collect();
-    if let Some(cycle) = find_cycle(&supports) {
-        r.push(
-            Level::Warn,
-            9,
-            None,
-            format!("circular reasoning in supports: {}", cycle.join(" -> ")),
-        );
-    }
-
-    if online {
-        online::check_tasks(&docs, &mut r);
+    let tags: Vec<&str> = tags.into_iter().collect();
+    for (i, a) in tags.iter().enumerate() {
+        for b in &tags[i + 1..] {
+            if let Some(how) = tag_drift(a, b) {
+                r.push(
+                    Level::Warn,
+                    10,
+                    None,
+                    format!("tags `{a}` and `{b}` differ only by {how}"),
+                );
+            }
+        }
     }
 
     r.findings
         .sort_by_key(|f| (f.level != Level::Error, f.rule));
     Ok(r)
+}
+
+/// How two distinct tags collide, if they do.
+fn tag_drift(a: &str, b: &str) -> Option<&'static str> {
+    let (a, b) = (a.to_ascii_lowercase(), b.to_ascii_lowercase());
+    if a == b {
+        return Some("case");
+    }
+    let plural = |x: &str, y: &str| x.strip_suffix('s') == Some(y);
+    if plural(&a, &b) || plural(&b, &a) {
+        return Some("a trailing `s`");
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tag_drift;
+
+    #[test]
+    fn tag_drift_catches_case_and_plurals_only() {
+        assert_eq!(tag_drift("Physics", "physics"), Some("case"));
+        assert_eq!(tag_drift("sim", "sims"), Some("a trailing `s`"));
+        assert_eq!(tag_drift("Sims", "sim"), Some("a trailing `s`"));
+        assert_eq!(tag_drift("physics", "orrery"), None);
+        assert_eq!(tag_drift("sim", "simulation"), None);
+    }
 }

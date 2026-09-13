@@ -96,7 +96,6 @@ pub fn promote(
     root: Option<PathBuf>,
     entry: &str,
     title: Option<String>,
-    domain: Option<&str>,
     parents: &[String],
     tags: &[String],
     task: Option<String>,
@@ -107,7 +106,6 @@ pub fn promote(
     let title = title.unwrap_or_else(|| e.text.clone());
     let spec = NodeSpec {
         title: &title,
-        domain,
         parents,
         kill: None,
         status: Status::Seed,
