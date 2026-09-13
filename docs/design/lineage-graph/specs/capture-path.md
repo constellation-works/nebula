@@ -1,8 +1,8 @@
 ---
 title: Capture Path
 owner: claude
-last_updated: 2026-09-07
-last_validated: 2026-09-07
+last_updated: 2026-09-12
+last_validated: 2026-09-12
 status: Accepted
 feature: lineage-graph
 doc_role: spec
@@ -10,7 +10,7 @@ type: design
 summary: The five-second capture budget, the inbox format, and why promotion is a separate act.
 tags: [lineage-graph, capture]
 paths: ["src/corpus/store.rs", "src/commands/inbox.rs"]
-related_features: [lineage-graph]
+related_features: [lineage-graph, v0.2]
 related_artifacts: []
 ---
 

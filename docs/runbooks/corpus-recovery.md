@@ -3,9 +3,9 @@ type: runbook
 summary: Diagnose a corpus that will not load, repair hand-edited nodes, and recover from an interrupted write.
 tags: [operations, recovery, debugging]
 paths: ["src/corpus/model.rs", "src/check/**"]
-related_features: [lineage-graph]
+related_features: [lineage-graph, v0.2]
 related_artifacts: []
-last_validated: 2026-09-07
+last_validated: 2026-09-12
 ---
 
 # Recover a Corpus
@@ -15,7 +15,7 @@ last_validated: 2026-09-07
 `neb check` reports the offending file and field:
 
 ```
-error: in /corpus/nodes/an-idea.md: parsing frontmatter: references[0]: unknown field `verdict`
+error: in /corpus/nodes/an-idea.md: parsing frontmatter: references[0]: unknown field `uri_kind`
 ```
 
 The corpus refuses to load as a whole rather than skipping the bad node, because
@@ -26,10 +26,14 @@ Common causes, all from hand-editing:
 
 | message | cause | fix |
 |---|---|---|
-| `unknown field \`verdict\`` on a reference | a finding filed as context | move it to `evidence`, or use `neb weigh` |
+| `unknown field` on a reference | a field that never existed, or one from an older schema | correct the spelling, or run `neb migrate` if the corpus is still at schema 1 |
 | `unknown field` on a node | a typo, or a field from a newer version | correct the spelling |
 | `missing YAML frontmatter` | the leading `---` line was lost | restore it |
 | `frontmatter is not terminated` | the closing `---` was lost | restore it |
+
+If the config names `schema_version: 1` (or has no `schema_version` at all),
+every node fails to load and the error names `neb migrate` — see
+[migrate-v1-to-v2.md](migrate-v1-to-v2.md).
 
 Prefer the CLI over hand-editing. Every command that mutates a node writes valid
 frontmatter by construction.
@@ -54,18 +58,27 @@ by hand. The message names the whole path:
 ERROR [1] corpus genealogy cycle: a -> b -> a
 ```
 
-Remove whichever edge is wrong. If both look right, one of them is probably a
-`supports` relation mislabelled as `derives-from`: an idea can support its own
-ancestor, but it cannot descend from its own descendant.
+Remove whichever edge is wrong. `derives-from`, `refines` and `generalizes` are
+the only edges that can create one; `contradicts` cannot, since it is symmetric
+rather than directional.
 
 ## Symptom: an edge points at a node that does not exist
 
 ```
-ERROR [4] some-node edge `derives-from` points at missing node `ghost`
+ERROR [3] some-node edge `derives-from` points at missing node `ghost`
 ```
 
 Nodes are never deleted through the CLI, so this means a file was removed
 manually or an id was mistyped. Restore the file from git, or correct the id.
+
+## Symptom: `neb migrate` refuses with uncommitted changes
+
+```
+error: /corpus has uncommitted changes; commit or stash them so the migration is its own commit
+```
+
+This is deliberate: see [migrate-v1-to-v2.md](migrate-v1-to-v2.md). Commit or
+stash, then run `neb migrate` again.
 
 ## Restoring from git
 
