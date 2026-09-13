@@ -3,15 +3,17 @@ type: runbook
 summary: Clear the inbox, find hypotheses with nothing running, and keep the corpus honest.
 tags: [operations, triage, routine]
 paths: ["src/commands/**"]
-related_features: [lineage-graph]
+related_features: [lineage-graph, v0.2]
 related_artifacts: []
-last_validated: 2026-09-07
+last_validated: 2026-09-12
 ---
 
 # Triage the Corpus
 
 Capture is cheap by design, so the inbox fills. This is the routine that keeps
-that from becoming a second pile of unprocessed notes.
+that from becoming a second pile of unprocessed notes. It describes the
+commands directly; if an agent is doing this for you, see
+[agent-triage.md](agent-triage.md) for the session-mode flow.
 
 ## Clear the inbox
 
@@ -44,24 +46,24 @@ thought you discarded is still findable by grep a year later.
 neb open
 ```
 
-With several domains declared this narrows to the default one and says so in
-its last line; `neb open --all` crosses, and `--domain <name>` picks another.
-
-If a live inbox capture is older than fourteen days, `neb open` puts one inbox
-finding first: promote or drop the captures waiting in the inbox. It appears
-regardless of domain scope, and `neb open --json` reports it with id `inbox`.
-
-The finding that matters most is a hypothesis with no evidence and no task
-running against it. That is an idea you committed to testing and then did not.
-Close the gap by filing work and recording it:
+This reports hypotheses with no references, seeds untouched for ninety days or
+more, and inbox entries waiting fourteen days or more; the inbox finding is
+listed first. Narrow it to a slice of the corpus with `--tag` (repeatable,
+every one required):
 
 ```sh
-neb task ranking-decay-half-life ORB-11440 --why "measure decay against a control period"
+neb open --tag ranking
 ```
 
-Two cautions when filing the Orbit task itself. Filing triggers dispatch, so file
-only when the node is genuinely ready. And `orbit.task.add` silently ignores a
-`dependencies` field, so wire dependencies with a follow-up `task.update`.
+The finding that matters most is a hypothesis with no references at all. That
+is an idea you committed to running down and then did not attach anything to.
+Close the gap by citing whatever you find, or by moving its status once you
+actually know the answer:
+
+```sh
+neb cite ranking-decay-half-life --kind study --uri "../orrery/lab/sims/coupling-off-control/" \
+  --note "Effect persists with the coupling off, which is what the kill condition named."
+```
 
 ## Sharpen a seed
 
@@ -72,26 +74,24 @@ one otherwise.
 neb sharpen gravity-as-scarcity --kill "if the effect survives with the coupling off"
 ```
 
-Write the falsifier before you look for evidence. That ordering is the whole
-mechanism: a kill condition written afterwards is a rationalisation.
+Write the falsifier before you look for anything that bears on it. That
+ordering is the whole mechanism: a kill condition written afterwards is a
+rationalisation.
 
-## Record a finding
-
-```sh
-neb evidence gravity-as-scarcity --verdict undermines --strength strong \
-  --source "../orrery/lab/sims/coupling-off-control/" \
-  --note "Effect persists with coupling off, which is what the kill condition named."
-```
-
-When the verdict is `undermines`, the tool prints the node's kill condition back
-at you. Compare them honestly, and if it fired, say so:
+## Move a node's status
 
 ```sh
-neb status gravity-as-scarcity refuted
+neb status gravity-as-scarcity refuted --why "Effect persists with coupling off, which is what the kill condition named."
 ```
 
-A refuted node cannot be quietly reopened later. Reviving the idea takes a new
-node with a `reopens` edge, which keeps the fact that it once died visible.
+`refuted` requires `--why`; `abandoned` takes it optionally. A refuted node
+cannot be quietly reopened later. Reviving the idea takes a new node with a
+`reopens` edge, which keeps the fact that it once died visible.
+
+```sh
+neb new "Gravity as scarcity, take two" --parent gravity-as-scarcity --kill "..."
+neb link gravity-as-scarcity-take-two reopens gravity-as-scarcity
+```
 
 ## Before you stop
 

@@ -3,9 +3,9 @@ type: runbook
 summary: Create a nebula corpus, point the CLI at it, and put it under version control.
 tags: [operations, setup, corpus]
 paths: ["src/corpus/store.rs", "src/corpus/config.rs"]
-related_features: [lineage-graph]
+related_features: [lineage-graph, v0.2]
 related_artifacts: []
-last_validated: 2026-09-07
+last_validated: 2026-09-12
 ---
 
 # Set Up a Corpus
@@ -42,25 +42,25 @@ git -C "$NEBULA_ROOT" commit -m "corpus"
 Use a private remote. The corpus mixes work and personal material, and unlike
 this repository it is not safe to publish.
 
-## Declare domains
+`neb migrate` refuses to run against a dirty git tree, so keep the corpus
+committed between sessions — see
+[migrate-v1-to-v2.md](migrate-v1-to-v2.md) if you are bringing an older corpus
+forward.
 
-A fresh corpus has one domain, `general`, and never asks about it. Declare more
-once the corpus spans areas you want to look at separately:
+## Tag as you go
+
+A fresh corpus has no declared structure to set up: tags are free-form,
+normalised to lowercase kebab-case on write, and there is nothing to
+initialize before using them.
 
 ```sh
-neb domain add principia
-neb domain add economics
-neb domain default principia
+neb new "Shear law from scarcity" --tag principia --kill "..."
+neb tag shear-law-from-scarcity --add orrery
+neb tag list
+neb list --tag principia --tag orrery
 ```
 
-With several domains declared, `new` and `promote` take `--domain` and fall
-back to the default; `list` and `open` narrow to the default and take `--all`
-to cross. `trace` and `impact` always cross, since edges between domains are
-the point.
-
-Use a second corpus only for a second owner. Work and personal ideas belong in
-separate corpora, each with its own `NEBULA_ROOT`; principia and economics
-belong in one.
+Use a second corpus only for a second owner — see "Where things are" below.
 
 ## Shell completions
 
@@ -100,6 +100,10 @@ neb check
 
 | path | holds |
 |---|---|
-| `$NEBULA_ROOT/nodes/<id>.md` | one node, with its edges, evidence and prose |
+| `$NEBULA_ROOT/nodes/<id>.md` | one node, with its edges, references and prose |
 | `$NEBULA_ROOT/inbox/YYYY-MM.md` | captures, append-only, struck through when settled |
-| `$NEBULA_ROOT/config.yaml` | corpus id, declared domains, default domain |
+| `$NEBULA_ROOT/config.yaml` | corpus id and schema version, nothing else |
+
+Work and personal ideas belong in separate corpora, each with its own
+`NEBULA_ROOT`; topics inside one owner's thinking are tags, not separate
+corpora.

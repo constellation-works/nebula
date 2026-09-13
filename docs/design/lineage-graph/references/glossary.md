@@ -1,59 +1,64 @@
 ---
 title: Glossary
 owner: claude
-last_updated: 2026-09-07
-last_validated: 2026-09-07
+last_updated: 2026-09-12
+last_validated: 2026-09-12
 status: Accepted
 feature: lineage-graph
 doc_role: reference
 type: design
 summary: Terms used across nebula's docs and code, with the distinctions that matter.
-tags: [lineage-graph, glossary]
+tags: [lineage-graph, glossary, v0.2]
 paths: ["src/corpus/model.rs"]
-related_features: [lineage-graph]
+related_features: [lineage-graph, v0.2]
 related_artifacts: []
 ---
 
 # Glossary
 
-**Node.** One unit of inquiry, from a vague observation to a supported claim. One
-markdown file. Never deleted.
+**Node.** One unit of inquiry, from a vague observation to a sharpened
+hypothesis. One markdown file. Never deleted.
 
-**Capture.** A line of text in the inbox. Not a node. Most captures never become
-one.
+**Capture.** A line of text in the inbox. Not a node. Most captures never
+become one.
 
 **Genealogy.** The edges answering "where did this come from": `derives-from`,
 `refines`, `generalizes`, `reopens`. Enforced acyclic.
 
 **Diamond.** A node reachable from an ancestor by two distinct paths, created
-when a node has two or more genealogical parents. Legal, expected, and the reason
-the structure is a DAG rather than a tree.
+when a node has two or more genealogical parents. Legal, expected, and the
+reason the structure is a DAG rather than a tree.
 
-**Evidence.** Something bearing on whether a node is true. Carries a verdict and
-a strength. Only evidence can move a node to `supported` or `refuted`.
-
-**Reference.** Context that situates an idea without bearing on its truth.
-Carries no verdict, and the schema rejects one.
-
-**Weigh.** Promoting a reference into evidence, once you have read it closely
-enough to say which way it cuts. The reference stays, marked, so the reading
-history survives.
+**Reference.** Context that situates an idea: a paper, a study, a discussion,
+a link to work it spawned. Carries a note explaining why it is attached, and
+no judgement about whether the idea is true — the schema rejects one.
 
 **Kill condition.** What would falsify a node, written when the hypothesis is
-stated and before any evidence arrives. Pre-registering it is what keeps the
-later verdict honest rather than retroactive.
+stated and before anything is read to test it. Pre-registering it is what
+keeps the later status change honest rather than retroactive.
 
 **Refuted.** The kill condition fired. Distinct from **abandoned**, which means
 you stopped caring. Both persist forever.
 
-**Graduated.** Handed downstream to principia or orbit-research, with a link out.
-The node stays here, so lineage crosses the boundary.
+**Closed.** The block a node carries once it is `refuted` or `abandoned`:
+`why` (required for `refuted`, optional for `abandoned`) and `at`, the date it
+closed. Absent on every other status.
 
-**Domain.** The one declared area a node belongs to: `principia`, `ranking`,
-and so on. A view inside a corpus, not a boundary: edges cross domains freely,
-and only `list` and `open` scope to one. Declared in `config.yaml`; a node naming
-anything else fails `check`.
+**Tag.** A free-form label, normalised to lowercase kebab-case on every write.
+No declared list; `check` warns when two tags differ only by case or a
+trailing `s`. `tag list` shows every tag in the corpus with its node count.
 
-**Corpus.** The nodes, inbox and `config.yaml`, living outside this repository.
-One corpus per owner: work and personal are separate corpora, since that line is
-about who owns the material rather than what it is about.
+**Graph.** The whole corpus as one `{nodes, edges}` export: what
+[docs/design/v0.2/1_spec.md](../../v0.2/1_spec.md) specifies as `neb graph
+--json` (not yet built — see [3_plan.md](../../v0.2/3_plan.md), task B) and
+what the desktop app's graph view will draw from. The same shape a `trace` or
+`impact` walk is computed over, just unfiltered.
+
+**Migrate.** `neb migrate`: a one-shot, idempotent pass that brings a v1
+corpus forward to the current schema, re-labelling everything the reduction
+removed into references so nothing is lost. See
+[docs/design/v0.2/1_spec.md](../../v0.2/1_spec.md) ("Migration").
+
+**Corpus.** The nodes, inbox and `config.yaml`, living outside this
+repository. One corpus per owner: work and personal are separate corpora,
+since that line is about who owns the material rather than what it is about.
