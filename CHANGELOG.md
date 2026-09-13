@@ -81,15 +81,27 @@ habit. This cut keeps what a person actually uses.
   `nebula-core` directly, no sidecar. The tray shows the unsettled inbox
   count; `Alt+Space` (configurable in the app's `settings.json`) opens a
   floating capture box that writes the same line `neb capture` writes; the
-  window has an Inbox view (capture box, unsettled entries) and a placeholder
-  for the Graph view. A `notify` watcher on `nodes/` and `inbox/` refreshes
-  both on outside changes. A missing corpus shows the path tried and a reload
-  button. `make desktop-dev`, `make desktop` (unsigned `.app`) and
+  window has an Inbox view (capture box, unsettled entries) and a Graph view.
+  A `notify` watcher on `nodes/` and `inbox/` refreshes both on outside
+  changes. A missing corpus shows the path tried and a reload button.
+  `make desktop-dev`, `make desktop` (unsigned `.app`) and
   `make desktop-check`; CI gains a `desktop` job (types drift, tsc, vitest,
   clippy). The workspace's `rust-version` moves to 1.88 for the desktop's
   dependency tree.
 - `Corpus::node_path` is public, so a consumer that hands a node file to the
   OS asks for the path rather than re-deriving the layout.
+- The desktop's Graph view: the whole corpus from one `graph()` call as a
+  layered DAG (`elkjs`, in a web worker, plain SVG; genealogy edges layer the
+  drawing, `contradicts` is dashed and drawn afterwards). Status is the card
+  colour; tag chips with `+n`; a marker on nodes that `reopens`. Drag to pan,
+  wheel to zoom, click to select and light ancestry and descent in two tints,
+  Escape to clear, double-click to open the file. A title search and a
+  multi-select tag filter apply before layout. The right-hand panel shows
+  the node read-only: frontmatter, `closed.why`, the body via
+  `react-markdown` + `remark-gfm` with raw HTML shown as text, edges as two
+  clickable lists, references as a table whose `http(s)`/`mailto` URIs open
+  through the opener plugin. `corpus-changed` refetches and re-lays out
+  without losing the selection or the viewport.
 
 ### Changed
 

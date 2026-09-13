@@ -11,6 +11,15 @@
   --accent-fg: #ffffff;
   --danger: #b3261e;
   --ok: #2b7a4b;
+  /* Status → colour on the graph; the same four in the panel's badge. */
+  --seed: #8a8a96;
+  --hypothesis: #3b6fd6;
+  --refuted: #c8443a;
+  --abandoned: #b9b9c2;
+  /* Lineage tints once a node is selected: where it came from, what came from it. */
+  --ancestor: #d0851b;
+  --descendant: #1f9e86;
+  --edge: #b6b6c2;
   font-family:
     -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
@@ -28,6 +37,13 @@
     --accent-fg: #14142a;
     --danger: #ff8a80;
     --ok: #7bd39a;
+    --seed: #8d8d9c;
+    --hypothesis: #7ea2ff;
+    --refuted: #ff7b71;
+    --abandoned: #5d5d6a;
+    --ancestor: #f0a63b;
+    --descendant: #3fc7ab;
+    --edge: #4a4a58;
   }
 }
 
@@ -93,8 +109,15 @@ code {
 
 .view {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 14px;
+}
+
+/* The graph owns its scrolling; the view must not add a second scrollbar. */
+.view:has(> .graph) {
+  padding: 0;
+  overflow: hidden;
 }
 
 /* Capture box ------------------------------------------------------------ */
@@ -215,4 +238,487 @@ code {
   padding: 10px 12px;
   border: 0;
   background: transparent;
+}
+
+/* Graph ------------------------------------------------------------------ */
+
+.graph {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.graph__empty,
+.graph__error {
+  margin: 0;
+  padding: 14px;
+  color: var(--fg-muted);
+}
+
+.graph__error {
+  color: var(--danger);
+}
+
+.graph__body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.graph__body > .graph__empty {
+  flex: 1;
+}
+
+.graph__body > .graph__error {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  min-height: 44px;
+}
+
+.toolbar__search {
+  font: inherit;
+  width: 14em;
+  padding: 4px 8px;
+  color: var(--fg);
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: none;
+}
+
+.toolbar__search:focus {
+  border-color: var(--accent);
+}
+
+.toolbar__tags {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 56px;
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tagbtn,
+.toolbar__button {
+  font: inherit;
+  font-size: 0.85em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-raised);
+  color: var(--fg);
+  cursor: default;
+  white-space: nowrap;
+}
+
+.tagbtn[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.tagbtn__count {
+  margin-left: 5px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.toolbar__stats {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-size: 0.85em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Canvas */
+
+.canvas {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: block;
+  background: var(--bg);
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.canvas--panning {
+  cursor: grabbing;
+}
+
+.edge {
+  fill: none;
+  stroke: var(--edge);
+  stroke-width: 1.5;
+  transition: opacity 120ms;
+}
+
+.edge--contradicts {
+  stroke-dasharray: 5 4;
+  stroke: var(--refuted);
+  opacity: 0.7;
+}
+
+.edge--dim {
+  opacity: 0.12;
+}
+
+.edge--ancestor {
+  stroke: var(--ancestor);
+  stroke-width: 2;
+}
+
+.edge--descendant {
+  stroke: var(--descendant);
+  stroke-width: 2;
+}
+
+.edge--near {
+  opacity: 1;
+}
+
+.arrow path {
+  fill: var(--edge);
+}
+
+.arrow-ancestor path {
+  fill: var(--ancestor);
+}
+
+.arrow-descendant path {
+  fill: var(--descendant);
+}
+
+.node {
+  --node: var(--seed);
+  cursor: default;
+  transition: opacity 120ms;
+}
+
+.node--hypothesis {
+  --node: var(--hypothesis);
+}
+
+.node--refuted {
+  --node: var(--refuted);
+}
+
+.node--abandoned {
+  --node: var(--abandoned);
+}
+
+.node--abandoned .node__title {
+  fill: var(--fg-muted);
+}
+
+.node__card {
+  fill: var(--bg-raised);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.node:hover .node__card {
+  stroke: var(--node);
+}
+
+.node--selected .node__card {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.node--ancestor .node__card {
+  stroke: var(--ancestor);
+  stroke-width: 2;
+}
+
+.node--descendant .node__card {
+  stroke: var(--descendant);
+  stroke-width: 2;
+}
+
+.node--dim {
+  opacity: 0.25;
+}
+
+.node__stripe {
+  fill: var(--node);
+}
+
+.node__title {
+  fill: var(--fg);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.chip rect {
+  fill: var(--line);
+}
+
+.chip text,
+.node__more {
+  fill: var(--fg-muted);
+  font-size: 10px;
+}
+
+.node__reopens circle {
+  fill: var(--bg-raised);
+  stroke: var(--hypothesis);
+  stroke-width: 1.5;
+}
+
+.node__reopens text {
+  fill: var(--hypothesis);
+  font-size: 9px;
+}
+
+/* Node panel */
+
+.panel {
+  position: relative;
+  display: flex;
+  flex-shrink: 0;
+  height: 100%;
+  border-left: 1px solid var(--line);
+  background: var(--bg-raised);
+}
+
+.panel__handle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+}
+
+.panel__body {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 10px 16px 24px;
+}
+
+.panel__top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.panel__id {
+  color: var(--fg-muted);
+}
+
+.panel__spacer {
+  flex: 1;
+}
+
+.panel__action {
+  font: inherit;
+  font-size: 0.85em;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.panel__title {
+  font-size: 1.15em;
+  line-height: 1.3;
+  margin: 0 0 8px;
+}
+
+.panel__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: var(--fg-muted);
+  font-size: 0.85em;
+}
+
+.badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--seed);
+  font-size: 0.85em;
+  text-transform: capitalize;
+}
+
+.badge--hypothesis {
+  background: var(--hypothesis);
+}
+
+.badge--refuted {
+  background: var(--refuted);
+}
+
+.badge--abandoned {
+  background: var(--abandoned);
+}
+
+.panel__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+
+.tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--line);
+  color: var(--fg-muted);
+  font-size: 0.85em;
+}
+
+.panel__section {
+  margin: 14px 0 0;
+}
+
+.panel__heading {
+  margin: 0 0 4px;
+  font-size: 0.8em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+
+.panel__kill p,
+.panel__closed p {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--hypothesis);
+  background: var(--bg);
+  border-radius: 0 6px 6px 0;
+}
+
+.panel__closed p {
+  border-left-color: var(--refuted);
+}
+
+.panel__error {
+  color: var(--danger);
+}
+
+.panel__edges {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.panel__edges li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+
+.panel__edge-type {
+  color: var(--fg-muted);
+  font-size: 0.85em;
+  min-width: 7em;
+}
+
+.panel__link {
+  font: inherit;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  text-align: left;
+  cursor: pointer;
+}
+
+.panel__link:hover {
+  text-decoration: underline;
+}
+
+.panel__refs {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+.panel__refs th,
+.panel__refs td {
+  text-align: left;
+  vertical-align: top;
+  padding: 4px 6px 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.panel__refs th {
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+
+.panel__refs a,
+.markdown a {
+  color: var(--accent);
+}
+
+/* Rendered body */
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  font-size: 1em;
+  margin: 14px 0 4px;
+}
+
+.markdown p,
+.markdown ul,
+.markdown ol {
+  margin: 6px 0;
+}
+
+.markdown pre {
+  padding: 8px 10px;
+  overflow: auto;
+  background: var(--bg);
+  border-radius: 6px;
+}
+
+.markdown blockquote {
+  margin: 6px 0;
+  padding-left: 10px;
+  border-left: 3px solid var(--line);
+  color: var(--fg-muted);
+}
+
+.markdown table {
+  border-collapse: collapse;
+}
+
+.markdown th,
+.markdown td {
+  padding: 3px 8px;
+  border: 1px solid var(--line);
 }

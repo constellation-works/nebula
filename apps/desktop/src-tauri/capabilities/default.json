@@ -1,13 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the frontend may call. The corpus is reached only through this crate's own commands; the plugins are driven from Rust.",
+  "description": "What the frontend may call. The corpus is reached only through this crate's own commands. The opener is the one plugin the frontend drives, for reference links, and only to http(s), mailto and tel URLs; files go through `open_in_editor`.",
   "windows": ["main", "capture"],
   "permissions": [
     "core:default",
     "core:window:allow-hide",
     "core:window:allow-show",
     "core:window:allow-set-focus",
-    "core:window:allow-start-dragging"
+    "core:window:allow-start-dragging",
+    "opener:allow-open-url",
+    "opener:allow-default-urls"
   ]
 }
