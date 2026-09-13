@@ -5,7 +5,5 @@ pub mod config;
 pub mod model;
 pub mod store;
 
-pub use model::{
-    Doc, Edge, EdgeType, Evidence, Node, Origin, Reference, Status, Strength, TaskLink, Verdict,
-};
+pub use model::{Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
 pub use store::Store;

@@ -1,4 +1,4 @@
-//! Cycle detection, shared by the genealogy and evidence graphs.
+//! Cycle detection for the genealogy graph.
 
 use std::collections::HashMap;
 

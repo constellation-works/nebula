@@ -45,8 +45,7 @@ impl Corpus {
             .arg(&self.root)
             .args(args)
             .env("NO_COLOR", "1")
-            .env_remove("NEBULA_ROOT")
-            .env_remove("NEBULA_ORBIT_BIN");
+            .env_remove("NEBULA_ROOT");
         for (key, value) in extra {
             cmd.env(key, value);
         }
@@ -174,86 +173,6 @@ fn set_inbox_stamp_for(root: &Path, capture_text: &str, stamp: &str) {
         return;
     }
     panic!("no inbox entry contains `{capture_text}`");
-}
-
-fn make_executable(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod +x");
-    }
-}
-
-/// A fake `orbit` that records each resolved id and serves canned JSON.
-struct OrbitStub {
-    bin: PathBuf,
-    log: PathBuf,
-    resp_dir: PathBuf,
-}
-
-impl OrbitStub {
-    fn install(workdir: &Path) -> Self {
-        let bin = workdir.join("nebula-orbit-stub");
-        let resp_dir = workdir.join("orbit-resp");
-        std::fs::create_dir_all(&resp_dir).expect("orbit-resp");
-        write(
-            &bin,
-            r#"#!/bin/sh
-dir=$(dirname "$0")
-log="$dir/orbit-calls.log"
-resp="$dir/orbit-resp"
-input=""
-prev=""
-for arg in "$@"; do
-  if [ "$prev" = "--input" ]; then
-    input=$arg
-  fi
-  prev=$arg
-done
-id=$(printf '%s' "$input" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-printf '%s\n' "$id" >> "$log"
-if [ -f "$resp/$id" ]; then
-  cat "$resp/$id"
-  exit 0
-fi
-if [ -f "$resp/$id.err" ]; then
-  cat "$resp/$id.err" >&2
-  exit 1
-fi
-printf 'task not found: %s\n' "$id" >&2
-exit 1
-"#,
-        );
-        make_executable(&bin);
-        Self {
-            bin,
-            log: workdir.join("orbit-calls.log"),
-            resp_dir,
-        }
-    }
-
-    fn ok(&self, id: &str, status: &str) {
-        write(
-            &self.resp_dir.join(id),
-            &serde_json::json!(status).to_string(),
-        );
-    }
-
-    fn err(&self, id: &str, stderr: &str) {
-        write(&self.resp_dir.join(format!("{id}.err")), stderr);
-    }
-
-    fn bin_str(&self) -> &str {
-        self.bin.to_str().expect("utf8 stub path")
-    }
-
-    fn calls(&self) -> Vec<String> {
-        std::fs::read_to_string(&self.log)
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_string)
-            .collect()
-    }
 }
 
 // ------------------------------------------------------------------ capture --
@@ -468,21 +387,6 @@ fn genealogy_cycles_are_refused_at_the_point_of_linking() {
 }
 
 #[test]
-fn a_supports_cycle_is_a_warning_not_an_error() {
-    let c = Corpus::new();
-    let a = c.seed("first", "First");
-    let b = c.seed("second", "Second");
-    c.run(&["link", &a, "supports", &b]).assert_ok();
-    c.run(&["link", &b, "supports", &a]).assert_ok();
-    // Circular reasoning is worth noticing and not worth blocking on: sometimes
-    // two ideas really do lean on each other and saying so is the honest record.
-    c.run(&["check"])
-        .assert_ok()
-        .says("circular reasoning")
-        .says("0 errors");
-}
-
-#[test]
 fn contradicts_is_recorded_on_both_nodes() {
     let c = Corpus::new();
     let a = c.seed("first", "First");
@@ -496,15 +400,38 @@ fn contradicts_is_recorded_on_both_nodes() {
 }
 
 #[test]
-fn impact_reports_what_leans_on_a_node() {
+fn impact_reports_descendants_and_contradictions() {
     let c = Corpus::new();
     let base = c.seed("foundation", "Foundation");
-    let dep = c.seed("built on it", "Dependent");
-    c.run(&["link", &dep, "depends-on", &base]).assert_ok();
-    c.run(&["impact", &base])
+    c.run(&["new", "Child", "--parent", &base]).assert_ok();
+    c.run(&["new", "Grandchild", "--parent", "child"])
+        .assert_ok();
+    let rival = c.seed("the other way round", "Rival");
+    c.run(&["link", &base, "contradicts", &rival]).assert_ok();
+    let unrelated = c.seed("nothing to do with it", "Unrelated");
+
+    let out = c.run(&["impact", &base]).assert_ok().stdout();
+    assert!(out.contains("child") && out.contains("grandchild"), "{out}");
+    assert!(out.contains(&rival), "{out}");
+    assert!(!out.contains(&unrelated), "{out}");
+
+    let json = c.run(&["--json", "impact", &base]).assert_ok().stdout();
+    let items: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    assert!(
+        items
+            .iter()
+            .any(|i| i["id"] == "grandchild" && i["via"] == "descends"),
+        "{json}"
+    );
+    assert!(
+        items
+            .iter()
+            .any(|i| i["id"] == rival && i["via"] == "contradicts"),
+        "{json}"
+    );
+    c.run(&["impact", &unrelated])
         .assert_ok()
-        .says(&dep)
-        .says("dies with it");
+        .says("nothing descends from or contradicts");
 }
 
 // -------------------------------------------------------------- discipline --
@@ -530,24 +457,65 @@ fn a_hypothesis_must_name_what_would_kill_it() {
 }
 
 #[test]
-fn a_verdict_must_rest_on_evidence() {
+fn refuting_needs_a_reason_and_writes_the_closed_block() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
     c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
-    c.run(&["status", &id, "supported"])
+    c.run(&["status", &id, "refuted"])
         .assert_fails()
-        .says("nothing supports");
+        .says("refuted needs --why");
+    c.run(&["status", &id, "refuted", "--why", "  "])
+        .assert_fails()
+        .says("refuted needs --why");
+    c.run(&["status", &id, "refuted", "--why", "X happened"])
+        .assert_ok();
 
-    c.run(&[
-        "evidence",
-        &id,
-        "--verdict",
-        "supports",
-        "--source",
-        "sim://run-1",
-    ])
-    .assert_ok();
-    c.run(&["status", &id, "supported"]).assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(raw.contains("closed:\n  why: X happened\n  at: "), "{raw}");
+    c.run(&["show", &id]).assert_ok().says("X happened");
+    c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
+
+    // The reason is the invariant, not the flag: strip it by hand and
+    // `check` catches the gap as rule 5.
+    write(
+        &c.node_file(&id),
+        &raw.replace("  why: X happened\n", "  why: ''\n"),
+    );
+    c.run(&["check"])
+        .assert_fails()
+        .says("[5]")
+        .says("closed.why is empty");
+
+    // A seed cannot be refuted: there is no kill condition to have fired.
+    let seed = c.seed("another idea", "Another idea");
+    c.run(&["status", &seed, "refuted", "--why", "no"])
+        .assert_fails()
+        .says("kill condition");
+    // And --why means nothing on an open status.
+    c.run(&["status", &seed, "hypothesis", "--why", "no"])
+        .assert_fails()
+        .says("--why only applies");
+}
+
+#[test]
+fn abandoning_takes_an_optional_reason_and_reviving_clears_it() {
+    let c = Corpus::new();
+    let bare = c.seed("an idea", "An idea");
+    c.run(&["status", &bare, "abandoned"]).assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&bare)).unwrap();
+    assert!(!raw.contains("closed:"), "{raw}");
+
+    let reasoned = c.seed("another idea", "Another idea");
+    c.run(&["status", &reasoned, "abandoned", "--why", "lost interest"])
+        .assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&reasoned)).unwrap();
+    assert!(raw.contains("why: lost interest"), "{raw}");
+
+    // Abandoned is not a verdict, so it can come back, and the closed block
+    // goes with it.
+    c.run(&["status", &reasoned, "seed"]).assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&reasoned)).unwrap();
+    assert!(!raw.contains("closed:"), "{raw}");
     c.run(&["check"]).assert_ok().says("0 errors");
 }
 
@@ -556,31 +524,23 @@ fn a_refuted_idea_cannot_quietly_come_back() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
     c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
-    c.run(&[
-        "evidence",
-        &id,
-        "--verdict",
-        "undermines",
-        "--source",
-        "sim://run-2",
-    ])
-    .assert_ok();
-    c.run(&["status", &id, "refuted"]).assert_ok();
+    c.run(&["status", &id, "refuted", "--why", "X happened"])
+        .assert_ok();
 
     // Reviving it takes a new node with a `reopens` edge, so the fact that it
-    // was once ruled out stays visible in the graph.
+    // was once ruled out stays visible in the graph. Not even abandoning it
+    // is allowed: refuted is final.
     c.run(&["status", &id, "hypothesis"])
         .assert_fails()
         .says("cannot simply reopen");
-    c.run(&[
-        "new",
-        "Second attempt",
-        "--kill",
-        "if Y",
-        "--status",
-        "hypothesis",
-    ])
-    .assert_ok();
+    c.run(&["status", &id, "abandoned"])
+        .assert_fails()
+        .says("cannot simply reopen");
+    c.run(&["new", "Second attempt", "--kill", "if Y"])
+        .assert_ok();
+    c.run(&["show", "second-attempt"])
+        .assert_ok()
+        .says("hypothesis");
     c.run(&["link", "second-attempt", "reopens", &id])
         .assert_ok();
     c.run(&["check"]).assert_ok().says("0 errors");
@@ -604,118 +564,6 @@ fn a_reference_cannot_smuggle_in_a_verdict() {
 }
 
 #[test]
-fn weighing_a_reference_keeps_the_reading_history() {
-    let c = Corpus::new();
-    let id = c.seed("an idea", "An idea");
-    c.run(&[
-        "cite",
-        &id,
-        "--uri",
-        "doi:10.1000/x",
-        "--kind",
-        "paper",
-        "--note",
-        "read this",
-    ])
-    .assert_ok();
-    c.run(&[
-        "weigh",
-        &id,
-        "r1",
-        "--verdict",
-        "undermines",
-        "--strength",
-        "strong",
-    ])
-    .assert_ok();
-
-    let shown = c.run(&["show", &id]).assert_ok().stdout();
-    assert!(shown.contains("r1"), "the reference stays put");
-    assert!(
-        shown.contains("ev1"),
-        "and the evidence it became appears too"
-    );
-    c.run(&["weigh", &id, "r1", "--verdict", "supports"])
-        .assert_fails()
-        .says("already weighed");
-}
-
-#[test]
-fn evidence_ids_are_never_reused() {
-    let c = Corpus::new();
-    let id = c.seed("an idea", "An idea");
-    c.run(&["evidence", &id, "--verdict", "supports", "--source", "a"])
-        .assert_ok();
-    c.run(&["evidence", &id, "--verdict", "supports", "--source", "b"])
-        .assert_ok();
-
-    let mut raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
-    raw = raw.replace("  id: ev1\n", "  id: evX\n"); // simulate a removal
-    write(&c.node_file(&id), &raw);
-    c.run(&["evidence", &id, "--verdict", "supports", "--source", "c"])
-        .assert_ok();
-
-    let shown = c.run(&["show", &id]).assert_ok().stdout();
-    assert!(
-        shown.contains("ev3"),
-        "the next id counts past the highest ever issued:\n{shown}"
-    );
-}
-
-#[test]
-fn graduating_must_say_where_the_idea_went() {
-    let c = Corpus::new();
-    let id = c.seed("an idea", "An idea");
-    c.run(&["status", &id, "graduated"])
-        .assert_fails()
-        .says("--to");
-    // Downstream demands a falsifier, so graduating without one is refused here
-    // rather than exporting the gap to principia.
-    c.run(&["graduate", &id, "--to", "principia://x"])
-        .assert_fails()
-        .says("no kill condition");
-    c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
-    c.run(&["graduate", &id, "--to", "principia://theory/an-idea"])
-        .assert_ok();
-    c.run(&["show", &id])
-        .assert_ok()
-        .says("principia://theory/an-idea");
-    c.run(&["check"]).assert_ok().says("0 errors");
-}
-
-#[test]
-fn malformed_task_ids_are_caught() {
-    let c = Corpus::new();
-    let id = c.seed("an idea", "An idea");
-    c.run(&["task", &id, "ORB-oops"]).assert_ok();
-    c.run(&["check"])
-        .assert_fails()
-        .says("malformed Orbit task id")
-        .says("expected PREFIX-nnnnn");
-    for task_id in ["orb-1", "ORB-", "-123", "ORB-12-3"] {
-        let malformed = Corpus::new();
-        let malformed_id = malformed.seed("another idea", "Another idea");
-        malformed
-            .run(&["task", &malformed_id, "--", task_id])
-            .assert_ok();
-        malformed
-            .run(&["check"])
-            .assert_fails()
-            .says("malformed Orbit task id");
-    }
-    let valid = Corpus::new();
-    let valid_id = valid.seed("another idea", "Another idea");
-    valid
-        .run(&["task", &valid_id, "DANI-10293", "--state", "open"])
-        .assert_ok();
-    valid.run(&["check"]).assert_ok().says("0 errors");
-    valid
-        .run(&["task", &valid_id, "ORB-11440", "--state", "open"])
-        .assert_ok();
-    valid.run(&["check"]).assert_ok().says("0 errors");
-}
-
-#[test]
 fn a_reference_with_no_note_warns_and_a_noted_one_does_not() {
     let c = Corpus::new();
     let bare = c.seed("an idea", "An idea");
@@ -732,7 +580,7 @@ fn a_reference_with_no_note_warns_and_a_noted_one_does_not() {
     .assert_ok();
     c.run(&["check"])
         .assert_ok()
-        .says("[11]")
+        .says("[9]")
         .says("reference `r1` has no note saying why it is here")
         .says(&bare)
         .says("0 errors, 1 warnings");
@@ -752,7 +600,7 @@ fn a_reference_with_no_note_warns_and_a_noted_one_does_not() {
     omitted
         .run(&["check"])
         .assert_ok()
-        .says("[11]")
+        .says("[9]")
         .says("0 errors, 1 warnings");
 
     let noted = Corpus::new();
@@ -776,49 +624,45 @@ fn a_reference_with_no_note_warns_and_a_noted_one_does_not() {
 }
 
 #[test]
-fn an_unresolved_local_uri_warns_until_the_file_exists_and_external_urls_never_trip_it() {
+fn a_local_uri_must_resolve_and_external_urls_never_trip_it() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
-    c.run(&[
-        "evidence",
-        &id,
-        "--verdict",
-        "supports",
-        "--source",
-        "./notes/missing.md",
-        "--note",
-        "n",
-    ])
-    .assert_ok();
-    c.run(&["check"])
-        .assert_ok()
-        .says("[14]")
-        .says("points at a path that does not resolve: ./notes/missing.md")
-        .says("0 errors, 1 warnings");
+    // Rule 8 at the point of action: `cite` refuses a path to nothing.
+    c.run(&["cite", &id, "--uri", "./notes/missing.md", "--note", "n"])
+        .assert_fails()
+        .says("does not resolve");
 
     std::fs::create_dir_all(c.root.join("nodes").join("notes")).unwrap();
     write(
         &c.root.join("nodes").join("notes").join("missing.md"),
         "here now",
     );
+    c.run(&["cite", &id, "--uri", "./notes/missing.md", "--note", "n"])
+        .assert_ok();
     c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
 
-    // External URLs are never fetched, so an https:// source never trips rule 14
-    // even though it obviously does not resolve as a local path.
+    // And in `check`, for the file that went missing later: an error, since
+    // a citation to nothing is a broken record rather than an untidy one.
+    std::fs::remove_file(c.root.join("nodes").join("notes").join("missing.md")).unwrap();
+    c.run(&["check"])
+        .assert_fails()
+        .says("[8]")
+        .says("points at a path that does not resolve: ./notes/missing.md")
+        .says("1 errors");
+
+    // Schemes and URLs are never resolved, so none of these trip rule 8.
     let online = Corpus::new();
     let online_id = online.seed("an online idea", "An online idea");
-    online
-        .run(&[
-            "evidence",
-            &online_id,
-            "--verdict",
-            "supports",
-            "--source",
-            "https://example.org/paper",
-            "--note",
-            "n",
-        ])
-        .assert_ok();
+    for uri in [
+        "https://example.org/paper",
+        "doi:10.1000/x",
+        "orbit:DANI-10345",
+        "[[almanac/some-page]]",
+    ] {
+        online
+            .run(&["cite", &online_id, "--uri", uri, "--note", "n"])
+            .assert_ok();
+    }
     online
         .run(&["check"])
         .assert_ok()
@@ -826,7 +670,7 @@ fn an_unresolved_local_uri_warns_until_the_file_exists_and_external_urls_never_t
 }
 
 #[test]
-fn check_json_exposes_rule_and_level_for_warn_findings() {
+fn check_json_exposes_rule_and_level() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
     c.run(&[
@@ -838,164 +682,29 @@ fn check_json_exposes_rule_and_level_for_warn_findings() {
         "paper",
     ])
     .assert_ok();
-    c.run(&[
-        "evidence",
-        &id,
-        "--verdict",
-        "supports",
-        "--source",
-        "./notes/missing.md",
-        "--note",
-        "n",
-    ])
-    .assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    write(
+        &c.node_file(&id),
+        &raw.replace("status: seed", "status: seed\ntags:\n- Sims\n- sim"),
+    );
 
     let out = c.run(&["--json", "check"]).assert_ok().stdout();
     let v: serde_json::Value = serde_json::from_str(&out).expect("check --json is valid JSON");
     let findings = v["findings"].as_array().expect("findings array");
 
-    let rule11 = findings
+    let rule9 = findings
         .iter()
-        .find(|f| f["rule"] == 11)
-        .expect("rule 11 finding present");
-    assert_eq!(rule11["level"], "warn");
+        .find(|f| f["rule"] == 9)
+        .expect("rule 9 finding present");
+    assert_eq!(rule9["level"], "warn");
+    assert_eq!(rule9["node"], id);
 
-    let rule14 = findings
+    let rule10 = findings
         .iter()
-        .find(|f| f["rule"] == 14)
-        .expect("rule 14 finding present");
-    assert_eq!(rule14["level"], "warn");
-}
-
-#[test]
-fn check_online_accepts_a_task_that_resolves_and_is_still_open() {
-    let c = Corpus::new();
-    let stub = OrbitStub::install(c.workdir());
-    stub.ok("DANI-10001", "in-progress");
-    let id = c.seed("an idea", "An idea");
-    c.run(&["task", &id, "DANI-10001"]).assert_ok();
-    c.run_with_env(
-        &["check", "--online"],
-        &[("NEBULA_ORBIT_BIN", stub.bin_str())],
-    )
-    .assert_ok()
-    .says("0 errors, 0 warnings");
-}
-
-#[test]
-fn check_online_warns_when_an_open_task_is_terminal_in_orbit() {
-    let c = Corpus::new();
-    let stub = OrbitStub::install(c.workdir());
-    stub.ok("DANI-20001", "done");
-    stub.ok("DANI-20002", "rejected");
-    stub.ok("DANI-20003", "archived");
-    let id = c.seed("an idea", "An idea");
-    c.run(&["task", &id, "DANI-20001"]).assert_ok();
-    c.run(&["task", &id, "DANI-20002"]).assert_ok();
-    c.run(&["task", &id, "DANI-20003"]).assert_ok();
-    // origin.task is resolve-only: a terminal Orbit status is not a warning.
-    c.run(&["new", "Produced by a finished task", "--task", "DANI-20001"])
-        .assert_ok();
-    c.run_with_env(
-        &["check", "--online"],
-        &[("NEBULA_ORBIT_BIN", stub.bin_str())],
-    )
-    .assert_ok()
-    .says("task DANI-20001 is done in Orbit but marked open on this node")
-    .says("task DANI-20002 is rejected in Orbit but marked open on this node")
-    .says("task DANI-20003 is archived in Orbit but marked open on this node")
-    .says("[13]")
-    .says("0 errors, 3 warnings");
-}
-
-#[test]
-fn check_online_errors_when_a_cited_task_does_not_resolve() {
-    let c = Corpus::new();
-    let stub = OrbitStub::install(c.workdir());
-    stub.err("DANI-99991", "no such task DANI-99991\n");
-    let origin = c
-        .run(&["new", "From a missing task", "--task", "DANI-99991"])
-        .assert_ok()
-        .stdout_trim();
-    let linked = c.seed("needs a task", "Needs a task");
-    c.run(&["task", &linked, "DANI-99992"]).assert_ok();
-    c.run_with_env(
-        &["check", "--online"],
-        &[("NEBULA_ORBIT_BIN", stub.bin_str())],
-    )
-    .assert_fails()
-    .says(&origin)
-    .says("Orbit task `DANI-99991` did not resolve: no such task DANI-99991")
-    .says("Orbit task `DANI-99992` did not resolve: task not found: DANI-99992")
-    .says("[13]");
-}
-
-#[test]
-fn check_online_missing_resolver_is_a_single_error() {
-    let c = Corpus::new();
-    let missing = c.workdir().join("no-such-orbit");
-    let a = c.seed("first", "First");
-    let b = c.seed("second", "Second");
-    c.run(&["task", &a, "DANI-30001"]).assert_ok();
-    c.run(&["task", &b, "DANI-30002"]).assert_ok();
-    c.run_with_env(
-        &["check", "--online"],
-        &[(
-            "NEBULA_ORBIT_BIN",
-            missing.to_str().expect("utf8 missing path"),
-        )],
-    )
-    .assert_fails()
-    .says("orbit binary not found")
-    .says("skipping online task resolution")
-    .says("2 nodes, 1 errors");
-}
-
-#[test]
-fn check_without_online_does_not_spawn_the_resolver() {
-    let c = Corpus::new();
-    let panic_bin = c.workdir().join("orbit-must-not-run");
-    write(
-        &panic_bin,
-        "#!/bin/sh\necho 'orbit stub must not be invoked' >&2\nexit 99\n",
-    );
-    make_executable(&panic_bin);
-    let id = c.seed("an idea", "An idea");
-    c.run(&["task", &id, "DANI-40001"]).assert_ok();
-    c.run_with_env(
-        &["check"],
-        &[(
-            "NEBULA_ORBIT_BIN",
-            panic_bin.to_str().expect("utf8 panic stub"),
-        )],
-    )
-    .assert_ok()
-    .says("0 errors");
-}
-
-#[test]
-fn check_online_resolves_each_distinct_id_once() {
-    let c = Corpus::new();
-    let stub = OrbitStub::install(c.workdir());
-    stub.ok("DANI-50001", "in-progress");
-    let origin = c
-        .run(&["new", "Shared origin", "--task", "DANI-50001"])
-        .assert_ok()
-        .stdout_trim();
-    let linked = c.seed("shared task", "Shared task");
-    c.run(&["task", &linked, "DANI-50001"]).assert_ok();
-    c.run(&["task", &origin, "DANI-50001"]).assert_ok();
-    c.run_with_env(
-        &["check", "--online"],
-        &[("NEBULA_ORBIT_BIN", stub.bin_str())],
-    )
-    .assert_ok()
-    .says("0 errors");
-    assert_eq!(
-        stub.calls(),
-        ["DANI-50001"],
-        "each distinct task id must be resolved once, not once per citation"
-    );
+        .find(|f| f["rule"] == 10)
+        .expect("rule 10 finding present");
+    assert_eq!(rule10["level"], "warn");
+    assert!(rule10["node"].is_null(), "tag drift is a corpus finding");
 }
 
 #[test]
@@ -1014,21 +723,44 @@ fn dangling_edges_are_caught() {
 // ------------------------------------------------------------------ triage --
 
 #[test]
-fn open_finds_the_hypothesis_with_nothing_running() {
+fn open_finds_the_hypothesis_with_no_references() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
     c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
     c.run(&["open"])
         .assert_ok()
-        .says("no evidence and no task running");
+        .says(&id)
+        .says("hypothesis with no references");
 
-    c.run(&["task", &id, "ORB-11440", "--why", "run the sim"])
+    c.run(&["cite", &id, "--uri", "https://example.org", "--note", "n"])
         .assert_ok();
     let after = c.run(&["open"]).assert_ok().stdout();
     assert!(
-        !after.contains("no task running"),
-        "a spawned task closes the gap:\n{after}"
+        !after.contains("no references"),
+        "a reference closes the gap:\n{after}"
     );
+}
+
+#[test]
+fn open_finds_seeds_untouched_for_ninety_days_and_filters_by_tag() {
+    let c = Corpus::new();
+    let old = c.seed("an old seed", "An old seed");
+    c.run(&["tag", &old, "--add", "physics"]).assert_ok();
+    set_updated(&c.node_file(&old), &date_days_ago(90));
+    let fresh = c.seed("a fresh seed", "A fresh seed");
+    set_updated(&c.node_file(&fresh), &date_days_ago(89));
+
+    let out = c.run(&["open"]).assert_ok().stdout();
+    assert!(
+        out.contains(&old) && out.contains("seed untouched for ninety days"),
+        "{out}"
+    );
+    assert!(!out.contains(&fresh), "{out}");
+
+    let out = c.run(&["open", "--tag", "physics"]).assert_ok().stdout();
+    assert!(out.contains(&old), "{out}");
+    let out = c.run(&["open", "--tag", "orrery"]).assert_ok().stdout();
+    assert!(!out.contains(&old), "{out}");
 }
 
 #[test]
@@ -1049,12 +781,6 @@ fn open_finds_inbox_captures_waiting_over_fourteen_days() {
     std::fs::write(inbox_file, raw).unwrap();
 
     c.run(&["open"])
-        .assert_ok()
-        .says("1 captures waiting over fourteen days; promote or drop them");
-    c.run(&["open", "--all"])
-        .assert_ok()
-        .says("1 captures waiting over fourteen days; promote or drop them");
-    c.run(&["open", "--domain", "general"])
         .assert_ok()
         .says("1 captures waiting over fourteen days; promote or drop them");
 
@@ -1109,169 +835,89 @@ fn round_tripping_a_node_preserves_prose_and_fields() {
     );
 }
 
-// ----------------------------------------------------------------- domains --
+// -------------------------------------------------------------------- tags --
 
 #[test]
-fn a_fresh_corpus_has_one_domain_and_asks_nothing() {
+fn tags_are_normalised_on_every_write_path() {
     let c = Corpus::new();
-    c.run(&["domain", "list"])
-        .assert_ok()
-        .says("general")
-        .says("(default)");
-    let id = c.seed("an idea", "An idea");
-    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
-    assert!(raw.contains("domain: general"), "{raw}");
-    // One domain: no scope footer, nothing to cross.
-    let out = c.run(&["list"]).assert_ok().stdout();
-    assert!(!out.contains("--all"), "{out}");
-}
-
-#[test]
-fn several_domains_without_a_default_make_new_a_decision() {
-    let c = Corpus::new();
-    c.run(&["domain", "add", "work"]).assert_ok();
-    // A fresh corpus defaults to `general`, so a second domain alone is
-    // still decision-free. Remove the default by hand to reach the case.
-    let cfg = c.root.join("config.yaml");
-    let raw = std::fs::read_to_string(&cfg).unwrap();
-    let kept: Vec<&str> = raw
-        .lines()
-        .filter(|l| !l.starts_with("default_domain"))
-        .collect();
-    write(&cfg, &(kept.join("\n") + "\n"));
-    c.run(&["new", "Undecided"]).assert_fails().says("--domain");
-    c.run(&["new", "Placed", "--domain", "work"]).assert_ok();
-    c.run(&["new", "Nowhere", "--domain", "nope"])
-        .assert_fails()
-        .says("no domain `nope`")
-        .says("general, work");
-    c.run(&["domain", "default", "work"]).assert_ok();
-    let id = c.run(&["new", "Defaulted"]).assert_ok().stdout_trim();
-    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
-    assert!(raw.contains("domain: work"), "{raw}");
-}
-
-#[test]
-fn list_scopes_to_the_default_domain_and_all_crosses() {
-    let c = Corpus::new();
-    c.run(&["domain", "add", "work"]).assert_ok();
-    c.run(&["domain", "default", "general"]).assert_ok();
-    c.run(&["new", "Personal thing"]).assert_ok();
-    c.run(&["new", "Work thing", "--domain", "work"])
-        .assert_ok();
-
-    let scoped = c
-        .run(&["list"])
-        .assert_ok()
-        .says("domain: general")
-        .stdout();
-    assert!(
-        scoped.contains("personal-thing") && !scoped.contains("work-thing"),
-        "{scoped}"
-    );
-
-    let all = c.run(&["list", "--all"]).assert_ok().stdout();
-    assert!(
-        all.contains("personal-thing") && all.contains("work-thing"),
-        "{all}"
-    );
-    assert!(all.contains("[work]") && all.contains("[general]"), "{all}");
-
-    let work = c.run(&["list", "--domain", "work"]).assert_ok().stdout();
-    assert!(
-        !work.contains("personal-thing") && work.contains("work-thing"),
-        "{work}"
-    );
-
-    c.run(&["list", "--domain", "work", "--all"]).assert_fails();
-}
-
-#[test]
-fn edges_cross_domains_because_a_domain_is_a_view_not_a_wall() {
-    let c = Corpus::new();
-    c.run(&["domain", "add", "physics"]).assert_ok();
-    c.run(&["domain", "default", "general"]).assert_ok();
-    c.run(&["new", "Ranking decay"]).assert_ok();
     c.run(&[
         "new",
-        "Dissipation analogy",
-        "--domain",
-        "physics",
-        "--parent",
-        "ranking-decay",
+        "Direct",
+        "--tag",
+        "Physics",
+        "--tag",
+        "Machine Learning",
     ])
     .assert_ok();
-    c.run(&["trace", "dissipation-analogy"])
-        .assert_ok()
-        .says("ranking-decay");
-    c.run(&["check"]).assert_ok().says("0 errors");
-}
-
-#[test]
-fn a_node_without_a_domain_fails_check_until_placed() {
-    let c = Corpus::new();
-    let id = c.seed("a legacy idea", "A legacy idea");
-    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
-    write(&c.node_file(&id), &raw.replace("domain: general\n", ""));
-    c.run(&["check"]).assert_fails().says("no domain");
-    c.run(&["domain", "list"])
-        .assert_ok()
-        .says("1 nodes name no declared domain");
-
-    c.run(&["domain", "set", &id, "general"])
-        .assert_ok()
-        .says("(none) -> general");
-    c.run(&["check"]).assert_ok().says("0 errors");
-
-    // An undeclared spelling is caught the same way.
-    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
-    write(
-        &c.node_file(&id),
-        &raw.replace("domain: general", "domain: General"),
-    );
-    c.run(&["check"]).assert_fails().says("not declared");
-}
-
-#[test]
-fn unplaced_domain_set_bulk_places_only_empty_nodes() {
-    let c = Corpus::new();
-    let unplaced = c.seed("a legacy idea", "A legacy idea");
-    let placed = c.seed("an existing idea", "An existing idea");
-    let raw = std::fs::read_to_string(c.node_file(&unplaced)).unwrap();
-    write(
-        &c.node_file(&unplaced),
-        &raw.replace("domain: general\n", ""),
+    let raw = std::fs::read_to_string(c.node_file("direct")).unwrap();
+    assert!(
+        raw.contains("tags:\n- physics\n- machine-learning\n"),
+        "{raw}"
     );
 
-    c.run(&["domain", "set", "--unplaced", "general"])
-        .assert_ok()
-        .says("(none) -> general")
-        .says("placed 1 nodes");
-    let unplaced_raw = std::fs::read_to_string(c.node_file(&unplaced)).unwrap();
-    let placed_raw = std::fs::read_to_string(c.node_file(&placed)).unwrap();
-    assert!(unplaced_raw.contains("domain: general"), "{unplaced_raw}");
-    assert!(placed_raw.contains("domain: general"), "{placed_raw}");
-    c.run(&["check"]).assert_ok().says("0 errors");
+    let entry = c.run(&["capture", "promoted with a tag"]).stdout_trim();
+    c.run(&["promote", &entry, "--title", "Promoted", "--tag", "ORRERY"])
+        .assert_ok();
+    let raw = std::fs::read_to_string(c.node_file("promoted")).unwrap();
+    assert!(raw.contains("tags:\n- orrery\n"), "{raw}");
 
-    c.run(&["domain", "set", &placed, "--unplaced", "general"])
+    c.run(&["tag", "promoted", "--add", "Physics", "--add", "physics"])
+        .assert_ok()
+        .says("orrery, physics");
+    c.run(&["tag", "promoted", "--remove", "ORRERY"])
+        .assert_ok()
+        .says("physics");
+    let raw = std::fs::read_to_string(c.node_file("promoted")).unwrap();
+    assert!(raw.contains("tags:\n- physics\n"), "{raw}");
+    c.run(&["tag", "promoted"])
         .assert_fails()
-        .says("cannot be used with");
-    c.run(&["domain", "set", "--unplaced", "missing"])
-        .assert_fails()
-        .says("no domain `missing`");
+        .says("--add <tag> or --remove <tag>");
+
+    c.run(&["tag", "list"])
+        .assert_ok()
+        .says("machine-learning 1")
+        .says("physics 2");
+    let json = c.run(&["--json", "tag", "list"]).assert_ok().stdout();
+    let items: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    assert!(
+        items
+            .iter()
+            .any(|i| i["tag"] == "physics" && i["count"] == 2),
+        "{json}"
+    );
+
+    // `--tag` filters are AND, and normalised the same way as the writes.
+    let out = c.run(&["list", "--tag", "Physics"]).assert_ok().stdout();
+    assert!(out.contains("direct") && out.contains("promoted"), "{out}");
+    let out = c
+        .run(&["list", "--tag", "physics", "--tag", "machine-learning"])
+        .assert_ok()
+        .stdout();
+    assert!(out.contains("direct") && !out.contains("promoted"), "{out}");
+    c.run(&["list", "--tag", "nope"])
+        .assert_ok()
+        .says("no nodes match");
+    c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
 }
 
 #[test]
-fn domain_names_are_slugs_and_never_declared_twice() {
+fn tag_drift_by_case_or_plural_is_a_warning() {
     let c = Corpus::new();
-    c.run(&["domain", "add", "Principia"])
-        .assert_fails()
-        .says("lowercase");
-    c.run(&["domain", "add", "principia"]).assert_ok();
-    c.run(&["domain", "add", "principia"])
-        .assert_fails()
-        .says("already");
-    c.run(&["domain", "default", "nope"]).assert_fails();
+    let a = c.seed("first", "First");
+    let b = c.seed("second", "Second");
+    c.run(&["tag", &a, "--add", "physics", "--add", "sim"])
+        .assert_ok();
+    c.run(&["tag", &b, "--add", "physics", "--add", "sims"])
+        .assert_ok();
+    // Writes normalise case, so the case collision has to be a hand edit.
+    let raw = std::fs::read_to_string(c.node_file(&b)).unwrap();
+    write(&c.node_file(&b), &raw.replace("- physics", "- Physics"));
+    c.run(&["check"])
+        .assert_ok()
+        .says("[10]")
+        .says("tags `Physics` and `physics` differ only by case")
+        .says("tags `sim` and `sims` differ only by a trailing `s`")
+        .says("0 errors, 2 warnings");
 }
 
 // ------------------------------------------------------------------ review --
@@ -1442,10 +1088,10 @@ fn review_out_writes_the_report_and_prints_nothing_else() {
 fn an_empty_corpus_produces_an_empty_review() {
     let c = Corpus::new();
     let out = c.run(&["review"]).assert_ok().stdout();
-    assert!(out.contains("## Hypotheses with no evidence for 30 days"));
+    assert!(out.contains("## Hypotheses untouched for 30 days"));
     assert!(out.contains("## Seeds untouched for 90 days"));
     assert!(out.contains("## Nodes with no references"));
-    assert!(out.contains("## Inbox entries waiting more than 14 days"));
+    assert!(out.contains("## Inbox entries waiting 14 days or more"));
     assert_eq!(
         out.matches("_none_").count(),
         4,
@@ -1490,4 +1136,344 @@ fn review_never_touches_nodes_or_inbox_on_disk() {
     let after = snapshot_corpus_files(&c.root);
 
     assert_eq!(before, after, "review must never mutate nodes/ or inbox/");
+}
+
+// ----------------------------------------------------------------- migrate --
+
+/// A corpus in v1 form: declared domains, evidence with verdicts and
+/// strengths, a task link, a weighed reference, the removed edge kinds, and
+/// the statuses v2 collapses. Written by hand so the fixture is exactly what
+/// v0.1 wrote and nothing in the current binary can shape it.
+const V1_CONFIG: &str = r"# nebula corpus configuration. `neb domain` edits this.
+schema_version: 1
+corpus_id: neb-abc123
+domains:
+- general
+- physics
+default_domain: physics
+";
+
+const V1_WAKE: &str = r"---
+id: wake-retardation
+title: Retardation in the scarcity wake
+domain: physics
+status: supported
+created: 2026-09-07
+updated: 2026-09-10
+kill: If the wake timescale is frame-independent, this is dead.
+tags:
+- Orrery
+edges:
+- type: derives-from
+  to: gravity-as-scarcity
+- type: depends-on
+  to: gravity-as-scarcity
+evidence:
+- id: ev1
+  verdict: supports
+  strength: strong
+  source: sim://boosted-source/run-3
+  date: 2026-09-08
+  note: |-
+    Boosted source shows a lag.
+    Frame dependence still to be checked.
+  origin:
+    task: DANI-10001
+- id: ev2
+  verdict: undermines
+  strength: anecdote
+  source: https://example.org/objection
+  date: 2026-09-09
+references:
+- id: r1
+  kind: study
+  uri: https://example.org/time-dilation
+  title: Gravitational time dilation
+  note: The constraint any wake timescale has to survive.
+  added: 2026-09-07
+  promoted_to: ev1
+tasks:
+- id: DANI-10001
+  state: open
+  why: run the boosted-source sim at three velocities
+---
+
+The wake lags the source.
+";
+
+const V1_GRAVITY: &str = r"---
+id: gravity-as-scarcity
+title: Gravity as scarcity
+domain: physics
+status: testing
+created: 2026-09-01
+updated: 2026-09-05
+kill: If a dense region shows no pull at all.
+evidence:
+- id: ev1
+  verdict: inconclusive
+  strength: suggestive
+  source: doi:10.1000/scarcity
+  date: 2026-09-04
+  note: Looked, learned nothing.
+---
+
+Space might have a density of something.
+";
+
+const V1_OLD: &str = r"---
+id: old-idea
+title: Old idea
+domain: general
+status: graduated
+created: 2026-08-01
+updated: 2026-08-20
+kill: If nobody downstream wants it.
+graduated_to: principia://theory/old-idea
+---
+
+It went downstream.
+";
+
+const V1_DEAD: &str = r"---
+id: dead-idea
+title: Dead idea
+domain: general
+status: refuted
+created: 2026-08-01
+updated: 2026-08-15
+kill: If the effect vanishes under control.
+edges:
+- type: undermines
+  to: old-idea
+evidence:
+- id: ev1
+  verdict: undermines
+  strength: strong
+  source: https://example.org/control-run
+  date: 2026-08-15
+  note: It vanished under control.
+---
+
+The effect vanished.
+";
+
+fn v1_corpus() -> Corpus {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("corpus");
+    std::fs::create_dir_all(root.join("nodes")).unwrap();
+    std::fs::create_dir_all(root.join("inbox")).unwrap();
+    write(&root.join("config.yaml"), V1_CONFIG);
+    for (id, text) in [
+        ("wake-retardation", V1_WAKE),
+        ("gravity-as-scarcity", V1_GRAVITY),
+        ("old-idea", V1_OLD),
+        ("dead-idea", V1_DEAD),
+    ] {
+        write(&root.join("nodes").join(format!("{id}.md")), text);
+    }
+    Corpus { dir, root }
+}
+
+#[test]
+fn a_v1_corpus_refuses_to_open_until_migrated() {
+    let c = v1_corpus();
+    c.run(&["list"])
+        .assert_fails()
+        .says("schema_version 1")
+        .says("neb migrate");
+    c.run(&["check"]).assert_fails().says("neb migrate");
+}
+
+#[test]
+fn migrate_relabels_evidence_tasks_and_edges_into_references() {
+    let c = v1_corpus();
+    let first = c
+        .run(&["migrate"])
+        .assert_ok()
+        .says("wake-retardation")
+        .says("domain `physics` -> tag `physics`")
+        .says("evidence ev1 -> reference r2")
+        .says("evidence ev2 -> reference r3")
+        .says("task DANI-10001 -> reference r4")
+        .says("edge depends-on gravity-as-scarcity -> reference r5")
+        .says("status supported -> hypothesis")
+        .says("status testing -> hypothesis")
+        .says("status graduated -> abandoned (graduated to principia://theory/old-idea)")
+        .says("config.yaml schema_version -> 2")
+        .says("4 of 4 nodes rewritten")
+        .stdout();
+    assert!(!first.contains("nothing changed"), "{first}");
+
+    let config = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    assert!(config.contains("schema_version: 2"), "{config}");
+    assert!(config.contains("corpus_id: neb-abc123"), "{config}");
+    assert!(
+        !config.contains("domains") && !config.contains("default_domain"),
+        "{config}"
+    );
+
+    let wake = std::fs::read_to_string(c.node_file("wake-retardation")).unwrap();
+    for gone in [
+        "domain:",
+        "evidence:",
+        "tasks:",
+        "promoted_to",
+        "type: depends-on",
+        "verdict:",
+        "strength:",
+    ] {
+        assert!(!wake.contains(gone), "`{gone}` survived migration:\n{wake}");
+    }
+    assert!(wake.contains("status: hypothesis"), "{wake}");
+    assert!(wake.contains("tags:\n- orrery\n- physics\n"), "{wake}");
+    assert!(
+        wake.contains("- type: derives-from\n  to: gravity-as-scarcity\n"),
+        "{wake}"
+    );
+    // The verdict and strength survive as a prefix on the note, the note's
+    // first line becomes the title, and the evidence provenance is kept.
+    assert!(
+        wake.contains(
+            "- id: r2\n  kind: other\n  uri: sim://boosted-source/run-3\n  \
+             title: Boosted source shows a lag.\n  note: |-\n    \
+             [supports/strong] Boosted source shows a lag.\n    \
+             Frame dependence still to be checked.\n  added: 2026-09-08\n  \
+             origin:\n    task: DANI-10001\n"
+        ),
+        "{wake}"
+    );
+    assert!(
+        wake.contains(
+            "- id: r3\n  kind: other\n  uri: https://example.org/objection\n  \
+             note: '[undermines/anecdote]'\n  added: 2026-09-09\n"
+        ),
+        "{wake}"
+    );
+    assert!(
+        wake.contains(
+            "- id: r4\n  kind: other\n  uri: orbit:DANI-10001\n  title: DANI-10001\n  \
+             note: '[open] run the boosted-source sim at three velocities'\n"
+        ),
+        "{wake}"
+    );
+    assert!(
+        wake.contains(
+            "- id: r5\n  kind: other\n  uri: neb:gravity-as-scarcity\n  \
+             title: gravity-as-scarcity\n  note: '[depends-on] gravity-as-scarcity'\n"
+        ),
+        "{wake}"
+    );
+    assert!(
+        wake.contains("The wake lags the source."),
+        "prose survives:\n{wake}"
+    );
+    // The migration never masquerades as an edit.
+    assert!(wake.contains("updated: 2026-09-10"), "{wake}");
+    c.run(&["check"])
+        .assert_ok()
+        .says("4 nodes, 0 errors, 0 warnings");
+    c.run(&["show", "wake-retardation"])
+        .assert_ok()
+        .says("[supports/strong]");
+}
+
+#[test]
+fn migrate_maps_statuses_and_is_a_no_op_the_second_time() {
+    let c = v1_corpus();
+    c.run(&["migrate"]).assert_ok();
+
+    let gravity = std::fs::read_to_string(c.node_file("gravity-as-scarcity")).unwrap();
+    assert!(gravity.contains("status: hypothesis"), "{gravity}");
+    assert!(
+        gravity.contains("[inconclusive/suggestive] Looked, learned nothing."),
+        "{gravity}"
+    );
+    assert!(gravity.contains("tags:\n- physics\n"), "{gravity}");
+
+    let old = std::fs::read_to_string(c.node_file("old-idea")).unwrap();
+    assert!(old.contains("status: abandoned"), "{old}");
+    assert!(
+        old.contains(
+            "closed:\n  why: graduated to principia://theory/old-idea\n  at: 2026-08-20\n"
+        ),
+        "{old}"
+    );
+    assert!(!old.contains("graduated_to"), "{old}");
+
+    let dead = std::fs::read_to_string(c.node_file("dead-idea")).unwrap();
+    assert!(dead.contains("status: refuted"), "{dead}");
+    assert!(dead.contains("closed:\n  why: refuted under v1"), "{dead}");
+    assert!(
+        dead.contains("[undermines/strong] It vanished under control."),
+        "{dead}"
+    );
+    assert!(dead.contains("note: '[undermines] old-idea'"), "{dead}");
+
+    c.run(&["check"])
+        .assert_ok()
+        .says("4 nodes, 0 errors, 0 warnings");
+    c.run(&["show", "wake-retardation"])
+        .assert_ok()
+        .says("[supports/strong]");
+    let listed = c.run(&["list", "--tag", "physics"]).assert_ok().stdout();
+    assert!(
+        listed.contains("wake-retardation") && listed.contains("gravity-as-scarcity"),
+        "{listed}"
+    );
+
+    // Second run: nothing to do, nothing touched.
+    let before = snapshot_corpus_files(&c.root);
+    let before_config = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    c.run(&["migrate"])
+        .assert_ok()
+        .says("already at schema 2; nothing changed");
+    assert_eq!(before, snapshot_corpus_files(&c.root));
+    assert_eq!(
+        before_config,
+        std::fs::read_to_string(c.root.join("config.yaml")).unwrap()
+    );
+}
+
+#[test]
+fn migrate_refuses_a_dirty_git_tree() {
+    let c = v1_corpus();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&c.root)
+            .args(args)
+            .output()
+            .expect("running git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q"]);
+    c.run(&["migrate"])
+        .assert_fails()
+        .says("uncommitted changes");
+    // Refused before anything was written.
+    let config = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    assert!(config.contains("schema_version: 1"), "{config}");
+
+    git(&["add", "-A"]);
+    git(&[
+        "-c",
+        "user.name=neb-test",
+        "-c",
+        "user.email=neb-test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "-m",
+        "v1 corpus",
+    ]);
+    c.run(&["migrate"])
+        .assert_ok()
+        .says("4 of 4 nodes rewritten");
+    c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
 }

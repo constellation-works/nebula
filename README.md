@@ -9,7 +9,8 @@ records how it descended into whatever it became. Ideas branch, merge and die,
 so the structure is a directed acyclic graph rather than a tree, and dead
 branches are kept forever because they are what stops you re-treading ground.
 
-The design is in [docs/spec.md](docs/spec.md).
+The v0.2 model is in [docs/design/v0.2/1_spec.md](docs/design/v0.2/1_spec.md);
+[docs/spec.md](docs/spec.md) describes v0.1 until it is rewritten.
 
 ## Repository boundary
 
@@ -26,23 +27,26 @@ nebula   = the CLI, the checker, the index builder   (this repo)
 corpus   = nodes/ and inbox/                          (elsewhere, private)
 ```
 
-## Domains
+## Tags
 
-A corpus is partitioned into declared domains (`principia`, `ranking`, ...)
-so one area's noise does not swamp another's. A domain is a view, not a wall:
-edges cross domains freely and `trace` always walks the whole graph; only
-`list` and `open` narrow, and `--all` crosses. Use a second corpus only for a
-second owner, which is what keeps work and personal material apart.
+Nodes carry free-form tags, normalised to lowercase kebab-case on every
+write. There is no declared list; `neb check` warns when two tags differ only
+by case or a trailing `s`. Use a second corpus only for a second owner, which
+is what keeps work and personal material apart.
 
 ```sh
-neb domain add principia
-neb domain default principia
-neb new "Shear law from scarcity" --domain principia --kill "..."
-neb list --all
+neb new "Shear law from scarcity" --tag principia --kill "..."
+neb tag shear-law-from-scarcity --add orrery
+neb tag list
+neb list --tag principia --tag orrery
+neb status shear-law-from-scarcity refuted --why "..."
 neb completions zsh > ~/.zfunc/_neb
 ```
 
+A corpus written by v0.1 is brought forward in place with `neb migrate`.
+
 ## Status
 
-v0.1: the full lifecycle from capture to graduation, fifteen invariants, and
-domains. Everything past that is a guess until roughly fifty real nodes exist.
+v0.2: the reduced model — four statuses, five edge kinds, references with
+notes, tags, and ten invariants. Everything past that is a guess until
+roughly fifty real nodes exist.
