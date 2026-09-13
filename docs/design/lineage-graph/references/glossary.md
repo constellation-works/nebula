@@ -9,7 +9,7 @@ doc_role: reference
 type: design
 summary: Terms used across nebula's docs and code, with the distinctions that matter.
 tags: [lineage-graph, glossary, v0.2]
-paths: ["src/corpus/model.rs"]
+paths: ["crates/nebula-core/src/model.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 ---

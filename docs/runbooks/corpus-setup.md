@@ -2,7 +2,7 @@
 type: runbook
 summary: Create a nebula corpus, point the CLI at it, and put it under version control.
 tags: [operations, setup, corpus]
-paths: ["src/corpus/store.rs", "src/corpus/config.rs"]
+paths: ["crates/nebula-core/src/store.rs", "crates/nebula-core/src/config.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 last_validated: 2026-09-12

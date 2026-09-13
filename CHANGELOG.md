@@ -68,6 +68,21 @@ habit. This cut keeps what a person actually uses.
 - `neb --help` groups are Corpus (`init`, `check`, `migrate`, `completions`),
   Inbox, Nodes (`new`, `sharpen`, `status`, `link`, `tag`), References
   (`cite`), Query, Maintenance.
+- `neb graph --json`: the whole corpus as `{nodes, edges}`, for a tool that
+  draws it. JSON only; without `--json` it prints a hint and exits 2.
+
+### Changed
+
+- The repository is a Cargo workspace. `crates/nebula-core` is the corpus as
+  a library (model, store, graph queries, ops, check, migrate) with a typed
+  `Error` and no terminal, clap or `anyhow` dependency; `crates/neb` is the
+  CLI, and each verb is one core call plus rendering. Every value core
+  returns is `Serialize`, so `--json` and the desktop app's IPC share one
+  schema. `cargo test -p nebula-core --features ts` (`make types`) generates
+  `apps/desktop/src/types/*.ts` from those types; CI fails if they are stale.
+  Observable CLI behaviour, messages and exit codes are unchanged.
+- The version is written once, in `[workspace.package]`;
+  `scripts/release-check.sh` reads it there.
 
 ## 0.1.0 — unreleased
 

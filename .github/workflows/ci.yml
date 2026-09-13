@@ -27,5 +27,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: ./scripts/release-check.sh
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --all-targets
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-targets
+      # The desktop's types are generated from nebula-core and committed, so a
+      # Rust change that forgot `make types` shows up here as a diff.
+      - run: cargo test -p nebula-core --features ts --lib
+      - run: git diff --exit-code -- apps/desktop/src/types

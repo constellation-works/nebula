@@ -9,7 +9,7 @@ doc_role: vision
 type: design
 summary: The maintenance loop that decides whether the corpus survives, and what deliberately stays out.
 tags: [lineage-graph]
-paths: ["src/**", "skills/**", "apps/desktop/**"]
+paths: ["crates/**", "skills/**", "apps/desktop/**"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 ---

@@ -1,11 +1,12 @@
-.PHONY: help build release run dev check test fmt fmt-check release-check clippy audit tree ci ci-fast install uninstall clean corpus-check watch
+.PHONY: help build release run dev check test types fmt fmt-check release-check clippy audit tree ci ci-fast install uninstall clean corpus-check watch
 
 # ------------------------------------------------------------
 # Config
 # ------------------------------------------------------------
 CARGO ?= cargo
 BINARY := neb
-CRATE := nebula
+# The library crate; the binary is `neb` and lives beside it under crates/.
+CORE := nebula-core
 INSTALL_PROFILE ?= release
 INSTALL_BIN_DIR ?= $(HOME)/.cargo/bin
 
@@ -37,8 +38,9 @@ help:
 	@echo "  make release       Build optimized release binary"
 	@echo "  make run ARGS=...  Run the CLI through cargo"
 	@echo "  make dev ARGS=...  Run the built binary directly"
-	@echo "  make check         Type-check"
-	@echo "  make test          Run all tests"
+	@echo "  make check         Type-check every crate"
+	@echo "  make test          Run all tests, every crate"
+	@echo "  make types         Regenerate apps/desktop/src/types from nebula-core"
 	@echo "  make fmt           Format code"
 	@echo "  make fmt-check     Check formatting"
 	@echo "  make release-check Verify Cargo/CHANGELOG version lockstep"
@@ -58,7 +60,7 @@ help:
 # Build
 # ------------------------------------------------------------
 build:
-	$(CARGO) build $(CARGO_PROFILE)
+	$(CARGO) build --workspace $(CARGO_PROFILE)
 
 release:
 	$(CARGO) build --bin $(BINARY) --release
@@ -77,10 +79,15 @@ dev: build
 # Quality
 # ------------------------------------------------------------
 check:
-	$(CARGO) check --all-targets
+	$(CARGO) check --workspace --all-targets --all-features
 
 test:
-	$(CARGO) test --all-targets
+	$(CARGO) test --workspace --all-targets
+
+# The TypeScript bindings are generated, never edited: this is the only way
+# they change. Destination is TS_RS_EXPORT_DIR in .cargo/config.toml.
+types:
+	$(CARGO) test -p $(CORE) --features ts --lib
 
 fmt:
 	$(CARGO) fmt --all
@@ -92,7 +99,7 @@ release-check:
 	./scripts/release-check.sh
 
 clippy:
-	$(CARGO) clippy --all-targets -- -D warnings
+	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings
 
 # Supply-chain audit: advisories + licenses via cargo-deny.
 audit:
@@ -104,7 +111,7 @@ tree:
 	$(CARGO) tree -e features
 
 # Full CI pass. Keep aligned with .github/workflows/ci.yml.
-ci: fmt-check release-check clippy test
+ci: fmt-check release-check clippy test types
 
 # Pre-handoff gate for agents: no compile.
 ci-fast: fmt-check
