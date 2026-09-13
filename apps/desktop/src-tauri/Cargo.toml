@@ -1,0 +1,36 @@
+[package]
+name = "nebula-desktop"
+description = "Nebula's menu-bar app: capture from anywhere, read the inbox, draw the graph."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Tauri's `run()` lives in the library so the crate has a test target that
+# does not need a window; `main.rs` is one line that calls it.
+[lib]
+name = "nebula_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nebula-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+nebula-core = { workspace = true }
+notify = "8"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-opener = "2"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

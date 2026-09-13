@@ -599,10 +599,10 @@ fn find_cycle<'a>(graph: &HashMap<&'a str, Vec<&'a str>>) -> Option<Vec<String>>
     let mut roots: Vec<&&str> = graph.keys().collect();
     roots.sort_unstable();
     for start in roots {
-        if !state.contains_key(*start) {
-            if let Some(c) = dfs(start, graph, &mut state, &mut stack) {
-                return Some(c);
-            }
+        if !state.contains_key(*start)
+            && let Some(c) = dfs(start, graph, &mut state, &mut stack)
+        {
+            return Some(c);
         }
     }
     None

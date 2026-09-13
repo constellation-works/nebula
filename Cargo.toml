@@ -3,7 +3,7 @@ resolver = "3"
 members = [
     "crates/nebula-core",
     "crates/neb",
-    # `apps/desktop/src-tauri` joins here when the desktop app lands.
+    "apps/desktop/src-tauri",
 ]
 
 # Shared by every member, so a version bump is one edit and `release-check.sh`
@@ -11,7 +11,7 @@ members = [
 [workspace.package]
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Idea lineage graph: capture a thought in five seconds, trace where it came from years later."
 license = "MIT"
 repository = "https://github.com/constellation-works/nebula"

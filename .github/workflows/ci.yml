@@ -25,6 +25,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { components: rustfmt, clippy }
       - uses: Swatinem/rust-cache@v2
+      # The desktop shell is a workspace member, and on Linux Tauri links the
+      # system webview and tray libraries.
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
       - run: cargo fmt --check
       - run: ./scripts/release-check.sh
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -33,3 +39,29 @@ jobs:
       # Rust change that forgot `make types` shows up here as a diff.
       - run: cargo test -p nebula-core --features ts --lib
       - run: git diff --exit-code -- apps/desktop/src/types
+  # The frontend, and the Tauri crate on the platform the app is for. No
+  # `tauri build` here: the .app is unsigned and built locally.
+  desktop:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # src/types is generated from nebula-core and committed; a hand edit or
+      # a forgotten `make types` shows up as a diff.
+      - run: pnpm gen-types
+      - run: git diff --exit-code -- src/types
+      - run: pnpm tsc --noEmit
+      - run: pnpm vitest run
+      - run: cargo clippy -p nebula-desktop --all-targets -- -D warnings

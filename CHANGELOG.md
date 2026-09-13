@@ -77,6 +77,19 @@ habit. This cut keeps what a person actually uses.
   shape, the ten invariants with each typed refusal and its remedy, and a
   worked transcript per mode. `make skill-link` symlinks it into
   `~/.claude/skills/nebula`.
+- `apps/desktop`: a menu-bar app (Tauri 2, React, TypeScript) on
+  `nebula-core` directly, no sidecar. The tray shows the unsettled inbox
+  count; `Alt+Space` (configurable in the app's `settings.json`) opens a
+  floating capture box that writes the same line `neb capture` writes; the
+  window has an Inbox view (capture box, unsettled entries) and a placeholder
+  for the Graph view. A `notify` watcher on `nodes/` and `inbox/` refreshes
+  both on outside changes. A missing corpus shows the path tried and a reload
+  button. `make desktop-dev`, `make desktop` (unsigned `.app`) and
+  `make desktop-check`; CI gains a `desktop` job (types drift, tsc, vitest,
+  clippy). The workspace's `rust-version` moves to 1.88 for the desktop's
+  dependency tree.
+- `Corpus::node_path` is public, so a consumer that hands a node file to the
+  OS asks for the path rather than re-deriving the layout.
 
 ### Changed
 

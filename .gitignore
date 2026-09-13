@@ -1,4 +1,9 @@
 /target
+# The desktop frontend's installs and builds; see apps/desktop/.gitignore.
+apps/desktop/node_modules
+apps/desktop/dist
+# Where pnpm puts its store when it cannot use the global one.
+.pnpm-store
 .DS_Store
 # The corpus never lives in this repo. See docs/spec.md, "Repository boundary".
 /corpus

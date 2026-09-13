@@ -77,7 +77,11 @@ impl Corpus {
     }
 
     /// Path of a node file, whether or not it exists.
-    pub(crate) fn node_path(&self, id: &str) -> PathBuf {
+    ///
+    /// Public so a consumer that hands a node to something outside the
+    /// corpus (the desktop's "open in editor") asks for the path rather than
+    /// re-deriving the layout.
+    pub fn node_path(&self, id: &str) -> PathBuf {
         self.root.join("nodes").join(format!("{id}.md"))
     }
 
