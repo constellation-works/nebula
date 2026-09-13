@@ -4,6 +4,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { openUrl as pluginOpenUrl } from "@tauri-apps/plugin-opener";
 import type { GraphExport } from "./types/GraphExport";
 import type { Inbox } from "./types/Inbox";
 import type { InboxEntry } from "./types/InboxEntry";
@@ -37,3 +38,9 @@ export const reload = (): Promise<void> => invoke<void>("reload");
  */
 export const onCorpusChanged = (handler: () => void): Promise<UnlistenFn> =>
   listen("corpus-changed", handler);
+
+/**
+ * Open a URL in the OS default handler, via the opener plugin. The webview
+ * must never navigate itself, so every external link in the UI routes here.
+ */
+export const openUrl = (url: string): Promise<void> => pluginOpenUrl(url);
