@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: The choices that shaped nebula, each with the reasoning and the condition that would reverse it.
 tags: [lineage-graph, v0.2]
-paths: ["src/**"]
+paths: ["crates/**"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 ---
@@ -140,13 +140,14 @@ not something nebula can enforce by refusing a transition.
 
 ## A module tree, not a flat `src/`
 
-The tool is small enough that a flat directory would work today. It is laid
-out as a tree anyway, with `main.rs` as the sole file under `src/`, because the
-layering is the part worth keeping honest over years: `corpus` must never learn
-about the terminal, and `commands` must never learn about clap. A directory per
-layer makes a violation visible in an import path. The layering also fixed the
-seam for a future library crate without deciding at the time whether one was
-needed — see "A core-library workspace" below for the point it got cashed in.
+The tool was small enough in v0.1 that a flat directory would have worked. It
+was laid out as a tree anyway, because the layering is the part worth keeping
+honest over years: the data layer must never learn about the terminal, and the
+verbs must never learn about clap. A directory per layer makes a violation
+visible in an import path. The layering also fixed the seam for a future
+library crate without deciding at the time whether one was needed — see "A
+core-library workspace" below for the point it got cashed in, and
+[2_design.md](2_design.md) "Crates" for the layout that resulted.
 
 ## Tags over domains
 

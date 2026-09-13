@@ -1,0 +1,27 @@
+[package]
+name = "neb"
+description = "Idea lineage graph: capture a thought in five seconds, trace where it came from years later."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "neb"
+path = "src/main.rs"
+
+[dependencies]
+nebula-core = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+time = { workspace = true }
+
+[lints]
+workspace = true

@@ -9,7 +9,7 @@ doc_role: spec
 type: design
 summary: What neb check enforces, where each rule is enforced, and which failures block.
 tags: [lineage-graph, invariants]
-paths: ["src/check/**", "src/corpus/model.rs", "src/corpus/config.rs"]
+paths: ["crates/nebula-core/src/check.rs", "crates/nebula-core/src/model.rs", "crates/nebula-core/src/ops.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 ---

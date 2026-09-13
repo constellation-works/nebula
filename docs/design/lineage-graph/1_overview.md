@@ -9,7 +9,7 @@ doc_role: overview
 type: design
 summary: Why nebula exists, what a node is, and where it sits relative to principia and orbit-research.
 tags: [lineage-graph]
-paths: ["src/**", "docs/spec.md"]
+paths: ["crates/**", "docs/spec.md"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 ---

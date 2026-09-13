@@ -1,0 +1,31 @@
+[package]
+name = "nebula-core"
+description = "The nebula corpus as a library: model, store, graph, ops, check, migrate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "nebula_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+thiserror = { workspace = true }
+time = { workspace = true }
+ts-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+# Generate `apps/desktop/src/types/*.ts` from the types below, so the frontend
+# never hand-writes a shape. `cargo test -p nebula-core --features ts` writes them.
+ts = ["dep:ts-rs"]
+
+[lints]
+workspace = true

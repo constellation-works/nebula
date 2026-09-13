@@ -2,7 +2,7 @@
 type: runbook
 summary: Clear the inbox, find hypotheses with nothing running, and keep the corpus honest.
 tags: [operations, triage, routine]
-paths: ["src/commands/**"]
+paths: ["crates/nebula-core/src/ops.rs", "crates/nebula-core/src/graph.rs", "crates/neb/src/cli.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 last_validated: 2026-09-12

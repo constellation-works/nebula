@@ -11,17 +11,23 @@ The corpus mixes work and personal thinking, and this repository is public.
 Never commit node or inbox content here. The corpus is found at runtime through
 `--root`, else `NEBULA_ROOT`, else `~/.nebula`, and `/corpus` is gitignored as a
 backstop. Fixtures for tests belong in a temporary directory, which is what
-`tests/cli.rs` does.
+`crates/neb/tests/cli.rs` and `crates/nebula-core/tests/core.rs` do.
 
 ## Working here
 
 ```sh
-cargo test            # 22 end-to-end tests over throwaway corpora
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
+make test             # every crate: core unit tests + end-to-end CLI tests
+make clippy           # --workspace --all-targets --all-features -D warnings
+make fmt-check
+make types            # regenerate apps/desktop/src/types from nebula-core
 ```
 
-CI runs all three on Linux and macOS. Both matter: the checker walks paths, and
+The workspace is `crates/nebula-core` (the corpus as a library: no terminal,
+no clap, typed errors, `Serialize` returns) and `crates/neb` (the CLI: one
+core call per verb, plus rendering). Anything that reads or writes the corpus
+goes in core; the desktop app and the agent skill must see what the CLI sees.
+CI runs all four on Linux and macOS, and fails if the generated TypeScript is
+stale. Both matter: the checker walks paths, and
 macOS temporary directories sit under a symlink, so path handling that resolves
 or canonicalizes will pass on one platform and fail on the other. Use paths as
 given.
@@ -39,12 +45,12 @@ that would reverse it. In particular:
   not by a check, and that is deliberate.
 - Capture must stay under five seconds and require no decisions.
 
-v0.1 is intentionally minimal. Do not add schema until roughly fifty real nodes
-exist to justify it.
+v0.2 is intentionally minimal — it *removed* schema. Do not add any until
+roughly fifty real nodes exist to justify it.
 
 ## Orbit integration
 
-`origin` records what produced a node; `tasks` records work it spawned. Two
+`origin` records what produced a node; work it spawned is a reference. Two
 hazards, both learned elsewhere in the constellation:
 
 - Never hardcode an agent family. orbit-research pinned `codex` into its task

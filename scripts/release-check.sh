@@ -2,7 +2,9 @@
 set -euo pipefail
 
 repo_root="${BASH_SOURCE[0]%scripts/release-check.sh}"
-cargo_version="$(sed -n '/^\[package\]/,/^\[/ { s/^version = "\([^"]*\)".*/\1/p; }' "$repo_root/Cargo.toml")"
+# Every crate inherits `version.workspace = true`, so the root manifest's
+# [workspace.package] table is the one place the version is written.
+cargo_version="$(sed -n '/^\[workspace.package\]/,/^\[/ { s/^version = "\([^"]*\)".*/\1/p; }' "$repo_root/Cargo.toml")"
 changelog_version="$(sed -n '/^## / { s/^## \([^ ]*\).*/\1/; p; q; }' "$repo_root/CHANGELOG.md")"
 
 if [[ -z "$cargo_version" || -z "$changelog_version" ]]; then

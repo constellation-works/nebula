@@ -2,7 +2,7 @@
 type: runbook
 summary: Diagnose a corpus that will not load, repair hand-edited nodes, and recover from an interrupted write.
 tags: [operations, recovery, debugging]
-paths: ["src/corpus/model.rs", "src/check/**"]
+paths: ["crates/nebula-core/src/model.rs", "crates/nebula-core/src/check.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 last_validated: 2026-09-12

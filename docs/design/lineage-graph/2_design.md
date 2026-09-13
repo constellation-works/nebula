@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: Storage layout, module boundaries, traversal, and how the corpus stays separate from the tool.
 tags: [lineage-graph]
-paths: ["src/**"]
+paths: ["crates/**"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 ---
@@ -70,26 +70,29 @@ personal ideas belong to different owners, so they are separate corpora with
 separate configs, and a lineage that genuinely crosses that line is recorded as
 a reference rather than an edge.
 
-## Modules
+## Crates
 
-`src/main.rs` is the only file directly under `src/`; everything else is a
-module directory. Dependencies point downward only.
+The repository is a Cargo workspace of two crates. Dependencies point one way:
+`neb` depends on `nebula-core`; nothing depends on `neb`.
 
-| module | holds |
-|---|---|
-| `cli` | the clap tree and dispatch; the only module that knows clap |
-| `commands` | one function per verb group: `inbox`, `node` (new, sharpen, link, status, tag), `attach` (cite), `read` (show, list, trace, impact, open, review), `check`, `migrate` |
-| `check` | `mod` runs the whole-corpus rules; `rules` the per-node ones; `graph` cycle detection |
-| `render` | terminal output; `tree` draws ancestry |
-| `corpus` | the data layer: `model` (schema, parse, atomic write), `store` (location, load, save, inbox), `config` (`config.yaml`) |
+| crate | module | holds |
+|---|---|---|
+| `nebula-core` | `model` | the file format: `Node`, `Status`, `Edge`, `Reference`; parse and atomic write |
+| | `store` | `Corpus`: location, load, save, create, the inbox |
+| | `graph` | `Graph` (id index, parent/child/contradicts adjacency) and the pure queries: trace, impact, open, review, export, show, list, tags |
+| | `ops` | the mutations, each enforcing its point-of-action invariants |
+| | `check` | the invariant checker, returning `Finding`s |
+| | `migrate` | v1 → v2, with its own lenient v1 model kept private |
+| | `error` | one `Error` enum; every public function returns `Result<T, Error>` |
+| `neb` | `cli` | the clap tree and dispatch; the only module anywhere that knows clap |
+| | `render` | terminal output for the values core returns; `tree` draws ancestry |
 
-`corpus`, `check` and `render` know nothing about the layers above them. That
-is deliberate: a second consumer appearing — the desktop app and the agent
-skill both now exist — is exactly the case
-[docs/design/v0.2/2_architecture.md](../v0.2/2_architecture.md) plans for, by
-splitting this binary into a pure `nebula-core` library and a thin `neb` CLI
-that wraps it. That split is a separate task; this module boundary is what
-makes it a mechanical move rather than a redesign.
+Core never prints, never colours, never exits, and does not depend on clap or
+`anyhow`. Every value it returns is `Serialize`, so `neb --json` and the
+desktop app's IPC are one schema; with the `ts` feature,
+`apps/desktop/src/types/*.ts` is generated from those types (`make types`).
+The reasoning is in
+[docs/design/v0.2/2_architecture.md](../v0.2/2_architecture.md).
 
 ## Traversal
 
