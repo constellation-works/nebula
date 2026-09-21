@@ -39,12 +39,19 @@ Refusals are typed. The message is what the CLI prints; the variant is what
 | `refuted needs --why: say how the kill condition fired` | `RefutedNeedsWhy` | 5 | `neb status <id> refuted --why "..."`. The reason is the human's; quote them. |
 | `\`X\` is refuted and cannot simply reopen` | `RefutedCannotReopen` | 6 | Refuted is final. `neb new "..." && neb link <new> reopens X` so the fact that it once died stays visible. Only with the human's say-so. |
 | `\`X\` cannot become \`Y\`` | `InvalidTransition` | — | A guard you have not seen. Report it verbatim; do not work around it. |
+| `duplicate node id \`X\`` | `DuplicateId` | — | The corpus has two documents claiming one id, so a verb cannot safely choose one. Report both paths; do not overwrite either document or retry the verb. |
+| `parent \`X\` does not exist` | `MissingParent` | — | The parent id is wrong or has not been created. Check `neb list --json`; use an existing parent, or create the intended parent only with the human's approval. |
+| `title \`X\` does not reduce to a usable id` | `UnusableTitle` | — | Give `neb new` or `neb promote` a title containing letters or numbers, or provide a valid `--id`. Do not retry the same unusable title. |
+| `\`X\` is not a valid id: ids are lowercase words joined by single dashes, 60 characters or fewer` | `InvalidId` | — | Use a lowercase slug of single-dash-separated words, at most 60 characters, for `neb new` or `neb promote --id`. Do not retry the invalid id. |
 | `\`../x.md\` does not resolve from .../nodes` | `UnresolvedUri` | 8 | Local URIs are relative to `nodes/`. Fix the path (`../../studies/x.md`) or use a URL/wikilink. |
 | `\`X\` is not an Observatory record id` | `InvalidObservatoryId` | 8 | `--kind observatory` takes the bare id (`Q002`, `H007`, `T003`, `R012`), never a path or a slug. Never fall back to `--uri <absolute path>`: it breaks on every other machine. |
 | `no open inbox entry \`X\`` | `NoSuchInboxEntry` | — | Already promoted or dropped, or the id is wrong. `neb inbox --json`. |
 | `node \`X\` already exists` | `NodeExists` | — | A node with that slug exists. Show it; the human decides whether this is a duplicate (drop) or a refinement (`new` with a different title + `refines`). |
 | `no corpus at <dir>` | `NoCorpus` | — | The root is wrong. Do **not** `neb init` somewhere new; confirm `NEBULA_ROOT` with the human. |
 | `... is schema_version 1, and this build understands 2` | `SchemaMismatch` | — | The corpus needs `neb migrate`. In session mode, run it only on a clean git tree and tell the human it lands as its own commit; in routine mode, propose it. |
+| `<root> has staged changes outside the corpus (<paths>); the write is in place and nothing was committed` | `StagedElsewhere { root, paths }` | — | **The write already landed. Do not retry the verb.** Report the staged paths; commit or unstage them, then catch up the corpus with `git -C <root> add nodes inbox config.yaml && git -C <root> commit -m "neb"`, or use `--no-commit` next time. |
+| `<root> is ignored by the git repository that contains it; nothing can be committed` | `CorpusIgnored` | — | The write landed but cannot be committed there. Run `git -C <root> init` to make the corpus its own repository, or turn commits off with `neb config commit off`; do not retry the write. |
+| `git <context> failed in <root>: <stderr>` | `Git { root, context, stderr }` | — | The write is in place; git is what failed. Report the command and stderr, fix the git problem, then catch up the corpus with a separate commit. Do not retry the verb. |
 | `a reason only applies to refuted or abandoned` | `Corpus(..)` | — | Drop `--why` when moving to an open status. |
 
 ## Warnings `check` will raise after your writes
