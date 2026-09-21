@@ -1,5 +1,5 @@
 //! The graph and the queries over it: trace, impact, open, review, export,
-//! plus the two listings the CLI and the desktop both need.
+//! near, plus the two listings the CLI and the desktop both need.
 //!
 //! A [`Graph`] is an indexed snapshot of loaded nodes. It is built once per
 //! command, and every query here is pure over it: nothing reads the disk,
@@ -12,7 +12,7 @@ use crate::error::{Error, Result};
 use crate::model::{self, Doc, EdgeType, Node, Note, Status};
 use crate::store::{self, Inbox};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Days a seed may sit untouched before `open` and `review` raise it.
@@ -597,6 +597,220 @@ pub fn tags(graph: &Graph<'_>) -> Result<TagCounts> {
             })
             .collect(),
     ))
+}
+
+/// The nodes closest to a query, best first. Serializes as the bare list.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Near(pub Vec<Neighbour>);
+
+/// One existing node a query lands near, and how near.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Neighbour {
+    /// The node's id.
+    pub id: String,
+    /// Its one-line title.
+    pub title: String,
+    /// Where it is in its lifecycle.
+    pub status: Status,
+    /// Its labels, since a promotion reuses the parent's.
+    pub tags: Vec<String>,
+    /// Lexical similarity in `0..=1`, rounded to three places. `1` would be a
+    /// node that saturates every word of the query; anything over about
+    /// `0.3` shares real vocabulary rather than one incidental word.
+    pub score: f64,
+}
+
+/// How many neighbours `near` returns unless told otherwise.
+pub const NEAR_DEFAULT: usize = 3;
+
+/// BM25 term-frequency saturation. The textbook value.
+const BM25_K1: f64 = 1.2;
+/// BM25 length normalisation. The textbook value.
+const BM25_B: f64 = 0.75;
+/// A word in the title counts this many times over one in the body.
+const TITLE_WEIGHT: f64 = 3.0;
+/// A tag counts this many times over a word in the body.
+const TAG_WEIGHT: f64 = 2.0;
+
+/// Words that are in every node and say nothing about which one.
+const STOPWORDS: &[&str] = &[
+    "a", "about", "after", "all", "also", "an", "and", "any", "are", "as", "at", "be", "because",
+    "been", "before", "being", "but", "by", "can", "could", "did", "do", "does", "doing", "for",
+    "from", "had", "has", "have", "having", "how", "i", "if", "in", "into", "is", "it", "its",
+    "just", "may", "might", "more", "most", "my", "no", "not", "of", "on", "one", "only", "or",
+    "our", "out", "over", "should", "so", "some", "than", "that", "the", "their", "them", "then",
+    "there", "these", "they", "this", "those", "to", "too", "up", "very", "was", "we", "were",
+    "what", "when", "where", "which", "while", "who", "why", "will", "with", "would", "you",
+    "your",
+];
+
+/// The nodes lexically closest to `query`, at most `k` of them, best first.
+///
+/// `query` is free text, or the id of an existing node, in which case that
+/// node's own title, body and tags are the query and the node itself is left
+/// out of the answer. Similarity is BM25 over the words of title, tags and
+/// body (title and tags weighted up), with the sum normalised by what a
+/// document saturating every query word would score, so the result sits in
+/// `0..=1` and is comparable across queries. No embeddings, no network, no
+/// dependency: at the corpus sizes this tool is for, word overlap is enough
+/// to put the right candidates in front of whoever is choosing a parent.
+///
+/// This *suggests*. It never writes an edge, and a caller that turned the
+/// first answer into a `--parent` unread would be doing the automatic
+/// linking the spec rules out.
+///
+/// Nodes that share no word with the query are not returned, so an empty
+/// list is the honest answer for a thought unlike anything in the corpus.
+/// Ties are broken by id, so the same corpus and query give the same order.
+pub fn near(graph: &Graph<'_>, query: &str, k: usize) -> Result<Near> {
+    let query = query.trim();
+    let (text, exclude) = match graph.get(query) {
+        Some(doc) => (node_text(doc), Some(doc.node.id.as_str())),
+        None => (query.to_string(), None),
+    };
+    let terms: BTreeSet<String> = tokens(&text).into_iter().collect();
+    if terms.is_empty() || k == 0 {
+        return Ok(Near(Vec::new()));
+    }
+
+    // Index every candidate: weighted term frequencies and weighted length.
+    let candidates: Vec<&Doc> = graph
+        .docs()
+        .iter()
+        .filter(|d| exclude != Some(d.node.id.as_str()))
+        .collect();
+    if candidates.is_empty() {
+        return Ok(Near(Vec::new()));
+    }
+    let indexed: Vec<(&Doc, HashMap<String, f64>, f64)> = candidates
+        .iter()
+        .map(|d| {
+            let (tf, len) = term_weights(d);
+            (*d, tf, len)
+        })
+        .collect();
+    let avg_len = indexed.iter().map(|(_, _, len)| len).sum::<f64>() / to_f64(indexed.len());
+    let n = to_f64(indexed.len());
+
+    // Inverse document frequency per query term, and the ceiling the
+    // normalisation divides by.
+    let idf: Vec<(&str, f64)> = terms
+        .iter()
+        .map(|t| {
+            let df = to_f64(
+                indexed
+                    .iter()
+                    .filter(|(_, tf, _)| tf.contains_key(t))
+                    .count(),
+            );
+            (t.as_str(), (1.0 + (n - df + 0.5) / (df + 0.5)).ln())
+        })
+        .collect();
+    let ceiling = (BM25_K1 + 1.0) * idf.iter().map(|(_, w)| w).sum::<f64>();
+    if ceiling <= 0.0 {
+        return Ok(Near(Vec::new()));
+    }
+
+    let mut scored: Vec<(f64, &Doc)> = indexed
+        .iter()
+        .filter_map(|(doc, tf, len)| {
+            let norm = BM25_K1 * (1.0 - BM25_B + BM25_B * len / avg_len);
+            let score: f64 = idf
+                .iter()
+                .filter_map(|(t, w)| tf.get(*t).map(|f| w * f * (BM25_K1 + 1.0) / (f + norm)))
+                .sum();
+            (score > 0.0).then_some((score / ceiling, *doc))
+        })
+        .collect();
+    scored.sort_by(|a, b| {
+        b.0.total_cmp(&a.0)
+            .then_with(|| a.1.node.id.cmp(&b.1.node.id))
+    });
+    scored.truncate(k);
+    Ok(Near(
+        scored
+            .into_iter()
+            .map(|(score, d)| Neighbour {
+                id: d.node.id.clone(),
+                title: d.node.title.clone(),
+                status: d.node.status,
+                tags: d.node.tags.clone(),
+                score: (score * 1000.0).round() / 1000.0,
+            })
+            .collect(),
+    ))
+}
+
+/// Everything about a node that a similarity should read, as one text.
+fn node_text(doc: &Doc) -> String {
+    format!(
+        "{}\n{}\n{}",
+        doc.node.title,
+        doc.node.tags.join(" "),
+        doc.body
+    )
+}
+
+/// Weighted term frequencies of one node, and its weighted length.
+fn term_weights(doc: &Doc) -> (HashMap<String, f64>, f64) {
+    let mut tf: HashMap<String, f64> = HashMap::new();
+    let mut len = 0.0;
+    for (text, weight) in [
+        (doc.node.title.as_str(), TITLE_WEIGHT),
+        (doc.body.as_str(), 1.0),
+    ] {
+        for t in tokens(text) {
+            *tf.entry(t).or_default() += weight;
+            len += weight;
+        }
+    }
+    // Tags are already single labels; `tokens` splits a kebab-case one into
+    // its words, so `ranking-decay` meets a body that says "ranking decay".
+    for tag in &doc.node.tags {
+        for t in tokens(tag) {
+            *tf.entry(t).or_default() += TAG_WEIGHT;
+            len += TAG_WEIGHT;
+        }
+    }
+    (tf, len)
+}
+
+/// Words of a text: lowercased, split on anything that is not a letter or a
+/// digit, stopwords dropped, one-letter fragments dropped, and lightly
+/// stemmed so `tags` meets `tag` and `linking` meets `link`.
+fn tokens(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .map(str::to_lowercase)
+        .filter(|w| w.chars().count() >= 2 && !STOPWORDS.contains(&w.as_str()))
+        .map(stem)
+        .collect()
+}
+
+/// A suffix strip, not a stemmer: enough for plurals and `-ing`, and wrong
+/// often enough that it is a similarity heuristic and not a search index.
+fn stem(w: String) -> String {
+    if let Some(base) = w.strip_suffix("ies").filter(|b| b.len() >= 3) {
+        return format!("{base}y");
+    }
+    if let Some(base) = w.strip_suffix("ing").filter(|b| b.len() >= 4) {
+        return base.to_string();
+    }
+    if let Some(base) = w
+        .strip_suffix('s')
+        .filter(|b| b.len() >= 3 && !b.ends_with('s'))
+    {
+        return base.to_string();
+    }
+    w
+}
+
+/// A count as a float, for the BM25 arithmetic. A corpus will not reach the
+/// size where this loses precision.
+#[allow(clippy::cast_precision_loss)]
+fn to_f64(n: usize) -> f64 {
+    n as f64
 }
 
 /// Whether a `YYYY-MM-DD` date is at least `days` old.

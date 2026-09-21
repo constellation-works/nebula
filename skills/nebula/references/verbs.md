@@ -54,9 +54,9 @@ for one invocation.
 
 | verb | does | flags |
 |---|---|---|
-| `neb capture <TEXT>...` | append a thought; prints the entry id; works on a corpus that does not exist yet | — |
+| `neb capture <TEXT>...` | append a thought; prints the entry id, then the three nearest nodes; works on a corpus that does not exist yet | `--quiet`/`-q` |
 | `neb inbox` | live entries (not promoted, not dropped) | — |
-| `neb promote <ENTRY>` | inbox entry → seed node | `--title`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run` |
+| `neb promote <ENTRY>` | inbox entry → seed node; without `--parent`, prints the three nearest nodes and proceeds as a root | `--title`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run`, `--quiet`/`-q` |
 | `neb drop <ENTRY>` | strike an entry through; never deleted | — |
 
 ```json
@@ -64,7 +64,51 @@ for one invocation.
 [ { "id": "a6e8", "at": "2026-09-12T18:16", "text": "nebula review as a weekly orbit routine" } ]
 ```
 
-`promote` prints `<id> <path>`; `capture` prints the entry id alone.
+`capture` prints the entry id on its own line, then — when any node shares a
+word with the text — a `near:` block of up to three lines, `<score> <status>
+<id> <title>`, best first. `promote` prints `<id> <path>` and, when no
+`--parent` was given, the same block for the title plus captured text. Both
+are the [`near`](#query) query run for you: a suggestion for the triage
+step, never an edge. `promote` writes the node as a root whatever it lists,
+and with `--parent` lists nothing, since that decision is made. `--quiet`
+prints the id (and path) alone. No block at all means nothing in the corpus
+shares a word with it — promote as a root or drop. The id is printed before
+`nodes/` is read, so a node file that will not parse fails the suggestions
+(non-zero, after the id, like a refused commit) and never the capture;
+`--quiet` does not read `nodes/` at all.
+
+```json
+// neb capture --json "domains drift when a field is required"
+{
+  "entry": { "id": "f1ca", "at": "2026-09-21T01:57", "text": "domains drift when a field is required" },
+  "near": [
+    { "id": "required-categorical-fields-drift", "title": "Required categorical fields drift",
+      "status": "seed", "tags": ["design"], "score": 0.555 },
+    { "id": "tags-beat-domains", "title": "Tags beat domains",
+      "status": "hypothesis", "tags": ["design", "corpus"], "score": 0.177 }
+  ]
+}
+
+// neb promote --json f1ca --title "Required fields drift domains"
+{
+  "doc": {
+    "node": { "id": "required-fields-drift-domains", "title": "Required fields drift domains",
+              "status": "seed", "created": "2026-09-21", "updated": "2026-09-21" },
+    "body": "domains drift when a field is required"
+  },
+  "path": "/Users/you/.nebula/nodes/required-fields-drift-domains.md",
+  "near": [
+    { "id": "required-categorical-fields-drift", "title": "Required categorical fields drift",
+      "status": "seed", "tags": ["design"], "score": 0.619 },
+    { "id": "tags-beat-domains", "title": "Tags beat domains",
+      "status": "hypothesis", "tags": ["design", "corpus"], "score": 0.114 }
+  ]
+}
+```
+
+`near` is omitted from both when it would be empty, so `--quiet`, a
+`--parent`, and a thought unlike anything in the corpus all read the same
+way: no `near` key.
 
 ## Nodes
 
@@ -176,6 +220,7 @@ not who wrote the words. `check` enforces nothing about authorship.
 |---|---|---|
 | `neb show <NODE>` | one node in full, plus its body | — |
 | `neb list` | every node | `--status <S>`, `--tag <TAG>`× (every tag must match) |
+| `neb near <QUERY>...` | the existing nodes closest to free text, or to a node (left out of its own answer), scored `0..=1`, best first | `--limit <K>`/`-k` (default 3) |
 | `neb trace <NODE>` | ancestry, nearest first, each node once | `--down` for descendants |
 | `neb impact <NODE>` | descendants plus `contradicts` neighbours | — |
 | `neb graph` | the whole corpus as `{nodes, edges}` | `--json` only; without it, a hint and exit 2 |
@@ -210,6 +255,29 @@ not who wrote the words. `check` enforces nothing about authorship.
 `neb list --json` is an array of the same `node` objects (no `body`). A closed
 node carries `"closed": { "why": "...", "at": "2026-09-12" }`; optional fields
 (`kill`, `closed`, `origin`, empty lists) are omitted.
+
+`near` is word overlap — BM25 over title, tags and body, title and tags
+weighted up, plurals and `-ing` folded, no embeddings and no network — with
+the score normalised so `1` would saturate every word of the query. Nodes
+sharing no word are left out, so an empty answer (`[]`; in text, `nothing
+near: no node shares a word with this`) is a real finding: the thought is
+unlike anything in the corpus. Roughly, above `0.3` the two share real
+vocabulary; below `0.1` they share one incidental word. It ranks candidates
+for a human to read; it never writes anything, and passing its first line
+straight to `--parent` unread is the automatic linking the spec rules out.
+
+```json
+// neb near --json "one global taxonomy for every domain"
+[
+  { "id": "a-single-global-taxonomy", "title": "A single global taxonomy",
+    "status": "abandoned", "tags": ["design"], "score": 0.301 },
+  { "id": "tags-beat-domains", "title": "Tags beat domains",
+    "status": "hypothesis", "tags": ["design", "corpus"], "score": 0.138 }
+]
+
+// neb near tags-beat-domains        (the node's own text is the query; it is not in the answer)
+0.30 abandoned  a-single-global-taxonomy A single global taxonomy
+```
 
 ```json
 // neb trace tags-beat-domains --json

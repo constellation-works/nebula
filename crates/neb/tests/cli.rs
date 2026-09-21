@@ -279,6 +279,318 @@ fn zsh_completions_include_the_cli_commands() {
         .says("capture");
 }
 
+// -------------------------------------------------------------------- near --
+
+/// Nodes whose vocabulary overlaps in known ways, so a query has one right
+/// answer and one wrong one.
+fn lexical_fixture(c: &Corpus) {
+    c.run(&[
+        "new",
+        "Tags beat domains",
+        "--tag",
+        "design",
+        "--tag",
+        "corpus",
+        "--kill",
+        "a corpus of 50+ nodes needs a query that tags cannot answer",
+    ])
+    .assert_ok();
+    c.run(&["new", "A single global taxonomy", "--tag", "design"])
+        .assert_ok();
+    c.run(&["new", "Ranking decay half-life", "--tag", "search"])
+        .assert_ok();
+    c.run(&["new", "Proper time is a count", "--tag", "physics"])
+        .assert_ok();
+}
+
+fn ids(json: &str) -> Vec<String> {
+    let out: serde_json::Value = serde_json::from_str(json).unwrap();
+    out.as_array()
+        .unwrap_or_else(|| panic!("a bare list: {json}"))
+        .iter()
+        .map(|n| n["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn near_ranks_existing_nodes_against_free_text() {
+    let c = Corpus::new();
+    lexical_fixture(&c);
+
+    let json = c
+        .run(&[
+            "near", "--json", "tags", "and", "domains", "beat", "a", "taxonomy",
+        ])
+        .assert_ok()
+        .stdout();
+    assert_eq!(
+        ids(&json),
+        ["tags-beat-domains", "a-single-global-taxonomy"],
+        "{json}"
+    );
+    let out: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let first = &out[0];
+    assert_eq!(first["title"], "Tags beat domains");
+    assert_eq!(first["status"], "hypothesis");
+    assert_eq!(first["tags"], serde_json::json!(["design", "corpus"]));
+    let score = first["score"].as_f64().unwrap();
+    assert!(score > 0.0 && score <= 1.0, "{json}");
+    assert!(
+        score >= out[1]["score"].as_f64().unwrap(),
+        "best first: {json}"
+    );
+
+    // Text mode: one line per neighbour, score first, the best on top.
+    let text = c
+        .run(&["near", "tags and domains beat a taxonomy"])
+        .assert_ok()
+        .stdout();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    assert!(lines[0].contains("tags-beat-domains"), "{text}");
+    assert!(lines[1].contains("a-single-global-taxonomy"), "{text}");
+    assert!(lines[0].starts_with("0."), "score leads the line: {text}");
+
+    // A limit caps the answer.
+    let json = c
+        .run(&["near", "--json", "--limit", "1", "tags taxonomy ranking"])
+        .assert_ok()
+        .stdout();
+    assert_eq!(ids(&json).len(), 1, "{json}");
+}
+
+#[test]
+fn near_takes_a_node_id_and_never_returns_that_node() {
+    let c = Corpus::new();
+    lexical_fixture(&c);
+    let json = c
+        .run(&["near", "--json", "tags-beat-domains"])
+        .assert_ok()
+        .stdout();
+    let found = ids(&json);
+    assert!(!found.contains(&"tags-beat-domains".to_string()), "{json}");
+    assert_eq!(
+        found.first().map(String::as_str),
+        Some("a-single-global-taxonomy"),
+        "{json}"
+    );
+}
+
+#[test]
+fn near_says_so_when_nothing_matches() {
+    let c = Corpus::new();
+    lexical_fixture(&c);
+    c.run(&["near", "quantum gravity"])
+        .assert_ok()
+        .says("nothing near");
+    let json = c
+        .run(&["near", "--json", "quantum", "gravity"])
+        .assert_ok()
+        .stdout();
+    assert_eq!(json.trim(), "[]");
+    c.run(&["near", "   "])
+        .assert_fails()
+        .says("nothing to look near");
+}
+
+#[test]
+fn capture_prints_the_nearest_nodes_after_the_id_unless_quiet() {
+    let c = Corpus::new();
+    lexical_fixture(&c);
+
+    let out = c
+        .run(&["capture", "a global taxonomy for tags"])
+        .assert_ok()
+        .stdout();
+    let mut lines = out.lines();
+    let id = lines.next().unwrap();
+    assert_eq!(id.len(), 4, "the entry id alone on the first line: {out}");
+    assert_eq!(lines.next(), Some("near:"), "{out}");
+    let rest: Vec<&str> = lines.collect();
+    assert_eq!(rest.len(), 2, "two nodes share a word, so two lines: {out}");
+    assert!(rest[0].contains("a-single-global-taxonomy"), "{out}");
+    assert!(rest[1].contains("tags-beat-domains"), "{out}");
+
+    // The capture landed, and nothing else changed: no node, no edge.
+    c.run(&["inbox"])
+        .assert_ok()
+        .says("a global taxonomy for tags");
+    let graph = c.run(&["graph", "--json"]).assert_ok().stdout();
+    let out: serde_json::Value = serde_json::from_str(&graph).unwrap();
+    assert_eq!(out["nodes"].as_array().unwrap().len(), 4, "{graph}");
+    assert!(out["edges"].as_array().unwrap().is_empty(), "{graph}");
+
+    // --quiet: the id and nothing else.
+    let out = c
+        .run(&["capture", "--quiet", "a taxonomy again"])
+        .assert_ok()
+        .stdout();
+    assert_eq!(out.lines().count(), 1, "{out}");
+    let out = c.run(&["capture", "-q", "tags again"]).assert_ok().stdout();
+    assert_eq!(out.lines().count(), 1, "{out}");
+
+    // Nothing near: the id alone, with no empty heading under it.
+    let out = c.run(&["capture", "quantum gravity"]).assert_ok().stdout();
+    assert_eq!(out.lines().count(), 1, "{out}");
+}
+
+#[test]
+fn capture_prints_its_id_before_a_node_that_will_not_parse_can_get_in_the_way() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    write(
+        &c.node_file(&id),
+        &raw.replace("status: seed", "status: seed\nverdict: supports"),
+    );
+
+    // The write lands and the id is printed; the suggestions are what fail,
+    // after it, the way a refused commit does. Nothing about the capture
+    // depended on `nodes/` parsing, and it must not read as a lost thought.
+    let run = c.run(&["capture", "another idea"]);
+    let out = run.stdout();
+    assert_eq!(out.lines().count(), 1, "the id, alone: {out}");
+    assert_eq!(out.trim().len(), 4, "{out}");
+    run.assert_fails().says("unknown field `verdict`");
+    c.run(&["inbox"]).assert_ok().says("another idea");
+
+    // --quiet never reads `nodes/`, so it does not even see the problem.
+    c.run(&["capture", "-q", "quietly"]).assert_ok();
+}
+
+#[test]
+fn capture_json_carries_the_entry_and_its_neighbours() {
+    let c = Corpus::new();
+    lexical_fixture(&c);
+    let json = c
+        .run(&["capture", "--json", "a taxonomy of tags"])
+        .assert_ok()
+        .stdout();
+    let out: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(out["entry"]["text"], "a taxonomy of tags", "{json}");
+    assert_eq!(out["entry"]["id"].as_str().unwrap().len(), 4, "{json}");
+    assert!(out["entry"]["at"].is_string(), "{json}");
+    let near = out["near"].as_array().unwrap();
+    assert_eq!(near[0]["id"], "a-single-global-taxonomy", "{json}");
+    assert!(near[0]["score"].is_number(), "{json}");
+
+    let json = c
+        .run(&[
+            "capture",
+            "--json",
+            "--quiet",
+            "a taxonomy of tags, quietly",
+        ])
+        .assert_ok()
+        .stdout();
+    let out: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(out.get("near").is_none(), "quiet omits the list: {json}");
+    assert!(out["entry"]["id"].is_string(), "{json}");
+}
+
+#[test]
+fn promote_without_a_parent_suggests_and_proceeds_as_a_root() {
+    let c = Corpus::new();
+    lexical_fixture(&c);
+    let entry = c
+        .run(&["capture", "-q", "search ranking decays with age"])
+        .assert_ok()
+        .stdout_trim();
+
+    let out = c.run(&["promote", &entry]).assert_ok().stdout();
+    let mut lines = out.lines();
+    assert!(
+        lines
+            .next()
+            .unwrap()
+            .starts_with("search-ranking-decays-with-age "),
+        "id and path first: {out}"
+    );
+    assert_eq!(lines.next(), Some("near:"), "{out}");
+    let rest: Vec<&str> = lines.collect();
+    assert_eq!(rest, [rest[0]], "one node shares a word: {out}");
+    assert!(rest[0].contains("ranking-decay-half-life"), "{out}");
+
+    // Promoted as a root: no parent, no edge, whatever was suggested.
+    let raw = std::fs::read_to_string(c.node_file("search-ranking-decays-with-age")).unwrap();
+    assert!(!raw.contains("edges:"), "suggesting never links:\n{raw}");
+    let trace = c
+        .run(&["trace", "--json", "search-ranking-decays-with-age"])
+        .assert_ok()
+        .stdout();
+    let walk: serde_json::Value = serde_json::from_str(&trace).unwrap();
+    assert_eq!(walk.as_array().unwrap().len(), 1, "{trace}");
+    assert!(walk[0]["parents"].as_array().unwrap().is_empty(), "{trace}");
+
+    // --quiet: the id and path alone.
+    let entry = c
+        .run(&["capture", "-q", "ranking decay, quietly"])
+        .assert_ok()
+        .stdout_trim();
+    let out = c.run(&["promote", "--quiet", &entry]).assert_ok().stdout();
+    assert_eq!(out.lines().count(), 1, "{out}");
+
+    // A parent named is a decision made: nothing to suggest.
+    let entry = c
+        .run(&["capture", "-q", "ranking decay, parented"])
+        .assert_ok()
+        .stdout_trim();
+    let out = c
+        .run(&["promote", &entry, "--parent", "ranking-decay-half-life"])
+        .assert_ok()
+        .stdout();
+    assert_eq!(out.lines().count(), 1, "{out}");
+}
+
+#[test]
+fn promote_json_is_the_created_node_with_its_neighbours() {
+    let c = Corpus::new();
+    lexical_fixture(&c);
+    let entry = c
+        .run(&["capture", "-q", "decay of a taxonomy"])
+        .assert_ok()
+        .stdout_trim();
+    let json = c
+        .run(&["promote", "--json", &entry, "--title", "Taxonomies decay"])
+        .assert_ok()
+        .stdout();
+    let out: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(out["doc"]["node"]["id"], "taxonomies-decay", "{json}");
+    assert_eq!(out["doc"]["body"], "decay of a taxonomy", "{json}");
+    assert!(
+        out["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("taxonomies-decay.md"),
+        "{json}"
+    );
+    let near = out["near"].as_array().unwrap();
+    assert_eq!(near[0]["id"], "a-single-global-taxonomy", "{json}");
+    assert!(
+        near.iter().all(|n| n["id"] != "taxonomies-decay"),
+        "a promotion is not its own neighbour: {json}"
+    );
+    assert!(out["doc"]["node"].get("edges").is_none(), "no edge: {json}");
+
+    // With a parent, `near` is omitted rather than empty.
+    let entry = c
+        .run(&["capture", "-q", "another taxonomy"])
+        .assert_ok()
+        .stdout_trim();
+    let json = c
+        .run(&[
+            "promote",
+            "--json",
+            &entry,
+            "--parent",
+            "a-single-global-taxonomy",
+        ])
+        .assert_ok()
+        .stdout();
+    let out: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(out.get("near").is_none(), "{json}");
+}
+
 // ------------------------------------------------------------------- graph --
 
 #[test]

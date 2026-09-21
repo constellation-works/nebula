@@ -16,7 +16,7 @@
 use crate::check::{OBSERVATORY, is_local_path, is_observatory_id, resolve_local};
 use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
-use crate::graph;
+use crate::graph::{self, Graph, Neighbour};
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
 use crate::store::{self, Committed, Corpus, InboxEntry};
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,26 @@ pub struct Created {
     pub doc: Doc,
     /// The file it went into.
     pub path: PathBuf,
+    /// Existing nodes the new one reads closest to, best first, for whoever
+    /// is deciding whether it has a parent. Filled by [`promote`] when no
+    /// parent was named; empty when one was, and always empty from
+    /// [`new_node`]. A suggestion only: nothing here becomes an edge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub near: Vec<Neighbour>,
+}
+
+/// A thought that has just gone into the inbox, and where it may belong.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Captured {
+    /// The entry as written.
+    pub entry: InboxEntry,
+    /// Existing nodes the text reads closest to, best first, for the triage
+    /// that comes later. Empty when nothing shares a word with it, or when
+    /// the caller asked for none. A suggestion only: nothing here becomes
+    /// an edge, and the capture is in the inbox whatever this holds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub near: Vec<Neighbour>,
 }
 
 /// A node with a reference newly attached.
@@ -133,6 +153,34 @@ pub fn capture(corpus: &Corpus, text: &str) -> Result<InboxEntry> {
     corpus.capture(text)
 }
 
+/// [`capture`], then the `k` existing nodes the text reads closest to.
+///
+/// The capture lands first and is never undone: the suggestions are for the
+/// triage that follows, and a corpus that cannot be read for them is an
+/// error reported *after* the write, the same way a refused commit is. `k`
+/// of zero skips the read altogether, which is what `--quiet` means. A
+/// caller that wants the entry id out before that read happens runs
+/// [`capture`] and then [`suggest`] itself.
+pub fn capture_near(corpus: &Corpus, text: &str, k: usize) -> Result<Captured> {
+    let entry = corpus.capture(text)?;
+    let near = suggest(corpus, &entry.text, k)?;
+    Ok(Captured { entry, near })
+}
+
+/// The `k` nodes closest to `text`, over the corpus as it is on disk now.
+///
+/// What [`capture_near`] and [`promote`] run, read before the node a caller
+/// is about to write so a promotion is not its own nearest neighbour. It
+/// reads `nodes/`, which a capture never needs, so a node file that will not
+/// parse fails here and not the capture.
+pub fn suggest(corpus: &Corpus, text: &str, k: usize) -> Result<Vec<Neighbour>> {
+    if k == 0 {
+        return Ok(Vec::new());
+    }
+    let docs = corpus.load_all()?;
+    Ok(graph::near(&Graph::build(&docs)?, text, k)?.0)
+}
+
 /// Discard a capture, struck through rather than deleted.
 pub fn drop(corpus: &Corpus, entry: &str) -> Result<InboxEntry> {
     let e = corpus.inbox_entry(entry)?;
@@ -144,9 +192,21 @@ pub fn drop(corpus: &Corpus, entry: &str) -> Result<InboxEntry> {
 ///
 /// Deliberately separate from capture. Most captures should never be
 /// promoted, and dropping one is a normal outcome rather than a failure.
-pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion) -> Result<Created> {
+///
+/// Without a parent, `near` on the result names the existing nodes the
+/// title and captured text read closest to, so the human can see whether
+/// a parent was defensible. The node is written as a root either way: the
+/// suggestion never blocks the promotion and never becomes an edge. `near_k`
+/// is how many to look for; zero looks for none.
+pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion, near_k: usize) -> Result<Created> {
     let e = corpus.inbox_entry(entry)?;
     let title = args.title.clone().unwrap_or_else(|| e.text.clone());
+    // Read before the write, so the new node is not among its own neighbours.
+    let near = if args.parents.is_empty() {
+        suggest(corpus, &format!("{title}\n{}", e.text), near_k)?
+    } else {
+        Vec::new()
+    };
     let mut doc = build(
         corpus,
         &NewNode {
@@ -171,6 +231,7 @@ pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion) -> Result<Created
     Ok(Created {
         path: corpus.node_path(&doc.node.id),
         doc,
+        near,
     })
 }
 
@@ -191,6 +252,7 @@ pub fn new_node(corpus: &Corpus, args: &NewNode) -> Result<Created> {
     Ok(Created {
         path: corpus.node_path(&doc.node.id),
         doc,
+        near: Vec::new(),
     })
 }
 

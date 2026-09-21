@@ -36,7 +36,7 @@ corpus is clean. A corpus at schema 1 refuses to open until `neb migrate`.
 ## The verbs
 
 Mutating: `capture`, `promote`, `drop`, `new`, `sharpen`, `status`, `link`,
-`tag`, `note`, `cite`, `migrate`, `config`. Read-only: `inbox`, `show`, `list`, `trace`,
+`tag`, `note`, `cite`, `migrate`, `config`. Read-only: `inbox`, `show`, `list`, `near`, `trace`,
 `impact`, `graph --json`, `open`, `review`, `check`, `tag list`. Every verb
 takes `--json`; [verbs.md](references/verbs.md) has each one's flags and its
 real `--json` shape. Prefer `--json` for anything you will reason over.
@@ -86,9 +86,12 @@ falsifier.
 ## Triage heuristics
 
 - **Promote** when the entry names something falsifiable, or connects to an
-  existing node — find the closest one with `neb list --json` and `neb trace`,
-  pass it as `--parent`, and reuse that parent's tags. Never invent a new tag
-  without saying so.
+  existing node — `neb near "<text>"` ranks the closest by shared words
+  (`capture` and a parentless `promote` print the same three lines); read
+  the candidates with `neb show` and `neb trace`, pass one as `--parent`
+  only if you can say why in a line, otherwise promote as a root, and reuse
+  the parent's tags. `near` suggests and never links; an empty answer means
+  a root, not a failure. Never invent a new tag without saying so.
 - **Drop** when it duplicates a node (say which) or is an action item, not an
   idea. Dropping is a normal outcome, not a failure.
 - **Sharpen** the moment a seed has a falsifier: `--kill` is written before
