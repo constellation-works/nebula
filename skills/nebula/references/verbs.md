@@ -1,8 +1,10 @@
 # Verbs
 
-Every verb takes `--root <DIR>`, `--json` and `--no-commit`, and those flags
-may appear anywhere on the line — before the verb, after it, or after the free
-text of `capture`, `note` and `near`. Ids are slugs of the title
+Every corpus verb below takes `--root <DIR>`, `--json` and `--no-commit`, and
+those flags may appear anywhere on the line — before the verb, after it, or
+after the free text of `capture`, `note` and `near`. Under `--json`, each emits
+one JSON value on stdout. The separate `completions` command is the sole
+exception: it always emits a shell script. Ids are slugs of the title
 (`"Tags beat domains"` → `tags-beat-domains`); inbox ids are four hex chars. A
 slug over 60 characters is cut at the last `-` at or before the limit, never
 mid-word. `promote` and `new` take `--id <SLUG>` to choose the id explicitly
@@ -26,6 +28,11 @@ The `--json` excerpts below are real output from a three-node fixture corpus.
 whole: the file stays machine-written and is never hand-edited. Without `DIR`
 it prints the effective root and which setting supplied it
 (`observatory_root` in `config.yaml`, else `$OBSERVATORY_ROOT`, else nothing).
+
+```json
+// neb init /Users/you/.nebula --json
+{ "root": "/Users/you/.nebula" }
+```
 
 ```json
 // neb config observatory-root --json     (source: config | env | unset)
@@ -115,6 +122,11 @@ shares a word with it — promote as a root or drop. The id is printed before
 }
 ```
 
+```json
+// neb drop 5572 --json
+{ "id": "5572", "at": "2026-09-21T02:56", "text": "duplicate thought" }
+```
+
 `near` is omitted from both when it would be empty, so `--quiet`, a
 `--parent`, and a thought unlike anything in the corpus all read the same
 way: no `near` key.
@@ -142,6 +154,68 @@ Unknown nodes are refused (`NoSuchNode`). `--json` is the same `NodeView` as
 `show --json`: `notes` is a list of `{at, text, by}`, oldest first, omitted
 when empty.
 
+The write verbs return the core value they changed. `new` returns `{doc,
+path}`; `sharpen` (including `--confirm`) and `tag` return a `Doc`; `status`
+returns `{doc, from}`; and `link` returns an array because `contradicts`
+changes both nodes.
+
+```json
+// neb new "Tags beat domains" --tag design --json
+{
+  "doc": {
+    "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "seed",
+              "created": "2026-09-21", "updated": "2026-09-21", "tags": ["design"] },
+    "body": ""
+  },
+  "path": "/Users/you/.nebula/nodes/tags-beat-domains.md"
+}
+```
+
+```json
+// neb sharpen tags-beat-domains --kill "a corpus of 50 nodes needs a query tags cannot answer" --json
+{
+  "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis",
+            "created": "2026-09-21", "updated": "2026-09-21",
+            "kill": "a corpus of 50 nodes needs a query tags cannot answer", "tags": ["design"] },
+  "body": ""
+}
+```
+
+```json
+// neb status a-single-taxonomy abandoned --why "tags preserve the useful cross-cuts" --json
+{
+  "doc": {
+    "node": { "id": "a-single-taxonomy", "title": "A single taxonomy", "status": "abandoned",
+              "created": "2026-09-21", "updated": "2026-09-21",
+              "closed": { "why": "tags preserve the useful cross-cuts", "at": "2026-09-21" } },
+    "body": ""
+  },
+  "from": "seed"
+}
+```
+
+```json
+// neb link tags-beat-domains contradicts a-single-taxonomy --json
+[
+  { "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis",
+                "created": "2026-09-21", "updated": "2026-09-21",
+                "edges": [{ "type": "contradicts", "to": "a-single-taxonomy" }] }, "body": "" },
+  { "node": { "id": "a-single-taxonomy", "title": "A single taxonomy", "status": "seed",
+                "created": "2026-09-21", "updated": "2026-09-21",
+                "edges": [{ "type": "contradicts", "to": "tags-beat-domains" }] }, "body": "" }
+]
+```
+
+```json
+// neb tag tags-beat-domains --add corpus --json
+{
+  "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis",
+            "created": "2026-09-21", "updated": "2026-09-21",
+            "tags": ["design", "corpus"] },
+  "body": ""
+}
+```
+
 ```json
 // neb --json note tags-beat-domains "folksonomy is the argument, not a taxonomy with extra steps"
 {
@@ -168,6 +242,26 @@ when empty.
 `--uri` may be omitted only with `--kind discussion`; every other kind requires
 it. A local URI is resolved relative to `nodes/` and refused if it does not
 exist. Always pass `--note`: it is the only field that matters in a year.
+
+`cite --json` returns the changed `doc` and the newly allocated reference id:
+
+```json
+// neb cite tags-beat-domains --kind article --uri https://example.org/folksonomy --note "the drift argument" --json
+{
+  "doc": {
+    "node": {
+      "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis",
+      "created": "2026-09-21", "updated": "2026-09-21",
+      "references": [
+        { "id": "r1", "kind": "article", "uri": "https://example.org/folksonomy",
+          "note": "the drift argument", "added": "2026-09-21" }
+      ]
+    },
+    "body": ""
+  },
+  "reference": "r1"
+}
+```
 
 ### Observatory records
 
