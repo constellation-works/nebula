@@ -214,6 +214,23 @@ fn refuting_needs_a_reason_and_is_final() {
         ops::set_status(&corpus, &a, Status::Seed, None),
         Err(Error::RefutedCannotReopen)
     ));
+    assert!(
+        matches!(
+            ops::sharpen(&corpus, &a, "a different falsifier", None),
+            Err(Error::RefutedCannotReopen)
+        ),
+        "rewriting the kill of a refuted node would orphan closed.why"
+    );
+    assert!(
+        matches!(
+            ops::confirm_kill(&corpus, &a),
+            Err(Error::RefutedCannotReopen)
+        ),
+        "confirming a kill on a refuted node is the same quiet rewrite"
+    );
+    let after = corpus.load(&a).unwrap().node;
+    assert_eq!(after.kill.as_deref(), Some("kill"));
+    assert_eq!(after.status, Status::Refuted);
 }
 
 #[test]

@@ -1096,7 +1096,12 @@ fn abandoning_takes_an_optional_reason_and_reviving_clears_it() {
     assert!(raw.contains("why: lost interest"), "{raw}");
 
     // Abandoned is not a verdict, so it can come back, and the closed block
-    // goes with it.
+    // goes with it. Its kill is not part of a recorded firing either, so
+    // sharpening is allowed.
+    c.run(&["sharpen", &bare, "--kill", "if Y"]).assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&bare)).unwrap();
+    assert!(raw.contains("kill: if Y"), "{raw}");
+    assert!(raw.contains("status: abandoned"), "{raw}");
     c.run(&["status", &reasoned, "seed"]).assert_ok();
     let raw = std::fs::read_to_string(c.node_file(&reasoned)).unwrap();
     assert!(!raw.contains("closed:"), "{raw}");
@@ -1120,6 +1125,22 @@ fn a_refuted_idea_cannot_quietly_come_back() {
     c.run(&["status", &id, "abandoned"])
         .assert_fails()
         .says("cannot simply reopen");
+
+    // The kill is part of the verdict: rewriting it would leave closed.why
+    // describing a falsifier the node no longer names. `--confirm` is the
+    // same write path with different flags.
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    c.run(&["sharpen", &id, "--kill", "a different falsifier"])
+        .assert_fails()
+        .says(&format!("`{id}` is refuted"));
+    c.run(&["sharpen", &id, "--confirm"])
+        .assert_fails()
+        .says(&format!("`{id}` is refuted"));
+    let after = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert_eq!(before, after, "a refused sharpen leaves the node untouched");
+    assert!(after.contains("kill: if X"), "{after}");
+    assert!(after.contains("why: X happened"), "{after}");
+    c.run(&["check"]).assert_ok().says("0 errors");
     c.run(&["new", "Second attempt", "--kill", "if Y"])
         .assert_ok();
     c.run(&["show", "second-attempt"])
