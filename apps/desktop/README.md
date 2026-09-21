@@ -17,9 +17,10 @@ macOS will ask you to allow it the first time.
 
 ## The corpus
 
-Found the way the CLI finds it: `NEBULA_ROOT`, else `~/.nebula`. The app
-never creates one. If the path has no corpus, the window says which path it
-tried and offers a reload once you have set `NEBULA_ROOT` or run `neb init`.
+Found the way the CLI finds it: `--root`, else `$NEBULA_ROOT`, else
+`~/.config/nebula/root`, else `~/.nebula`. The app never creates one. If the
+path has no corpus, the window says which path it tried and offers a reload
+once you have set `NEBULA_ROOT` or run `neb init`.
 
 Nothing is stored in this repository; the corpus is private and lives outside.
 

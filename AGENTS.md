@@ -9,8 +9,9 @@ nebula captures half-formed ideas and traces their lineage. It is a Rust CLI
 
 The corpus mixes work and personal thinking, and this repository is public.
 Never commit node or inbox content here. The corpus is found at runtime through
-`--root`, else `NEBULA_ROOT`, else `~/.nebula`, and `/corpus` is gitignored as a
-backstop. Fixtures for tests belong in a temporary directory, which is what
+`--root`, else `$NEBULA_ROOT`, else `~/.config/nebula/root`, else `~/.nebula`,
+and `/corpus` is gitignored as a backstop. Fixtures for tests belong in a
+temporary directory, which is what
 `crates/neb/tests/cli.rs` and `crates/nebula-core/tests/core.rs` do.
 
 ## Working here

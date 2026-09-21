@@ -8,8 +8,9 @@
 use nebula_core::{Corpus, Graph, GraphExport, InboxEntry, NodeView, Result, graph, ops};
 use std::path::{Path, PathBuf};
 
-/// Where the corpus is expected: `NEBULA_ROOT`, else `~/.nebula`. The CLI's
-/// rule with no `--root`, so the app and the terminal never disagree.
+/// Where the corpus is expected: `--root`, else `$NEBULA_ROOT`, else
+/// `~/.config/nebula/root`, else `~/.nebula`. The CLI's rule, so the app and
+/// the terminal never disagree.
 pub fn resolve_root() -> Result<PathBuf> {
     Corpus::resolve_root(None)
 }
