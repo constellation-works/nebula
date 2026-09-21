@@ -40,9 +40,11 @@ until `neb migrate`.
 
 Mutating: `capture`, `promote`, `drop`, `new`, `sharpen`, `status`, `link`,
 `tag`, `note`, `cite`, `migrate`, `config`. Read-only: `inbox`, `show`, `list`, `near`, `trace`,
-`impact`, `graph --json`, `open`, `review`, `check`, `tag list`. Every verb
-takes `--json`; [verbs.md](references/verbs.md) has each one's flags and its
-real `--json` shape. Prefer `--json` for anything you will reason over.
+`impact`, `graph --json`, `open`, `review`, `check`, `tag list`. Every corpus
+verb listed here (plus `init`) emits JSON on stdout under `--json`;
+[verbs.md](references/verbs.md) has each one's flags and its real shape. Shell
+`completions` is the sole exception. Prefer `--json` for anything you will
+reason over.
 
 ## Linking to Observatory
 

@@ -1462,22 +1462,127 @@ fn open_finds_inbox_captures_waiting_over_fourteen_days() {
 }
 
 #[test]
-fn json_output_is_machine_readable() {
+#[allow(clippy::too_many_lines)] // One contract matrix is easier to audit than split verb lists.
+fn every_documented_json_verb_emits_machine_readable_json() {
+    let init_dir = tempfile::tempdir().unwrap();
+    let init_home = init_dir.path().join("home");
+    let init_root = init_dir.path().join("corpus");
+    let initialized = run_from_home(&init_home, Some(&init_root), &["init", "--json"], None)
+        .assert_ok()
+        .stdout();
+    let initialized: serde_json::Value =
+        serde_json::from_str(&initialized).expect("init --json is valid JSON");
+    assert_eq!(initialized["root"], init_root.display().to_string());
+
     let c = Corpus::new();
-    let id = c.seed("an idea", "An idea");
-    let out = c.run(&["--json", "show", &id]).assert_ok().stdout();
-    let v: serde_json::Value = serde_json::from_str(&out).expect("show --json is valid JSON");
-    assert_eq!(v["node"]["id"], id);
-    assert_eq!(v["body"], "an idea");
+    let json = |args: &[&str]| {
+        let out = c.run(args).assert_ok().stdout();
+        serde_json::from_str::<serde_json::Value>(&out)
+            .unwrap_or_else(|e| panic!("`neb {}` did not emit JSON: {e}\n{out}", args.join(" ")))
+    };
 
-    let empty = c.run(&["new", "Empty prose"]).assert_ok().stdout_trim();
-    let out = c.run(&["--json", "show", &empty]).assert_ok().stdout();
-    let v: serde_json::Value = serde_json::from_str(&out).expect("show --json is valid JSON");
-    assert_eq!(v["body"], "");
+    json(&["migrate", "--json"]);
+    json(&["config", "observatory-root", "--json"]);
+    json(&["config", "commit", "--json"]);
 
-    let out = c.run(&["--json", "check"]).assert_ok().stdout();
-    let v: serde_json::Value = serde_json::from_str(&out).expect("check --json is valid JSON");
-    assert_eq!(v["nodes"], 2);
+    let captured = json(&["capture", "--json", "an idea to promote"]);
+    let promote_entry = captured["entry"]["id"].as_str().unwrap();
+    json(&["inbox", "--json"]);
+    let promoted = json(&[
+        "promote",
+        "--json",
+        promote_entry,
+        "--title",
+        "Promoted idea",
+    ]);
+    assert_eq!(promoted["doc"]["node"]["id"], "promoted-idea");
+    assert!(promoted["path"].is_string());
+
+    let captured = json(&["capture", "--json", "an idea to drop"]);
+    let drop_entry = captured["entry"]["id"].as_str().unwrap();
+    let dropped = json(&["drop", "--json", drop_entry]);
+    assert_eq!(dropped["id"], drop_entry);
+    assert_eq!(dropped["text"], "an idea to drop");
+
+    let created = json(&["new", "--json", "Direct idea", "--tag", "design"]);
+    assert_eq!(created["doc"]["node"]["id"], "direct-idea");
+    assert!(created["path"].is_string());
+
+    json(&["new", "--json", "Idea to sharpen"]);
+    let sharpened = json(&[
+        "sharpen",
+        "--json",
+        "idea-to-sharpen",
+        "--kill",
+        "the evidence changes",
+        "--by",
+        "agent:test",
+    ]);
+    assert_eq!(sharpened["node"]["status"], "hypothesis");
+    assert_eq!(sharpened["node"]["kill"], "the evidence changes");
+    let confirmed = json(&["sharpen", "--json", "idea-to-sharpen", "--confirm"]);
+    assert_eq!(confirmed["node"]["kill"], "the evidence changes");
+    assert!(confirmed["node"].get("kill_by").is_none());
+
+    json(&["new", "--json", "Idea to close"]);
+    let changed = json(&[
+        "status",
+        "--json",
+        "idea-to-close",
+        "abandoned",
+        "--why",
+        "superseded",
+    ]);
+    assert_eq!(changed["from"], "seed");
+    assert_eq!(changed["doc"]["node"]["status"], "abandoned");
+
+    json(&["new", "--json", "Parent idea"]);
+    json(&["new", "--json", "Child idea"]);
+    let linked = json(&[
+        "link",
+        "--json",
+        "child-idea",
+        "derives-from",
+        "parent-idea",
+    ]);
+    assert_eq!(linked.as_array().unwrap().len(), 1);
+    assert_eq!(linked[0]["node"]["edges"][0]["to"], "parent-idea");
+
+    let tagged = json(&["tag", "--json", "direct-idea", "--add", "corpus"]);
+    assert_eq!(
+        tagged["node"]["tags"],
+        serde_json::json!(["design", "corpus"])
+    );
+    json(&["tag", "list", "--json"]);
+
+    let noted = json(&["note", "--json", "direct-idea", "supporting detail"]);
+    assert_eq!(noted["notes"][0]["text"], "supporting detail");
+    let cited = json(&[
+        "cite",
+        "--json",
+        "direct-idea",
+        "--kind",
+        "article",
+        "--uri",
+        "https://example.org/evidence",
+        "--note",
+        "supporting evidence",
+    ]);
+    assert_eq!(cited["reference"], "r1");
+    assert_eq!(cited["doc"]["node"]["references"][0]["kind"], "article");
+
+    let shown = json(&["show", "--json", "direct-idea"]);
+    assert_eq!(shown["node"]["id"], "direct-idea");
+    json(&["list", "--json"]);
+    json(&["near", "--json", "direct design"]);
+    json(&["trace", "--json", "child-idea"]);
+    json(&["impact", "--json", "parent-idea"]);
+    json(&["graph", "--json"]);
+    json(&["open", "--json"]);
+    json(&["review", "--json"]);
+
+    let checked = json(&["check", "--json"]);
+    assert!(checked["nodes"].as_u64().unwrap() >= 6);
 }
 
 #[test]

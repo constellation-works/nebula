@@ -602,9 +602,13 @@ fn run(cli: Cli) -> Outcome {
             let root_config_path = Corpus::root_config_path_if_absent(&target)?;
             let default_root_warning = Corpus::warning_before_default_init(&target)?;
             let done = ops::init(root, path)?;
-            println!("corpus ready at {}", done.root.display());
-            if let Some(config) = root_config_path {
-                println!("wrote {} so every command finds it", config.display());
+            if json {
+                out_json(&done)?;
+            } else {
+                println!("corpus ready at {}", done.root.display());
+                if let Some(config) = root_config_path {
+                    println!("wrote {} so every command finds it", config.display());
+                }
             }
             if let Some(configured) = default_root_warning {
                 eprintln!(
@@ -784,8 +788,12 @@ fn run(cli: Cli) -> Outcome {
 
         Command::Drop { entry } => {
             let corpus = Corpus::open(root)?;
-            ops::drop(&corpus, &entry)?;
-            println!("dropped {}", render::bold(&entry));
+            let dropped = ops::drop(&corpus, &entry)?;
+            if json {
+                out_json(&dropped)?;
+            } else {
+                println!("dropped {}", render::bold(&entry));
+            }
             commit(&corpus, commits, "drop", &[&entry])?;
             Ok(ok)
         }
@@ -813,11 +821,15 @@ fn run(cli: Cli) -> Outcome {
                     by,
                 },
             )?;
-            println!(
-                "{} {}",
-                render::bold(&created.doc.node.id),
-                render::dim(&created.path.display().to_string())
-            );
+            if json {
+                out_json(&created)?;
+            } else {
+                println!(
+                    "{} {}",
+                    render::bold(&created.doc.node.id),
+                    render::dim(&created.path.display().to_string())
+                );
+            }
             commit(&corpus, commits, "new", &[&created.doc.node.id])?;
             Ok(ok)
         }
@@ -830,8 +842,12 @@ fn run(cli: Cli) -> Outcome {
             // `--kill` and `--by` conflict with `--confirm` in the clap tree,
             // so there is no text here to reconcile: confirming changes none.
             let corpus = Corpus::open(root)?;
-            ops::confirm_kill(&corpus, &node).map_err(|e| Failure::about(&e, &node))?;
-            println!("{} kill condition confirmed as yours", render::bold(&node));
+            let doc = ops::confirm_kill(&corpus, &node).map_err(|e| Failure::about(&e, &node))?;
+            if json {
+                out_json(&doc)?;
+            } else {
+                println!("{} kill condition confirmed as yours", render::bold(&node));
+            }
             commit(&corpus, commits, "sharpen", &[&node])?;
             Ok(ok)
         }
@@ -850,7 +866,11 @@ fn run(cli: Cli) -> Outcome {
             let corpus = Corpus::open(root)?;
             let doc = ops::sharpen(&corpus, &node, &kill, by.as_deref())
                 .map_err(|e| Failure::about(&e, &node))?;
-            println!("{} is now {}", render::bold(&node), doc.node.status);
+            if json {
+                out_json(&doc)?;
+            } else {
+                println!("{} is now {}", render::bold(&node), doc.node.status);
+            }
             commit(&corpus, commits, "sharpen", &[&node])?;
             Ok(ok)
         }
@@ -865,11 +885,15 @@ fn run(cli: Cli) -> Outcome {
             let corpus = Corpus::open(root)?;
             let changed = ops::set_status(&corpus, &node, status, why.as_deref())
                 .map_err(|e| Failure::about(&e, &node))?;
-            println!(
-                "{} {} -> {status}",
-                render::bold(&node),
-                render::dim(&changed.from.to_string())
-            );
+            if json {
+                out_json(&changed)?;
+            } else {
+                println!(
+                    "{} {} -> {status}",
+                    render::bold(&node),
+                    render::dim(&changed.from.to_string())
+                );
+            }
             commit(&corpus, commits, "status", &[&node])?;
             Ok(ok)
         }
@@ -877,13 +901,17 @@ fn run(cli: Cli) -> Outcome {
         Command::Link { from, kind, to, by } => {
             let corpus = Corpus::open(root)?;
             let kind = EdgeType::from(kind);
-            ops::link(&corpus, &from, kind, &to, by.as_deref())?;
-            println!(
-                "{} {} {}",
-                render::bold(&from),
-                render::dim(&kind.to_string()),
-                render::bold(&to)
-            );
+            let changed = ops::link(&corpus, &from, kind, &to, by.as_deref())?;
+            if json {
+                out_json(&changed)?;
+            } else {
+                println!(
+                    "{} {} {}",
+                    render::bold(&from),
+                    render::dim(&kind.to_string()),
+                    render::bold(&to)
+                );
+            }
             commit(&corpus, commits, "link", &[&from, &to])?;
             Ok(ok)
         }
@@ -919,12 +947,16 @@ fn run(cli: Cli) -> Outcome {
             if !add.is_empty() {
                 doc = ops::tag_add(&corpus, &target, &add)?;
             }
-            let shown = if doc.node.tags.is_empty() {
-                render::dim("(no tags)")
+            if json {
+                out_json(&doc)?;
             } else {
-                doc.node.tags.join(", ")
-            };
-            println!("{} {shown}", render::bold(&target));
+                let shown = if doc.node.tags.is_empty() {
+                    render::dim("(no tags)")
+                } else {
+                    doc.node.tags.join(", ")
+                };
+                println!("{} {shown}", render::bold(&target));
+            }
             commit(&corpus, commits, "tag", &[&target])?;
             Ok(ok)
         }
@@ -972,46 +1004,50 @@ fn run(cli: Cli) -> Outcome {
                     origin: Origin::of(task, run),
                 },
             )?;
-            println!("{} {}", render::bold(&node), render::bold(&cited.reference));
-            if kind == OBSERVATORY {
-                let setting = corpus.observatory_root();
-                let record = cited
-                    .doc
-                    .node
-                    .references
-                    .iter()
-                    .find(|r| r.id == cited.reference)
-                    .and_then(|r| r.uri.clone())
-                    .unwrap_or_default();
-                match setting.root.as_deref() {
-                    None => println!(
-                        "\n{}",
-                        render::dim(&format!(
-                            "No observatory root set, so `{record}` cannot be located. \
-                             Set one with `neb config observatory-root <DIR>` or \
-                             ${OBSERVATORY_ROOT_ENV}."
-                        ))
-                    ),
-                    Some(dir) => match check::resolve_observatory(dir, &record) {
-                        Some(path) => println!("{}", render::dim(&path.display().to_string())),
+            if json {
+                out_json(&cited)?;
+            } else {
+                println!("{} {}", render::bold(&node), render::bold(&cited.reference));
+                if kind == OBSERVATORY {
+                    let setting = corpus.observatory_root();
+                    let record = cited
+                        .doc
+                        .node
+                        .references
+                        .iter()
+                        .find(|r| r.id == cited.reference)
+                        .and_then(|r| r.uri.clone())
+                        .unwrap_or_default();
+                    match setting.root.as_deref() {
                         None => println!(
                             "\n{}",
                             render::dim(&format!(
-                                "`{record}` does not resolve under {}; `check` will keep \
-                                 saying so until the checkout has it.",
-                                dir.display()
+                                "No observatory root set, so `{record}` cannot be located. \
+                                 Set one with `neb config observatory-root <DIR>` or \
+                                 ${OBSERVATORY_ROOT_ENV}."
                             ))
                         ),
-                    },
+                        Some(dir) => match check::resolve_observatory(dir, &record) {
+                            Some(path) => println!("{}", render::dim(&path.display().to_string())),
+                            None => println!(
+                                "\n{}",
+                                render::dim(&format!(
+                                    "`{record}` does not resolve under {}; `check` will keep \
+                                     saying so until the checkout has it.",
+                                    dir.display()
+                                ))
+                            ),
+                        },
+                    }
                 }
-            }
-            if bare {
-                println!(
-                    "\n{}",
-                    render::dim(
-                        "No note. Add one saying why it is here, or this is a link that rots."
-                    )
-                );
+                if bare {
+                    println!(
+                        "\n{}",
+                        render::dim(
+                            "No note. Add one saying why it is here, or this is a link that rots."
+                        )
+                    );
+                }
             }
             commit(&corpus, commits, "cite", &[&node, &cited.reference])?;
             Ok(ok)
