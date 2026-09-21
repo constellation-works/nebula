@@ -359,6 +359,40 @@ fn init_warns_before_creating_default_root_that_shadows_configured_root() {
 }
 
 #[test]
+fn init_warns_when_a_third_directory_would_orphan_the_configured_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let configured = dir.path().join("corpus");
+    let config_path = home.join(".config/nebula/root");
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(&config_path, format!("{}\n", configured.display())).unwrap();
+
+    let other = dir.path().join("corpus2");
+    let out = run_from_home(&home, Some(&other), &["init"], None).assert_ok();
+    assert!(
+        out.stderr().contains(&config_path.display().to_string()),
+        "expected warning naming {} in:\n{}",
+        config_path.display(),
+        out.stderr()
+    );
+    assert!(
+        out.stderr().contains(&configured.display().to_string()),
+        "expected warning naming the still-configured root in:\n{}",
+        out.stderr()
+    );
+    assert!(
+        out.stderr().contains(&other.display().to_string()),
+        "expected warning naming the new corpus in:\n{}",
+        out.stderr()
+    );
+    assert_eq!(
+        std::fs::read_to_string(&config_path).unwrap(),
+        format!("{}\n", configured.display()),
+        "the config root must not be silently rewritten"
+    );
+}
+
+#[test]
 fn zsh_completions_include_the_cli_commands() {
     let c = Corpus::new();
     c.run(&["completions", "zsh"])
