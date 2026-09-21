@@ -142,6 +142,7 @@ pub struct Citation {
 pub fn init(root: Option<PathBuf>, path: Option<PathBuf>) -> Result<Initialized> {
     let target = Corpus::resolve_root(path.or(root))?;
     Corpus::init(&target)?;
+    Corpus::write_root_config_if_absent(&target)?;
     Ok(Initialized { root: target })
 }
 

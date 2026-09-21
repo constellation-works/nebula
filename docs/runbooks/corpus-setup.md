@@ -19,7 +19,11 @@ the only irreplaceable part of the system.
 neb init ~/corpus/nebula
 ```
 
-Then make every command find it:
+`neb init` writes this non-default location to `~/.config/nebula/root`, so
+every command finds it even from shells that do not load your shell profile.
+The resolver checks `--root`, `$NEBULA_ROOT`, that config file, then
+`~/.nebula` in that order. You can still export the environment variable when
+you want a shell-specific override:
 
 ```sh
 echo 'export NEBULA_ROOT=$HOME/corpus/nebula' >> ~/.zshrc

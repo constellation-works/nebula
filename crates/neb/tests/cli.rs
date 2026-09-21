@@ -45,6 +45,7 @@ impl Corpus {
             .arg(&self.root)
             .args(args)
             .env("NO_COLOR", "1")
+            .env("HOME", self.workdir())
             .env_remove("NEBULA_ROOT")
             // Removed rather than trusted: a developer with a real
             // Observatory checkout exported would otherwise resolve records
@@ -74,6 +75,34 @@ impl Corpus {
         self.run(&["promote", &id, "--title", title])
             .assert_ok()
             .stdout_trim()
+    }
+}
+
+/// Run against an isolated home directory so root discovery is part of the
+/// fixture rather than a property of the developer's shell.
+fn run_from_home(
+    home: &Path,
+    root: Option<&Path>,
+    args: &[&str],
+    nebula_root: Option<&Path>,
+) -> Run {
+    let mut cmd = Command::new(bin());
+    if let Some(root) = root {
+        cmd.arg("--root").arg(root);
+    }
+    cmd.args(args)
+        .env("HOME", home)
+        .env("NO_COLOR", "1")
+        .env_remove("OBSERVATORY_ROOT");
+    if let Some(nebula_root) = nebula_root {
+        cmd.env("NEBULA_ROOT", nebula_root);
+    } else {
+        cmd.env_remove("NEBULA_ROOT");
+    }
+    let out = cmd.output().expect("running neb");
+    Run {
+        args: args.join(" "),
+        out,
     }
 }
 
@@ -268,6 +297,65 @@ fn capture_works_before_a_corpus_exists() {
         "capture must never be blocked by missing setup"
     );
     assert!(root.join("inbox").is_dir());
+}
+
+#[test]
+fn root_discovery_prefers_flag_then_environment_then_config_then_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let configured = dir.path().join("configured");
+    let environment = dir.path().join("environment");
+    let explicit = dir.path().join("explicit");
+
+    let init = run_from_home(&home, Some(&configured), &["init"], None).assert_ok();
+    let config_path = home.join(".config/nebula/root");
+    assert_eq!(
+        std::fs::read_to_string(&config_path).unwrap(),
+        format!("{}\n", configured.display())
+    );
+    assert!(
+        init.stdout()
+            .contains(&format!("wrote {}", config_path.display()))
+    );
+
+    run_from_home(&home, Some(&environment), &["init"], None).assert_ok();
+    run_from_home(&home, Some(&explicit), &["init"], None).assert_ok();
+
+    run_from_home(&home, Some(&explicit), &["check"], Some(&environment))
+        .assert_ok()
+        .says("0 nodes");
+    run_from_home(&home, None, &["check"], Some(&environment))
+        .assert_ok()
+        .says("0 nodes");
+    run_from_home(&home, None, &["check"], None)
+        .assert_ok()
+        .says("0 nodes");
+
+    let default_home = dir.path().join("default-home");
+    let default = default_home.join(".nebula");
+    run_from_home(&default_home, Some(&default), &["init"], None).assert_ok();
+    run_from_home(&default_home, None, &["check"], None)
+        .assert_ok()
+        .says("0 nodes");
+}
+
+#[test]
+fn init_warns_before_creating_default_root_that_shadows_configured_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let configured = dir.path().join("configured");
+    let config_path = home.join(".config/nebula/root");
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(&config_path, format!("{}\n", configured.display())).unwrap();
+
+    let default = home.join(".nebula");
+    let out = run_from_home(&home, Some(&default), &["init"], None).assert_ok();
+    assert!(
+        out.stderr().contains("warning: creating ~/.nebula"),
+        "expected warning in:\n{}",
+        out.stderr()
+    );
+    assert!(out.stderr().contains(&configured.display().to_string()));
 }
 
 #[test]
