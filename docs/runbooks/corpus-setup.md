@@ -102,7 +102,7 @@ neb check
 |---|---|
 | `$NEBULA_ROOT/nodes/<id>.md` | one node, with its edges, references and prose |
 | `$NEBULA_ROOT/inbox/YYYY-MM.md` | captures, append-only, struck through when settled |
-| `$NEBULA_ROOT/config.yaml` | corpus id and schema version, nothing else |
+| `$NEBULA_ROOT/config.yaml` | corpus id, schema version, and the observatory root when one is set |
 
 Work and personal ideas belong in separate corpora, each with its own
 `NEBULA_ROOT`; topics inside one owner's thinking are tags, not separate

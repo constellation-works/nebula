@@ -17,6 +17,17 @@ The `--json` excerpts below are real output from a three-node fixture corpus.
 | `neb init [PATH]` | create an empty corpus | — |
 | `neb check` | run the ten invariants; exit non-zero on any error | — |
 | `neb migrate` | v1 → v2 in place; idempotent; refuses on a dirty git tree | — |
+| `neb config observatory-root [DIR]` | read or set where the Observatory checkout is | — |
+
+`config` is the only verb that writes `config.yaml`, and it rewrites the file
+whole: the file stays machine-written and is never hand-edited. Without `DIR`
+it prints the effective root and which setting supplied it
+(`observatory_root` in `config.yaml`, else `$OBSERVATORY_ROOT`, else nothing).
+
+```json
+// neb config observatory-root --json     (source: config | env | unset)
+{ "root": "/Users/you/workspace/observatory", "source": "config" }
+```
 
 ```json
 // neb check --json          (findings[] carries {rule, level, node, message})
@@ -83,11 +94,49 @@ when empty.
 
 | verb | does | flags |
 |---|---|---|
-| `neb cite <NODE> [--uri <URI>]` | attach context | `--kind` (paper, study, article, note, discussion, book, dataset, thread, other), `--title`, `--note`, `--by <LABEL>`, `--task`, `--run` |
+| `neb cite <NODE> [--uri <URI>]` | attach context | `--kind` (paper, study, article, note, discussion, book, dataset, thread, observatory, other), `--title`, `--note`, `--by <LABEL>`, `--task`, `--run` |
 
 `--uri` may be omitted only with `--kind discussion`; every other kind requires
 it. A local URI is resolved relative to `nodes/` and refused if it does not
 exist. Always pass `--note`: it is the only field that matters in a year.
+
+### Observatory records
+
+`--kind observatory` links a node to an Observatory record, and its `--uri` is
+the bare record id — `Q002`, `H007`, `T003`, `R012` — not a path. That is what
+makes the citation portable: nothing machine-specific reaches the corpus. Case
+is normalised up (`q002` stores `Q002`), and anything that is not one of `Q`,
+`H`, `T`, `R` followed by digits is a typed refusal at `cite`.
+
+Where the record is comes from the corpus, not the reference:
+`observatory_root` in `config.yaml` (set by `neb config observatory-root`),
+else `$OBSERVATORY_ROOT`. The id is matched by prefix inside the directory its
+letter names — `questions/`, `hypotheses/`, `theories/`, `research/` — so
+`Q002` finds `questions/Q002-is-proper-time-a-count….md` and `R012` finds the
+`research/R012-arc/` directory.
+
+`check` warns, and never errors, when the root is unset or the id does not
+resolve: the citation is still true, and the machine is merely missing or
+behind the checkout. `show` prints the resolved path under the reference, and
+`show --json` carries an `observatory` array of
+`{reference, record, path}` (`path` omitted when it does not resolve).
+
+```json
+// neb cite proper-time-is-a-count --kind observatory --uri Q002 --note "the question this became"
+// then: neb show proper-time-is-a-count --json
+{
+  "node": {
+    "references": [
+      { "id": "r1", "kind": "observatory", "uri": "Q002",
+        "note": "the question this became", "added": "2026-09-21", "by": "human" }
+    ]
+  },
+  "observatory": [
+    { "reference": "r1", "record": "Q002",
+      "path": "/Users/you/workspace/observatory/questions/Q002-is-proper-time-a-count-of-snapshots-along-a-worldline.md" }
+  ]
+}
+```
 
 ## Authorship
 

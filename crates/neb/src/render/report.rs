@@ -2,8 +2,9 @@
 
 use super::{bold, dim, paint, status_badge};
 use nebula_core::{
-    HUMAN, INBOX_DAYS, Impact, Inbox, MigrationReport, NodeView, OpenReport, Report, ReviewItem,
-    ReviewReport, ReviewRule, Severity, TagCounts, Via,
+    HUMAN, INBOX_DAYS, Impact, Inbox, MigrationReport, NodeView, OBSERVATORY_ROOT_ENV,
+    ObservatoryRoot, ObservatorySource, OpenReport, Report, ReviewItem, ReviewReport, ReviewRule,
+    Severity, TagCounts, Via,
 };
 use std::fmt::Write as _;
 
@@ -55,12 +56,46 @@ pub fn node(view: &NodeView) -> String {
                     let _ = writeln!(out, "  {} {}", bold(&r.id), r.kind);
                 }
             }
+            // An observatory reference stores a record id, so where that
+            // record actually is on this machine is the useful line.
+            if let Some(link) = view.observatory.iter().find(|l| l.reference == r.id) {
+                let located = match &link.path {
+                    Some(path) => dim(&path.display().to_string()),
+                    None => dim("(does not resolve; check the observatory root)"),
+                };
+                let _ = writeln!(out, "     {located}");
+            }
             let text = r.note.as_deref().map_or("(no note)", str::trim);
             let _ = writeln!(out, "     {}", dim(text));
         }
         out.push('\n');
     }
     out
+}
+
+/// Where `observatory` references resolve, and what set that.
+pub fn observatory_root(setting: &ObservatoryRoot) -> String {
+    match (&setting.root, setting.source) {
+        (Some(root), ObservatorySource::Config) => {
+            format!(
+                "{} {}\n",
+                bold(&root.display().to_string()),
+                dim("(config.yaml)")
+            )
+        }
+        (Some(root), ObservatorySource::Env) => format!(
+            "{} {}\n",
+            bold(&root.display().to_string()),
+            dim(&format!("(${OBSERVATORY_ROOT_ENV})"))
+        ),
+        _ => format!(
+            "{}\n",
+            dim(&format!(
+                "no observatory root; set one with `neb config observatory-root <DIR>` or \
+                 ${OBSERVATORY_ROOT_ENV}"
+            ))
+        ),
+    }
 }
 
 /// Captures waiting to be promoted or dropped.

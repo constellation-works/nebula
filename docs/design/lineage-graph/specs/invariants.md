@@ -1,15 +1,15 @@
 ---
 title: Invariants
 owner: claude
-last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_updated: 2026-09-21
+last_validated: 2026-09-21
 status: Accepted
 feature: lineage-graph
 doc_role: spec
 type: design
 summary: What neb check enforces, where each rule is enforced, and which failures block.
 tags: [lineage-graph, invariants]
-paths: ["crates/nebula-core/src/check.rs", "crates/nebula-core/src/model.rs", "crates/nebula-core/src/ops.rs"]
+paths: ["crates/nebula-core/src/check.rs", "crates/nebula-core/src/model.rs", "crates/nebula-core/src/ops.rs", "crates/nebula-core/src/config.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 ---
@@ -32,6 +32,7 @@ and its "What is removed" table for the rules this replaced.
 | 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status` |
 | 7 | A reference carries none of the removed judgement fields | error | parse |
 | 8 | Local reference URIs resolve | error | `cite`, `check` |
+| 8 | An `observatory` record resolves under the configured root — the same rule, softer, because it judges the machine rather than the corpus | warn | `check` (shape at `cite`) |
 | 9 | Every reference has a note | warn | `check` |
 | 10 | No two tags differ only by case or a trailing `s` | warn | `check` |
 
@@ -54,6 +55,20 @@ than catching them later, because you still remember what you meant.
 
 **The checker**, for everything that needs the whole corpus in view, and as a
 backstop for rules also enforced elsewhere, since node files are hand-editable.
+
+## Rule 8 and Observatory records
+
+A reference of kind `observatory` carries a bare record id (`Q002`, `H007`,
+`T003`, `R012`) rather than a location, and where that record is comes from
+`observatory_root` in `config.yaml`, else `$OBSERVATORY_ROOT`. The split
+follows from what each half means. The id's *shape* is the corpus's business,
+so `cite` refuses anything that is not one of the four letters followed by
+digits — a path stored there would never resolve, and the mistake is obvious
+now and cryptic in a year. Whether the record is *on this machine* is not the
+corpus's business at all: an unset root or a checkout without the record says
+the machine is missing something, not that the citation is wrong, so `check`
+warns. Erroring would make one portable corpus fail on every machine that
+does not happen to have Observatory checked out.
 
 ## Errors and warnings
 

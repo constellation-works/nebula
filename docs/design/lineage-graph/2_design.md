@@ -44,10 +44,14 @@ writer appears.
 Every node write is rendered to a sibling temporary file and renamed, so an
 interrupted write cannot leave half a node behind.
 
-`config.yaml` at the corpus root holds exactly two things: `schema_version` and
-an opaque `corpus_id`. Nothing else is configured — tags on the nodes
-themselves are how the corpus is partitioned for a view. `neb init` writes it;
-`neb migrate` bumps `schema_version` in place.
+`config.yaml` at the corpus root holds `schema_version`, an opaque `corpus_id`,
+and — once set — `observatory_root`, the one thing that is about this machine
+rather than about the ideas: where the Observatory checkout is, so an
+`observatory` reference's bare record id resolves to a file. Nothing about the
+ideas is configured — tags on the nodes themselves are how the corpus is
+partitioned for a view. `neb init` writes the file, `neb config` rewrites it
+whole, and `neb migrate` bumps `schema_version` in place; it is never hand
+edited.
 
 ## Tags, not a declared list
 

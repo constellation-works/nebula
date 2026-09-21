@@ -232,12 +232,16 @@ fn refuse_dirty_tree(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Rewrite `config.yaml` to hold only `corpus_id` and `schema_version`.
+/// Rewrite `config.yaml` to hold `corpus_id`, `schema_version`, and the
+/// observatory root when one was set. The v1 keys it drops are named in
+/// `docs/runbooks/migrate-v1-to-v2.md`.
 fn migrate_config(root: &Path) -> Result<bool> {
     #[derive(Deserialize)]
     struct Lenient {
         #[serde(default)]
         corpus_id: Option<String>,
+        #[serde(default)]
+        observatory_root: Option<PathBuf>,
     }
     let path = root.join(config::FILE);
     let existing = if path.exists() {
@@ -245,14 +249,17 @@ fn migrate_config(root: &Path) -> Result<bool> {
     } else {
         None
     };
-    let corpus_id = existing
+    let lenient = existing
         .as_deref()
         .map(serde_yaml_ng::from_str::<Lenient>)
         .transpose()
-        .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))?
-        .and_then(|l| l.corpus_id)
-        .unwrap_or_else(|| store::corpus_id(root));
-    let fresh = Config::fresh(corpus_id);
+        .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))?;
+    let (corpus_id, observatory_root) = match lenient {
+        Some(l) => (l.corpus_id, l.observatory_root),
+        None => (None, None),
+    };
+    let mut fresh = Config::fresh(corpus_id.unwrap_or_else(|| store::corpus_id(root)));
+    fresh.observatory_root = observatory_root;
     if existing.as_deref() == Some(fresh.render()?.as_str()) {
         return Ok(false);
     }

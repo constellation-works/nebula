@@ -45,7 +45,11 @@ impl Corpus {
             .arg(&self.root)
             .args(args)
             .env("NO_COLOR", "1")
-            .env_remove("NEBULA_ROOT");
+            .env_remove("NEBULA_ROOT")
+            // Removed rather than trusted: a developer with a real
+            // Observatory checkout exported would otherwise resolve records
+            // these tests expect to go missing.
+            .env_remove("OBSERVATORY_ROOT");
         for (key, value) in extra {
             cmd.env(key, value);
         }
@@ -1721,6 +1725,290 @@ fn review_never_touches_nodes_or_inbox_on_disk() {
     let after = snapshot_corpus_files(&c.root);
 
     assert_eq!(before, after, "review must never mutate nodes/ or inbox/");
+}
+
+// -------------------------------------------------------------- observatory --
+
+/// An Observatory checkout in research layout v2: records are files under
+/// `questions/`, `hypotheses/` and `theories/`, and directories under
+/// `research/`. Only what a test cites is created, so an id that should not
+/// resolve genuinely does not.
+fn observatory(at: &Path) -> PathBuf {
+    let root = at.join("observatory");
+    for dir in ["questions", "hypotheses", "theories", "research"] {
+        std::fs::create_dir_all(root.join(dir)).unwrap();
+    }
+    write(
+        &root
+            .join("questions")
+            .join("Q002-is-proper-time-a-count-of-snapshots-along-a-worldline.md"),
+        "# Q002\n",
+    );
+    write(
+        &root.join("theories").join("T003-ppn-reduction.md"),
+        "# T003\n",
+    );
+    std::fs::create_dir_all(root.join("research").join("R012-arc")).unwrap();
+    root
+}
+
+/// The portable citation: the corpus stores `Q002` and nothing about this
+/// machine, and the path is reconstructed from the configured root.
+#[test]
+fn an_observatory_reference_stores_the_bare_record_id_and_show_resolves_it() {
+    let c = Corpus::new();
+    let obs = observatory(c.workdir());
+    let id = c.seed(
+        "proper time is a count of snapshots",
+        "Proper time is a count",
+    );
+    c.run(&["config", "observatory-root", obs.to_str().unwrap()])
+        .assert_ok();
+
+    // Lower case on the way in: the id is the same record either way.
+    c.run(&[
+        "cite",
+        &id,
+        "--kind",
+        "observatory",
+        "--uri",
+        "q002",
+        "--note",
+        "the question this seed became",
+    ])
+    .assert_ok();
+
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(raw.contains("kind: observatory"), "{raw}");
+    assert!(raw.contains("uri: Q002"), "the id is stored bare:\n{raw}");
+    assert!(
+        !raw.contains(obs.to_str().unwrap()),
+        "no machine path may reach the corpus:\n{raw}"
+    );
+
+    c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
+
+    let resolved = obs
+        .join("questions")
+        .join("Q002-is-proper-time-a-count-of-snapshots-along-a-worldline.md");
+    c.run(&["show", &id])
+        .assert_ok()
+        .says("observatory")
+        .says("Q002")
+        .says(resolved.to_str().unwrap());
+
+    let out = c.run(&["--json", "show", &id]).assert_ok().stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).expect("show --json is valid JSON");
+    assert_eq!(v["node"]["references"][0]["uri"], "Q002");
+    assert_eq!(v["observatory"][0]["reference"], "r1");
+    assert_eq!(v["observatory"][0]["record"], "Q002");
+    assert_eq!(v["observatory"][0]["path"], resolved.to_str().unwrap());
+
+    // Every letter of the scheme, including a research record, which is a
+    // directory rather than a file.
+    for record in ["T003", "R012"] {
+        c.run(&[
+            "cite",
+            &id,
+            "--kind",
+            "observatory",
+            "--uri",
+            record,
+            "--note",
+            "n",
+        ])
+        .assert_ok();
+    }
+    c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
+}
+
+/// A record the checkout does not carry is a warning: the citation is still
+/// the truth, and this machine is merely behind.
+#[test]
+fn an_unresolved_observatory_record_warns_and_never_errors() {
+    let c = Corpus::new();
+    let obs = observatory(c.workdir());
+    let id = c.seed("an idea", "An idea");
+    c.run(&["config", "observatory-root", obs.to_str().unwrap()])
+        .assert_ok();
+    c.run(&[
+        "cite",
+        &id,
+        "--kind",
+        "observatory",
+        "--uri",
+        "Q404",
+        "--note",
+        "a question that is not written yet",
+    ])
+    .assert_ok()
+    .says("does not resolve under");
+
+    c.run(&["check"])
+        .assert_ok()
+        .says("warn")
+        .says("[8]")
+        .says("Observatory record `Q404`")
+        .says("does not resolve under")
+        .says("0 errors, 1 warnings");
+
+    c.run(&["show", &id])
+        .assert_ok()
+        .says("does not resolve; check the observatory root");
+}
+
+/// With no root set there is nothing to resolve against, which is a fact
+/// about the machine rather than about the corpus: still a warning, and one
+/// that says how to fix it.
+#[test]
+fn an_observatory_reference_with_no_root_warns_and_the_env_supplies_one() {
+    let c = Corpus::new();
+    let obs = observatory(c.workdir());
+    let id = c.seed("an idea", "An idea");
+    c.run(&[
+        "cite",
+        &id,
+        "--kind",
+        "observatory",
+        "--uri",
+        "Q002",
+        "--note",
+        "why",
+    ])
+    .assert_ok()
+    .says("No observatory root set");
+
+    c.run(&["check"])
+        .assert_ok()
+        .says("warn")
+        .says("[8]")
+        .says("no observatory root is set")
+        .says("0 errors, 1 warnings");
+    c.run(&["show", &id])
+        .assert_ok()
+        .says("does not resolve; check the observatory root");
+
+    // $OBSERVATORY_ROOT is the fallback, so a machine that exports one needs
+    // no per-corpus setting at all.
+    c.run_with_env(&["check"], &[("OBSERVATORY_ROOT", obs.to_str().unwrap())])
+        .assert_ok()
+        .says("0 errors, 0 warnings");
+}
+
+/// The setting is read and written by one verb, `config.yaml` stays whole
+/// and machine-written, and the corpus's own value wins over the
+/// environment's.
+#[test]
+fn the_observatory_root_is_a_corpus_setting_that_config_reads_and_writes() {
+    let c = Corpus::new();
+    let obs = observatory(c.workdir());
+    let elsewhere = c.workdir().join("elsewhere");
+
+    c.run(&["config", "observatory-root"])
+        .assert_ok()
+        .says("no observatory root");
+
+    c.run(&["config", "observatory-root", obs.to_str().unwrap()])
+        .assert_ok()
+        .says(obs.to_str().unwrap())
+        .says("config.yaml");
+
+    let raw = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    assert!(
+        raw.starts_with("# nebula corpus configuration. Not edited by hand.\n"),
+        "{raw}"
+    );
+    assert!(raw.contains("schema_version: 2"), "{raw}");
+    assert!(raw.contains("corpus_id:"), "{raw}");
+    assert!(
+        raw.contains(&format!("observatory_root: {}", obs.display())),
+        "{raw}"
+    );
+
+    // Set on purpose for this corpus, so it outranks whatever the shell says.
+    c.run_with_env(
+        &["config", "observatory-root"],
+        &[("OBSERVATORY_ROOT", elsewhere.to_str().unwrap())],
+    )
+    .assert_ok()
+    .says(obs.to_str().unwrap())
+    .says("config.yaml");
+
+    let out = c
+        .run_with_env(
+            &["--json", "config", "observatory-root"],
+            &[("OBSERVATORY_ROOT", elsewhere.to_str().unwrap())],
+        )
+        .assert_ok()
+        .stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).expect("config --json is valid JSON");
+    assert_eq!(v["root"], obs.to_str().unwrap());
+    assert_eq!(v["source"], "config");
+
+    // And with nothing in the file, the environment answers.
+    let bare = Corpus::new();
+    let out = bare
+        .run_with_env(
+            &["--json", "config", "observatory-root"],
+            &[("OBSERVATORY_ROOT", obs.to_str().unwrap())],
+        )
+        .assert_ok()
+        .stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["root"], obs.to_str().unwrap());
+    assert_eq!(v["source"], "env");
+}
+
+/// `migrate` rewrites `config.yaml` whole, so the one setting the file
+/// carries has to survive it — and a corpus already at v2 still changes
+/// nothing.
+#[test]
+fn migrate_keeps_the_observatory_root() {
+    let c = Corpus::new();
+    let obs = observatory(c.workdir());
+    c.run(&["config", "observatory-root", obs.to_str().unwrap()])
+        .assert_ok();
+    let before = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+
+    c.run(&["migrate"]).assert_ok().says("nothing changed");
+
+    assert_eq!(
+        before,
+        std::fs::read_to_string(c.root.join("config.yaml")).unwrap()
+    );
+    c.run(&["config", "observatory-root"])
+        .assert_ok()
+        .says(obs.to_str().unwrap());
+}
+
+/// A path or a slug stored as an observatory record would never resolve, and
+/// the mistake is obvious now and cryptic in a year.
+#[test]
+fn an_observatory_uri_that_is_not_a_record_id_is_refused_at_cite() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    for uri in [
+        "/Users/someone/observatory/questions/Q002-a-question.md",
+        "Q002-is-proper-time-a-count",
+        "X002",
+        "questions/Q002",
+    ] {
+        c.run(&[
+            "cite",
+            &id,
+            "--kind",
+            "observatory",
+            "--uri",
+            uri,
+            "--note",
+            "n",
+        ])
+        .assert_fails()
+        .says("is not an Observatory record id");
+    }
+    c.run(&["cite", &id, "--kind", "observatory", "--note", "n"])
+        .assert_fails()
+        .says("--uri is required unless --kind is discussion");
 }
 
 // ----------------------------------------------------------------- migrate --

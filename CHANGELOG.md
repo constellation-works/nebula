@@ -58,6 +58,18 @@ habit. This cut keeps what a person actually uses.
   per-node summary of what changed; a second run rewrites nothing.
 - `config.yaml` is `schema_version: 2`; a v1 corpus refuses to open with a
   hint to run `neb migrate`.
+- `cite --kind observatory --uri Q002`: a portable link to an Observatory
+  record. The `uri` is the bare record id (`Q###`, `H###`, `T###`, `R###`),
+  normalised to upper case and refused at `cite` when it is not one; nothing
+  machine-specific reaches the corpus. Where the record is comes from
+  `observatory_root` in `config.yaml`, set by the new
+  `neb config observatory-root [DIR]` (which reads the effective root and its
+  source when given no directory), else `$OBSERVATORY_ROOT`. `check` rule 8
+  *warns* rather than errors when the root is unset or the id does not
+  resolve, since that judges the machine rather than the corpus. `show`
+  prints the resolved path, and `show --json` carries
+  `observatory: [{reference, record, path}]`. `config.yaml` stays
+  machine-written and `migrate` preserves the setting.
 - `open` reports hypotheses with no references, seeds untouched for ninety
   days or more, and inbox entries waiting fourteen days or more.
 - `impact` reports every descendant (reverse genealogy) plus the node's

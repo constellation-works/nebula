@@ -38,10 +38,12 @@ pub fn graph(corpus: &Corpus) -> Result<GraphExport> {
 }
 
 /// One node in full: the `neb show --json` shape, body trimmed and ready for
-/// a markdown renderer.
+/// a markdown renderer. Observatory references are located the same way
+/// `neb show` locates them, so the panel and the terminal agree.
 pub fn node(corpus: &Corpus, id: &str) -> Result<NodeView> {
     let docs = corpus.load_all()?;
-    graph::node(&Graph::build(&docs)?, id)
+    let observatory = corpus.observatory_root().root;
+    Ok(graph::node(&Graph::build(&docs)?, id)?.with_observatory(observatory.as_deref()))
 }
 
 /// The file behind a node, for handing to the OS. Fails when the node does

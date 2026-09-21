@@ -1,15 +1,16 @@
 //! Corpus configuration.
 //!
-//! `config.yaml` at the corpus root holds exactly two things: which schema
-//! the files follow and a stable id for the corpus. Nothing else is
-//! configured: tags on the nodes themselves partition the corpus.
+//! `config.yaml` at the corpus root holds which schema the files follow, a
+//! stable id for the corpus, and, when one has been set, where the
+//! Observatory checkout is. Nothing about the ideas is configured: tags on
+//! the nodes themselves partition the corpus.
 //!
 //! Private to the crate. A consumer that needs to know the schema version is
 //! asking about a corpus, and [`crate::store::Corpus`] is what answers that.
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// File name at the corpus root.
 pub(crate) const FILE: &str = "config.yaml";
@@ -25,7 +26,40 @@ pub(crate) struct Config {
     pub(crate) schema_version: u32,
     /// Stable, opaque, never edited by hand.
     pub(crate) corpus_id: String,
+    /// Where the Observatory checkout is, so an `observatory` reference's
+    /// bare record id resolves to a file on this machine. Written by
+    /// `neb config observatory-root`, absent until then; `$OBSERVATORY_ROOT`
+    /// stands in when it is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) observatory_root: Option<PathBuf>,
 }
+
+/// Where `observatory` references resolve, and which setting said so.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ObservatoryRoot {
+    /// The Observatory checkout, as it was given. `None` when nothing set it.
+    pub root: Option<PathBuf>,
+    /// Which of the two settings supplied it.
+    pub source: ObservatorySource,
+}
+
+/// Where an observatory root came from. `config.yaml` wins over the
+/// environment, because it was set on purpose for this corpus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "lowercase")]
+pub enum ObservatorySource {
+    /// `observatory_root` in `config.yaml`.
+    Config,
+    /// `$OBSERVATORY_ROOT`.
+    Env,
+    /// Neither is set.
+    Unset,
+}
+
+/// The environment variable that stands in for `observatory_root`.
+pub const OBSERVATORY_ROOT_ENV: &str = "OBSERVATORY_ROOT";
 
 impl Config {
     /// A config for a corpus that has just been created.
@@ -33,6 +67,27 @@ impl Config {
         Self {
             schema_version: SCHEMA_VERSION,
             corpus_id,
+            observatory_root: None,
+        }
+    }
+
+    /// The observatory root this config names, else the environment's.
+    pub(crate) fn observatory_root(&self) -> ObservatoryRoot {
+        if let Some(root) = &self.observatory_root {
+            return ObservatoryRoot {
+                root: Some(root.clone()),
+                source: ObservatorySource::Config,
+            };
+        }
+        match std::env::var_os(OBSERVATORY_ROOT_ENV).filter(|v| !v.is_empty()) {
+            Some(v) => ObservatoryRoot {
+                root: Some(PathBuf::from(v)),
+                source: ObservatorySource::Env,
+            },
+            None => ObservatoryRoot {
+                root: None,
+                source: ObservatorySource::Unset,
+            },
         }
     }
 
