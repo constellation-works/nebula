@@ -42,6 +42,12 @@ function ExternalLink({ href, children }: { href?: string; children?: ReactNode 
   );
 }
 
+/** Human authorship is the default; call out only claims made by somebody else. */
+function Authorship({ by }: { by?: string | null }) {
+  if (by === undefined || by === null || by === "human") return null;
+  return <span className="panel__dates">by {by}</span>;
+}
+
 function EdgeList({
   heading,
   edges,
@@ -64,6 +70,7 @@ function EdgeList({
             <button type="button" className="panel__link" onClick={() => onSelect(e.to)}>
               {titles.get(e.to) ?? e.to}
             </button>
+            <Authorship by={e.by} />
           </li>
         ))}
       </ul>
@@ -155,6 +162,7 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
             <h2 className="panel__title">{node.title}</h2>
             <div className="panel__meta">
               <span className={`badge badge--${node.status}`}>{node.status}</span>
+              <Authorship by={node.title_by} />
               <span className="panel__dates">
                 {node.created} · updated {node.updated}
               </span>
@@ -172,6 +180,7 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
               <section className="panel__section panel__kill">
                 <h3 className="panel__heading">Kill condition</h3>
                 <p>{node.kill}</p>
+                <Authorship by={node.kill_by} />
               </section>
             )}
             {node.closed && (
@@ -203,24 +212,36 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
                       <th>kind</th>
                       <th>title</th>
                       <th>note</th>
+                      <th>by</th>
                       <th>added</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {references.map((r) => (
-                      <tr key={r.id}>
-                        <td>{r.kind}</td>
-                        <td>
-                          {r.uri ? (
-                            <ExternalLink href={r.uri}>{r.title ?? r.uri}</ExternalLink>
-                          ) : (
-                            r.title || r.kind || "—"
-                          )}
-                        </td>
-                        <td>{r.note ?? ""}</td>
-                        <td>{r.added}</td>
-                      </tr>
-                    ))}
+                    {references.map((r) => {
+                      const observatory = view.observatory?.find((link) => link.reference === r.id);
+                      return (
+                        <tr key={r.id}>
+                          <td>{r.kind}</td>
+                          <td>
+                            {r.uri ? (
+                              <ExternalLink href={r.uri}>{r.title ?? r.uri}</ExternalLink>
+                            ) : (
+                              r.title || r.kind || "—"
+                            )}
+                            {observatory !== undefined && (
+                              <div>
+                                <code>{observatory.path ?? "(does not resolve on this machine)"}</code>
+                              </div>
+                            )}
+                          </td>
+                          <td>{r.note ?? ""}</td>
+                          <td>
+                            <Authorship by={r.by} />
+                          </td>
+                          <td>{r.added}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </section>
