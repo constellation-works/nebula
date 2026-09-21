@@ -316,7 +316,7 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
     let n = &doc.node;
     let id = Some(n.id.as_str());
     for f in &n.references {
-        if f.uri.is_none() && f.kind != "discussion" {
+        if f.uri.as_deref().is_none_or(|uri| uri.trim().is_empty()) && f.kind != "discussion" {
             r.push(
                 Severity::Error,
                 8,
@@ -342,7 +342,7 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
         //    record is gone, so the finding is a warning rather than an
         //    error and the reference stays valid on a machine that has it.
         if f.kind == OBSERVATORY {
-            if let Some(record) = f.uri.as_deref() {
+            if let Some(record) = f.uri.as_deref().filter(|record| !record.trim().is_empty()) {
                 match observatory {
                     None => r.push(
                         Severity::Warn,
@@ -376,6 +376,7 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
         if let Some(uri) = f
             .uri
             .as_deref()
+            .filter(|uri| !uri.trim().is_empty())
             .filter(|uri| is_local_path(uri) && !resolve_local(corpus, uri).exists())
         {
             r.push(

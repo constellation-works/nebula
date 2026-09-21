@@ -1287,6 +1287,18 @@ fn a_discussion_reference_may_omit_its_uri_but_other_kinds_may_not() {
     c.run(&["cite", &id, "--kind", "paper", "--note", "missing URI"])
         .assert_fails()
         .says("--uri is required unless --kind is discussion");
+    c.run(&[
+        "cite",
+        &id,
+        "--kind",
+        "paper",
+        "--uri",
+        "",
+        "--note",
+        "empty URI",
+    ])
+    .assert_fails()
+    .says("--uri is required unless --kind is discussion");
 
     c.run(&["cite", &id, "--kind", "discussion"]).assert_ok();
     c.run(&["check"])
@@ -1311,7 +1323,7 @@ fn a_discussion_reference_may_omit_its_uri_but_other_kinds_may_not() {
     let raw = std::fs::read_to_string(invalid.node_file(&invalid_id)).unwrap();
     write(
         &invalid.node_file(&invalid_id),
-        &raw.replace("  uri: https://example.org\n", ""),
+        &raw.replace("  uri: https://example.org\n", "  uri: ''\n"),
     );
     invalid
         .run(&["check"])
