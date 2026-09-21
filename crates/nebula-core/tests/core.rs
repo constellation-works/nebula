@@ -6,8 +6,8 @@
 //! is what a consumer that is not a terminal matches on.
 
 use nebula_core::{
-    Corpus, Direction, EdgeType, Error, Graph, HUMAN, NewNode, Promotion, ReviewRule, Status, Via,
-    graph, ops,
+    Corpus, Direction, EdgeType, Error, Graph, HUMAN, NEAR_DEFAULT, NewNode, Promotion, ReviewRule,
+    Status, Via, graph, ops,
 };
 
 fn corpus() -> (tempfile::TempDir, Corpus) {
@@ -311,6 +311,7 @@ fn notes_accumulate_in_order_and_unknown_nodes_are_refused() {
             tags: vec!["physics".into()],
             ..Promotion::default()
         },
+        0,
     )
     .unwrap()
     .doc
@@ -355,6 +356,201 @@ fn notes_accumulate_in_order_and_unknown_nodes_are_refused() {
         ops::note(&corpus, "nope", "lost", None),
         Err(Error::NoSuchNode(missing)) if missing == "nope"
     ));
+}
+
+// -------------------------------------------------------------------- near --
+
+/// A small corpus with vocabulary that overlaps in known ways: two nodes
+/// about taxonomy and tags, one about search ranking, one about nothing
+/// the queries below mention.
+fn lexical_fixture(corpus: &Corpus) {
+    for (title, tags, kill) in [
+        (
+            "Tags beat domains",
+            vec!["design", "corpus"],
+            Some("a corpus of 50+ nodes needs a cross-cutting query that tags cannot answer"),
+        ),
+        ("A single global taxonomy", vec!["design"], None),
+        ("Ranking decay half-life", vec!["search"], None),
+        ("Proper time is a count", vec!["physics"], None),
+    ] {
+        ops::new_node(
+            corpus,
+            &NewNode {
+                title: title.to_string(),
+                tags: tags.into_iter().map(String::from).collect(),
+                kill: kill.map(String::from),
+                ..NewNode::default()
+            },
+        )
+        .unwrap();
+    }
+    // Body text counts too: the ranking node argues in words a query can hit.
+    ops::note(
+        corpus,
+        "ranking-decay-half-life",
+        "a search result should lose rank as it ages, on a half-life",
+        None,
+    )
+    .unwrap();
+}
+
+#[test]
+fn near_ranks_by_shared_vocabulary_best_first() {
+    let (_dir, corpus) = corpus();
+    lexical_fixture(&corpus);
+    let docs = corpus.load_all().unwrap();
+    let graph = Graph::build(&docs).unwrap();
+
+    let near = graph::near(&graph, "tags and domains beat a taxonomy", NEAR_DEFAULT).unwrap();
+    let ids: Vec<&str> = near.0.iter().map(|n| n.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["tags-beat-domains", "a-single-global-taxonomy"],
+        "the two nodes sharing words, the one sharing more first; \
+         the search and physics nodes share none and are left out"
+    );
+    assert!(
+        near.0.windows(2).all(|w| w[0].score >= w[1].score),
+        "best first: {near:?}"
+    );
+    assert!(
+        near.0.iter().all(|n| n.score > 0.0 && n.score <= 1.0),
+        "scores sit in 0..=1: {near:?}"
+    );
+    assert_eq!(
+        near.0[0].tags,
+        ["design", "corpus"],
+        "a neighbour carries its tags, since a promotion reuses the parent's"
+    );
+
+    // Body text is read, not just the title: only the note mentions ageing.
+    let near = graph::near(&graph, "results that age", NEAR_DEFAULT).unwrap();
+    assert_eq!(
+        near.0.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
+        ["ranking-decay-half-life"]
+    );
+}
+
+#[test]
+fn near_takes_a_node_id_and_leaves_that_node_out() {
+    let (_dir, corpus) = corpus();
+    lexical_fixture(&corpus);
+    let docs = corpus.load_all().unwrap();
+    let graph = Graph::build(&docs).unwrap();
+
+    let near = graph::near(&graph, "tags-beat-domains", NEAR_DEFAULT).unwrap();
+    let ids: Vec<&str> = near.0.iter().map(|n| n.id.as_str()).collect();
+    assert!(
+        !ids.contains(&"tags-beat-domains"),
+        "a node is not its own neighbour: {ids:?}"
+    );
+    assert_eq!(
+        ids.first(),
+        Some(&"a-single-global-taxonomy"),
+        "the other design node shares the `design` tag; nothing else does: {ids:?}"
+    );
+}
+
+#[test]
+fn near_is_capped_at_k_and_empty_for_a_thought_unlike_anything() {
+    let (_dir, corpus) = corpus();
+    lexical_fixture(&corpus);
+    let docs = corpus.load_all().unwrap();
+    let graph = Graph::build(&docs).unwrap();
+
+    let near = graph::near(&graph, "tags taxonomy ranking", 2).unwrap();
+    assert_eq!(near.0.len(), 2, "k caps the answer: {near:?}");
+    assert!(
+        graph::near(&graph, "tags taxonomy ranking", 0)
+            .unwrap()
+            .0
+            .is_empty(),
+        "k of zero asks for nothing"
+    );
+
+    let none = graph::near(&graph, "quantum gravity", NEAR_DEFAULT).unwrap();
+    assert!(none.0.is_empty(), "no shared word, no neighbour: {none:?}");
+    let stop = graph::near(&graph, "the and of", NEAR_DEFAULT).unwrap();
+    assert!(stop.0.is_empty(), "stopwords alone are no query: {stop:?}");
+
+    let empty = tempfile::tempdir().unwrap();
+    let empty = Corpus::init(&empty.path().join("corpus")).unwrap();
+    let docs = empty.load_all().unwrap();
+    let graph = Graph::build(&docs).unwrap();
+    assert!(
+        graph::near(&graph, "anything", NEAR_DEFAULT)
+            .unwrap()
+            .0
+            .is_empty(),
+        "an empty corpus has no neighbours"
+    );
+}
+
+#[test]
+fn capture_and_promote_suggest_but_never_link() {
+    let (_dir, corpus) = corpus();
+    lexical_fixture(&corpus);
+
+    let captured = ops::capture_near(&corpus, "a taxonomy for tags", NEAR_DEFAULT).unwrap();
+    assert_eq!(captured.entry.text, "a taxonomy for tags");
+    assert_eq!(
+        captured
+            .near
+            .iter()
+            .map(|n| n.id.as_str())
+            .collect::<Vec<_>>(),
+        ["a-single-global-taxonomy", "tags-beat-domains"],
+        "capture names the nearest nodes: {:?}",
+        captured.near
+    );
+    let quiet = ops::capture_near(&corpus, "a taxonomy for tags, again", 0).unwrap();
+    assert!(quiet.near.is_empty(), "k of zero is the quiet path");
+
+    // Promoted as a root: the suggestions come back, and the node has no edge.
+    let created = ops::promote(
+        &corpus,
+        &captured.entry.id,
+        &Promotion::default(),
+        NEAR_DEFAULT,
+    )
+    .unwrap();
+    assert_eq!(
+        created.near.first().map(|n| n.id.as_str()),
+        Some("a-single-global-taxonomy"),
+        "{:?}",
+        created.near
+    );
+    assert!(
+        !created.near.iter().any(|n| n.id == created.doc.node.id),
+        "a promotion is not its own neighbour: {:?}",
+        created.near
+    );
+    assert!(
+        created.doc.node.edges.is_empty(),
+        "suggesting never links: {:?}",
+        created.doc.node.edges
+    );
+    let on_disk = corpus.load(&created.doc.node.id).unwrap();
+    assert!(on_disk.node.edges.is_empty(), "nor on disk");
+
+    // With a parent named, there is nothing to suggest.
+    let entry = ops::capture(&corpus, "ranking decay again").unwrap();
+    let created = ops::promote(
+        &corpus,
+        &entry.id,
+        &Promotion {
+            parents: vec!["ranking-decay-half-life".into()],
+            ..Promotion::default()
+        },
+        NEAR_DEFAULT,
+    )
+    .unwrap();
+    assert!(created.near.is_empty(), "{:?}", created.near);
+    assert_eq!(
+        created.doc.node.parents().collect::<Vec<_>>(),
+        ["ranking-decay-half-life"]
+    );
 }
 
 #[test]
@@ -465,7 +661,7 @@ fn commit_on_records_each_write_as_one_commit_of_corpus_paths_only() {
         committed_paths(&root, "HEAD")
     );
 
-    let id = ops::promote(&corpus, &entry.id, &Promotion::default())
+    let id = ops::promote(&corpus, &entry.id, &Promotion::default(), 0)
         .unwrap()
         .doc
         .node

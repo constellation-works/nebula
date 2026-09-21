@@ -27,12 +27,25 @@ triage it; do not start without being asked.
 
 For each inbox entry, in order:
 
-- Find the nearest existing node: `neb list --json`, then `neb trace <id>`
-  on the candidates. Read titles and `kill` fields, not just ids.
+- Run `neb near --json "<the entry's text>"`. It ranks the existing nodes by
+  shared vocabulary, best first, with a score in `0..=1`; `capture` already
+  printed the same three lines when the thought went in. Read the top
+  candidates — `neb show <id>` for the title, body and `kill`, `neb trace
+  <id>` for where each sits — rather than trusting the score: it is word
+  overlap, and a shared word is not a shared idea.
+- Pick a parent only if one is defensible: you can say in one line why the
+  entry descends from, refines or generalizes that node. Otherwise promote
+  as a root. An empty `near` (`[]`) is a real finding — nothing in the corpus
+  shares a word with it — and a root is the honest answer, not a failure.
+  `promote` without `--parent` prints the same suggestions and proceeds;
+  it never blocks and never links.
 - Say which of **promote** (with the proposed `--title`, `--parent`, `--tag`)
   or **drop** (with the reason: duplicates `<id>`, or an action item) you
   recommend, and wait for the human unless they have said "just do it".
-- Promote with the parent's tags. A new tag is a decision: name it as one.
+  Passing `near`'s first line to `--parent` unread is the automatic linking
+  the spec rules out.
+- Promote with the parent's tags (`near` lists each candidate's). A new tag
+  is a decision: name it as one.
 - After promoting, ask for the falsifier. If the human gives one, `sharpen`
   in the same breath. If not, leave it a seed — a seed is honest.
 
@@ -76,17 +89,22 @@ $ neb check
 3 nodes, 0 errors, 0 warnings
 $ neb inbox --json
 [ { "id": "a6e8", "at": "2026-09-12T18:16", "text": "nebula review as a weekly orbit routine" } ]
+$ neb near --json "nebula review as a weekly orbit routine"
+[]
 $ neb list --json | jq -c '.[] | {id, status, tags}'
 {"id":"a-single-global-taxonomy","status":"refuted","tags":["design"]}
 {"id":"required-categorical-fields-drift","status":"seed","tags":["design"]}
 {"id":"tags-beat-domains","status":"hypothesis","tags":["design","corpus"]}
 ```
 
-> **agent:** One entry. "nebula review as a weekly orbit routine" is about
-> operating the corpus, closest to `tags-beat-domains` (both are about how
-> the tool is used, tag `design`). It reads as an action item more than an
-> idea, so I'd **drop** it — unless you mean the claim that unattended review
-> is safe as long as it only proposes. Promote as that, or drop?
+> **agent:** One entry. `near` finds nothing: no node shares a word with
+> "nebula review as a weekly orbit routine". Reading the three, it is about
+> operating the corpus, and `tags-beat-domains` is the only one about how
+> the tool is used (tag `design`) — a defensible parent, though a thin one.
+> It reads as an action item more than an idea, so I'd **drop** it — unless
+> you mean the claim that unattended review is safe as long as it only
+> proposes. Promote as that (parent `tags-beat-domains`, or as a root), or
+> drop?
 
 > **human:** promote it as the claim, parent tags-beat-domains
 

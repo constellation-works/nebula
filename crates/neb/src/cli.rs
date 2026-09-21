@@ -20,7 +20,7 @@
 use crate::render;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use nebula_core::{
-    Citation, Corpus, Direction, EdgeType, Error, Graph, NewNode, OBSERVATORY,
+    Citation, Corpus, Direction, EdgeType, Error, Graph, NEAR_DEFAULT, NewNode, OBSERVATORY,
     OBSERVATORY_ROOT_ENV, Origin, Promotion, Severity, Status, check, graph, migrate, ops,
 };
 use std::path::{Path, PathBuf};
@@ -43,7 +43,7 @@ Corpus:
 Inbox:
   capture      Append a thought to the inbox. One line, no decisions, no parent
   inbox        List captures that have not been promoted or dropped
-  promote      Turn an inbox entry into a seed node
+  promote      Turn an inbox entry into a seed node. Suggests parents, never picks one
   drop         Discard an inbox entry. Struck through, never deleted
 
 Nodes:
@@ -60,6 +60,7 @@ References:
 Query:
   show         Show one node in full
   list         List nodes
+  near         The existing nodes closest to some text, or to a node, with a score
   trace        Walk ancestry. The feature the whole system exists for
   impact       What descends from this node, and what contradicts it
   graph        The whole corpus as nodes and edges, for a tool that draws it
@@ -184,8 +185,13 @@ enum Command {
     ///
     /// This is the five-second path. It deliberately asks nothing of you,
     /// because a capture step that requires decisions is a capture step you
-    /// will skip at the exact moment the idea arrives.
+    /// will skip at the exact moment the idea arrives. After the entry id it
+    /// names the three existing nodes the thought reads closest to, for the
+    /// triage that comes later; that is a suggestion, and nothing is linked.
     Capture {
+        /// Print the entry id alone, without the nearest nodes.
+        #[arg(long, short)]
+        quiet: bool,
         /// The thought, as you would say it out loud.
         #[arg(required = true, trailing_var_arg = true)]
         text: Vec<String>,
@@ -194,13 +200,20 @@ enum Command {
     /// List captures that have not been promoted or dropped.
     Inbox,
 
-    /// Turn an inbox entry into a seed node.
+    /// Turn an inbox entry into a seed node. Suggests parents, never picks one.
     ///
     /// Deliberately separate from capture. Most captures should never be
     /// promoted, and dropping one is a normal outcome rather than a failure.
+    /// Without `--parent` the node is written as a root and the three
+    /// existing nodes it reads closest to are printed afterwards, so a parent
+    /// that was defensible can still be linked; no edge is ever written from
+    /// that list.
     Promote {
         /// Inbox entry id, from `neb inbox`.
         entry: String,
+        /// Print the id and path alone, without the nearest nodes.
+        #[arg(long, short)]
+        quiet: bool,
         /// Node title. Defaults to the captured text.
         #[arg(long)]
         title: Option<String>,
@@ -386,6 +399,24 @@ enum Command {
         /// Only nodes carrying this tag. Repeat to require every one.
         #[arg(long = "tag", value_name = "TAG")]
         tags: Vec<String>,
+    },
+
+    /// The existing nodes closest to some text, or to a node, with a score.
+    ///
+    /// Word overlap over title, tags and body (BM25, title and tags weighted
+    /// up; no embeddings, no network), scored `0..=1` and best first. Nodes
+    /// sharing no word with the query are left out, so an empty answer means
+    /// the thought is unlike anything here. For triage: run it on a capture,
+    /// pick a parent if one is defensible, otherwise promote as a root. It
+    /// suggests; `link` and `--parent` are still yours to run.
+    Near {
+        /// How many to return.
+        #[arg(long, short = 'k', value_name = "K", default_value_t = NEAR_DEFAULT)]
+        limit: usize,
+        /// Free text, or the id of an existing node (which is then left out
+        /// of the answer).
+        #[arg(required = true, trailing_var_arg = true)]
+        query: Vec<String>,
     },
 
     /// Walk ancestry. The feature the whole system exists for.
@@ -637,7 +668,7 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Capture { text } => {
+        Command::Capture { quiet, text } => {
             let text = text.join(" ");
             if text.trim().is_empty() {
                 return Err(Failure::say("nothing to capture"));
@@ -646,8 +677,22 @@ fn run(cli: Cli) -> Outcome {
             // told to run a setup command is precisely the friction that
             // loses the thought.
             let corpus = Corpus::open_or_init(root)?;
+            let k = if quiet { 0 } else { NEAR_DEFAULT };
+            if json {
+                let captured = ops::capture_near(&corpus, &text, k)?;
+                out_json(&captured)?;
+                commit(&corpus, commits, "capture", &[&captured.entry.id])?;
+                return Ok(ok);
+            }
+            // The id goes out before `nodes/` is read for the suggestions:
+            // the capture never depended on the rest of the corpus parsing,
+            // and a node file that will not must not read as a lost thought.
             let entry = ops::capture(&corpus, &text)?;
             println!("{}", render::bold(&entry.id));
+            print!(
+                "{}",
+                render::suggestions(&ops::suggest(&corpus, &entry.text, k)?)
+            );
             commit(&corpus, commits, "capture", &[&entry.id])?;
             Ok(ok)
         }
@@ -665,6 +710,7 @@ fn run(cli: Cli) -> Outcome {
 
         Command::Promote {
             entry,
+            quiet,
             title,
             parents,
             tags,
@@ -674,6 +720,7 @@ fn run(cli: Cli) -> Outcome {
             run,
         } => {
             let corpus = Corpus::open(root)?;
+            let k = if quiet { 0 } else { NEAR_DEFAULT };
             let created = ops::promote(
                 &corpus,
                 &entry,
@@ -685,12 +732,18 @@ fn run(cli: Cli) -> Outcome {
                     id,
                     by,
                 },
+                k,
             )?;
-            println!(
-                "{} {}",
-                render::bold(&created.doc.node.id),
-                render::dim(&created.path.display().to_string())
-            );
+            if json {
+                out_json(&created)?;
+            } else {
+                println!(
+                    "{} {}",
+                    render::bold(&created.doc.node.id),
+                    render::dim(&created.path.display().to_string())
+                );
+                print!("{}", render::suggestions(&created.near));
+            }
             commit(&corpus, commits, "promote", &[&entry, &created.doc.node.id])?;
             Ok(ok)
         }
@@ -956,6 +1009,22 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
+        Command::Near { limit, query } => {
+            let query = query.join(" ");
+            if query.trim().is_empty() {
+                return Err(Failure::say("nothing to look near"));
+            }
+            let corpus = Corpus::open(root)?;
+            let docs = corpus.load_all()?;
+            let near = graph::near(&Graph::build(&docs)?, &query, limit)?;
+            if json {
+                out_json(&near)?;
+            } else {
+                print!("{}", render::near(&near));
+            }
+            Ok(ok)
+        }
+
         Command::Trace { node, down } => {
             let corpus = Corpus::open(root)?;
             let docs = corpus.load_all()?;
@@ -1063,7 +1132,7 @@ mod tests {
             assert!(flat.contains(&row), "help is missing the row {row:?}");
             seen += 1;
         }
-        assert_eq!(seen, 23, "template rows need updating for a new subcommand");
+        assert_eq!(seen, 24, "template rows need updating for a new subcommand");
         assert!(
             Cli::command().find_subcommand("help").is_none(),
             "clap's `help` subcommand should be disabled"
@@ -1111,7 +1180,7 @@ mod tests {
             &["capture", "inbox", "promote", "drop"],
             &["new", "sharpen", "status", "link", "tag", "note"],
             &["cite"],
-            &["show", "list", "trace", "impact", "graph"],
+            &["show", "list", "near", "trace", "impact", "graph"],
             &["open", "review"],
         ]
         .concat();

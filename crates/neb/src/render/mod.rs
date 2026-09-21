@@ -13,7 +13,8 @@ use std::sync::OnceLock;
 
 pub use error::{message, message_about};
 pub use report::{
-    check, commit_setting, impact, inbox, migration, node, observatory_root, open, review, tags,
+    check, commit_setting, impact, inbox, migration, near, node, observatory_root, open, review,
+    suggestions, tags,
 };
 pub use tree::draw as tree;
 

@@ -85,6 +85,20 @@ habit. This cut keeps what a person actually uses.
   (`--json`: `{ "enabled": bool }`); `migrate` preserves it and commits
   itself. The runbooks now recommend a private repository at the corpus
   root and cover restoring from it.
+- `neb near <TEXT>... | <NODE>` (`--limit K`, default 3): the existing nodes
+  closest to free text, or to a node (left out of its own answer), scored
+  `0..=1` and best first. Word overlap only — BM25 over title, tags and
+  body, title and tags weighted up, plurals and `-ing` folded — with no
+  embeddings, no network and no new dependency. Nodes sharing no word are
+  left out, so `[]` means the thought is unlike anything in the corpus.
+  `capture` prints the same top three under the entry id, and `promote`
+  without `--parent` prints them and proceeds as a root; `--quiet`/`-q` on
+  either prints the id alone. Suggestion only: nothing here ever writes an
+  edge, by the v0.2 rule against automatic linking. `--json` shapes:
+  `near` is a bare list of `{id, title, status, tags, score}`; `capture`
+  is `{entry, near}`; `promote` is `{doc, path, near}`, `near` omitted when
+  empty. The skill's triage heuristic now runs `near`, picks a parent only
+  when one is defensible, and otherwise promotes as a root.
 - `open` reports hypotheses with no references, seeds untouched for ninety
   days or more, and inbox entries waiting fourteen days or more.
 - `impact` reports every descendant (reverse genealogy) plus the node's

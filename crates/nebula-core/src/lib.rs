@@ -16,7 +16,7 @@
 //!
 //! - [`model`]  the file format: [`Node`], [`Status`], [`Edge`], [`Reference`], [`Note`]
 //! - [`store`]  [`Corpus`]: where it lives, loading, saving, the inbox
-//! - [`graph`]  [`Graph`] and the pure queries over it
+//! - [`graph`]  [`Graph`] and the pure queries over it, `near` included
 //! - [`ops`]    the mutations, each enforcing its point-of-action invariants
 //! - [`check`]  the invariant checker, and where an `observatory` record resolves
 //! - [`migrate`] v1 → v2, with its own lenient v1 model kept private
@@ -53,12 +53,13 @@ pub use config::{
 pub use error::{Error, Result};
 pub use graph::{
     Direction, EdgeRecord, Graph, GraphExport, HYPOTHESIS_DAYS, INBOX_DAYS, Impact, Listing,
-    NodeSummary, NodeView, ObservatoryLink, OpenItem, OpenReport, ReviewItem, ReviewReport,
-    ReviewRule, SEED_DAYS, TagCount, TagCounts, Touched, Trace, TraceNode, Via,
+    NEAR_DEFAULT, Near, Neighbour, NodeSummary, NodeView, ObservatoryLink, OpenItem, OpenReport,
+    ReviewItem, ReviewReport, ReviewRule, SEED_DAYS, TagCount, TagCounts, Touched, Trace,
+    TraceNode, Via,
 };
 pub use migrate::{MigrationReport, NodeMigration};
 pub use model::{Closed, Doc, Edge, EdgeType, HUMAN, Node, Note, Origin, Reference, Status};
-pub use ops::{Citation, Cited, Created, Initialized, NewNode, Promotion, StatusChange};
+pub use ops::{Captured, Citation, Cited, Created, Initialized, NewNode, Promotion, StatusChange};
 pub use store::{Committed, Corpus, Inbox, InboxEntry};
 
 /// Writes `apps/desktop/src/types/*.ts` from the types above.
@@ -92,6 +93,8 @@ mod ts_export {
         Report::export_all(&cfg).unwrap();
         MigrationReport::export_all(&cfg).unwrap();
         Created::export_all(&cfg).unwrap();
+        Captured::export_all(&cfg).unwrap();
+        Near::export_all(&cfg).unwrap();
         Cited::export_all(&cfg).unwrap();
         StatusChange::export_all(&cfg).unwrap();
         Initialized::export_all(&cfg).unwrap();

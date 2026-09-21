@@ -2,7 +2,7 @@
 
 use super::{bold, dim, paint, status_badge};
 use nebula_core::{
-    CommitSetting, HUMAN, INBOX_DAYS, Impact, Inbox, MigrationReport, NodeView,
+    CommitSetting, HUMAN, INBOX_DAYS, Impact, Inbox, MigrationReport, Near, Neighbour, NodeView,
     OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, OpenReport, Report, ReviewItem,
     ReviewReport, ReviewRule, Severity, TagCounts, Via,
 };
@@ -127,6 +127,49 @@ pub fn inbox(inbox: &Inbox) -> String {
             inbox.0.len()
         ))
     );
+    out
+}
+
+/// One neighbour as a line: score, status, id, title.
+fn neighbour(n: &Neighbour) -> String {
+    format!(
+        "{} {} {} {}",
+        dim(&format!("{:.2}", n.score)),
+        status_badge(n.status),
+        bold(&n.id),
+        dim(&n.title)
+    )
+}
+
+/// The nodes closest to a query, best first, as `near` prints them.
+pub fn near(near: &Near) -> String {
+    let mut out = String::new();
+    if near.0.is_empty() {
+        let _ = writeln!(
+            out,
+            "{}",
+            dim("nothing near: no node shares a word with this")
+        );
+        return out;
+    }
+    for n in &near.0 {
+        let _ = writeln!(out, "{}", neighbour(n));
+    }
+    out
+}
+
+/// The nearest nodes after a `capture` or a `promote`, indented under the
+/// id the verb printed, and nothing at all when there are none: the verb's
+/// own line stays the whole story for a thought unlike anything here.
+pub fn suggestions(near: &[Neighbour]) -> String {
+    let mut out = String::new();
+    if near.is_empty() {
+        return out;
+    }
+    let _ = writeln!(out, "{}", dim("near:"));
+    for n in near {
+        let _ = writeln!(out, "  {}", neighbour(n));
+    }
     out
 }
 
