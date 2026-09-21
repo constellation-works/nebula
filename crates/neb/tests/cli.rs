@@ -1385,6 +1385,34 @@ fn open_finds_the_hypothesis_with_no_references() {
 }
 
 #[test]
+fn open_json_items_have_exactly_id_and_why_keys() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
+    set_created(&c.node_file(&id), &date_days_ago(14));
+
+    let json = c.run(&["open", "--json"]).assert_ok().stdout();
+    let items: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    assert!(
+        !items.is_empty(),
+        "expected at least one open item:\n{json}"
+    );
+    for item in &items {
+        let keys: std::collections::BTreeSet<&str> = item
+            .as_object()
+            .expect("open --json item is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            std::collections::BTreeSet::from(["id", "why"]),
+            "open --json item key set drifted from {{id, why}}: {item}"
+        );
+    }
+}
+
+#[test]
 fn open_and_review_apply_the_no_references_grace_at_fourteen_days() {
     let c = Corpus::new();
     let grace = c.seed("still in grace", "Still in grace");

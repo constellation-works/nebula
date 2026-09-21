@@ -429,4 +429,14 @@ reference and does not close the no-references finding after the grace period.
 
 `neb review` without `--json` prints five `##` sections in that order, each
 `_none_` or a `- \`id\` Title — reason` list; `--out review.md` writes it to a
-file. `neb open --json` is an array of `{id, title, status, reason}`.
+file.
+
+```json
+// neb open --json
+[
+  { "id": "an-idea", "why": "hypothesis with no references" }
+]
+```
+
+`neb open --json` is an array of `{id, why}` — narrower than `review`'s items,
+with no `title`, `status`, or `reason`.
