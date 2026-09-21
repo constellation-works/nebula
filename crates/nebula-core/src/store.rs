@@ -31,7 +31,8 @@ pub struct Corpus {
 }
 
 impl Corpus {
-    /// Where a corpus would be, given `--root`, else `NEBULA_ROOT`, else `~/.nebula`.
+    /// Where a corpus would be, given `--root`, else `NEBULA_ROOT`, else the
+    /// configured root, else `~/.nebula`.
     pub fn resolve_root(explicit: Option<PathBuf>) -> Result<PathBuf> {
         if let Some(p) = explicit {
             return Ok(p);
@@ -39,11 +40,83 @@ impl Corpus {
         if let Ok(p) = std::env::var("NEBULA_ROOT") {
             return Ok(PathBuf::from(p));
         }
-        let home = std::env::var("HOME").map_err(|_| Error::corpus("HOME is not set"))?;
-        Ok(PathBuf::from(home).join(".nebula"))
+        if let Some(p) = Self::configured_root()? {
+            return Ok(p);
+        }
+        Self::default_root()
     }
 
-    /// Open the corpus named by `--root`, else `NEBULA_ROOT`, else `~/.nebula`.
+    /// The root used when no command, environment, or machine setting names one.
+    pub fn default_root() -> Result<PathBuf> {
+        Ok(Self::home()?.join(".nebula"))
+    }
+
+    /// The machine-local file that records a non-default corpus root.
+    pub fn root_config_path() -> Result<PathBuf> {
+        Ok(Self::home()?.join(".config").join("nebula").join("root"))
+    }
+
+    /// Read the configured corpus root, if this machine has one.
+    pub fn configured_root() -> Result<Option<PathBuf>> {
+        let path = Self::root_config_path()?;
+        match std::fs::read_to_string(path) {
+            Ok(raw) => {
+                let root = raw.trim();
+                if root.is_empty() {
+                    return Err(Error::corpus("configured nebula root is empty"));
+                }
+                Ok(Some(PathBuf::from(root)))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// The machine-local setting that a new non-default corpus will write.
+    pub fn root_config_path_if_absent(root: &Path) -> Result<Option<PathBuf>> {
+        if root == Self::default_root()? {
+            return Ok(None);
+        }
+        let path = Self::root_config_path()?;
+        if path.exists() {
+            return Ok(None);
+        }
+        Ok(Some(path))
+    }
+
+    /// Write the machine-local root setting when a newly initialized corpus
+    /// is not the default and no setting already exists. Returns the setting
+    /// path when it was written.
+    pub fn write_root_config_if_absent(root: &Path) -> Result<Option<PathBuf>> {
+        let Some(path) = Self::root_config_path_if_absent(root)? else {
+            return Ok(None);
+        };
+        let parent = path
+            .parent()
+            .ok_or_else(|| Error::corpus("root configuration path has no parent"))?;
+        std::fs::create_dir_all(parent)?;
+        std::fs::write(&path, format!("{}\n", root.display()))?;
+        Ok(Some(path))
+    }
+
+    /// A conflicting machine setting is worth naming before creating the
+    /// legacy default corpus. The normal resolver cannot reach this state,
+    /// but an explicit `--root ~/.nebula` can.
+    pub fn warning_before_default_init(root: &Path) -> Result<Option<PathBuf>> {
+        if root != Self::default_root()? || root.exists() {
+            return Ok(None);
+        }
+        Ok(Self::configured_root()?.filter(|configured| configured != root))
+    }
+
+    fn home() -> Result<PathBuf> {
+        std::env::var("HOME")
+            .map(PathBuf::from)
+            .map_err(|_| Error::corpus("HOME is not set"))
+    }
+
+    /// Open the corpus named by `--root`, else `NEBULA_ROOT`, else the
+    /// configured root, else `~/.nebula`.
     pub fn open(explicit: Option<PathBuf>) -> Result<Self> {
         let root = Self::resolve_root(explicit)?;
         if !root.join("nodes").is_dir() {

@@ -83,12 +83,12 @@ Options:
                   directed acyclic graph. Nothing is ever deleted: refuted and abandoned \
                   ideas are what stop you re-treading ground.",
     after_help = "The corpus lives outside this repository. It is found via --root, else \
-                  $NEBULA_ROOT, else ~/.nebula.",
+                  $NEBULA_ROOT, else ~/.config/nebula/root, else ~/.nebula.",
     disable_help_subcommand = true,
     help_template = HELP_TEMPLATE
 )]
 struct Cli {
-    /// Corpus location. Defaults to `$NEBULA_ROOT`, else `~/.nebula`.
+    /// Corpus location. Defaults to `$NEBULA_ROOT`, else `~/.config/nebula/root`, else `~/.nebula`.
     #[arg(long, global = true, value_name = "DIR")]
     root: Option<PathBuf>,
 
@@ -586,12 +586,21 @@ fn run(cli: Cli) -> Outcome {
 
     match cli.command {
         Command::Init { path } => {
+            let target = Corpus::resolve_root(path.clone().or(root.clone()))?;
+            let root_config_path = Corpus::root_config_path_if_absent(&target)?;
+            let default_root_warning = Corpus::warning_before_default_init(&target)?;
             let done = ops::init(root, path)?;
             println!("corpus ready at {}", done.root.display());
-            println!(
-                "\nExport it so every command finds it:\n  export NEBULA_ROOT={}",
-                done.root.display()
-            );
+            if let Some(config) = root_config_path {
+                println!("wrote {} so every command finds it", config.display());
+            }
+            if let Some(configured) = default_root_warning {
+                eprintln!(
+                    "warning: creating ~/.nebula while {} points to {}",
+                    Corpus::root_config_path()?.display(),
+                    configured.display()
+                );
+            }
             Ok(ok)
         }
 
@@ -676,7 +685,16 @@ fn run(cli: Cli) -> Outcome {
             // Capture must work on a corpus that does not exist yet. Being
             // told to run a setup command is precisely the friction that
             // loses the thought.
-            let corpus = Corpus::open_or_init(root)?;
+            let resolved_root = Corpus::resolve_root(root)?;
+            let default_root_warning = Corpus::warning_before_default_init(&resolved_root)?;
+            let corpus = Corpus::open_or_init(Some(resolved_root))?;
+            if let Some(configured) = default_root_warning {
+                eprintln!(
+                    "warning: creating ~/.nebula while {} points to {}",
+                    Corpus::root_config_path()?.display(),
+                    configured.display()
+                );
+            }
             let k = if quiet { 0 } else { NEAR_DEFAULT };
             if json {
                 let captured = ops::capture_near(&corpus, &text, k)?;

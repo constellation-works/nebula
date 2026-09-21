@@ -27,11 +27,14 @@ is the one thing this skill forbids outright. Read
 
 ## Where the corpus is
 
-`--root <dir>`, else `$NEBULA_ROOT`, else `~/.nebula`. The corpus is private
-and **never inside the nebula repository** (`codebases/nebula`); never commit
-`nodes/`, `inbox/` or `config.yaml` there. Before the first write of a session
-run `neb check` — it confirms the root resolves, the schema is v2, and the
-corpus is clean. A corpus at schema 1 refuses to open until `neb migrate`.
+`--root <dir>`, else `$NEBULA_ROOT`, else the one-line path in
+`~/.config/nebula/root`, else `~/.nebula`. The corpus is private and **never
+inside the nebula repository** (`codebases/nebula`); never commit `nodes/`,
+`inbox/` or `config.yaml` there. Before the first write of a session run `neb
+check` — it confirms the root resolves, the schema is v2, and the corpus is
+clean. If it resolves to `~/.nebula`, stop and ask rather than write unless the
+human has confirmed that is the corpus. A corpus at schema 1 refuses to open
+until `neb migrate`.
 
 ## The verbs
 
