@@ -2906,6 +2906,9 @@ fn commit_on_records_each_mutating_verb_and_never_pushes() {
     let early = c.run(&["capture", "before the setting"]).stdout_trim();
     c.run(&["config", "commit", "on"]).assert_ok();
     assert_eq!(log(&c.root), ["neb config commit"]);
+    c.run(&["config", "observatory-root", "/tmp/observatory"])
+        .assert_ok();
+    assert_eq!(log(&c.root)[0], "neb config observatory-root");
 
     // Every mutating verb, in lifecycle order, one commit each.
     let entry = c.run(&["capture", "a thought"]).assert_ok().stdout_trim();
@@ -2988,12 +2991,23 @@ fn commit_on_records_each_mutating_verb_and_never_pushes() {
     assert_eq!(log(&c.root)[0], format!("neb capture {entry}"));
     assert!(git(&c.root, &["status", "--porcelain"]).is_empty());
 
-    // A read-only verb commits nothing; a no-op write commits nothing.
+    // A read-only verb and a no-op write commit nothing.
     let n = log(&c.root).len();
     c.run(&["list"]).assert_ok();
     c.run(&["check"]).assert_ok();
     c.run(&["migrate"]).assert_ok().says("nothing changed");
     assert_eq!(log(&c.root).len(), n);
+
+    // Argument-less config is also read-only, even when a corpus path is
+    // already dirty.
+    let node = c.node_file(&b);
+    let contents = std::fs::read_to_string(&node).unwrap();
+    write(&node, &(contents + "\nhuman edit\n"));
+    assert!(git(&c.root, &["status", "--porcelain"]).contains(" M nodes/"));
+    c.run(&["config", "observatory-root"]).assert_ok();
+    c.run(&["config", "commit"]).assert_ok();
+    assert_eq!(log(&c.root).len(), n);
+    assert!(git(&c.root, &["status", "--porcelain"]).contains(" M nodes/"));
 
     // Nothing was ever pushed, and a commit never contains a stranger.
     assert!(

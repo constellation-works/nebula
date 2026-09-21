@@ -640,16 +640,18 @@ fn run(cli: Cli) -> Outcome {
             setting: ConfigSetting::ObservatoryRoot { dir },
         } => {
             let mut corpus = Corpus::open(root)?;
-            let setting = match dir {
-                Some(dir) => ops::set_observatory_root(&mut corpus, dir)?,
-                None => corpus.observatory_root(),
+            let (setting, changed) = match dir {
+                Some(dir) => (ops::set_observatory_root(&mut corpus, dir)?, true),
+                None => (corpus.observatory_root(), false),
             };
             if json {
                 out_json(&setting)?;
             } else {
                 print!("{}", render::observatory_root(&setting));
             }
-            commit(&corpus, commits, "config", &["observatory-root"])?;
+            if changed {
+                commit(&corpus, commits, "config", &["observatory-root"])?;
+            }
             Ok(ok)
         }
 
@@ -657,9 +659,9 @@ fn run(cli: Cli) -> Outcome {
             setting: ConfigSetting::Commit { state },
         } => {
             let mut corpus = Corpus::open(root)?;
-            let setting = match state {
-                Some(state) => ops::set_commit(&mut corpus, bool::from(state))?,
-                None => corpus.commit_setting(),
+            let (setting, changed) = match state {
+                Some(state) => (ops::set_commit(&mut corpus, bool::from(state))?, true),
+                None => (corpus.commit_setting(), false),
             };
             if json {
                 out_json(&setting)?;
@@ -668,7 +670,9 @@ fn run(cli: Cli) -> Outcome {
             }
             // Turning it on records itself; turning it off leaves the file
             // for the next commit you make by hand, because off means off.
-            commit(&corpus, commits, "config", &["commit"])?;
+            if changed {
+                commit(&corpus, commits, "config", &["commit"])?;
+            }
             Ok(ok)
         }
 
