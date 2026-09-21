@@ -39,6 +39,14 @@ const fixture: NodeView = {
         note: null,
         added: "2026-09-03",
       },
+      {
+        id: "r3",
+        kind: "discussion",
+        uri: null,
+        title: "Team debrief",
+        note: null,
+        added: "2026-09-04",
+      },
     ],
     closed: { why: "Two users asked for the review count too.", at: "2026-09-12" },
   },
@@ -127,7 +135,7 @@ describe("NodePanel", () => {
     // The body's GFM table is also a table; the references one follows its heading.
     const heading = await screen.findByRole("heading", { level: 3, name: "References" });
     const rows = within(heading.parentElement!).getAllByRole("row");
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
     expect(rows[1]).toHaveTextContent("article");
     expect(rows[1]).toHaveTextContent("the one-number precedent");
     expect(rows[1]).toHaveTextContent("2026-09-02");
@@ -136,6 +144,9 @@ describe("NodePanel", () => {
     // A local path is not a link: nothing to hand to the OS.
     expect(within(rows[2]!).queryByRole("link")).toBeNull();
     expect(within(rows[2]!).getByText("almanac/notes/tray.md").tagName).toBe("CODE");
+    // A uri-less reference (e.g. a discussion) renders as plain text, not a link.
+    expect(within(rows[3]!).queryByRole("link")).toBeNull();
+    expect(within(rows[3]!).getByText("Team debrief")).toBeInTheDocument();
   });
 
   it("opens the file and closes on request", async () => {

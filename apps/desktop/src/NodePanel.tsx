@@ -211,7 +211,11 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
                       <tr key={r.id}>
                         <td>{r.kind}</td>
                         <td>
-                          <ExternalLink href={r.uri}>{r.title ?? r.uri}</ExternalLink>
+                          {r.uri ? (
+                            <ExternalLink href={r.uri}>{r.title ?? r.uri}</ExternalLink>
+                          ) : (
+                            r.title || r.kind || "—"
+                          )}
                         </td>
                         <td>{r.note ?? ""}</td>
                         <td>{r.added}</td>
