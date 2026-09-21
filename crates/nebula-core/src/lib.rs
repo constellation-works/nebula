@@ -14,7 +14,7 @@
 //!
 //! Module map:
 //!
-//! - [`model`]  the file format: [`Node`], [`Status`], [`Edge`], [`Reference`]
+//! - [`model`]  the file format: [`Node`], [`Status`], [`Edge`], [`Reference`], [`Note`]
 //! - [`store`]  [`Corpus`]: where it lives, loading, saving, the inbox
 //! - [`graph`]  [`Graph`] and the pure queries over it
 //! - [`ops`]    the mutations, each enforcing its point-of-action invariants
@@ -55,7 +55,7 @@ pub use graph::{
     TagCount, TagCounts, Touched, Trace, TraceNode, Via,
 };
 pub use migrate::{MigrationReport, NodeMigration};
-pub use model::{Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
+pub use model::{Closed, Doc, Edge, EdgeType, Node, Note, Origin, Reference, Status};
 pub use ops::{Citation, Cited, Created, Initialized, NewNode, Promotion, StatusChange};
 pub use store::{Corpus, Inbox, InboxEntry};
 

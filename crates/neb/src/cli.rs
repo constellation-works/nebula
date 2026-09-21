@@ -51,6 +51,7 @@ Nodes:
   status       Move a node to a new status, with the transition guards applied
   link         Add a typed edge between two nodes
   tag          Edit a node's tags, or list every tag with its node count
+  note         Append a dated paragraph of reasoning to a node body
 
 References:
   cite         Attach context, with a note saying why it is here
@@ -284,6 +285,20 @@ enum Command {
         /// A tag to remove. Repeatable.
         #[arg(long = "remove", value_name = "TAG")]
         remove: Vec<String>,
+    },
+
+    /// Append a dated paragraph of reasoning to a node body.
+    ///
+    /// Creates a `## Notes` section at the end of the body if needed, then
+    /// appends `- YYYY-MM-DD: <text>`. Repeated notes accumulate in order;
+    /// earlier body text is not rewritten. Status, edges and tags are left
+    /// as they are.
+    Note {
+        /// Node id.
+        node: String,
+        /// The reasoning, as they said it.
+        #[arg(required = true, trailing_var_arg = true)]
+        text: Vec<String>,
     },
 
     /// Attach context, with a note saying why it is here.
@@ -634,6 +649,23 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
+        Command::Note { node, text } => {
+            let text = text.join(" ");
+            if text.trim().is_empty() {
+                return Err(Failure::say("nothing to note"));
+            }
+            let corpus = Corpus::open(root)?;
+            ops::note(&corpus, &node, &text).map_err(|e| Failure::about(&e, &node))?;
+            if json {
+                let docs = corpus.load_all()?;
+                let view = graph::node(&Graph::build(&docs)?, &node)?;
+                out_json(&view)?;
+            } else {
+                println!("{}", render::bold(&node));
+            }
+            Ok(ok)
+        }
+
         Command::Cite {
             node,
             uri,
@@ -799,7 +831,7 @@ mod tests {
             assert!(flat.contains(&row), "help is missing the row {row:?}");
             seen += 1;
         }
-        assert_eq!(seen, 21, "template rows need updating for a new subcommand");
+        assert_eq!(seen, 22, "template rows need updating for a new subcommand");
         assert!(
             Cli::command().find_subcommand("help").is_none(),
             "clap's `help` subcommand should be disabled"
@@ -844,7 +876,7 @@ mod tests {
         let expected = [
             ["init", "check", "migrate", "completions"].as_slice(),
             &["capture", "inbox", "promote", "drop"],
-            &["new", "sharpen", "status", "link", "tag"],
+            &["new", "sharpen", "status", "link", "tag", "note"],
             &["cite"],
             &["show", "list", "trace", "impact", "graph"],
             &["open", "review"],

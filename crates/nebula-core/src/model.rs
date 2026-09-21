@@ -329,6 +329,20 @@ pub fn normalize_tags(raw: &[String]) -> Vec<String> {
     out
 }
 
+/// A dated paragraph of reasoning appended to a node's body.
+///
+/// Notes live in the prose, under a `## Notes` section, not in the
+/// frontmatter. This type is the parsed projection that `show --json`
+/// exposes; the file itself is still markdown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Note {
+    /// When it was written, as `YYYY-MM-DD`.
+    pub at: String,
+    /// The reasoning, in the author's words.
+    pub text: String,
+}
+
 /// A node file: frontmatter plus the prose you actually wrote.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -385,6 +399,81 @@ pub(crate) fn render(doc: &Doc) -> Result<String> {
     Ok(format!("---\n{fm}---\n\n{body}\n"))
 }
 
+const NOTES_HEADING: &str = "## Notes";
+
+/// Append `- YYYY-MM-DD: text` under a `## Notes` section at the end of
+/// `body`. Existing body text is never rewritten: if a notes section already
+/// closes the file, the new line is added after the last entry; otherwise a
+/// section is created at the end.
+pub(crate) fn append_note(body: &str, date: &str, text: &str) -> String {
+    let entry = format!("- {date}: {text}");
+    let body = body.trim_end();
+    if has_terminal_notes_section(body) {
+        format!("{body}\n{entry}")
+    } else if body.is_empty() {
+        format!("{NOTES_HEADING}\n\n{entry}")
+    } else {
+        format!("{body}\n\n{NOTES_HEADING}\n\n{entry}")
+    }
+}
+
+fn has_terminal_notes_section(body: &str) -> bool {
+    let Some(idx) = last_notes_heading(body) else {
+        return false;
+    };
+    let after = &body[idx + NOTES_HEADING.len()..];
+    !after.lines().skip(1).any(|line| line.starts_with("## "))
+}
+
+fn last_notes_heading(body: &str) -> Option<usize> {
+    let mut found = None;
+    let mut offset = 0;
+    for line in body.split_inclusive('\n') {
+        let content = line.trim_end_matches(['\n', '\r']);
+        if content == NOTES_HEADING {
+            found = Some(offset);
+        }
+        offset += line.len();
+    }
+    found
+}
+
+/// Notes from the last `## Notes` section, oldest first. Lines that are not
+/// `- YYYY-MM-DD: text` are ignored, so hand-written asides stay asides.
+pub(crate) fn notes_from_body(body: &str) -> Vec<Note> {
+    let Some(idx) = last_notes_heading(body) else {
+        return Vec::new();
+    };
+    let after = &body[idx + NOTES_HEADING.len()..];
+    after.lines().filter_map(parse_note_line).collect()
+}
+
+fn parse_note_line(line: &str) -> Option<Note> {
+    let rest = line.strip_prefix("- ")?;
+    let (at, text) = rest.split_once(": ")?;
+    if !is_iso_date(at) {
+        return None;
+    }
+    Some(Note {
+        at: at.to_string(),
+        text: text.to_string(),
+    })
+}
+
+fn is_iso_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && b.iter().enumerate().all(|(i, c)| {
+            if i == 4 || i == 7 {
+                true
+            } else {
+                c.is_ascii_digit()
+            }
+        })
+}
+
 /// Write a node file atomically.
 ///
 /// Rendered to a sibling temporary file and renamed, so an interrupted write
@@ -435,5 +524,59 @@ mod tests {
         }
         assert!("graduated".parse::<Status>().is_err());
         assert!("supports".parse::<EdgeType>().is_err());
+    }
+
+    #[test]
+    fn notes_accumulate_in_order_and_leave_earlier_body_alone() {
+        let first = append_note("the original capture", "2026-09-21", "first thought");
+        assert_eq!(
+            first,
+            "the original capture\n\n## Notes\n\n- 2026-09-21: first thought"
+        );
+        let second = append_note(&first, "2026-09-21", "second thought");
+        assert_eq!(
+            second,
+            "the original capture\n\n## Notes\n\n- 2026-09-21: first thought\n- 2026-09-21: second thought"
+        );
+        assert!(
+            second.starts_with("the original capture"),
+            "the capture itself is not rewritten"
+        );
+        assert_eq!(
+            notes_from_body(&second),
+            vec![
+                Note {
+                    at: "2026-09-21".into(),
+                    text: "first thought".into(),
+                },
+                Note {
+                    at: "2026-09-21".into(),
+                    text: "second thought".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_body_still_gets_a_notes_section() {
+        let body = append_note("", "2026-09-21", "alone");
+        assert_eq!(body, "## Notes\n\n- 2026-09-21: alone");
+        assert_eq!(
+            notes_from_body(&body),
+            vec![Note {
+                at: "2026-09-21".into(),
+                text: "alone".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_later_heading_gets_a_fresh_notes_section_at_the_end() {
+        let body = append_note("intro\n\n## Next\n\ndo x", "2026-09-21", "why");
+        assert_eq!(
+            body,
+            "intro\n\n## Next\n\ndo x\n\n## Notes\n\n- 2026-09-21: why"
+        );
+        assert_eq!(notes_from_body(&body)[0].text, "why");
     }
 }

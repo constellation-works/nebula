@@ -8,7 +8,7 @@
 //! desktop hold a graph in memory and rebuild it on a file-watch event.
 
 use crate::error::{Error, Result};
-use crate::model::{self, Doc, EdgeType, Node, Status};
+use crate::model::{self, Doc, EdgeType, Node, Note, Status};
 use crate::store::{self, Inbox};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -448,16 +448,21 @@ pub fn export(graph: &Graph<'_>) -> Result<GraphExport> {
 pub struct NodeView {
     /// The structured fields.
     pub node: Node,
-    /// The argument, trimmed.
+    /// The argument, trimmed. Includes the `## Notes` section when one exists.
     pub body: String,
+    /// Dated reasoning parsed from the last `## Notes` section, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<Note>,
 }
 
 /// Show one node in full.
 pub fn node(graph: &Graph<'_>, id: &str) -> Result<NodeView> {
     let doc = graph.require(id)?;
+    let body = doc.body.trim().to_string();
     Ok(NodeView {
         node: doc.node.clone(),
-        body: doc.body.trim().to_string(),
+        notes: model::notes_from_body(&body),
+        body,
     })
 }
 
