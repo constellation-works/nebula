@@ -601,6 +601,7 @@ fn run(cli: Cli) -> Outcome {
             let target = Corpus::resolve_root(path.clone().or(root.clone()))?;
             let root_config_path = Corpus::root_config_path_if_absent(&target)?;
             let default_root_warning = Corpus::warning_before_default_init(&target)?;
+            let shadowing_warning = Corpus::warning_before_shadowing_init(&target)?;
             let done = ops::init(root, path)?;
             if json {
                 out_json(&done)?;
@@ -615,6 +616,17 @@ fn run(cli: Cli) -> Outcome {
                     "warning: creating ~/.nebula while {} points to {}",
                     Corpus::root_config_path()?.display(),
                     configured.display()
+                );
+            }
+            if let Some(configured) = shadowing_warning {
+                let config_path = Corpus::root_config_path()?;
+                eprintln!(
+                    "warning: {} still points to {}, not {}; run `echo {} > {}` to point commands at this corpus",
+                    config_path.display(),
+                    configured.display(),
+                    target.display(),
+                    target.display(),
+                    config_path.display()
                 );
             }
             Ok(ok)

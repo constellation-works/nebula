@@ -109,6 +109,20 @@ impl Corpus {
         Ok(Self::configured_root()?.filter(|configured| configured != root))
     }
 
+    /// A configured root that names a *different* directory than the one
+    /// about to be initialized is worth naming even when the target is not
+    /// the legacy default: `init` would otherwise succeed silently and every
+    /// later command would keep resolving to the old corpus, leaving the new
+    /// one orphaned. `None` when there is no configured root, the target
+    /// already matches it, or the target is the default (covered by
+    /// [`Self::warning_before_default_init`] instead).
+    pub fn warning_before_shadowing_init(root: &Path) -> Result<Option<PathBuf>> {
+        if root == Self::default_root()? {
+            return Ok(None);
+        }
+        Ok(Self::configured_root()?.filter(|configured| configured != root))
+    }
+
     fn home() -> Result<PathBuf> {
         std::env::var("HOME")
             .map(PathBuf::from)
