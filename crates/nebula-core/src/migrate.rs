@@ -80,7 +80,8 @@ struct V1Evidence {
 struct V1Reference {
     id: String,
     kind: String,
-    uri: String,
+    #[serde(default)]
+    uri: Option<String>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
@@ -329,7 +330,7 @@ impl Relabel<'_> {
             self.out.push(Reference {
                 id: r.id,
                 kind: r.kind,
-                uri: Some(r.uri),
+                uri: r.uri,
                 title: r.title,
                 note: r.note,
                 added: r.added,

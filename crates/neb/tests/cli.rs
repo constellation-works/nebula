@@ -2708,6 +2708,46 @@ fn migrate_maps_statuses_and_is_a_no_op_the_second_time() {
     );
 }
 
+/// A v2 corpus can hold a `kind: discussion` reference with no `uri`
+/// (allowed since DANI-10593). `migrate` reads every node through the v1
+/// model to detect what needs rewriting, and that model must tolerate a
+/// missing `uri` too, or a legal v2 node makes migration fail outright.
+#[test]
+fn migrate_is_a_no_op_on_a_uri_less_discussion_reference() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&[
+        "cite",
+        &id,
+        "--kind",
+        "discussion",
+        "--note",
+        "a chat with the human",
+    ])
+    .assert_ok();
+
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(!before.contains("uri:"), "{before}");
+    let updated_before = before
+        .lines()
+        .find(|l| l.starts_with("updated:"))
+        .unwrap()
+        .to_string();
+
+    c.run(&["migrate"])
+        .assert_ok()
+        .says("already at schema 2; nothing changed");
+
+    let after = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert_eq!(before, after, "migrate must not touch a v2 node");
+    let updated_after = after
+        .lines()
+        .find(|l| l.starts_with("updated:"))
+        .unwrap()
+        .to_string();
+    assert_eq!(updated_before, updated_after, "updated must not be bumped");
+}
+
 #[test]
 fn migrate_refuses_a_dirty_git_tree() {
     let c = v1_corpus();
