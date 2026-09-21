@@ -1,6 +1,8 @@
 # Verbs
 
-Every verb takes `--root <DIR>`, `--json` and `--no-commit`. Ids are slugs of the title
+Every verb takes `--root <DIR>`, `--json` and `--no-commit`, and those flags
+may appear anywhere on the line — before the verb, after it, or after the free
+text of `capture`, `note` and `near`. Ids are slugs of the title
 (`"Tags beat domains"` → `tags-beat-domains`); inbox ids are four hex chars. A
 slug over 60 characters is cut at the last `-` at or before the limit, never
 mid-word. `promote` and `new` take `--id <SLUG>` to choose the id explicitly
@@ -54,7 +56,7 @@ for one invocation.
 
 | verb | does | flags |
 |---|---|---|
-| `neb capture <TEXT>...` | append a thought; prints the entry id, then the three nearest nodes; works on a corpus that does not exist yet | `--quiet`/`-q` |
+| `neb capture <TEXT>...` | append a thought; prints the entry id, then the three nearest nodes; works on a corpus that does not exist yet | `--quiet`/`-q` (before or after the text) |
 | `neb inbox` | live entries (not promoted, not dropped) | — |
 | `neb promote <ENTRY>` | inbox entry → seed node; without `--parent`, prints the three nearest nodes and proceeds as a root | `--title`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run`, `--quiet`/`-q` |
 | `neb drop <ENTRY>` | strike an entry through; never deleted | — |
@@ -63,6 +65,13 @@ for one invocation.
 // neb inbox --json
 [ { "id": "a6e8", "at": "2026-09-12T18:16", "text": "nebula review as a weekly orbit routine" } ]
 ```
+
+`capture`, `note` and `near` take remaining words as the thought, so a flag
+after the text is still a flag: `neb capture "an idea" --quiet` quiets and
+stores `an idea`; `neb note <id> "a thought" --no-commit` skips the commit
+and stores `a thought`. A thought that itself contains a token starting with
+`-` is one quoted argument, or sits after `--`
+(`neb capture -- --quiet is the idea`).
 
 `capture` prints the entry id on its own line, then — when any node shares a
 word with the text — a `near:` block of up to three lines, `<score> <status>
@@ -120,7 +129,7 @@ way: no `near` key.
 | `neb link <FROM> <KIND> <TO>` | `derives-from`, `refines`, `generalizes`, `reopens`, `contradicts` | `--by <LABEL>` |
 | `neb tag <NODE>` | edit tags; normalised to lowercase kebab-case | `--add <TAG>`×, `--remove <TAG>`× |
 | `neb tag list` | every tag with its node count | — |
-| `neb note [--by <LABEL>] <NODE> <TEXT>...` | append a dated paragraph of reasoning to the body | `--by <LABEL>`, before the node id |
+| `neb note [--by <LABEL>] <NODE> <TEXT>...` | append a dated paragraph of reasoning to the body | `--by <LABEL>` (before or after the text) |
 
 `new --kill "..."` starts the node as a hypothesis; without it, a seed.
 `sharpen --confirm` takes no text: it adopts the kill condition already on the
@@ -220,7 +229,7 @@ not who wrote the words. `check` enforces nothing about authorship.
 |---|---|---|
 | `neb show <NODE>` | one node in full, plus its body | — |
 | `neb list` | every node | `--status <S>`, `--tag <TAG>`× (every tag must match) |
-| `neb near <QUERY>...` | the existing nodes closest to free text, or to a node (left out of its own answer), scored `0..=1`, best first | `--limit <K>`/`-k` (default 3) |
+| `neb near <QUERY>...` | the existing nodes closest to free text, or to a node (left out of its own answer), scored `0..=1`, best first | `--limit <K>`/`-k` (default 3); flags may follow the query |
 | `neb trace <NODE>` | ancestry, nearest first, each node once | `--down` for descendants |
 | `neb impact <NODE>` | descendants plus `contradicts` neighbours | — |
 | `neb graph` | the whole corpus as `{nodes, edges}` | `--json` only; without it, a hint and exit 2 |

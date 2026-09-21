@@ -481,6 +481,29 @@ fn near_says_so_when_nothing_matches() {
         .says("nothing to look near");
 }
 
+/// `--no-commit` after the query is a flag; `--quiet` is not a near flag, so
+/// it is refused rather than folded into the text.
+#[test]
+fn near_trailing_no_commit_is_a_flag_and_quiet_is_refused() {
+    let c = Corpus::new();
+    lexical_fixture(&c);
+    let with_flag = c
+        .run(&["near", "--json", "one global taxonomy", "--no-commit"])
+        .assert_ok()
+        .stdout();
+    let without = c
+        .run(&["near", "--json", "one global taxonomy"])
+        .assert_ok()
+        .stdout();
+    assert_eq!(
+        with_flag, without,
+        "trailing --no-commit must not join the query"
+    );
+    c.run(&["near", "one global taxonomy", "--quiet"])
+        .assert_fails()
+        .says("--quiet");
+}
+
 #[test]
 fn capture_prints_the_nearest_nodes_after_the_id_unless_quiet() {
     let c = Corpus::new();
@@ -520,6 +543,45 @@ fn capture_prints_the_nearest_nodes_after_the_id_unless_quiet() {
     // Nothing near: the id alone, with no empty heading under it.
     let out = c.run(&["capture", "quantum gravity"]).assert_ok().stdout();
     assert_eq!(out.lines().count(), 1, "{out}");
+}
+
+/// `--quiet` and `--no-commit` after the thought are flags, not more text.
+#[test]
+fn capture_trailing_quiet_and_no_commit_are_flags() {
+    let c = Corpus::new();
+    lexical_fixture(&c);
+    let out = c
+        .run(&["capture", "an idea", "--quiet"])
+        .assert_ok()
+        .stdout();
+    assert_eq!(
+        out.lines().count(),
+        1,
+        "trailing --quiet still quiets: {out}"
+    );
+    let json = c.run(&["--json", "inbox"]).assert_ok().stdout();
+    let inbox: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let texts: Vec<&str> = inbox
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["text"].as_str().unwrap())
+        .collect();
+    assert!(texts.contains(&"an idea"), "{json}");
+    assert!(
+        texts.iter().all(|t| !t.contains("--quiet")),
+        "the flag must not land in the inbox: {json}"
+    );
+
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let before = log(&c.root).len();
+    c.run(&["capture", "kept out of git", "--no-commit"])
+        .assert_ok();
+    assert_eq!(log(&c.root).len(), before, "trailing --no-commit skips git");
+    let json = c.run(&["--json", "inbox"]).assert_ok().stdout();
+    assert!(json.contains("kept out of git"), "{json}");
+    assert!(!json.contains("--no-commit"), "{json}");
 }
 
 #[test]
@@ -1512,6 +1574,34 @@ fn note_appends_in_order_and_show_exposes_them() {
     c.run(&["note", "nope", "lost"])
         .assert_fails()
         .says("no node `nope`");
+}
+
+/// `--no-commit` after the reasoning is a flag, not more text; `--quiet` is
+/// not a note flag, so it is refused rather than written into the body.
+#[test]
+fn note_trailing_no_commit_is_a_flag_and_quiet_is_refused() {
+    let (c, _remote) = corpus_repo();
+    let id = c.seed("the original thought", "The original thought");
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let before = log(&c.root).len();
+    c.run(&["note", &id, "a thought", "--no-commit"])
+        .assert_ok();
+    assert_eq!(log(&c.root).len(), before, "trailing --no-commit skips git");
+    let body = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    let today = date_days_ago(0);
+    assert!(
+        body.contains(&format!("- {today}: a thought")),
+        "the note should land without the flag:\n{body}"
+    );
+    assert!(
+        !body.contains("--no-commit"),
+        "the flag must not land in the body:\n{body}"
+    );
+    c.run(&["note", &id, "a thought", "--quiet"])
+        .assert_fails()
+        .says("--quiet");
+    let after = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert_eq!(body, after, "a refused --quiet must not write");
 }
 
 // ------------------------------------------------------------- authorship --

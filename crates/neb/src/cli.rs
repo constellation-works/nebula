@@ -193,7 +193,11 @@ enum Command {
         #[arg(long, short)]
         quiet: bool,
         /// The thought, as you would say it out loud.
-        #[arg(required = true, trailing_var_arg = true)]
+        ///
+        /// Remaining words, so it can be typed without quotes. Not a trailing
+        /// vararg: a flag after the text (`--quiet`, `--no-commit`) is still
+        /// a flag. A dash-leading token belongs in quotes, or after `--`.
+        #[arg(required = true, num_args = 1..)]
         text: Vec<String>,
     },
 
@@ -351,7 +355,11 @@ enum Command {
         #[arg(long, value_name = "LABEL")]
         by: Option<String>,
         /// The reasoning, as they said it.
-        #[arg(required = true, trailing_var_arg = true)]
+        ///
+        /// Remaining words, so it can be typed without quotes. Not a trailing
+        /// vararg: a flag after the text (`--no-commit`, `--by`) is still a
+        /// flag. A dash-leading token belongs in quotes, or after `--`.
+        #[arg(required = true, num_args = 1..)]
         text: Vec<String>,
     },
 
@@ -415,7 +423,11 @@ enum Command {
         limit: usize,
         /// Free text, or the id of an existing node (which is then left out
         /// of the answer).
-        #[arg(required = true, trailing_var_arg = true)]
+        ///
+        /// Remaining words, so it can be typed without quotes. Not a trailing
+        /// vararg: a flag after the query (`--limit`, `--json`) is still a
+        /// flag. A dash-leading token belongs in quotes, or after `--`.
+        #[arg(required = true, num_args = 1..)]
         query: Vec<String>,
     },
 
@@ -1212,6 +1224,78 @@ mod tests {
     /// The wrappers are the only place a status or an edge kind is spelled
     /// for the command line, so they have to agree with the core types they
     /// stand in for.
+    fn parse_cli(args: &[&str]) -> Result<Cli, String> {
+        Cli::try_parse_from(std::iter::once("neb").chain(args.iter().copied()))
+            .map_err(|e| e.render().to_string())
+    }
+
+    /// `capture`, `note` and `near` take remaining words as the thought, but
+    /// a flag after those words is still a flag. Swallowing `--quiet` or
+    /// `--no-commit` into the text is how the corpus got silently polluted.
+    #[test]
+    fn trailing_flags_after_free_text_are_flags() {
+        let cli = parse_cli(&["capture", "an idea", "--quiet"]).expect("capture --quiet");
+        assert!(!cli.no_commit);
+        match cli.command {
+            Command::Capture { quiet, text } => {
+                assert!(quiet);
+                assert_eq!(text, ["an idea"]);
+            }
+            _ => panic!("expected capture"),
+        }
+
+        let cli =
+            parse_cli(&["capture", "an", "idea", "--no-commit"]).expect("capture --no-commit");
+        assert!(cli.no_commit);
+        match cli.command {
+            Command::Capture { quiet, text } => {
+                assert!(!quiet);
+                assert_eq!(text, ["an", "idea"]);
+            }
+            _ => panic!("expected capture"),
+        }
+
+        let cli = parse_cli(&["note", "alpha-beta", "a thought", "--no-commit"])
+            .expect("note --no-commit");
+        assert!(cli.no_commit);
+        match cli.command {
+            Command::Note { node, by, text } => {
+                assert_eq!(node, "alpha-beta");
+                assert_eq!(by, None);
+                assert_eq!(text, ["a thought"]);
+            }
+            _ => panic!("expected note"),
+        }
+
+        let cli = parse_cli(&["near", "some query", "--no-commit"]).expect("near --no-commit");
+        assert!(cli.no_commit);
+        match cli.command {
+            Command::Near { limit, query } => {
+                assert_eq!(limit, NEAR_DEFAULT);
+                assert_eq!(query, ["some query"]);
+            }
+            _ => panic!("expected near"),
+        }
+
+        let Err(err) = parse_cli(&["near", "some query", "--quiet"]) else {
+            panic!("near has no --quiet")
+        };
+        assert!(
+            err.contains("--quiet"),
+            "unknown trailing flag should be named: {err}"
+        );
+
+        let cli = parse_cli(&["capture", "--", "an idea", "--quiet"]).expect("capture -- escape");
+        assert!(!cli.no_commit);
+        match cli.command {
+            Command::Capture { quiet, text } => {
+                assert!(!quiet);
+                assert_eq!(text, ["an idea", "--quiet"]);
+            }
+            _ => panic!("expected capture"),
+        }
+    }
+
     #[test]
     fn value_enums_match_the_core_types() {
         for arg in [
