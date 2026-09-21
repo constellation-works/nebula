@@ -5,7 +5,9 @@
 //! asserts on messages and exit codes. These assert on the typed values, which
 //! is what a consumer that is not a terminal matches on.
 
-use nebula_core::{Corpus, Direction, EdgeType, Error, Graph, NewNode, Status, Via, graph, ops};
+use nebula_core::{
+    Corpus, Direction, EdgeType, Error, Graph, NewNode, Promotion, Status, Via, graph, ops,
+};
 
 fn corpus() -> (tempfile::TempDir, Corpus) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -220,6 +222,64 @@ fn an_empty_kill_condition_is_refused() {
     assert!(matches!(
         ops::sharpen(&corpus, &a, "   "),
         Err(Error::EmptyKill)
+    ));
+}
+
+#[test]
+fn notes_accumulate_in_order_and_unknown_nodes_are_refused() {
+    let (_dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "the original thought").unwrap();
+    let id = ops::promote(
+        &corpus,
+        &entry.id,
+        &Promotion {
+            title: Some("A".into()),
+            tags: vec!["physics".into()],
+            ..Promotion::default()
+        },
+    )
+    .unwrap()
+    .doc
+    .node
+    .id;
+    let parent = seed(&corpus, "Parent", &[]);
+    ops::link(&corpus, &id, EdgeType::DerivesFrom, &parent).unwrap();
+
+    let before = corpus.load(&id).unwrap();
+    let status = before.node.status;
+    let edges = before.node.edges.clone();
+    let tags = before.node.tags.clone();
+    let original = before.body.clone();
+
+    ops::note(&corpus, &id, "first thought").unwrap();
+    let second = ops::note(&corpus, &id, "second thought").unwrap();
+
+    assert!(
+        second.body.contains(original.trim()),
+        "the capture is still there:\n{}",
+        second.body
+    );
+    let first_at = second.body.find("first thought").expect("first note");
+    let second_at = second.body.find("second thought").expect("second note");
+    assert!(first_at < second_at, "notes accumulate in order");
+    assert!(second.body.contains("## Notes"));
+    assert_eq!(second.node.status, status);
+    assert_eq!(second.node.edges, edges);
+    assert_eq!(second.node.tags, tags);
+
+    let docs = corpus.load_all().unwrap();
+    let view = graph::node(&Graph::build(&docs).unwrap(), &id).unwrap();
+    assert_eq!(
+        view.notes
+            .iter()
+            .map(|n| n.text.as_str())
+            .collect::<Vec<_>>(),
+        ["first thought", "second thought"]
+    );
+
+    assert!(matches!(
+        ops::note(&corpus, "nope", "lost"),
+        Err(Error::NoSuchNode(missing)) if missing == "nope"
     ));
 }
 

@@ -49,9 +49,27 @@ The `--json` excerpts below are real output from a three-node fixture corpus.
 | `neb link <FROM> <KIND> <TO>` | `derives-from`, `refines`, `generalizes`, `reopens`, `contradicts` | — |
 | `neb tag <NODE>` | edit tags; normalised to lowercase kebab-case | `--add <TAG>`×, `--remove <TAG>`× |
 | `neb tag list` | every tag with its node count | — |
+| `neb note <NODE> <TEXT>...` | append a dated paragraph of reasoning to the body | — |
 
 `new --kill "..."` starts the node as a hypothesis; without it, a seed.
 `contradicts` is written on both nodes. `link` prints `<from> <kind> <to>`.
+`note` creates a `## Notes` section at the end of the body if needed, then
+appends `- YYYY-MM-DD: <text>`. Repeated notes accumulate in order; earlier
+body text, status, edges and tags are left as they are. `updated` is bumped.
+Unknown nodes are refused (`NoSuchNode`). `--json` is the same `NodeView` as
+`show --json`: `notes` is a list of `{at, text}`, oldest first, omitted when
+empty.
+
+```json
+// neb --json note tags-beat-domains "folksonomy is the argument, not a taxonomy with extra steps"
+{
+  "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis" },
+  "body": "tags beat domains because a category you must pick is a decision you skip\n\n## Notes\n\n- 2026-09-21: folksonomy is the argument, not a taxonomy with extra steps",
+  "notes": [
+    { "at": "2026-09-21", "text": "folksonomy is the argument, not a taxonomy with extra steps" }
+  ]
+}
+```
 
 ```json
 // neb tag list --json

@@ -1,5 +1,5 @@
 //! Everything that changes a corpus: capture, promote, drop, new, sharpen,
-//! link, cite, status, tags.
+//! link, cite, note, status, tags.
 //!
 //! Each op takes a [`Corpus`] and typed arguments, enforces the invariants
 //! that belong at the point of action, writes, and returns what changed. A
@@ -283,6 +283,28 @@ pub fn link(corpus: &Corpus, from: &str, kind: EdgeType, to: &str) -> Result<Vec
         }
     }
     Ok(changed)
+}
+
+/// Append a dated paragraph of reasoning to a node body.
+///
+/// Creates a `## Notes` section at the end of the body if needed, then
+/// appends `- YYYY-MM-DD: <text>`. Earlier body text, status, edges and tags
+/// are left as they are. `updated` is stamped by [`Corpus::save`].
+pub fn note(corpus: &Corpus, id: &str, text: &str) -> Result<Doc> {
+    let text = text
+        .trim()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.is_empty() {
+        return Err(Error::corpus("a note cannot be empty"));
+    }
+    let mut doc = corpus.load(id)?;
+    doc.body = model::append_note(&doc.body, &store::today(), &text);
+    corpus.save(&mut doc)?;
+    Ok(doc)
 }
 
 /// Attach context to a node. The note is the field that matters.

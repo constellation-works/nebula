@@ -36,7 +36,7 @@ corpus is clean. A corpus at schema 1 refuses to open until `neb migrate`.
 ## The verbs
 
 Mutating: `capture`, `promote`, `drop`, `new`, `sharpen`, `status`, `link`,
-`tag`, `cite`, `migrate`. Read-only: `inbox`, `show`, `list`, `trace`,
+`tag`, `note`, `cite`, `migrate`. Read-only: `inbox`, `show`, `list`, `trace`,
 `impact`, `graph --json`, `open`, `review`, `check`, `tag list`. Every verb
 takes `--json`; [verbs.md](references/verbs.md) has each one's flags and its
 real `--json` shape. Prefer `--json` for anything you will reason over.
@@ -47,7 +47,8 @@ When the human flags something worth keeping — "capture that", "that's a
 seed" — run `neb capture "<one sentence, in their words>"`. Their words, not
 your summary; one sentence, no decisions, no parent. Ask before capturing
 anything they did not flag. At the end of a substantive session propose (do
-not run) up to five `neb capture "..."` lines from the discussion.
+not run) up to five `neb capture "..."` lines from the discussion. When the
+human refines an idea in conversation, `neb note` the refinement in their words.
 
 ## Provenance
 
