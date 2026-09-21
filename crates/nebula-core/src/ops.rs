@@ -446,7 +446,13 @@ pub fn note(corpus: &Corpus, id: &str, text: &str, by: Option<&str>) -> Result<D
 pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     let by = model::author(args.by.as_deref())?;
     let mut doc = corpus.load(id)?;
-    if args.uri.is_none() && args.kind != "discussion" {
+    let uri = args
+        .uri
+        .as_deref()
+        .map(str::trim)
+        .filter(|uri| !uri.is_empty())
+        .map(str::to_owned);
+    if uri.is_none() && args.kind != "discussion" {
         return Err(Error::corpus(
             "--uri is required unless --kind is discussion",
         ));
@@ -454,7 +460,7 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     // An Observatory record id is checked for its shape at the point of
     // action, because a path or a slug stored here would never resolve and
     // the mistake is obvious now and cryptic later.
-    let uri = match (args.kind.as_str(), args.uri.as_deref()) {
+    let uri = match (args.kind.as_str(), uri.as_deref()) {
         (OBSERVATORY, Some(record)) => {
             let record = record.trim().to_ascii_uppercase();
             if !is_observatory_id(&record) {
@@ -462,7 +468,7 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
             }
             Some(record)
         }
-        _ => args.uri.clone(),
+        _ => uri,
     };
     // Rule 8 at the point of action: a local path that does not resolve is a
     // citation to nothing, and refusing it here is cheaper than finding it
