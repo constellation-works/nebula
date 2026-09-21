@@ -195,6 +195,10 @@ enum Command {
         /// Labels.
         #[arg(long = "tag", value_name = "TAG")]
         tags: Vec<String>,
+        /// Explicit id, overriding the title's slug. Same rules as a slug:
+        /// lowercase words joined by single dashes, 60 characters or fewer.
+        #[arg(long, value_name = "SLUG")]
+        id: Option<String>,
         /// Orbit task that produced it.
         #[arg(long)]
         task: Option<String>,
@@ -222,6 +226,10 @@ enum Command {
         /// Labels.
         #[arg(long = "tag", value_name = "TAG")]
         tags: Vec<String>,
+        /// Explicit id, overriding the title's slug. Same rules as a slug:
+        /// lowercase words joined by single dashes, 60 characters or fewer.
+        #[arg(long, value_name = "SLUG")]
+        id: Option<String>,
         /// Orbit task that produced it.
         #[arg(long)]
         task: Option<String>,
@@ -488,6 +496,7 @@ fn run(cli: Cli) -> Outcome {
             title,
             parents,
             tags,
+            id,
             task,
             run,
         } => {
@@ -500,6 +509,7 @@ fn run(cli: Cli) -> Outcome {
                     parents,
                     tags,
                     origin: Origin::of(task, run),
+                    id,
                 },
             )?;
             println!(
@@ -522,6 +532,7 @@ fn run(cli: Cli) -> Outcome {
             parents,
             kill,
             tags,
+            id,
             task,
             run,
         } => {
@@ -534,6 +545,7 @@ fn run(cli: Cli) -> Outcome {
                     kill,
                     tags,
                     origin: Origin::of(task, run),
+                    id,
                 },
             )?;
             println!(

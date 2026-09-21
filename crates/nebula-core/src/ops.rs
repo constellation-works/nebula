@@ -68,6 +68,9 @@ pub struct NewNode {
     pub tags: Vec<String>,
     /// What produced it.
     pub origin: Option<Origin>,
+    /// Explicit id, overriding the title's slug. Validated with the same
+    /// rules a derived slug already follows, and refused on collision.
+    pub id: Option<String>,
 }
 
 /// Everything that goes into a node promoted from the inbox.
@@ -81,6 +84,9 @@ pub struct Promotion {
     pub tags: Vec<String>,
     /// What produced it.
     pub origin: Option<Origin>,
+    /// Explicit id, overriding the title's slug. Validated with the same
+    /// rules a derived slug already follows, and refused on collision.
+    pub id: Option<String>,
 }
 
 /// Everything that goes into a reference.
@@ -136,6 +142,7 @@ pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion) -> Result<Created
             kill: None,
             tags: args.tags.clone(),
             origin: args.origin.clone(),
+            id: args.id.clone(),
         },
         Status::Seed,
         &e.text,
@@ -170,7 +177,15 @@ pub fn new_node(corpus: &Corpus, args: &NewNode) -> Result<Created> {
 
 /// A fresh node, with its id, dates and parent edges filled in.
 fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<Doc> {
-    let id = store::slugify(&spec.title);
+    let id = match &spec.id {
+        Some(id) => {
+            if !store::is_slug(id) {
+                return Err(Error::InvalidId(id.clone()));
+            }
+            id.clone()
+        }
+        None => store::slugify(&spec.title),
+    };
     if id.is_empty() {
         return Err(Error::UnusableTitle(spec.title.clone()));
     }

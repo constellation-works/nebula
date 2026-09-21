@@ -321,6 +321,11 @@ fn fnv(s: &str) -> u64 {
 }
 
 /// Turn a title into a node id.
+///
+/// A slug over 60 characters is cut at the last `-` at or before the limit,
+/// never mid-word. A title with no dash in its first 60 characters (one long
+/// word) cuts to nothing; the empty-id check at the call site turns that into
+/// a refusal rather than a truncated word standing in for the whole title.
 pub(crate) fn slugify(s: &str) -> String {
     let mut out = String::new();
     let mut dash = false;
@@ -333,5 +338,91 @@ pub(crate) fn slugify(s: &str) -> String {
             dash = true;
         }
     }
-    out.trim_end_matches('-').chars().take(60).collect()
+    let out = out.trim_end_matches('-');
+    if out.chars().count() <= 60 {
+        return out.to_string();
+    }
+    let cut: String = out.chars().take(60).collect();
+    match cut.rfind('-') {
+        Some(i) => cut[..i].to_string(),
+        None => String::new(),
+    }
+}
+
+/// Whether `s` is already exactly what [`slugify`] would turn it into:
+/// lowercase words joined by single dashes, no leading, trailing, or doubled
+/// dash, 60 characters or fewer. Used to validate a user-supplied `--id`
+/// against the same rule a derived id already has to follow.
+pub(crate) fn is_slug(s: &str) -> bool {
+    !s.is_empty() && s.chars().count() <= 60 && slugify(s) == s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_short_title_slugifies_whole() {
+        assert_eq!(slugify("Tags beat domains"), "tags-beat-domains");
+    }
+
+    #[test]
+    fn a_slug_over_the_limit_never_ends_mid_word() {
+        let word = "abcdefg"; // 7 chars, so units of 8 with the joining dash
+        let title = [word; 9].join(" ");
+        let slug = slugify(&title);
+        assert!(slug.chars().count() <= 60, "slug is over the limit: {slug}");
+        assert!(!slug.is_empty());
+        assert!(
+            slug.split('-').all(|w| w == word),
+            "slug has a partial word: {slug}"
+        );
+    }
+
+    /// The title behind the frozen id in the bug report: the naive
+    /// `.chars().take(60)` cut landed on a dash-adjacent boundary here by
+    /// coincidence, but the fixed rule (cut at the last dash at or before 60)
+    /// still applies and drops the trailing word rather than keeping a slug
+    /// that happens to look intact.
+    #[test]
+    fn every_surviving_word_is_whole() {
+        let title = "Self-authored structure is a paved path, imposed structure is rigidity";
+        let slug = slugify(title);
+        assert!(slug.chars().count() <= 60);
+        assert!(!slug.is_empty());
+        assert!(!slug.ends_with('-'));
+        let words: Vec<String> = title
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .map(str::to_ascii_lowercase)
+            .collect();
+        for part in slug.split('-') {
+            assert!(
+                words.iter().any(|w| w == part),
+                "fragment `{part}` is not a whole word from the title"
+            );
+        }
+    }
+
+    #[test]
+    fn a_title_with_no_dash_in_the_first_60_chars_reduces_to_empty() {
+        // One long run with no separator: there is no dash to cut at, so the
+        // whole thing reduces to nothing rather than a truncated fragment
+        // standing in for the title.
+        let title = "a".repeat(61);
+        assert_eq!(slugify(&title), "");
+    }
+
+    #[test]
+    fn is_slug_matches_what_slugify_would_produce() {
+        assert!(is_slug("self-authored-structure"));
+        assert!(is_slug(&"a".repeat(60)));
+        assert!(!is_slug(""));
+        assert!(!is_slug("Has-Capitals"));
+        assert!(!is_slug("trailing-"));
+        assert!(!is_slug("-leading"));
+        assert!(!is_slug("double--dash"));
+        assert!(!is_slug("has space"));
+        assert!(!is_slug(&"a".repeat(61)));
+    }
 }

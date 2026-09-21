@@ -113,6 +113,14 @@ pub enum Error {
     #[error("title `{0}` does not reduce to a usable id")]
     UnusableTitle(String),
 
+    /// A user-supplied `--id` does not follow the slug rules: lowercase
+    /// words joined by single dashes, no leading, trailing, or doubled
+    /// dash, 60 characters or fewer.
+    #[error(
+        "`{0}` is not a valid id: ids are lowercase words joined by single dashes, 60 characters or fewer"
+    )]
+    InvalidId(String),
+
     /// Anything else about the corpus itself: configuration, a malformed
     /// file, a value that is not one of the ones there are.
     #[error("{0}")]
