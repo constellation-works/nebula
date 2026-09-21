@@ -13,14 +13,16 @@ const fixture: NodeView = {
   node: {
     id: "tray-count-is-the-status-bar",
     title: "The tray count is the whole status bar",
+    title_by: "agent:crew-title",
     status: "refuted",
     created: "2026-09-01",
     updated: "2026-09-12",
     kill: "A user asks for a second number in the tray.",
+    kill_by: "agent:crew-alpha",
     tags: ["desktop", "capture"],
     edges: [
-      { type: "derives-from", to: "capture-under-five-seconds" },
-      { type: "contradicts", to: "dashboards-earn-their-keep" },
+      { type: "derives-from", to: "capture-under-five-seconds", by: "agent:crew-genealogy" },
+      { type: "contradicts", to: "dashboards-earn-their-keep", by: "agent:crew-contradiction" },
     ],
     references: [
       {
@@ -47,6 +49,23 @@ const fixture: NodeView = {
         note: null,
         added: "2026-09-04",
       },
+      {
+        id: "r4",
+        kind: "observatory",
+        uri: "Q002",
+        title: null,
+        note: "the question this became",
+        added: "2026-09-05",
+        by: "agent:crew-reference",
+      },
+      {
+        id: "r5",
+        kind: "observatory",
+        uri: "H007",
+        title: null,
+        note: null,
+        added: "2026-09-06",
+      },
     ],
     closed: { why: "Two users asked for the review count too.", at: "2026-09-12" },
   },
@@ -61,6 +80,10 @@ const fixture: NodeView = {
     "|---|---|",
     "| 1 | 2 |",
   ].join("\n"),
+  observatory: [
+    { reference: "r4", record: "Q002", path: "/research/observatory/questions/Q002.md" },
+    { reference: "r5", record: "H007", path: null },
+  ],
 };
 
 const nodes: NodeSummary[] = [
@@ -103,6 +126,18 @@ describe("NodePanel", () => {
     expect(tags.map((t) => t.textContent)).toEqual(["desktop", "capture"]);
   });
 
+  it("shows non-human authorship and resolves observatory references", async () => {
+    renderPanel();
+    await screen.findByRole("heading", { level: 2, name: fixture.node.title });
+    expect(screen.getByText("by agent:crew-title")).toBeInTheDocument();
+    expect(screen.getByText("by agent:crew-alpha")).toBeInTheDocument();
+    expect(screen.getByText("by agent:crew-genealogy")).toBeInTheDocument();
+    expect(screen.getByText("by agent:crew-contradiction")).toBeInTheDocument();
+    expect(screen.getByText("by agent:crew-reference")).toBeInTheDocument();
+    expect(screen.getByText("/research/observatory/questions/Q002.md")).toBeInTheDocument();
+    expect(screen.getByText("(does not resolve on this machine)")).toBeInTheDocument();
+  });
+
   it("renders the body as markdown with GFM and without raw HTML", async () => {
     renderPanel();
     expect(await screen.findByRole("heading", { level: 2, name: "Argument" })).toBeInTheDocument();
@@ -135,7 +170,7 @@ describe("NodePanel", () => {
     // The body's GFM table is also a table; the references one follows its heading.
     const heading = await screen.findByRole("heading", { level: 3, name: "References" });
     const rows = within(heading.parentElement!).getAllByRole("row");
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(6);
     expect(rows[1]).toHaveTextContent("article");
     expect(rows[1]).toHaveTextContent("the one-number precedent");
     expect(rows[1]).toHaveTextContent("2026-09-02");
@@ -147,6 +182,8 @@ describe("NodePanel", () => {
     // A uri-less reference (e.g. a discussion) renders as plain text, not a link.
     expect(within(rows[3]!).queryByRole("link")).toBeNull();
     expect(within(rows[3]!).getByText("Team debrief")).toBeInTheDocument();
+    expect(within(rows[4]!).getByText("Q002").tagName).toBe("CODE");
+    expect(within(rows[4]!).getByText("/research/observatory/questions/Q002.md").tagName).toBe("CODE");
   });
 
   it("opens the file and closes on request", async () => {
