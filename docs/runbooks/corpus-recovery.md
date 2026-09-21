@@ -2,10 +2,10 @@
 type: runbook
 summary: Diagnose a corpus that will not load, repair hand-edited nodes, and recover from an interrupted write.
 tags: [operations, recovery, debugging]
-paths: ["crates/nebula-core/src/model.rs", "crates/nebula-core/src/check.rs"]
+paths: ["crates/nebula-core/src/model.rs", "crates/nebula-core/src/check.rs", "crates/nebula-core/src/store.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
-last_validated: 2026-09-12
+last_validated: 2026-09-21
 ---
 
 # Recover a Corpus
@@ -80,12 +80,73 @@ error: /corpus has uncommitted changes; commit or stash them so the migration is
 This is deliberate: see [migrate-v1-to-v2.md](migrate-v1-to-v2.md). Commit or
 stash, then run `neb migrate` again.
 
-## Restoring from git
+## Symptom: a verb writes but refuses to commit
 
-The corpus should be a git repository. Since nothing is ever deleted in normal
-operation, almost any damage is a checkout away:
+With `neb config commit on`, a verb prints its usual result and then:
+
+```
+error: /corpus has staged changes outside the corpus (README.md); the write is in place and nothing was committed
+```
+
+The write happened — the node or inbox line is on disk — but `neb` will not
+fold a stranger's staged work into a `neb` commit, so it left the index
+alone. This can only occur when the corpus is nested inside a larger
+repository rather than being one itself. Commit or unstage the other change,
+then either run any verb (its commit sweeps up the earlier write) or catch
+up by hand:
+
+```sh
+git -C "$NEBULA_ROOT" add nodes inbox config.yaml
+git -C "$NEBULA_ROOT" commit -m "neb"
+```
+
+`--no-commit` on a verb skips its commit once, if you need to keep working
+before sorting the index out.
+
+A different refusal, `is ignored by the git repository that contains it`,
+means the corpus sits under an outer repository whose `.gitignore` hides it,
+so there is nothing git would ever record. Make the corpus its own
+repository — `git -C "$NEBULA_ROOT" init` — as
+[corpus-setup.md](corpus-setup.md#put-it-under-git) recommends, or turn the
+setting off with `neb config commit off`.
+
+Any other git failure (`git commit failed in /corpus: ...`) is reported with
+git's own message and, again, never undoes the write.
+
+## Restoring from the corpus repo
+
+The corpus should be a git repository, ideally its own one at the corpus
+root with a private remote (see
+[corpus-setup.md](corpus-setup.md#put-it-under-git)). With `neb config
+commit on`, every verb is one commit named `neb <verb> <ids>`, so the history
+reads as a log of what you did and any state is addressable.
+
+Since nothing is ever deleted in normal operation, almost any damage is a
+checkout away:
 
 ```sh
 git -C "$NEBULA_ROOT" status
+git -C "$NEBULA_ROOT" log --oneline -- nodes/an-idea.md
 git -C "$NEBULA_ROOT" checkout -- nodes/an-idea.md
 ```
+
+To undo one verb entirely — a promotion that should have been a drop, a
+`link` that was wrong — revert its commit rather than editing files, so the
+mistake stays in the history too:
+
+```sh
+git -C "$NEBULA_ROOT" log --oneline -5
+git -C "$NEBULA_ROOT" revert <hash>
+```
+
+If the disk is gone, the remote is the corpus:
+
+```sh
+git clone <private-remote> ~/corpus/nebula
+export NEBULA_ROOT=$HOME/corpus/nebula
+neb check
+```
+
+`check` should report the node count you remember and zero errors. Anything
+written after the last push is lost, which is the argument for pushing
+often; `neb` commits but never pushes, so a cron job or a habit has to.

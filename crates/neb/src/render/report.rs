@@ -2,9 +2,9 @@
 
 use super::{bold, dim, paint, status_badge};
 use nebula_core::{
-    HUMAN, INBOX_DAYS, Impact, Inbox, MigrationReport, NodeView, OBSERVATORY_ROOT_ENV,
-    ObservatoryRoot, ObservatorySource, OpenReport, Report, ReviewItem, ReviewReport, ReviewRule,
-    Severity, TagCounts, Via,
+    CommitSetting, HUMAN, INBOX_DAYS, Impact, Inbox, MigrationReport, NodeView,
+    OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, OpenReport, Report, ReviewItem,
+    ReviewReport, ReviewRule, Severity, TagCounts, Via,
 };
 use std::fmt::Write as _;
 
@@ -95,6 +95,18 @@ pub fn observatory_root(setting: &ObservatoryRoot) -> String {
                  ${OBSERVATORY_ROOT_ENV}"
             ))
         ),
+    }
+}
+
+/// Whether writes are committed, as `neb config commit` reports it.
+pub fn commit_setting(setting: CommitSetting) -> String {
+    if setting.enabled {
+        format!("{} {}\n", bold("on"), dim("(config.yaml)"))
+    } else {
+        format!(
+            "{}\n",
+            dim("off; turn it on with `neb config commit on` once the corpus is a git repository")
+        )
     }
 }
 

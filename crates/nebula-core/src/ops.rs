@@ -1,20 +1,24 @@
 //! Everything that changes a corpus: capture, promote, drop, new, sharpen,
-//! link, cite, note, status, tags.
+//! link, cite, note, status, tags, and the commit that may follow any of them.
 //!
 //! Each op takes a [`Corpus`] and typed arguments, enforces the invariants
 //! that belong at the point of action, writes, and returns what changed. A
 //! caller cannot produce an invalid corpus through this module; `check` exists
 //! to catch hand edits, not bugs in here.
 //!
+//! [`commit`] is its own op rather than the tail of every other one, so a
+//! write's result reaches the caller even when git then refuses: the write is
+//! never rolled back because of git, and the caller can tell the two apart.
+//!
 //! Which invariants live here rather than in `check` is a deliberate choice
 //! per rule. See `docs/design/lineage-graph/specs/invariants.md`.
 
 use crate::check::{OBSERVATORY, is_local_path, is_observatory_id, resolve_local};
-use crate::config::ObservatoryRoot;
+use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
 use crate::graph;
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
-use crate::store::{self, Corpus, InboxEntry};
+use crate::store::{self, Committed, Corpus, InboxEntry};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -423,6 +427,26 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
 pub fn set_observatory_root(corpus: &mut Corpus, dir: PathBuf) -> Result<ObservatoryRoot> {
     corpus.set_observatory_root(dir)?;
     Ok(corpus.observatory_root())
+}
+
+/// Record in the corpus's `config.yaml` whether each write is committed.
+///
+/// Returns the setting as it now stands.
+pub fn set_commit(corpus: &mut Corpus, enabled: bool) -> Result<CommitSetting> {
+    corpus.set_commit(enabled)?;
+    Ok(corpus.commit_setting())
+}
+
+/// Commit the corpus after a successful write, as `neb <verb> <ids>`.
+///
+/// Does nothing, and says so with `None`, unless `commit: true` is set in
+/// `config.yaml` and the root is inside a git work tree. Stages only
+/// `nodes/`, `inbox/` and `config.yaml` under the root, never pushes, and
+/// refuses with [`Error::StagedElsewhere`] rather than sweep up something
+/// staged outside the corpus. Called after the write it records, which
+/// stays on disk whatever happens here.
+pub fn commit(corpus: &Corpus, verb: &str, ids: &[&str]) -> Result<Option<Committed>> {
+    corpus.commit(verb, ids)
 }
 
 /// Move a node to a new status, with the transition guards applied.

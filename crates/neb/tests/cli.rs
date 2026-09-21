@@ -2350,3 +2350,342 @@ fn migrate_refuses_a_dirty_git_tree() {
         .says("4 of 4 nodes rewritten");
     c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
 }
+
+// ------------------------------------------------------------------ commit --
+
+/// Run git in `dir`, asserting it succeeded; stdout as text.
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("running git");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed in {}:\n{}",
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// A repository at `dir` with a local identity, so `neb`'s commits do not
+/// depend on the developer's global git configuration.
+fn git_init(dir: &Path) {
+    git(dir, &["init", "-q"]);
+    git(dir, &["config", "user.name", "neb-test"]);
+    git(dir, &["config", "user.email", "neb-test@example.invalid"]);
+    git(dir, &["config", "commit.gpgsign", "false"]);
+}
+
+/// Commit messages, newest first.
+fn log(dir: &Path) -> Vec<String> {
+    git(dir, &["log", "--format=%s"])
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
+/// The paths the newest commit touched, relative to the repository's top
+/// level, sorted.
+fn head_paths(dir: &Path) -> Vec<String> {
+    let mut paths: Vec<String> = git(dir, &["show", "--name-only", "--format=", "HEAD"])
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// The recommended setup: a repository at the corpus root, with a remote it
+/// must never push to.
+fn corpus_repo() -> (Corpus, PathBuf) {
+    let c = Corpus::new();
+    git_init(&c.root);
+    let remote = c.workdir().join("remote.git");
+    git(c.workdir(), &["init", "-q", "--bare", "remote.git"]);
+    git(
+        &c.root,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    (c, remote)
+}
+
+/// The setting is off by default and the verbs behave as they always did;
+/// `neb config commit` reads and writes it, turning it on is itself the
+/// first commit, and turning it off leaves that rewrite for you.
+#[test]
+fn commit_is_off_by_default_and_the_setting_reads_and_writes() {
+    let (c, _remote) = corpus_repo();
+
+    c.run(&["config", "commit"]).assert_ok().says("off");
+    let out = c.run(&["--json", "config", "commit"]).assert_ok().stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["enabled"], false);
+    c.run(&["capture", "before the setting"]).assert_ok();
+    assert!(git(&c.root, &["log", "--oneline", "--all"]).is_empty());
+    assert!(git(&c.root, &["status", "--porcelain"]).contains("?? "));
+    let raw = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    assert!(!raw.contains("commit"), "absent until set: {raw}");
+
+    // Turning it on is itself the first commit, and sweeps up what was
+    // already there under the corpus paths.
+    c.run(&["config", "commit", "on"])
+        .assert_ok()
+        .says("on")
+        .says("committed ");
+    assert_eq!(log(&c.root), ["neb config commit"]);
+    assert_eq!(head_paths(&c.root).len(), 2, "{:?}", head_paths(&c.root));
+    assert!(head_paths(&c.root).contains(&"config.yaml".to_string()));
+    let raw = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    assert!(raw.contains("commit: true"), "{raw}");
+    let out = c.run(&["--json", "config", "commit"]).assert_ok().stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["enabled"], true);
+
+    // Off again: the file loses the key, and that last rewrite is left for
+    // you to commit by hand, because off means off.
+    c.run(&["config", "commit", "off"]).assert_ok().says("off");
+    let raw = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    assert!(!raw.contains("commit"), "{raw}");
+    assert!(git(&c.root, &["status", "--porcelain"]).contains(" M config.yaml"));
+    git(&c.root, &["commit", "-qam", "off"]);
+    c.run(&["capture", "with it off"]).assert_ok();
+    assert_eq!(log(&c.root)[0], "off");
+    assert!(git(&c.root, &["status", "--porcelain"]).contains(" M inbox/"));
+}
+
+/// With `commit` on, every mutating verb lands as one commit named after it
+/// and touching only corpus paths; `--no-commit` waives that once; the
+/// remote is never touched.
+#[test]
+fn commit_on_records_each_mutating_verb_and_never_pushes() {
+    let (c, remote) = corpus_repo();
+    let early = c.run(&["capture", "before the setting"]).stdout_trim();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    assert_eq!(log(&c.root), ["neb config commit"]);
+
+    // Every mutating verb, in lifecycle order, one commit each.
+    let entry = c.run(&["capture", "a thought"]).assert_ok().stdout_trim();
+    assert_eq!(log(&c.root)[0], format!("neb capture {entry}"));
+    assert!(head_paths(&c.root).iter().all(|p| p.starts_with("inbox/")));
+
+    let id = c
+        .run(&["promote", &entry, "--title", "A thought"])
+        .assert_ok()
+        .says("committed ")
+        .stdout_trim();
+    assert_eq!(log(&c.root)[0], format!("neb promote {entry} {id}"));
+    let paths = head_paths(&c.root);
+    assert_eq!(paths.len(), 2, "{paths:?}");
+    assert!(paths.contains(&format!("nodes/{id}.md")));
+
+    c.run(&["drop", &early]).assert_ok();
+    assert_eq!(log(&c.root)[0], format!("neb drop {early}"));
+
+    let b = c
+        .run(&["new", "B", "--parent", &id])
+        .assert_ok()
+        .stdout_trim();
+    assert_eq!(log(&c.root)[0], format!("neb new {b}"));
+    assert_eq!(head_paths(&c.root), [format!("nodes/{b}.md")]);
+
+    c.run(&["sharpen", &id, "--kill", "if it fails"])
+        .assert_ok();
+    assert_eq!(log(&c.root)[0], format!("neb sharpen {id}"));
+
+    c.run(&["status", &id, "abandoned", "--why", "moved on"])
+        .assert_ok();
+    assert_eq!(log(&c.root)[0], format!("neb status {id}"));
+
+    c.run(&["link", &b, "contradicts", &id]).assert_ok();
+    assert_eq!(log(&c.root)[0], format!("neb link {b} {id}"));
+    let mut both = [format!("nodes/{b}.md"), format!("nodes/{id}.md")];
+    both.sort();
+    assert_eq!(
+        head_paths(&c.root),
+        both,
+        "contradicts is written on both ends, in one commit"
+    );
+
+    c.run(&["tag", &b, "--add", "physics"]).assert_ok();
+    assert_eq!(log(&c.root)[0], format!("neb tag {b}"));
+
+    c.run(&["note", &b, "some reasoning"]).assert_ok();
+    assert_eq!(log(&c.root)[0], format!("neb note {b}"));
+
+    c.run(&[
+        "cite",
+        &b,
+        "--uri",
+        "https://example.com",
+        "--note",
+        "because",
+    ])
+    .assert_ok();
+    assert_eq!(log(&c.root)[0], format!("neb cite {b} r1"));
+
+    // `--json` keeps the payload clean: the commit happens, silently.
+    let before = log(&c.root).len();
+    let out = c
+        .run(&["--json", "note", &b, "a second thought"])
+        .assert_ok()
+        .stdout();
+    serde_json::from_str::<serde_json::Value>(&out).expect("note --json is still valid JSON");
+    assert_eq!(log(&c.root).len(), before + 1);
+
+    // `--no-commit` skips it once; the next verb sweeps the write up.
+    c.run(&["--no-commit", "capture", "kept out of git for now"])
+        .assert_ok();
+    assert_eq!(log(&c.root).len(), before + 1);
+    assert!(git(&c.root, &["status", "--porcelain"]).contains(" M inbox/"));
+    let entry = c
+        .run(&["capture", "and this one"])
+        .assert_ok()
+        .stdout_trim();
+    assert_eq!(log(&c.root)[0], format!("neb capture {entry}"));
+    assert!(git(&c.root, &["status", "--porcelain"]).is_empty());
+
+    // A read-only verb commits nothing; a no-op write commits nothing.
+    let n = log(&c.root).len();
+    c.run(&["list"]).assert_ok();
+    c.run(&["check"]).assert_ok();
+    c.run(&["migrate"]).assert_ok().says("nothing changed");
+    assert_eq!(log(&c.root).len(), n);
+
+    // Nothing was ever pushed, and a commit never contains a stranger.
+    assert!(
+        git(&remote, &["rev-list", "--all"]).is_empty(),
+        "the remote should be empty"
+    );
+    for line in git(&c.root, &["log", "--name-only", "--format="]).lines() {
+        if line.is_empty() {
+            continue;
+        }
+        assert!(
+            line == "config.yaml" || line.starts_with("nodes/") || line.starts_with("inbox/"),
+            "a commit touched {line}"
+        );
+    }
+}
+
+/// The corpus nested in a larger repository, the shape the refusal exists
+/// for: something staged outside the corpus must not ride in a `neb`
+/// commit, and the write must never be undone because of it.
+#[test]
+fn a_staged_change_outside_the_corpus_refuses_the_commit_and_keeps_the_write() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outer = dir.path().join("outer");
+    let root = outer.join("corpus");
+    let c = Corpus { dir, root };
+    c.run(&["init"]).assert_ok();
+    git_init(&outer);
+    write(&outer.join("README.md"), "theirs\n");
+    git(&outer, &["add", "-A"]);
+    git(&outer, &["commit", "-q", "-m", "start"]);
+    c.run(&["config", "commit", "on"]).assert_ok();
+    assert_eq!(head_paths(&outer), ["corpus/config.yaml"]);
+
+    write(&outer.join("README.md"), "theirs, edited\n");
+    git(&outer, &["add", "README.md"]);
+    write(&outer.join("notes.txt"), "never staged\n");
+    let head = git(&outer, &["rev-parse", "HEAD"]);
+
+    let run = c.run(&["new", "An idea"]).assert_fails();
+    let run = run
+        .says("staged changes outside the corpus (README.md)")
+        .says("the write is in place");
+    assert!(
+        run.stdout().contains("an-idea"),
+        "the verb reported its write before the refusal:\n{}",
+        run.stdout()
+    );
+    assert!(c.node_file("an-idea").exists(), "the write stays");
+    assert_eq!(git(&outer, &["rev-parse", "HEAD"]), head, "no commit");
+    let status = git(&outer, &["status", "--porcelain"]);
+    assert!(
+        status.contains("M  README.md"),
+        "their staging is intact:\n{status}"
+    );
+    assert!(
+        status.contains("?? notes.txt"),
+        "nothing outside was touched:\n{status}"
+    );
+    assert!(
+        status.contains("?? corpus/nodes/"),
+        "and the node was not even staged:\n{status}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(outer.join("README.md")).unwrap(),
+        "theirs, edited\n"
+    );
+
+    // With their change committed, the next verb sweeps the node up too.
+    git(&outer, &["commit", "-q", "-m", "theirs"]);
+    let b = c.run(&["new", "B"]).assert_ok().stdout_trim();
+    assert_eq!(log(&outer)[0], format!("neb new {b}"));
+    assert_eq!(
+        head_paths(&outer),
+        [
+            "corpus/nodes/an-idea.md".to_string(),
+            format!("corpus/nodes/{b}.md")
+        ]
+    );
+    assert!(git(&outer, &["status", "--porcelain"]).contains("?? notes.txt"));
+}
+
+/// `commit: on` in a corpus the containing repository ignores would commit
+/// nothing forever; that is a typed refusal with the fix in the hint.
+#[test]
+fn commit_on_in_an_ignored_corpus_is_refused_with_the_fix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outer = dir.path().join("outer");
+    let root = outer.join("corpus");
+    let c = Corpus { dir, root };
+    c.run(&["init"]).assert_ok();
+    git_init(&outer);
+    write(&outer.join(".gitignore"), "corpus/\n");
+    c.run(&["config", "commit", "on"])
+        .assert_fails()
+        .says("is ignored by the git repository that contains it")
+        .says("git -C")
+        .says("init");
+    let raw = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    assert!(
+        raw.contains("commit: true"),
+        "the setting was written: {raw}"
+    );
+    // A repository at the corpus root is the fix, and needs no other change.
+    git_init(&c.root);
+    c.run(&["capture", "now it works"])
+        .assert_ok()
+        .says("committed ");
+    assert_eq!(log(&c.root).len(), 1);
+}
+
+/// A migration is the write most worth its own commit. `migrate` reads the
+/// setting through its lenient config model, keeps it, and commits itself.
+#[test]
+fn migrate_keeps_the_commit_setting_and_commits_itself() {
+    let c = v1_corpus();
+    let config = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    write(
+        &c.root.join("config.yaml"),
+        &format!("{config}commit: true\n"),
+    );
+    git_init(&c.root);
+    git(&c.root, &["add", "-A"]);
+    git(&c.root, &["commit", "-q", "-m", "v1 corpus"]);
+
+    c.run(&["migrate"])
+        .assert_ok()
+        .says("4 of 4 nodes rewritten")
+        .says("committed ");
+    assert_eq!(log(&c.root), ["neb migrate", "v1 corpus"]);
+    assert!(git(&c.root, &["status", "--porcelain"]).is_empty());
+    let raw = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    assert!(raw.contains("commit: true"), "{raw}");
+    c.run(&["config", "commit"]).assert_ok().says("on");
+}

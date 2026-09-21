@@ -47,7 +47,9 @@ pub mod ops;
 pub mod store;
 
 pub use check::{Finding, OBSERVATORY, Report, Severity};
-pub use config::{OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, SCHEMA_VERSION};
+pub use config::{
+    CommitSetting, OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, SCHEMA_VERSION,
+};
 pub use error::{Error, Result};
 pub use graph::{
     Direction, EdgeRecord, Graph, GraphExport, HYPOTHESIS_DAYS, INBOX_DAYS, Impact, Listing,
@@ -57,7 +59,7 @@ pub use graph::{
 pub use migrate::{MigrationReport, NodeMigration};
 pub use model::{Closed, Doc, Edge, EdgeType, HUMAN, Node, Note, Origin, Reference, Status};
 pub use ops::{Citation, Cited, Created, Initialized, NewNode, Promotion, StatusChange};
-pub use store::{Corpus, Inbox, InboxEntry};
+pub use store::{Committed, Corpus, Inbox, InboxEntry};
 
 /// Writes `apps/desktop/src/types/*.ts` from the types above.
 ///
@@ -95,6 +97,8 @@ mod ts_export {
         Initialized::export_all(&cfg).unwrap();
         Direction::export_all(&cfg).unwrap();
         ObservatoryRoot::export_all(&cfg).unwrap();
+        CommitSetting::export_all(&cfg).unwrap();
+        Committed::export_all(&cfg).unwrap();
 
         assert!(
             cfg.out_dir().join("Node.ts").exists(),

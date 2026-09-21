@@ -95,6 +95,10 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
+    /// Skip the commit this once, where `neb config commit on` would make one.
+    #[arg(long, global = true)]
+    no_commit: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -164,7 +168,7 @@ enum Command {
     /// Read or set a corpus setting.
     ///
     /// `config.yaml` stays machine-written: this rewrites it whole rather
-    /// than inviting a hand edit.
+    /// than inviting a hand edit. Settings: `observatory-root`, `commit`.
     Config {
         #[command(subcommand)]
         setting: ConfigSetting,
@@ -442,6 +446,30 @@ enum ConfigSetting {
         /// The checkout. Omit to read the current setting.
         dir: Option<PathBuf>,
     },
+
+    /// Whether each mutating verb commits the corpus afterwards, when the
+    /// root is inside a git work tree. Off by default. The commit stages
+    /// `nodes/`, `inbox/` and `config.yaml` only, is `neb <verb> <ids>`,
+    /// never pushes, and is refused (the write kept) when something outside
+    /// the corpus is already staged. `--no-commit` skips it once.
+    Commit {
+        /// `on` or `off`. Omit to read the current setting.
+        state: Option<OnOff>,
+    },
+}
+
+/// A boolean setting as the command line spells it.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+#[value(rename_all = "lowercase")]
+enum OnOff {
+    On,
+    Off,
+}
+
+impl From<OnOff> for bool {
+    fn from(s: OnOff) -> Self {
+        matches!(s, OnOff::On)
+    }
 }
 
 /// A message the CLI exits on. Core errors become one through [`render`], so
@@ -485,11 +513,45 @@ pub fn main() -> ExitCode {
 
 type Outcome = std::result::Result<ExitCode, Failure>;
 
+/// What every mutating arm needs to decide whether to commit and how to say
+/// so: `--no-commit` waives the setting once, and `--json` keeps the
+/// confirmation off stdout so the payload stays parseable.
+#[derive(Clone, Copy)]
+struct CommitOpts {
+    skip: bool,
+    json: bool,
+}
+
+/// Commit the corpus after a write, if `config.yaml` asks for it.
+///
+/// Runs after the verb has printed its own result, because the write has
+/// already landed and a refusal here must never read as the write failing.
+fn commit(
+    corpus: &Corpus,
+    opts: CommitOpts,
+    verb: &str,
+    ids: &[&str],
+) -> std::result::Result<(), Failure> {
+    if opts.skip {
+        return Ok(());
+    }
+    let done = ops::commit(corpus, verb, ids)?;
+    if let Some(done) = done.filter(|_| !opts.json) {
+        let short = done.hash.get(..7).unwrap_or(&done.hash);
+        println!("{}", render::dim(&format!("committed {short}")));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)] // A dispatch table is one arm per verb.
 fn run(cli: Cli) -> Outcome {
     let ok = ExitCode::SUCCESS;
     let root = cli.root.clone();
     let json = cli.json;
+    let commits = CommitOpts {
+        skip: cli.no_commit,
+        json,
+    };
 
     match cli.command {
         Command::Init { path } => {
@@ -522,12 +584,15 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Migrate => {
-            let report = migrate::run(root)?;
+            let report = migrate::run(root.clone())?;
             if json {
                 out_json(&report)?;
             } else {
                 print!("{}", render::migration(&report));
             }
+            // The corpus is at this build's schema now, so it opens; the
+            // migration lands as its own commit when the setting is on.
+            commit(&Corpus::open(root)?, commits, "migrate", &[])?;
             Ok(ok)
         }
 
@@ -544,6 +609,26 @@ fn run(cli: Cli) -> Outcome {
             } else {
                 print!("{}", render::observatory_root(&setting));
             }
+            commit(&corpus, commits, "config", &["observatory-root"])?;
+            Ok(ok)
+        }
+
+        Command::Config {
+            setting: ConfigSetting::Commit { state },
+        } => {
+            let mut corpus = Corpus::open(root)?;
+            let setting = match state {
+                Some(state) => ops::set_commit(&mut corpus, bool::from(state))?,
+                None => corpus.commit_setting(),
+            };
+            if json {
+                out_json(&setting)?;
+            } else {
+                print!("{}", render::commit_setting(setting));
+            }
+            // Turning it on records itself; turning it off leaves the file
+            // for the next commit you make by hand, because off means off.
+            commit(&corpus, commits, "config", &["commit"])?;
             Ok(ok)
         }
 
@@ -563,6 +648,7 @@ fn run(cli: Cli) -> Outcome {
             let corpus = Corpus::open_or_init(root)?;
             let entry = ops::capture(&corpus, &text)?;
             println!("{}", render::bold(&entry.id));
+            commit(&corpus, commits, "capture", &[&entry.id])?;
             Ok(ok)
         }
 
@@ -605,6 +691,7 @@ fn run(cli: Cli) -> Outcome {
                 render::bold(&created.doc.node.id),
                 render::dim(&created.path.display().to_string())
             );
+            commit(&corpus, commits, "promote", &[&entry, &created.doc.node.id])?;
             Ok(ok)
         }
 
@@ -612,6 +699,7 @@ fn run(cli: Cli) -> Outcome {
             let corpus = Corpus::open(root)?;
             ops::drop(&corpus, &entry)?;
             println!("dropped {}", render::bold(&entry));
+            commit(&corpus, commits, "drop", &[&entry])?;
             Ok(ok)
         }
 
@@ -643,6 +731,7 @@ fn run(cli: Cli) -> Outcome {
                 render::bold(&created.doc.node.id),
                 render::dim(&created.path.display().to_string())
             );
+            commit(&corpus, commits, "new", &[&created.doc.node.id])?;
             Ok(ok)
         }
 
@@ -656,6 +745,7 @@ fn run(cli: Cli) -> Outcome {
             let corpus = Corpus::open(root)?;
             ops::confirm_kill(&corpus, &node).map_err(|e| Failure::about(&e, &node))?;
             println!("{} kill condition confirmed as yours", render::bold(&node));
+            commit(&corpus, commits, "sharpen", &[&node])?;
             Ok(ok)
         }
 
@@ -674,6 +764,7 @@ fn run(cli: Cli) -> Outcome {
             let doc = ops::sharpen(&corpus, &node, &kill, by.as_deref())
                 .map_err(|e| Failure::about(&e, &node))?;
             println!("{} is now {}", render::bold(&node), doc.node.status);
+            commit(&corpus, commits, "sharpen", &[&node])?;
             Ok(ok)
         }
 
@@ -692,6 +783,7 @@ fn run(cli: Cli) -> Outcome {
                 render::bold(&node),
                 render::dim(&changed.from.to_string())
             );
+            commit(&corpus, commits, "status", &[&node])?;
             Ok(ok)
         }
 
@@ -705,6 +797,7 @@ fn run(cli: Cli) -> Outcome {
                 render::dim(&kind.to_string()),
                 render::bold(&to)
             );
+            commit(&corpus, commits, "link", &[&from, &to])?;
             Ok(ok)
         }
 
@@ -745,6 +838,7 @@ fn run(cli: Cli) -> Outcome {
                 doc.node.tags.join(", ")
             };
             println!("{} {shown}", render::bold(&target));
+            commit(&corpus, commits, "tag", &[&target])?;
             Ok(ok)
         }
 
@@ -763,6 +857,7 @@ fn run(cli: Cli) -> Outcome {
             } else {
                 println!("{}", render::bold(&node));
             }
+            commit(&corpus, commits, "note", &[&node])?;
             Ok(ok)
         }
 
@@ -831,6 +926,7 @@ fn run(cli: Cli) -> Outcome {
                     )
                 );
             }
+            commit(&corpus, commits, "cite", &[&node, &cited.reference])?;
             Ok(ok)
         }
 
@@ -998,6 +1094,7 @@ mod tests {
         }
         assert!(text.contains("Usage: neb [OPTIONS] <COMMAND>"));
         assert!(text.contains("--root <DIR>"));
+        assert!(text.contains("--no-commit"));
         assert!(text.contains("The corpus lives outside this repository"));
     }
 
