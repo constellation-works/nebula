@@ -55,7 +55,7 @@ pub use graph::{
     TagCount, TagCounts, Touched, Trace, TraceNode, Via,
 };
 pub use migrate::{MigrationReport, NodeMigration};
-pub use model::{Closed, Doc, Edge, EdgeType, Node, Note, Origin, Reference, Status};
+pub use model::{Closed, Doc, Edge, EdgeType, HUMAN, Node, Note, Origin, Reference, Status};
 pub use ops::{Citation, Cited, Created, Initialized, NewNode, Promotion, StatusChange};
 pub use store::{Corpus, Inbox, InboxEntry};
 

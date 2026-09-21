@@ -299,6 +299,8 @@ pub enum ReviewRule {
     UntouchedSeed,
     /// A live node with nothing attached to it.
     NoReferences,
+    /// A hypothesis standing on a kill condition the human never wrote.
+    UnconfirmedKill,
     /// Captures rotting in the inbox.
     StaleInbox,
 }
@@ -336,6 +338,7 @@ pub fn review(graph: &Graph<'_>, inbox: &Inbox, since: Option<i64>) -> Result<Re
     let mut stale_hypotheses = Vec::new();
     let mut untouched_seeds = Vec::new();
     let mut no_references = Vec::new();
+    let mut unconfirmed_kills = Vec::new();
 
     for d in graph.docs() {
         let n = &d.node;
@@ -366,12 +369,24 @@ pub fn review(graph: &Graph<'_>, inbox: &Inbox, since: Option<i64>) -> Result<Re
                 reason: "no references attached".into(),
             });
         }
+        // A hypothesis is only as honest as the falsifier under it, and a
+        // falsifier somebody else proposed is not yet the human's claim.
+        if n.status == Status::Hypothesis && !model::is_human(n.kill_by.as_deref()) {
+            let by = n.kill_by.as_deref().unwrap_or(model::HUMAN);
+            unconfirmed_kills.push(ReviewItem {
+                rule: ReviewRule::UnconfirmedKill,
+                id: n.id.clone(),
+                title: n.title.clone(),
+                reason: format!("kill condition written by `{by}`, not confirmed by a human"),
+            });
+        }
     }
 
     let waiting = stale_inbox(inbox);
     let mut items = stale_hypotheses;
     items.append(&mut untouched_seeds);
     items.append(&mut no_references);
+    items.append(&mut unconfirmed_kills);
     if waiting > 0 {
         items.push(ReviewItem {
             rule: ReviewRule::StaleInbox,
@@ -464,11 +479,15 @@ pub struct NodeView {
 }
 
 /// Show one node in full.
+///
+/// Authorship is stated outright here, including the `human` the file leaves
+/// implicit, so a reader of `--json` sees who wrote each field without having
+/// to know that an absent author means the human.
 pub fn node(graph: &Graph<'_>, id: &str) -> Result<NodeView> {
     let doc = graph.require(id)?;
     let body = doc.body.trim().to_string();
     Ok(NodeView {
-        node: doc.node.clone(),
+        node: doc.node.clone().with_authorship_stated(),
         notes: model::notes_from_body(&body),
         body,
     })
@@ -480,6 +499,8 @@ pub fn node(graph: &Graph<'_>, id: &str) -> Result<NodeView> {
 pub struct Listing(pub Vec<Node>);
 
 /// List nodes. Several tags narrow to nodes carrying all of them.
+///
+/// Authorship is stated as it is by [`node`], so the two agree.
 pub fn list(graph: &Graph<'_>, status: Option<Status>, tags: &[String]) -> Result<Listing> {
     let tags = model::normalize_tags(tags);
     Ok(Listing(
@@ -488,7 +509,7 @@ pub fn list(graph: &Graph<'_>, status: Option<Status>, tags: &[String]) -> Resul
             .iter()
             .filter(|d| status.is_none_or(|s| d.node.status == s))
             .filter(|d| d.node.has_all_tags(&tags))
-            .map(|d| d.node.clone())
+            .map(|d| d.node.clone().with_authorship_stated())
             .collect(),
     ))
 }

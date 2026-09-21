@@ -50,12 +50,27 @@ anything they did not flag. At the end of a substantive session propose (do
 not run) up to five `neb capture "..."` lines from the discussion. When the
 human refines an idea in conversation, `neb note` the refinement in their words.
 
-## Provenance
+## Provenance and authorship
 
-Under Orbit, pass `--task <id>` and `--run <id>` on `promote`, `new` and
+Two different questions, kept apart. **Provenance** says which run produced a
+write: under Orbit pass `--task <id>` and `--run <id>` on `promote`, `new` and
 `cite`, from `ORBIT_TASK_ID` / `ORBIT_RUN_ID` or the task you were given.
-Never hardcode an agent family: crews and model names change underneath the
-skill.
+
+**Authorship** says who wrote the words. `--by <label>` defaults to `human`,
+so an unattributed write claims the human wrote it. Pass `--by` with your own
+session or crew label — `--by agent:<session-or-crew>` — on every write whose
+text is yours: `new`, `sharpen`, `link`, `note`, `cite`, and `promote` when
+you also pass `--title`. A capture promoted as it was captured is in the
+human's words; leave it that way. Never hardcode an agent family: crews and
+model names change underneath the skill. Authorship is stored per field
+(`title_by`, `kill_by`, `by` on each edge, reference and note entry) and
+`show --json` states it, `human` included.
+
+A kill condition you wrote is a proposal, not the human's claim. `neb review`
+lists it under "Agent-authored kills not yet confirmed by a human" until the
+human runs `neb sharpen <node> --confirm`. Propose that line; never run it
+yourself, because confirming is the human saying they stand behind the
+falsifier.
 
 ## Triage heuristics
 
@@ -66,7 +81,7 @@ skill.
 - **Drop** when it duplicates a node (say which) or is an action item, not an
   idea. Dropping is a normal outcome, not a failure.
 - **Sharpen** the moment a seed has a falsifier: `--kill` is written before
-  anything is read.
+  anything is read, with `--by` when the falsifier is yours rather than theirs.
 - **Link** only what you can defend: `derives-from` for descent, `refines`
   for a narrower version, `generalizes` for a wider one, `contradicts` for a
   live conflict, `reopens` for a new node reviving a refuted one.

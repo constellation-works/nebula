@@ -16,7 +16,7 @@ agent reads it and runs the lines they agree with.
 
 ```sh
 neb check --json                 # if any error finding: report it as the whole review and stop
-neb review --json                # the four rules
+neb review --json                # the five rules
 neb inbox --json                 # what is waiting
 neb open --json                  # what needs attention
 neb list --json                  # for finding parents and duplicates
@@ -45,6 +45,9 @@ with the check line and the date.
 ## sharpen
 - `neb sharpen required-categorical-fields-drift --kill "..."` — seed since 2026-09-12 with no falsifier; the kill is the human's to write
 
+## confirm
+- `neb sharpen tags-beat-domains --confirm` — `review` rule unconfirmed-kill; the kill reads as theirs, but only they can say so
+
 ## link
 - `neb link required-categorical-fields-drift refines tags-beat-domains` — its body restates the parent's second sentence
 
@@ -64,6 +67,8 @@ Rules for the lines:
   value only the human can supply (a kill condition, a reason, a URI).
 - Never propose `refuted`. Refuting asserts a kill condition fired, and that
   is an observation the human makes. Propose `abandoned` and say why.
+- Never run `sharpen --confirm` yourself, in either mode: confirming a kill
+  condition is the human saying they stand behind it.
 - Never propose a new tag without saying `(new tag)` after the reason.
 - Never propose `migrate`, `init` or anything touching `config.yaml`; if
   `check` fails to open the corpus, that failure is the entire review.

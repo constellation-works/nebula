@@ -141,6 +141,47 @@ pub struct Edge {
     pub kind: EdgeType,
     /// The node id on the other end.
     pub to: String,
+    /// Who claimed the relation. Absent is [`HUMAN`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+}
+
+/// The author of anything nobody attributed: the human whose corpus this is.
+///
+/// Stored by omission. A field with no author reads as the human's own, which
+/// is what every node written before authorship existed is, and is why
+/// `neb migrate` has nothing to do about it.
+pub const HUMAN: &str = "human";
+
+/// Whether a stored author label means the human.
+///
+/// `None`, an empty label and `human` are the same answer, so a hand-written
+/// `by: human` reads the same as leaving the line out.
+pub fn is_human(by: Option<&str>) -> bool {
+    by.is_none_or(|b| {
+        let b = b.trim();
+        b.is_empty() || b == HUMAN
+    })
+}
+
+/// A `--by` label as it is stored: [`None`] for the human, the trimmed label
+/// otherwise.
+///
+/// The label is free text on purpose — a session id, a crew name, whatever
+/// identifies the writer — and nothing here knows an agent family. What it
+/// cannot hold is the punctuation a note line uses to carry its author in the
+/// prose, since a note is markdown rather than YAML and has to parse back.
+pub fn author(by: Option<&str>) -> Result<Option<String>> {
+    if is_human(by) {
+        return Ok(None);
+    }
+    let label = by.unwrap_or_default().trim();
+    if label.contains(['(', ')', '\n']) || label.contains(": ") {
+        return Err(Error::corpus(format!(
+            "`{label}` cannot be an author label: no parentheses, newlines or `: `"
+        )));
+    }
+    Ok(Some(label.to_string()))
 }
 
 /// What produced a node or a reference.
@@ -208,6 +249,9 @@ pub struct Reference {
     pub note: Option<String>,
     /// When it was attached.
     pub added: String,
+    /// Who attached it and wrote the note. Absent is [`HUMAN`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
     /// What produced it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
@@ -234,6 +278,9 @@ pub struct Node {
     pub id: String,
     /// One line naming the idea.
     pub title: String,
+    /// Who wrote that line. Absent is [`HUMAN`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_by: Option<String>,
     /// Where it is in its lifecycle.
     pub status: Status,
     /// When it entered the graph.
@@ -245,6 +292,11 @@ pub struct Node {
     /// instead of retroactive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kill: Option<String>,
+    /// Who wrote the kill condition. Absent is [`HUMAN`]. A kill somebody
+    /// else proposed is a claim the human has not yet made: `review` lists
+    /// it until one is confirmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kill_by: Option<String>,
     /// Free-form labels, lowercase kebab-case, normalised on every write.
     /// No declared list: `check` warns on drift instead of walling it off.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -278,6 +330,40 @@ impl Node {
             .iter()
             .filter(move |e| e.kind == kind)
             .map(|e| e.to.as_str())
+    }
+
+    /// Whether this node already declares an edge of `kind` to `to`.
+    ///
+    /// Authorship is not part of a link's identity: the same claim written
+    /// twice is one claim, whoever wrote it the second time.
+    pub fn has_edge(&self, kind: EdgeType, to: &str) -> bool {
+        self.edges.iter().any(|e| e.kind == kind && e.to == to)
+    }
+
+    /// This node with every authorship field stated outright.
+    ///
+    /// The corpus stores the human by omission, because a node written before
+    /// authorship existed has to read the same as one written after. A reader
+    /// of `--json` should not have to know that rule, so the queries fill the
+    /// default in before serializing.
+    #[must_use]
+    pub fn with_authorship_stated(mut self) -> Self {
+        fn state(by: &mut Option<String>) {
+            if is_human(by.as_deref()) {
+                *by = Some(HUMAN.to_string());
+            }
+        }
+        state(&mut self.title_by);
+        if self.kill.is_some() {
+            state(&mut self.kill_by);
+        }
+        for e in &mut self.edges {
+            state(&mut e.by);
+        }
+        for r in &mut self.references {
+            state(&mut r.by);
+        }
+        self
     }
 
     /// Whether every one of `tags` is on this node. An empty filter matches.
@@ -342,6 +428,9 @@ pub struct Note {
     pub at: String,
     /// The reasoning, in the author's words.
     pub text: String,
+    /// Who wrote it. A projection rather than a stored field, so this is
+    /// always stated: the human's line simply does not name an author.
+    pub by: String,
 }
 
 /// A node file: frontmatter plus the prose you actually wrote.
@@ -406,8 +495,15 @@ const NOTES_HEADING: &str = "## Notes";
 /// `body`. Existing body text is never rewritten: if a notes section already
 /// closes the file, the new line is added after the last entry; otherwise a
 /// section is created at the end.
-pub(crate) fn append_note(body: &str, date: &str, text: &str) -> String {
-    let entry = format!("- {date}: {text}");
+///
+/// A note nobody but the human wrote carries its author inline,
+/// `- YYYY-MM-DD (label): text`. The human's own line keeps the shape it has
+/// always had, so the prose does not fill with attributions of the obvious.
+pub(crate) fn append_note(body: &str, date: &str, text: &str, by: Option<&str>) -> String {
+    let entry = match by {
+        Some(by) => format!("- {date} ({by}): {text}"),
+        None => format!("- {date}: {text}"),
+    };
     let body = body.trim_end();
     if has_terminal_notes_section(body) {
         format!("{body}\n{entry}")
@@ -451,13 +547,18 @@ pub(crate) fn notes_from_body(body: &str) -> Vec<Note> {
 
 fn parse_note_line(line: &str) -> Option<Note> {
     let rest = line.strip_prefix("- ")?;
-    let (at, text) = rest.split_once(": ")?;
+    let (head, text) = rest.split_once(": ")?;
+    let (at, by) = match head.split_once(" (") {
+        Some((at, by)) => (at, by.strip_suffix(')')?),
+        None => (head, HUMAN),
+    };
     if !is_iso_date(at) {
         return None;
     }
     Some(Note {
         at: at.to_string(),
         text: text.to_string(),
+        by: by.to_string(),
     })
 }
 
@@ -529,12 +630,12 @@ mod tests {
 
     #[test]
     fn notes_accumulate_in_order_and_leave_earlier_body_alone() {
-        let first = append_note("the original capture", "2026-09-21", "first thought");
+        let first = append_note("the original capture", "2026-09-21", "first thought", None);
         assert_eq!(
             first,
             "the original capture\n\n## Notes\n\n- 2026-09-21: first thought"
         );
-        let second = append_note(&first, "2026-09-21", "second thought");
+        let second = append_note(&first, "2026-09-21", "second thought", None);
         assert_eq!(
             second,
             "the original capture\n\n## Notes\n\n- 2026-09-21: first thought\n- 2026-09-21: second thought"
@@ -549,10 +650,12 @@ mod tests {
                 Note {
                     at: "2026-09-21".into(),
                     text: "first thought".into(),
+                    by: HUMAN.into(),
                 },
                 Note {
                     at: "2026-09-21".into(),
                     text: "second thought".into(),
+                    by: HUMAN.into(),
                 },
             ]
         );
@@ -560,20 +663,52 @@ mod tests {
 
     #[test]
     fn an_empty_body_still_gets_a_notes_section() {
-        let body = append_note("", "2026-09-21", "alone");
+        let body = append_note("", "2026-09-21", "alone", None);
         assert_eq!(body, "## Notes\n\n- 2026-09-21: alone");
         assert_eq!(
             notes_from_body(&body),
             vec![Note {
                 at: "2026-09-21".into(),
                 text: "alone".into(),
+                by: HUMAN.into(),
             }]
         );
     }
 
+    /// A note somebody else wrote names them in the line, and reads back as
+    /// theirs; the human's line is untouched and reads back as the human's.
+    #[test]
+    fn a_note_carries_its_author_in_the_line_only_when_it_is_not_the_human() {
+        let mine = append_note("", "2026-09-21", "my reasoning", None);
+        let ours = append_note(&mine, "2026-09-21", "its reasoning", Some("crew-alpha"));
+        assert_eq!(
+            ours,
+            "## Notes\n\n- 2026-09-21: my reasoning\n- 2026-09-21 (crew-alpha): its reasoning"
+        );
+        let notes = notes_from_body(&ours);
+        assert_eq!(notes[0].by, HUMAN);
+        assert_eq!(notes[1].by, "crew-alpha");
+        assert_eq!(notes[1].text, "its reasoning");
+    }
+
+    #[test]
+    fn an_author_label_is_free_text_but_cannot_break_a_note_line() {
+        assert_eq!(author(None).unwrap(), None);
+        assert_eq!(author(Some(" human ")).unwrap(), None);
+        assert_eq!(author(Some("  ")).unwrap(), None);
+        assert_eq!(
+            author(Some("agent:session-7d2")).unwrap(),
+            Some("agent:session-7d2".into())
+        );
+        assert!(author(Some("crew (alpha)")).is_err());
+        assert!(author(Some("crew: alpha")).is_err());
+        assert!(is_human(None) && is_human(Some("human")));
+        assert!(!is_human(Some("agent:session-7d2")));
+    }
+
     #[test]
     fn a_later_heading_gets_a_fresh_notes_section_at_the_end() {
-        let body = append_note("intro\n\n## Next\n\ndo x", "2026-09-21", "why");
+        let body = append_note("intro\n\n## Next\n\ndo x", "2026-09-21", "why", None);
         assert_eq!(
             body,
             "intro\n\n## Next\n\ndo x\n\n## Notes\n\n- 2026-09-21: why"

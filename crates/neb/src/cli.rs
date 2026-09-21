@@ -200,6 +200,10 @@ enum Command {
         /// lowercase words joined by single dashes, 60 characters or fewer.
         #[arg(long, value_name = "SLUG")]
         id: Option<String>,
+        /// Who authored the text: `human`, or the agent's session or crew
+        /// label. Free text; defaults to `human`.
+        #[arg(long, value_name = "LABEL")]
+        by: Option<String>,
         /// Orbit task that produced it.
         #[arg(long)]
         task: Option<String>,
@@ -231,6 +235,10 @@ enum Command {
         /// lowercase words joined by single dashes, 60 characters or fewer.
         #[arg(long, value_name = "SLUG")]
         id: Option<String>,
+        /// Who authored the text: `human`, or the agent's session or crew
+        /// label. Free text; defaults to `human`.
+        #[arg(long, value_name = "LABEL")]
+        by: Option<String>,
         /// Orbit task that produced it.
         #[arg(long)]
         task: Option<String>,
@@ -240,12 +248,23 @@ enum Command {
     },
 
     /// Sharpen a seed into a hypothesis by naming what would kill it.
+    ///
+    /// `--confirm` adopts the kill condition already on the node as the
+    /// human's own: the text is untouched and nothing is appended, which is
+    /// what takes the node off `review`'s unconfirmed list.
     Sharpen {
         /// Node id.
         node: String,
         /// The falsifier, written before anything is read.
+        #[arg(long, required_unless_present = "confirm", conflicts_with = "confirm")]
+        kill: Option<String>,
+        /// Who wrote the kill condition: `human`, or the agent's session or
+        /// crew label. Free text; defaults to `human`.
+        #[arg(long, value_name = "LABEL", conflicts_with = "confirm")]
+        by: Option<String>,
+        /// Stand behind the kill condition already there, as the human.
         #[arg(long)]
-        kill: String,
+        confirm: bool,
     },
 
     /// Move a node to a new status, with the transition guards applied.
@@ -271,6 +290,10 @@ enum Command {
         kind: EdgeKindArg,
         /// Node the edge points at.
         to: String,
+        /// Who authored the text: `human`, or the agent's session or crew
+        /// label. Free text; defaults to `human`.
+        #[arg(long, value_name = "LABEL")]
+        by: Option<String>,
     },
 
     /// Edit a node's tags, or list every tag with its node count.
@@ -296,6 +319,10 @@ enum Command {
     Note {
         /// Node id.
         node: String,
+        /// Who authored the text: `human`, or the agent's session or crew
+        /// label. Free text; defaults to `human`.
+        #[arg(long, value_name = "LABEL")]
+        by: Option<String>,
         /// The reasoning, as they said it.
         #[arg(required = true, trailing_var_arg = true)]
         text: Vec<String>,
@@ -317,6 +344,10 @@ enum Command {
         /// Why this is attached. The only field that matters in a year.
         #[arg(long)]
         note: Option<String>,
+        /// Who authored the text: `human`, or the agent's session or crew
+        /// label. Free text; defaults to `human`.
+        #[arg(long, value_name = "LABEL")]
+        by: Option<String>,
         /// Orbit task that produced it.
         #[arg(long)]
         task: Option<String>,
@@ -512,6 +543,7 @@ fn run(cli: Cli) -> Outcome {
             parents,
             tags,
             id,
+            by,
             task,
             run,
         } => {
@@ -525,6 +557,7 @@ fn run(cli: Cli) -> Outcome {
                     tags,
                     origin: Origin::of(task, run),
                     id,
+                    by,
                 },
             )?;
             println!(
@@ -548,6 +581,7 @@ fn run(cli: Cli) -> Outcome {
             kill,
             tags,
             id,
+            by,
             task,
             run,
         } => {
@@ -561,6 +595,7 @@ fn run(cli: Cli) -> Outcome {
                     tags,
                     origin: Origin::of(task, run),
                     id,
+                    by,
                 },
             )?;
             println!(
@@ -571,9 +606,33 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Sharpen { node, kill } => {
+        Command::Sharpen {
+            node,
+            confirm: true,
+            ..
+        } => {
+            // `--kill` and `--by` conflict with `--confirm` in the clap tree,
+            // so there is no text here to reconcile: confirming changes none.
             let corpus = Corpus::open(root)?;
-            let doc = ops::sharpen(&corpus, &node, &kill).map_err(|e| Failure::about(&e, &node))?;
+            ops::confirm_kill(&corpus, &node).map_err(|e| Failure::about(&e, &node))?;
+            println!("{} kill condition confirmed as yours", render::bold(&node));
+            Ok(ok)
+        }
+
+        Command::Sharpen {
+            node,
+            kill,
+            by,
+            confirm: false,
+        } => {
+            // Clap's `required_unless_present` guarantees the kill is here
+            // without `--confirm`; saying so beats an unwrap.
+            let Some(kill) = kill else {
+                return Err(Failure::say("pass --kill <KILL>, or --confirm"));
+            };
+            let corpus = Corpus::open(root)?;
+            let doc = ops::sharpen(&corpus, &node, &kill, by.as_deref())
+                .map_err(|e| Failure::about(&e, &node))?;
             println!("{} is now {}", render::bold(&node), doc.node.status);
             Ok(ok)
         }
@@ -596,10 +655,10 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Link { from, kind, to } => {
+        Command::Link { from, kind, to, by } => {
             let corpus = Corpus::open(root)?;
             let kind = EdgeType::from(kind);
-            ops::link(&corpus, &from, kind, &to)?;
+            ops::link(&corpus, &from, kind, &to, by.as_deref())?;
             println!(
                 "{} {} {}",
                 render::bold(&from),
@@ -649,13 +708,14 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Note { node, text } => {
+        Command::Note { node, by, text } => {
             let text = text.join(" ");
             if text.trim().is_empty() {
                 return Err(Failure::say("nothing to note"));
             }
             let corpus = Corpus::open(root)?;
-            ops::note(&corpus, &node, &text).map_err(|e| Failure::about(&e, &node))?;
+            ops::note(&corpus, &node, &text, by.as_deref())
+                .map_err(|e| Failure::about(&e, &node))?;
             if json {
                 let docs = corpus.load_all()?;
                 let view = graph::node(&Graph::build(&docs)?, &node)?;
@@ -672,6 +732,7 @@ fn run(cli: Cli) -> Outcome {
             kind,
             title,
             note,
+            by,
             task,
             run,
         } => {
@@ -685,6 +746,7 @@ fn run(cli: Cli) -> Outcome {
                     kind,
                     title,
                     note,
+                    by,
                     origin: Origin::of(task, run),
                 },
             )?;

@@ -2,7 +2,7 @@
 
 use super::{bold, dim, paint, status_badge};
 use nebula_core::{
-    INBOX_DAYS, Impact, Inbox, MigrationReport, NodeView, OpenReport, Report, ReviewItem,
+    HUMAN, INBOX_DAYS, Impact, Inbox, MigrationReport, NodeView, OpenReport, Report, ReviewItem,
     ReviewReport, ReviewRule, Severity, TagCounts, Via,
 };
 use std::fmt::Write as _;
@@ -20,7 +20,16 @@ pub fn node(view: &NodeView) -> String {
     );
     let _ = writeln!(out, "{}\n", n.title);
     if let Some(k) = &n.kill {
-        let _ = writeln!(out, "{} {k}\n", dim("kill:"));
+        // Whose falsifier this is decides how much the hypothesis is worth,
+        // so an unconfirmed one says so where the human will read it.
+        match n.kill_by.as_deref().filter(|by| *by != HUMAN) {
+            Some(by) => {
+                let _ = writeln!(out, "{} {k} {}\n", dim("kill:"), dim(&format!("({by})")));
+            }
+            None => {
+                let _ = writeln!(out, "{} {k}\n", dim("kill:"));
+            }
+        }
     }
     if let Some(c) = &n.closed {
         let _ = writeln!(out, "{} {} {}\n", dim("closed:"), c.why, dim(&c.at));
@@ -177,6 +186,10 @@ pub fn review(report: &ReviewReport, hypothesis_days: i64, seed_days: i64) -> St
             format!("Seeds untouched for {seed_days} days"),
         ),
         (ReviewRule::NoReferences, "Nodes with no references".into()),
+        (
+            ReviewRule::UnconfirmedKill,
+            "Agent-authored kills not yet confirmed by a human".into(),
+        ),
         (
             ReviewRule::StaleInbox,
             format!("Inbox entries waiting {INBOX_DAYS} days or more"),

@@ -22,6 +22,11 @@ use std::process::Command;
 struct V1Node {
     id: String,
     title: String,
+    // v1 had no authorship, but a v2 node does, and this model is what every
+    // node is read through: dropping the fields here would strip authorship
+    // off a migrated corpus and stop `neb migrate` being a no-op on v2.
+    #[serde(default)]
+    title_by: Option<String>,
     #[serde(default)]
     domain: String,
     status: String,
@@ -29,6 +34,8 @@ struct V1Node {
     updated: String,
     #[serde(default)]
     kill: Option<String>,
+    #[serde(default)]
+    kill_by: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
     #[serde(default)]
@@ -52,6 +59,8 @@ struct V1Edge {
     #[serde(rename = "type")]
     kind: String,
     to: String,
+    #[serde(default)]
+    by: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +87,8 @@ struct V1Reference {
     #[serde(default)]
     note: Option<String>,
     added: String,
+    #[serde(default)]
+    by: Option<String>,
     #[serde(default)]
     promoted_to: Option<String>,
     #[serde(default)]
@@ -291,10 +302,12 @@ fn convert(v1: V1Node) -> Result<(Node, Vec<String>)> {
         Node {
             id: v1.id,
             title: v1.title,
+            title_by: v1.title_by,
             status,
             created: v1.created,
             updated: v1.updated,
             kill: v1.kill,
+            kill_by: v1.kill_by,
             tags,
             edges,
             references,
@@ -330,6 +343,7 @@ impl Relabel<'_> {
                 title: r.title,
                 note: r.note,
                 added: r.added,
+                by: r.by,
                 origin: r.origin,
             });
         }
@@ -355,6 +369,8 @@ impl Relabel<'_> {
             title,
             note: Some(note),
             added,
+            // A re-labelled v1 entry is the human's own record, restated.
+            by: None,
             origin,
         });
         id
@@ -429,7 +445,11 @@ impl Relabel<'_> {
                     )));
                 }
             };
-            out.push(Edge { kind, to: e.to });
+            out.push(Edge {
+                kind,
+                to: e.to,
+                by: e.by,
+            });
         }
         Ok(out)
     }
