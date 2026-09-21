@@ -12,7 +12,7 @@ exit non-zero; `warn` findings do not.
 | 3 | Every edge target exists; no self-loop | error | `link`, `check` |
 | 4 | `contradicts` is mutual | error | `link` writes both; `check` |
 | 5 | `refuted` carries `closed.why` | error | `status`, `check` |
-| 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status` |
+| 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status`/`sharpen` |
 | 7 | A reference carries no `verdict`/`strength` | error | parse |
 | 8 | Local reference URIs resolve, relative to `nodes/` | error | `cite`, `check` |
 | 8 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`) |
@@ -37,7 +37,7 @@ Refusals are typed. The message is what the CLI prints; the variant is what
 | `\`hypothesis\` needs a kill condition first` | `NeedsKill(hypothesis)` | 2 | `neb sharpen <id> --kill "..."` — it moves the status for you. Ask the human for the falsifier if you do not have one; do not invent it. |
 | `a kill condition cannot be empty` | `EmptyKill` | 2 | Same: write the falsifier. |
 | `refuted needs --why: say how the kill condition fired` | `RefutedNeedsWhy` | 5 | `neb status <id> refuted --why "..."`. The reason is the human's; quote them. |
-| `\`X\` is refuted and cannot simply reopen` | `RefutedCannotReopen` | 6 | Refuted is final. `neb new "..." && neb link <new> reopens X` so the fact that it once died stays visible. Only with the human's say-so. |
+| `\`X\` is refuted and cannot simply reopen` | `RefutedCannotReopen` | 6 | Refuted is final, including its kill condition: `sharpen --kill` and `sharpen --confirm` refuse too, because rewriting the falsifier would orphan `closed.why`. `neb new "..." && neb link <new> reopens X` so the fact that it once died stays visible. Only with the human's say-so. Abandoned is revivable, so `sharpen` on an abandoned node is allowed. |
 | `\`X\` cannot become \`Y\`` | `InvalidTransition` | — | A guard you have not seen. Report it verbatim; do not work around it. |
 | `duplicate node id \`X\`` | `DuplicateId` | — | The corpus has two documents claiming one id, so a verb cannot safely choose one. Report both paths; do not overwrite either document or retry the verb. |
 | `parent \`X\` does not exist` | `MissingParent` | — | The parent id is wrong or has not been created. Check `neb list --json`; use an existing parent, or create the intended parent only with the human's approval. |

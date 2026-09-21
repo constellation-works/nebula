@@ -310,8 +310,14 @@ fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<
 /// Sharpen a seed into a hypothesis by naming what would kill it.
 ///
 /// `by` is whoever wrote the kill condition; `None` is the human.
+/// A refuted node's kill is part of the recorded verdict, so rewriting it
+/// is refused the same way a status change is: the idea stays dead, and a
+/// new node with a `reopens` edge is the way back.
 pub fn sharpen(corpus: &Corpus, id: &str, kill: &str, by: Option<&str>) -> Result<Doc> {
     let mut doc = corpus.load(id)?;
+    if doc.node.status.is_closed_by_verdict() {
+        return Err(Error::RefutedCannotReopen);
+    }
     if kill.trim().is_empty() {
         return Err(Error::EmptyKill);
     }
@@ -331,6 +337,9 @@ pub fn sharpen(corpus: &Corpus, id: &str, kill: &str, by: Option<&str>) -> Resul
 /// the only thing that takes the node off `review`'s unconfirmed list.
 pub fn confirm_kill(corpus: &Corpus, id: &str) -> Result<Doc> {
     let mut doc = corpus.load(id)?;
+    if doc.node.status.is_closed_by_verdict() {
+        return Err(Error::RefutedCannotReopen);
+    }
     if doc.node.kill.as_ref().is_none_or(|k| k.trim().is_empty()) {
         return Err(Error::corpus(
             "there is no kill condition to confirm; name one with --kill",
