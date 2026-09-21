@@ -1,7 +1,13 @@
 # Verbs
 
 Every verb takes `--root <DIR>` and `--json`. Ids are slugs of the title
-(`"Tags beat domains"` → `tags-beat-domains`); inbox ids are four hex chars.
+(`"Tags beat domains"` → `tags-beat-domains`); inbox ids are four hex chars. A
+slug over 60 characters is cut at the last `-` at or before the limit, never
+mid-word. `promote` and `new` take `--id <SLUG>` to choose the id explicitly
+instead — useful for a long title, since ids are frozen by invariant once
+written. An explicit id follows the same slug rules (lowercase words joined
+by single dashes, 60 characters or fewer) and is refused, as a typed error,
+if it breaks those rules or collides with an existing node.
 The `--json` excerpts below are real output from a three-node fixture corpus.
 
 ## Corpus
@@ -23,7 +29,7 @@ The `--json` excerpts below are real output from a three-node fixture corpus.
 |---|---|---|
 | `neb capture <TEXT>...` | append a thought; prints the entry id; works on a corpus that does not exist yet | — |
 | `neb inbox` | live entries (not promoted, not dropped) | — |
-| `neb promote <ENTRY>` | inbox entry → seed node | `--title`, `--parent <ID>`×, `--tag <TAG>`×, `--task`, `--run` |
+| `neb promote <ENTRY>` | inbox entry → seed node | `--title`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--task`, `--run` |
 | `neb drop <ENTRY>` | strike an entry through; never deleted | — |
 
 ```json
@@ -37,7 +43,7 @@ The `--json` excerpts below are real output from a three-node fixture corpus.
 
 | verb | does | flags |
 |---|---|---|
-| `neb new <TITLE>` | create a node directly | `--parent <ID>`×, `--kill`, `--tag <TAG>`×, `--task`, `--run` |
+| `neb new <TITLE>` | create a node directly | `--parent <ID>`×, `--kill`, `--tag <TAG>`×, `--id <SLUG>`, `--task`, `--run` |
 | `neb sharpen <NODE> --kill <KILL>` | seed → hypothesis by naming the falsifier | — |
 | `neb status <NODE> <STATUS>` | `seed`, `hypothesis`, `refuted`, `abandoned`, with guards | `--why` (required for refuted, optional for abandoned) |
 | `neb link <FROM> <KIND> <TO>` | `derives-from`, `refines`, `generalizes`, `reopens`, `contradicts` | — |

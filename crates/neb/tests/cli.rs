@@ -357,6 +357,71 @@ fn orbit_provenance_is_recorded_only_when_supplied() {
     assert!(raw.contains("run: jrun-20260907-0002"));
 }
 
+// ------------------------------------------------------------------ --id --
+
+#[test]
+fn new_and_promote_accept_an_explicit_id_overriding_the_slug() {
+    let c = Corpus::new();
+    let node = c
+        .run(&[
+            "new",
+            "A title that would slugify to something else entirely",
+            "--id",
+            "short-id",
+        ])
+        .assert_ok()
+        .stdout_trim();
+    assert_eq!(node, "short-id");
+    let raw = std::fs::read_to_string(c.node_file("short-id")).unwrap();
+    assert!(raw.contains("id: short-id"));
+    assert!(raw.contains("title: A title that would slugify to something else entirely"));
+
+    let entry = c
+        .run(&["capture", "promoted under a chosen id"])
+        .stdout_trim();
+    let node = c
+        .run(&[
+            "promote",
+            &entry,
+            "--title",
+            "Promoted under a chosen id",
+            "--id",
+            "chosen-id",
+        ])
+        .assert_ok()
+        .stdout_trim();
+    assert_eq!(node, "chosen-id");
+    assert!(c.node_file("chosen-id").exists());
+}
+
+#[test]
+fn an_explicit_id_that_breaks_the_slug_rules_is_a_typed_refusal() {
+    let c = Corpus::new();
+    c.run(&["new", "Some idea", "--id", "Not-Lowercase"])
+        .assert_fails()
+        .says("not a valid id");
+    c.run(&["new", "Some idea", "--id", "trailing-dash-"])
+        .assert_fails()
+        .says("not a valid id");
+    c.run(&["new", "Some idea", "--id", "double--dash"])
+        .assert_fails()
+        .says("not a valid id");
+    assert_eq!(
+        std::fs::read_dir(c.root.join("nodes")).unwrap().count(),
+        0,
+        "a refused id should not leave a node behind"
+    );
+}
+
+#[test]
+fn an_explicit_id_that_collides_with_an_existing_node_is_a_typed_refusal() {
+    let c = Corpus::new();
+    c.run(&["new", "First idea", "--id", "taken"]).assert_ok();
+    c.run(&["new", "Second idea", "--id", "taken"])
+        .assert_fails()
+        .says("already exists");
+}
+
 #[test]
 fn a_node_can_descend_from_two_parents_and_trace_shows_the_diamond() {
     let c = Corpus::new();
