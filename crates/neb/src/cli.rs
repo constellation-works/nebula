@@ -307,7 +307,7 @@ enum Command {
         node: String,
         /// Where it lives. A URL, DOI, path, or almanac wikilink.
         #[arg(long)]
-        uri: String,
+        uri: Option<String>,
         /// paper, study, article, note, discussion, book, dataset, thread, other.
         #[arg(long, default_value = "other")]
         kind: String,

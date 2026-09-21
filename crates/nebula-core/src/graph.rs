@@ -19,6 +19,8 @@ pub const SEED_DAYS: i64 = 90;
 pub const HYPOTHESIS_DAYS: i64 = 30;
 /// Days an inbox capture may wait before `open` and `review` raise it.
 pub const INBOX_DAYS: i64 = 14;
+/// Days a new node may remain without references before `open` and `review` raise it.
+pub const NO_REFERENCES_DAYS: i64 = 14;
 
 /// An indexed snapshot of a loaded corpus.
 ///
@@ -246,8 +248,8 @@ pub struct OpenItem {
     pub why: String,
 }
 
-/// Hypotheses with no references, seeds untouched for ninety days, and inbox
-/// captures waiting fourteen days or more.
+/// Hypotheses at least fourteen days old with no references, seeds untouched
+/// for ninety days, and inbox captures waiting fourteen days or more.
 pub fn open(graph: &Graph<'_>, inbox: &Inbox, tags: &[String]) -> Result<OpenReport> {
     let tags = model::normalize_tags(tags);
     let mut items: Vec<OpenItem> = Vec::new();
@@ -262,7 +264,10 @@ pub fn open(graph: &Graph<'_>, inbox: &Inbox, tags: &[String]) -> Result<OpenRep
         let n = &d.node;
         // The genuinely actionable gap: a hypothesis that names what would
         // kill it and has nothing attached that bears on the question.
-        if n.status == Status::Hypothesis && n.references.is_empty() {
+        if n.status == Status::Hypothesis
+            && n.references.is_empty()
+            && older_than(&n.created, NO_REFERENCES_DAYS)
+        {
             items.push(OpenItem {
                 id: n.id.clone(),
                 why: "hypothesis with no references".into(),
@@ -350,7 +355,10 @@ pub fn review(graph: &Graph<'_>, inbox: &Inbox, since: Option<i64>) -> Result<Re
                 reason: format!("seed untouched for {seed_days} days; propose: status abandoned"),
             });
         }
-        if n.status.is_open() && n.references.is_empty() {
+        if n.status.is_open()
+            && n.references.is_empty()
+            && older_than(&n.created, NO_REFERENCES_DAYS)
+        {
             no_references.push(ReviewItem {
                 rule: ReviewRule::NoReferences,
                 id: n.id.clone(),

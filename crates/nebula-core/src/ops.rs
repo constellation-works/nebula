@@ -92,8 +92,9 @@ pub struct Promotion {
 /// Everything that goes into a reference.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Citation {
-    /// Where it lives: a URL, DOI, path, or almanac wikilink.
-    pub uri: String,
+    /// Where it lives: a URL, DOI, path, or almanac wikilink. Optional only
+    /// for a discussion.
+    pub uri: Option<String>,
     /// `paper`, `study`, `article`, `note`, `discussion`, `book`, `dataset`,
     /// `thread` or `other`.
     pub kind: String,
@@ -310,12 +311,21 @@ pub fn note(corpus: &Corpus, id: &str, text: &str) -> Result<Doc> {
 /// Attach context to a node. The note is the field that matters.
 pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     let mut doc = corpus.load(id)?;
+    if args.uri.is_none() && args.kind != "discussion" {
+        return Err(Error::corpus(
+            "--uri is required unless --kind is discussion",
+        ));
+    }
     // Rule 8 at the point of action: a local path that does not resolve is a
     // citation to nothing, and refusing it here is cheaper than finding it
     // in `check` after the context of why it was attached has gone.
-    if is_local_path(&args.uri) && !resolve_local(corpus, &args.uri).exists() {
+    if let Some(uri) = args
+        .uri
+        .as_deref()
+        .filter(|uri| is_local_path(uri) && !resolve_local(corpus, uri).exists())
+    {
         return Err(Error::UnresolvedUri {
-            uri: args.uri.clone(),
+            uri: uri.to_string(),
             from: corpus.root().join("nodes"),
         });
     }

@@ -19,9 +19,9 @@ id: string,
  */
 kind: string, 
 /**
- * A URL, DOI, repo path, or almanac wikilink.
+ * A URL, DOI, repo path, or almanac wikilink. Discussions may omit it.
  */
-uri: string, 
+uri?: string | null, 
 /**
  * Human-readable name.
  */

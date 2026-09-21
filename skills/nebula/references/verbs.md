@@ -80,9 +80,10 @@ empty.
 
 | verb | does | flags |
 |---|---|---|
-| `neb cite <NODE> --uri <URI>` | attach context | `--kind` (paper, study, article, note, discussion, book, dataset, thread, other), `--title`, `--note`, `--task`, `--run` |
+| `neb cite <NODE> [--uri <URI>]` | attach context | `--kind` (paper, study, article, note, discussion, book, dataset, thread, other), `--title`, `--note`, `--task`, `--run` |
 
-A local `--uri` is resolved relative to `nodes/` and refused if it does not
+`--uri` may be omitted only with `--kind discussion`; every other kind requires
+it. A local URI is resolved relative to `nodes/` and refused if it does not
 exist. Always pass `--note`: it is the only field that matters in a year.
 
 ## Query
@@ -154,10 +155,12 @@ node carries `"closed": { "why": "...", "at": "2026-09-12" }`; optional fields
 
 | verb | does | flags |
 |---|---|---|
-| `neb open` | hypotheses with no references, seeds untouched ≥ 90 days, inbox entries waiting ≥ 14 days | `--tag <TAG>`× |
-| `neb review` | the weekly report: stale hypotheses (≥ 30 days), untouched seeds (≥ 90), nodes with no references, inbox waiting ≥ 14 | `--since <DAYS>`, `--out <FILE>` |
+| `neb open` | hypotheses created ≥ 14 days ago with no references, seeds untouched ≥ 90 days, inbox entries waiting ≥ 14 days | `--tag <TAG>`× |
+| `neb review` | the weekly report: stale hypotheses (≥ 30 days), untouched seeds (≥ 90), nodes created ≥ 14 days ago with no references, inbox waiting ≥ 14 | `--since <DAYS>`, `--out <FILE>` |
 
 Both are read-only by the spec's hard rule.
+Notes are reasoning, not context: adding a note does not count as adding a
+reference and does not close the no-references finding after the grace period.
 
 ```json
 // neb review --json     (rule: stale-hypothesis | untouched-seed | no-references | inbox-waiting)
