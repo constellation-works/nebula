@@ -366,3 +366,215 @@ fn opening_a_missing_corpus_is_a_typed_error() {
         Err(Error::NoCorpus(p)) if p == missing
     ));
 }
+
+// ------------------------------------------------------------------ commit --
+
+/// Run git in `dir`, asserting it succeeded; stdout as text.
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("running git");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed in {}:\n{}",
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// A repository at `dir` with an identity, so `neb`'s commits do not depend
+/// on the developer's global git configuration.
+fn git_init(dir: &std::path::Path) {
+    git(dir, &["init", "-q"]);
+    git(dir, &["config", "user.name", "neb-test"]);
+    git(dir, &["config", "user.email", "neb-test@example.invalid"]);
+    git(dir, &["config", "commit.gpgsign", "false"]);
+}
+
+/// The paths a commit touched, relative to the repository's top level.
+fn committed_paths(dir: &std::path::Path, rev: &str) -> Vec<String> {
+    git(dir, &["show", "--name-only", "--format=", rev])
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+fn head(dir: &std::path::Path) -> String {
+    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+}
+
+#[test]
+fn commit_is_off_by_default_and_off_means_nothing_is_committed() {
+    // Not a repository at all: with the setting off, git is never consulted.
+    let (_plain, plain) = corpus();
+    assert!(!plain.commit_setting().enabled);
+    seed(&plain, "A", &[]);
+    assert!(matches!(ops::commit(&plain, "new", &["a"]), Ok(None)));
+
+    // In a repository, off still means the write is left uncommitted.
+    let (dir, mut corpus) = corpus();
+    let root = dir.path().join("corpus");
+    git_init(&root);
+    seed(&corpus, "A", &[]);
+    assert!(matches!(ops::commit(&corpus, "new", &["a"]), Ok(None)));
+    assert!(
+        git(&root, &["status", "--porcelain"]).contains("?? nodes/"),
+        "the write is there, not staged, not committed"
+    );
+
+    // The setting is a `config.yaml` key that is absent until turned on, so
+    // a file written before it existed renders back unchanged.
+    let config = || std::fs::read_to_string(root.join("config.yaml")).unwrap();
+    assert!(!config().contains("commit"), "{}", config());
+    assert!(ops::set_commit(&mut corpus, true).unwrap().enabled);
+    assert!(config().contains("commit: true"), "{}", config());
+    assert!(!ops::set_commit(&mut corpus, false).unwrap().enabled);
+    assert!(!config().contains("commit"), "{}", config());
+}
+
+#[test]
+fn commit_on_records_each_write_as_one_commit_of_corpus_paths_only() {
+    let (dir, mut corpus) = corpus();
+    let root = dir.path().join("corpus");
+    git_init(&root);
+    ops::set_commit(&mut corpus, true).unwrap();
+    let start = ops::commit(&corpus, "config", &["commit"])
+        .unwrap()
+        .expect("turning it on is itself recorded");
+    assert_eq!(start.message, "neb config commit");
+    assert_eq!(committed_paths(&root, "HEAD"), ["config.yaml"]);
+
+    // A capture creates inbox/, a promote writes a node and settles the
+    // capture: one commit each, naming what the verb touched.
+    let entry = ops::capture(&corpus, "a thought").unwrap();
+    let captured = ops::commit(&corpus, "capture", &[&entry.id])
+        .unwrap()
+        .expect("a commit");
+    assert_eq!(captured.message, format!("neb capture {}", entry.id));
+    assert_eq!(captured.hash, head(&root));
+    assert!(
+        committed_paths(&root, "HEAD")
+            .iter()
+            .all(|p| p.starts_with("inbox/")),
+        "{:?}",
+        committed_paths(&root, "HEAD")
+    );
+
+    let id = ops::promote(&corpus, &entry.id, &Promotion::default())
+        .unwrap()
+        .doc
+        .node
+        .id;
+    let promoted = ops::commit(&corpus, "promote", &[&entry.id, &id])
+        .unwrap()
+        .expect("a commit");
+    assert_eq!(promoted.message, format!("neb promote {} {id}", entry.id));
+    let mut paths = committed_paths(&root, "HEAD");
+    paths.sort();
+    assert_eq!(paths.len(), 2, "{paths:?}");
+    assert!(paths.iter().any(|p| p == &format!("nodes/{id}.md")));
+    assert!(paths.iter().any(|p| p.starts_with("inbox/")));
+
+    // A stray file under the root that is not a corpus path is left alone,
+    // and a write that changed nothing produces no commit.
+    std::fs::write(root.join("scratch.txt"), "not the corpus\n").unwrap();
+    let before = head(&root);
+    assert!(matches!(ops::commit(&corpus, "note", &[&id]), Ok(None)));
+    assert_eq!(head(&root), before);
+    assert!(
+        git(&root, &["status", "--porcelain"]).contains("?? scratch.txt"),
+        "scratch.txt is neither staged nor committed"
+    );
+    assert!(
+        git(
+            &root,
+            &[
+                "status",
+                "--porcelain",
+                "--",
+                "nodes",
+                "inbox",
+                "config.yaml"
+            ]
+        )
+        .is_empty()
+    );
+    assert!(
+        git(&root, &["remote"]).is_empty(),
+        "nothing to push to, and nothing pushed"
+    );
+}
+
+#[test]
+fn a_commit_is_refused_when_something_outside_the_corpus_is_staged_and_the_write_stays() {
+    // The corpus is nested in a larger repository, the shape the refusal
+    // exists for: a file staged elsewhere must not ride in a `neb` commit.
+    let dir = tempfile::tempdir().unwrap();
+    let outer = dir.path().join("outer");
+    let root = outer.join("corpus");
+    let mut corpus = Corpus::init(&root).unwrap();
+    git_init(&outer);
+    std::fs::write(outer.join("README.md"), "theirs\n").unwrap();
+    git(&outer, &["add", "-A"]);
+    git(&outer, &["commit", "-q", "-m", "start"]);
+    ops::set_commit(&mut corpus, true).unwrap();
+    ops::commit(&corpus, "config", &["commit"])
+        .unwrap()
+        .unwrap();
+    assert_eq!(committed_paths(&outer, "HEAD"), ["corpus/config.yaml"]);
+
+    std::fs::write(outer.join("README.md"), "theirs, edited\n").unwrap();
+    git(&outer, &["add", "README.md"]);
+    let before = head(&outer);
+    let a = seed(&corpus, "A", &[]);
+    let err = ops::commit(&corpus, "new", &[&a]).unwrap_err();
+    assert!(
+        matches!(&err, Error::StagedElsewhere { root: r, paths } if r == &root && paths == &["README.md"]),
+        "got {err:?}"
+    );
+    assert_eq!(head(&outer), before, "nothing was committed");
+    assert!(
+        corpus.node_path(&a).exists(),
+        "the write is never rolled back because of git"
+    );
+    let status = git(&outer, &["status", "--porcelain"]);
+    assert!(
+        status.contains("M  README.md"),
+        "their staging is intact:\n{status}"
+    );
+    assert!(
+        status.contains("?? corpus/nodes/"),
+        "the node was not even staged:\n{status}"
+    );
+
+    // Once their change is out of the way, the next commit sweeps the node.
+    git(&outer, &["commit", "-q", "-m", "theirs"]);
+    let done = ops::commit(&corpus, "new", &[&a]).unwrap().unwrap();
+    assert_eq!(done.message, format!("neb new {a}"));
+    assert_eq!(
+        committed_paths(&outer, "HEAD"),
+        [format!("corpus/nodes/{a}.md")]
+    );
+}
+
+#[test]
+fn commit_on_in_a_corpus_the_containing_repository_ignores_is_a_typed_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let outer = dir.path().join("outer");
+    let root = outer.join("corpus");
+    let mut corpus = Corpus::init(&root).unwrap();
+    git_init(&outer);
+    std::fs::write(outer.join(".gitignore"), "corpus/\n").unwrap();
+    ops::set_commit(&mut corpus, true).unwrap();
+    let a = seed(&corpus, "A", &[]);
+    assert!(matches!(
+        ops::commit(&corpus, "new", &[&a]),
+        Err(Error::CorpusIgnored(r)) if r == root
+    ));
+    assert!(corpus.node_path(&a).exists());
+}

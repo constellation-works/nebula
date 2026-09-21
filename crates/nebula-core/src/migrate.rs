@@ -14,7 +14,6 @@ use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, S
 use crate::store::{self, Corpus};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 // --------------------------------------------------------------- v1 model --
 
@@ -192,30 +191,11 @@ fn in_file(e: Error, path: &Path) -> Error {
 /// lands as its own commit and the pre-migration state stays recoverable.
 /// A corpus that is not a git repository is migrated as is.
 fn refuse_dirty_tree(root: &Path) -> Result<()> {
-    let inside = Command::new("git")
-        .args([
-            "-C",
-            &root.display().to_string(),
-            "rev-parse",
-            "--is-inside-work-tree",
-        ])
-        .output();
-    let Ok(inside) = inside else {
-        return Ok(()); // no git on PATH: nothing to protect against
-    };
-    if !inside.status.success() {
+    // No git on PATH, or no repository: nothing to protect against.
+    if !store::inside_work_tree(root).unwrap_or(false) {
         return Ok(());
     }
-    let status = Command::new("git")
-        .args([
-            "-C",
-            &root.display().to_string(),
-            "status",
-            "--porcelain",
-            "--",
-            ".",
-        ])
-        .output()?;
+    let status = store::git(root, &["status", "--porcelain", "--", "."])?;
     if !status.status.success() {
         return Err(Error::corpus(format!(
             "git status failed in {}:\n{}",
@@ -232,9 +212,9 @@ fn refuse_dirty_tree(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Rewrite `config.yaml` to hold `corpus_id`, `schema_version`, and the
-/// observatory root when one was set. The v1 keys it drops are named in
-/// `docs/runbooks/migrate-v1-to-v2.md`.
+/// Rewrite `config.yaml` to hold `corpus_id`, `schema_version`, the
+/// observatory root when one was set, and `commit` when it is on. The v1
+/// keys it drops are named in `docs/runbooks/migrate-v1-to-v2.md`.
 fn migrate_config(root: &Path) -> Result<bool> {
     #[derive(Deserialize)]
     struct Lenient {
@@ -242,6 +222,8 @@ fn migrate_config(root: &Path) -> Result<bool> {
         corpus_id: Option<String>,
         #[serde(default)]
         observatory_root: Option<PathBuf>,
+        #[serde(default)]
+        commit: bool,
     }
     let path = root.join(config::FILE);
     let existing = if path.exists() {
@@ -254,12 +236,13 @@ fn migrate_config(root: &Path) -> Result<bool> {
         .map(serde_yaml_ng::from_str::<Lenient>)
         .transpose()
         .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))?;
-    let (corpus_id, observatory_root) = match lenient {
-        Some(l) => (l.corpus_id, l.observatory_root),
-        None => (None, None),
+    let (corpus_id, observatory_root, commit) = match lenient {
+        Some(l) => (l.corpus_id, l.observatory_root, l.commit),
+        None => (None, None, false),
     };
     let mut fresh = Config::fresh(corpus_id.unwrap_or_else(|| store::corpus_id(root)));
     fresh.observatory_root = observatory_root;
+    fresh.commit = commit;
     if existing.as_deref() == Some(fresh.render()?.as_str()) {
         return Ok(false);
     }

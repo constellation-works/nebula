@@ -1,6 +1,6 @@
 # Verbs
 
-Every verb takes `--root <DIR>` and `--json`. Ids are slugs of the title
+Every verb takes `--root <DIR>`, `--json` and `--no-commit`. Ids are slugs of the title
 (`"Tags beat domains"` → `tags-beat-domains`); inbox ids are four hex chars. A
 slug over 60 characters is cut at the last `-` at or before the limit, never
 mid-word. `promote` and `new` take `--id <SLUG>` to choose the id explicitly
@@ -18,6 +18,7 @@ The `--json` excerpts below are real output from a three-node fixture corpus.
 | `neb check` | run the ten invariants; exit non-zero on any error | — |
 | `neb migrate` | v1 → v2 in place; idempotent; refuses on a dirty git tree | — |
 | `neb config observatory-root [DIR]` | read or set where the Observatory checkout is | — |
+| `neb config commit [on\|off]` | read or set whether each write is committed to the corpus's git repository | — |
 
 `config` is the only verb that writes `config.yaml`, and it rewrites the file
 whole: the file stays machine-written and is never hand-edited. Without `DIR`
@@ -28,6 +29,21 @@ it prints the effective root and which setting supplied it
 // neb config observatory-root --json     (source: config | env | unset)
 { "root": "/Users/you/workspace/observatory", "source": "config" }
 ```
+
+```json
+// neb config commit --json
+{ "enabled": true }
+```
+
+With `commit` on (off by default) and the corpus root inside a git work
+tree, every mutating verb ends with one commit of `nodes/`, `inbox/` and
+`config.yaml`, named `neb <verb> <ids>`, and prints `committed <hash>` in
+text mode (nothing extra in `--json`). It never pushes and never touches a
+path outside the corpus root. If something outside the corpus is already
+staged, the verb exits non-zero with `staged changes outside the corpus`
+**after** its write has landed — the write is never rolled back because of
+git; report it rather than retry the write. `--no-commit` skips the commit
+for one invocation.
 
 ```json
 // neb check --json          (findings[] carries {rule, level, node, message})

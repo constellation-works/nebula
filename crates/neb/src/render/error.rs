@@ -21,6 +21,18 @@ pub fn message(e: &Error) -> String {
         Error::SchemaMismatch { .. } => {
             format!("{e}\n\nBring the corpus forward with:  neb migrate")
         }
+        Error::StagedElsewhere { root, .. } => format!(
+            "{e}\n\nCommit or unstage them, then catch the corpus up:\n  \
+             git -C {0} add nodes inbox config.yaml && git -C {0} commit -m \"neb\"\n\n\
+             Or skip the commit next time with --no-commit.",
+            root.display()
+        ),
+        Error::CorpusIgnored(root) => format!(
+            "{e}\n\nMake the corpus its own repository, so the containing one's ignore \
+             rules stop applying:\n  git -C {} init\n\nOr turn the setting off:  \
+             neb config commit off",
+            root.display()
+        ),
         other => other.to_string(),
     }
 }

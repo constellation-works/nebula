@@ -12,7 +12,9 @@ use std::io::IsTerminal;
 use std::sync::OnceLock;
 
 pub use error::{message, message_about};
-pub use report::{check, impact, inbox, migration, node, observatory_root, open, review, tags};
+pub use report::{
+    check, commit_setting, impact, inbox, migration, node, observatory_root, open, review, tags,
+};
 pub use tree::draw as tree;
 
 fn colour() -> bool {

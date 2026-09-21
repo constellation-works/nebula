@@ -6,12 +6,19 @@
 //!
 //! Nothing here prints. A caller that wants to tell someone what happened gets
 //! back the data and says it in its own voice.
+//!
+//! The corpus may sit inside a git work tree, and when `config.yaml` says
+//! `commit: true` a write ends with a commit of the corpus paths and nothing
+//! else. That is the whole of what this module knows about git: it never
+//! pushes, never stages a path outside the root, and never undoes a write
+//! because the commit failed.
 
-use crate::config::{Config, ObservatoryRoot};
+use crate::config::{self, CommitSetting, Config, ObservatoryRoot};
 use crate::error::{Error, Result};
 use crate::model::{self, Doc};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 use time::{
     Date, OffsetDateTime, format_description::well_known::Iso8601, macros::format_description,
 };
@@ -96,6 +103,105 @@ impl Corpus {
     pub(crate) fn set_observatory_root(&mut self, dir: PathBuf) -> Result<()> {
         self.config.observatory_root = Some(dir);
         self.config.save(&self.root)
+    }
+
+    /// Whether a write is followed by a commit, per `config.yaml`.
+    pub fn commit_setting(&self) -> CommitSetting {
+        CommitSetting {
+            enabled: self.config.commit,
+        }
+    }
+
+    /// Record in `config.yaml` whether writes are committed. Rewrites the
+    /// file whole, like every other setting.
+    pub(crate) fn set_commit(&mut self, enabled: bool) -> Result<()> {
+        self.config.commit = enabled;
+        self.config.save(&self.root)
+    }
+
+    /// Commit the corpus after a write, when `config.yaml` asks for it and
+    /// the root is inside a git work tree.
+    ///
+    /// Stages `nodes/`, `inbox/` and `config.yaml` under the root and
+    /// nothing else, and commits as `neb <verb> <ids>`. `None` when the
+    /// setting is off, the root is not under git, or the write left nothing
+    /// to record. Refused, as [`Error::StagedElsewhere`], when the index
+    /// already holds something outside the corpus: a `neb` commit is exactly
+    /// the corpus, and folding a stranger's staged work into one would misfile
+    /// it. The write is on disk before this runs and stays there whatever
+    /// git says. Never pushes.
+    pub(crate) fn commit(&self, verb: &str, ids: &[&str]) -> Result<Option<Committed>> {
+        if !self.config.commit {
+            return Ok(None);
+        }
+        let root = &self.root;
+        if !inside_work_tree(root).map_err(|e| git_unavailable(root, &e))? {
+            return Ok(None);
+        }
+        // The corpus is gitignored by the repository around it, which is
+        // exactly the setup a private repository at the corpus root fixes.
+        let ignored = git(root, &["check-ignore", "-q", "--", "nodes"])?;
+        match ignored.status.code() {
+            Some(0) => return Err(Error::CorpusIgnored(root.clone())),
+            Some(1) => {}
+            _ => {
+                return Err(git_failed(
+                    root,
+                    "check-ignore",
+                    &String::from_utf8_lossy(&ignored.stderr),
+                ));
+            }
+        }
+        let prefix = git_ok(root, &["rev-parse", "--show-prefix"])?;
+        let prefix = prefix.trim();
+        // The whole index, not just the part under the root: a path staged
+        // elsewhere in the repository is exactly what the refusal is for.
+        // Paths come back relative to the top level, hence the prefix.
+        let staged = git_ok(root, &["diff", "--cached", "--name-only", "--no-renames"])?;
+        let outside: Vec<String> = staged
+            .lines()
+            .filter(|path| !is_corpus_path(prefix, path))
+            .map(String::from)
+            .collect();
+        if !outside.is_empty() {
+            return Err(Error::StagedElsewhere {
+                root: root.clone(),
+                paths: outside,
+            });
+        }
+
+        // Only paths that exist can be named: `inbox/` appears on the first
+        // capture and a pathspec that matches nothing is a git error.
+        let present: Vec<&str> = COMMIT_PATHS
+            .iter()
+            .copied()
+            .filter(|p| root.join(p).exists())
+            .collect();
+        if present.is_empty() {
+            return Ok(None);
+        }
+        let mut add = vec!["add", "-A", "--"];
+        add.extend(present);
+        git_ok(root, &add)?;
+        let staged = git(root, &["diff", "--cached", "--quiet"])?;
+        match staged.status.code() {
+            Some(0) => return Ok(None), // the write changed nothing git can see
+            Some(1) => {}
+            _ => {
+                return Err(git_failed(
+                    root,
+                    "diff",
+                    &String::from_utf8_lossy(&staged.stderr),
+                ));
+            }
+        }
+        let message = match ids {
+            [] => format!("neb {verb}"),
+            ids => format!("neb {verb} {}", ids.join(" ")),
+        };
+        git_ok(root, &["commit", "-q", "-m", &message])?;
+        let hash = git_ok(root, &["rev-parse", "HEAD"])?.trim().to_string();
+        Ok(Some(Committed { hash, message }))
     }
 
     /// Path of a node file, whether or not it exists.
@@ -236,6 +342,80 @@ impl Corpus {
         std::fs::write(&entry.file, lines.join("\n") + "\n")?;
         Ok(())
     }
+}
+
+/// A commit `neb` made after a write.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Committed {
+    /// The full commit hash.
+    pub hash: String,
+    /// The message, `neb <verb> <ids>`.
+    pub message: String,
+}
+
+/// What a `neb` commit may contain, relative to the corpus root. Everything
+/// else under the root, and everything outside it, is left alone.
+const COMMIT_PATHS: [&str; 3] = ["nodes", "inbox", config::FILE];
+
+/// Whether a path from `git diff --name-only`, relative to the repository's
+/// top level, is one a `neb` commit may contain. `prefix` is the root's own
+/// position under that top level (`git rev-parse --show-prefix`), empty when
+/// the corpus root is the repository.
+fn is_corpus_path(prefix: &str, path: &str) -> bool {
+    let Some(rest) = path.strip_prefix(prefix) else {
+        return false;
+    };
+    rest == config::FILE || rest.starts_with("nodes/") || rest.starts_with("inbox/")
+}
+
+/// Run git at the corpus root. The process not starting at all is the one
+/// failure this reports; whether the command succeeded is the caller's to
+/// judge, since a non-zero exit is an answer for some of them.
+pub(crate) fn git(root: &Path, args: &[&str]) -> Result<Output> {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|e| git_unavailable(root, &e))
+}
+
+/// Run git at the corpus root and require it to succeed; stdout as text.
+fn git_ok(root: &Path, args: &[&str]) -> Result<String> {
+    let out = git(root, args)?;
+    if !out.status.success() {
+        return Err(git_failed(
+            root,
+            args.first().copied().unwrap_or("git"),
+            &String::from_utf8_lossy(&out.stderr),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn git_failed(root: &Path, context: &str, stderr: &str) -> Error {
+    Error::Git {
+        root: root.to_path_buf(),
+        context: context.to_string(),
+        stderr: stderr.trim().to_string(),
+    }
+}
+
+fn git_unavailable(root: &Path, e: &std::io::Error) -> Error {
+    git_failed(root, "start", &e.to_string())
+}
+
+/// Whether the root is inside a git work tree. `Err` only when git itself
+/// could not be run, which a caller that merely wants to know may treat as
+/// "no".
+pub(crate) fn inside_work_tree(root: &Path) -> std::io::Result<bool> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()?;
+    Ok(out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true")
 }
 
 /// Every capture still waiting to be promoted or dropped.

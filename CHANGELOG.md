@@ -70,6 +70,21 @@ habit. This cut keeps what a person actually uses.
   prints the resolved path, and `show --json` carries
   `observatory: [{reference, record, path}]`. `config.yaml` stays
   machine-written and `migrate` preserves the setting.
+- `neb config commit on|off`: with `commit: true` in `config.yaml` (off by
+  default, absent from the file until set) and the corpus root inside a git
+  work tree, every mutating verb (`capture`, `promote`, `drop`, `new`,
+  `sharpen`, `status`, `link`, `tag`, `cite`, `note`, `migrate`, `config`)
+  ends with one commit of `nodes/`, `inbox/` and `config.yaml` under the
+  root, as `neb <verb> <ids>`, and prints `committed <hash>`. Never pushes,
+  never stages a path outside the corpus. Something staged elsewhere in the
+  repository is a typed refusal (`StagedElsewhere`) that leaves the write in
+  place: a write is never rolled back because of git. A corpus the
+  containing repository ignores is refused too (`CorpusIgnored`), with the
+  fix — a repository at the corpus root — in the hint. `--no-commit` on any
+  verb skips the commit once. `neb config commit` reads the setting
+  (`--json`: `{ "enabled": bool }`); `migrate` preserves it and commits
+  itself. The runbooks now recommend a private repository at the corpus
+  root and cover restoring from it.
 - `open` reports hypotheses with no references, seeds untouched for ninety
   days or more, and inbox entries waiting fourteen days or more.
 - `impact` reports every descendant (reverse genealogy) plus the node's

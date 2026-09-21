@@ -5,7 +5,7 @@ tags: [operations, setup, corpus]
 paths: ["crates/nebula-core/src/store.rs", "crates/nebula-core/src/config.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
-last_validated: 2026-09-12
+last_validated: 2026-09-21
 ---
 
 # Set Up a Corpus
@@ -31,7 +31,10 @@ against throwaway corpora.
 ## Put it under git
 
 The corpus is append-mostly text, so git is the right backup and the history is
-worth having on its own.
+worth having on its own. The corpus exists on one disk until it has a remote.
+
+The recommended setup is a **private repository at the corpus root** — `git
+init` inside the corpus, not in whatever directory contains it:
 
 ```sh
 git -C "$NEBULA_ROOT" init
@@ -39,13 +42,71 @@ git -C "$NEBULA_ROOT" add -A
 git -C "$NEBULA_ROOT" commit -m "corpus"
 ```
 
+A repository at the root means the containing repository's `.gitignore` is
+irrelevant: a corpus kept under a vault or a notes checkout that ignores it
+(the usual arrangement, since a corpus should not ride along in someone else's
+history) still gets its own history, and `neb` can commit to it. A nested
+repository is invisible to the outer one beyond a single untracked directory
+entry, which the outer ignore rule already hides.
+
 Use a private remote. The corpus mixes work and personal material, and unlike
 this repository it is not safe to publish.
+
+```sh
+git -C "$NEBULA_ROOT" remote add origin <private-remote>
+git -C "$NEBULA_ROOT" push -u origin HEAD
+```
 
 `neb migrate` refuses to run against a dirty git tree, so keep the corpus
 committed between sessions — see
 [migrate-v1-to-v2.md](migrate-v1-to-v2.md) if you are bringing an older corpus
 forward.
+
+## Let neb commit for you
+
+Once the corpus is a repository, `neb` can commit after every write:
+
+```sh
+neb config commit on
+```
+
+This writes `commit: true` to `config.yaml` (off by default, and absent from
+the file until turned on). From then on every mutating verb — `capture`,
+`promote`, `drop`, `new`, `sharpen`, `status`, `link`, `tag`, `cite`, `note`,
+`migrate`, `config` — ends with one commit of the corpus paths, and prints
+`committed <hash>` under its usual output:
+
+```
+$ neb capture "tags beat domains"
+3f2a
+committed 8c1d2e0
+$ git -C "$NEBULA_ROOT" log --oneline -1
+8c1d2e0 neb capture 3f2a
+```
+
+What it does, and does not do:
+
+- The commit stages `nodes/`, `inbox/` and `config.yaml` under the corpus
+  root and nothing else. Anything else under the root, and everything outside
+  it, is left as it was. The message is `neb <verb> <ids>`.
+- It never pushes. Push on your own schedule (`git -C "$NEBULA_ROOT" push`),
+  or from a cron job, and the remote is your off-disk copy.
+- It needs a git identity, like any commit: `git -C "$NEBULA_ROOT" config
+  user.name ...` and `user.email` if your global config has none.
+- If something outside the corpus is already staged in the repository (which
+  can only happen when the corpus is nested in a larger one), the commit is
+  refused so that a `neb` commit is always exactly the corpus. The write
+  itself is never rolled back; see
+  [corpus-recovery.md](corpus-recovery.md#symptom-a-verb-writes-but-refuses-to-commit).
+- If the repository around the corpus ignores it, `neb` says so rather than
+  silently commit nothing; the fix is the `git init` at the root above.
+- `--no-commit` on any verb skips the commit once; the next verb that commits
+  sweeps the earlier write up with its own.
+- `neb config commit off` turns it off. That last rewrite of `config.yaml` is
+  left uncommitted, because off means off; commit it by hand.
+
+`neb config commit` with no argument reports the setting (`--json` gives
+`{ "enabled": true }`).
 
 ## Tag as you go
 
@@ -102,7 +163,7 @@ neb check
 |---|---|
 | `$NEBULA_ROOT/nodes/<id>.md` | one node, with its edges, references and prose |
 | `$NEBULA_ROOT/inbox/YYYY-MM.md` | captures, append-only, struck through when settled |
-| `$NEBULA_ROOT/config.yaml` | corpus id, schema version, and the observatory root when one is set |
+| `$NEBULA_ROOT/config.yaml` | corpus id, schema version, `commit: true` when auto-commit is on, and the observatory root when one is set |
 
 Work and personal ideas belong in separate corpora, each with its own
 `NEBULA_ROOT`; topics inside one owner's thinking are tags, not separate

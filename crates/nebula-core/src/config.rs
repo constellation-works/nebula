@@ -1,9 +1,10 @@
 //! Corpus configuration.
 //!
 //! `config.yaml` at the corpus root holds which schema the files follow, a
-//! stable id for the corpus, and, when one has been set, where the
-//! Observatory checkout is. Nothing about the ideas is configured: tags on
-//! the nodes themselves partition the corpus.
+//! stable id for the corpus, whether `neb` commits the corpus after each
+//! write, and, when one has been set, where the Observatory checkout is.
+//! Nothing about the ideas is configured: tags on the nodes themselves
+//! partition the corpus.
 //!
 //! Private to the crate. A consumer that needs to know the schema version is
 //! asking about a corpus, and [`crate::store::Corpus`] is what answers that.
@@ -32,6 +33,21 @@ pub(crate) struct Config {
     /// stands in when it is absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) observatory_root: Option<PathBuf>,
+    /// Whether a mutating verb commits the corpus afterwards, when the root
+    /// is inside a git work tree. Off by default and absent from the file
+    /// until `neb config commit on` writes it, so a corpus written before
+    /// the setting existed renders back byte for byte.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) commit: bool,
+}
+
+/// Whether the corpus is committed after each write, as `neb config commit`
+/// reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct CommitSetting {
+    /// `commit` in `config.yaml`. `false` when the key is absent.
+    pub enabled: bool,
 }
 
 /// Where `observatory` references resolve, and which setting said so.
@@ -68,6 +84,7 @@ impl Config {
             schema_version: SCHEMA_VERSION,
             corpus_id,
             observatory_root: None,
+            commit: false,
         }
     }
 

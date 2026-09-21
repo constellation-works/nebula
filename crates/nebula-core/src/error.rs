@@ -127,6 +127,38 @@ pub enum Error {
     )]
     InvalidId(String),
 
+    /// The commit after a write was refused because something outside the
+    /// corpus was already staged, and a `neb` commit must be exactly the
+    /// corpus. The write itself is in place: git never rolls back a write.
+    #[error(
+        "{} has staged changes outside the corpus ({}); the write is in place and nothing was committed",
+        .root.display(),
+        .paths.join(", ")
+    )]
+    StagedElsewhere {
+        /// The corpus root.
+        root: PathBuf,
+        /// What is staged, relative to the repository's top level.
+        paths: Vec<String>,
+    },
+
+    /// `commit` is on, but the repository containing the corpus ignores it,
+    /// so there is nothing git would ever record.
+    #[error("{} is ignored by the git repository that contains it; nothing can be committed", .0.display())]
+    CorpusIgnored(PathBuf),
+
+    /// A git command did not succeed. The write it was meant to record is in
+    /// place.
+    #[error("git {context} failed in {}: {stderr}", .root.display())]
+    Git {
+        /// The corpus root the command ran in.
+        root: PathBuf,
+        /// Which command.
+        context: String,
+        /// What git said.
+        stderr: String,
+    },
+
     /// Anything else about the corpus itself: configuration, a malformed
     /// file, a value that is not one of the ones there are.
     #[error("{0}")]
