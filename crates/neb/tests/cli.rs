@@ -154,6 +154,17 @@ fn set_updated(path: &Path, date: &str) {
     write(path, &raw);
 }
 
+/// Back-date a node's `created` field without changing when it was last touched.
+fn set_created(path: &Path, date: &str) {
+    let raw = std::fs::read_to_string(path).unwrap();
+    let needle = "\ncreated: ";
+    let start = raw.find(needle).unwrap() + needle.len();
+    let end = start + 10;
+    let mut raw = raw;
+    raw.replace_range(start..end, date);
+    write(path, &raw);
+}
+
 /// Back-date one capture's timestamp in place, found by its own text rather
 /// than by position, since `Corpus::seed` leaves earlier settled captures in
 /// the same monthly inbox file ahead of whichever one a test cares about.
@@ -731,6 +742,64 @@ fn a_reference_with_no_note_warns_and_a_noted_one_does_not() {
 }
 
 #[test]
+fn a_discussion_reference_may_omit_its_uri_but_other_kinds_may_not() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+
+    c.run(&[
+        "cite",
+        &id,
+        "--kind",
+        "discussion",
+        "--note",
+        "came from the ideation session",
+    ])
+    .assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(raw.contains("kind: discussion"), "{raw}");
+    assert!(
+        !raw.contains("uri:"),
+        "URI-less discussion should omit uri:\n{raw}"
+    );
+    c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
+
+    c.run(&["cite", &id, "--kind", "paper", "--note", "missing URI"])
+        .assert_fails()
+        .says("--uri is required unless --kind is discussion");
+
+    c.run(&["cite", &id, "--kind", "discussion"]).assert_ok();
+    c.run(&["check"])
+        .assert_ok()
+        .says("reference `r2` has no note saying why it is here")
+        .says("0 errors, 1 warnings");
+
+    let invalid = Corpus::new();
+    let invalid_id = invalid.seed("another idea", "Another idea");
+    invalid
+        .run(&[
+            "cite",
+            &invalid_id,
+            "--kind",
+            "paper",
+            "--uri",
+            "https://example.org",
+            "--note",
+            "context",
+        ])
+        .assert_ok();
+    let raw = std::fs::read_to_string(invalid.node_file(&invalid_id)).unwrap();
+    write(
+        &invalid.node_file(&invalid_id),
+        &raw.replace("  uri: https://example.org\n", ""),
+    );
+    invalid
+        .run(&["check"])
+        .assert_fails()
+        .says("kind `paper` but no URI")
+        .says("1 errors, 0 warnings");
+}
+
+#[test]
 fn a_local_uri_must_resolve_and_external_urls_never_trip_it() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
@@ -834,6 +903,7 @@ fn open_finds_the_hypothesis_with_no_references() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
     c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
+    set_created(&c.node_file(&id), &date_days_ago(14));
     c.run(&["open"])
         .assert_ok()
         .says(&id)
@@ -846,6 +916,32 @@ fn open_finds_the_hypothesis_with_no_references() {
         !after.contains("no references"),
         "a reference closes the gap:\n{after}"
     );
+}
+
+#[test]
+fn open_and_review_apply_the_no_references_grace_at_fourteen_days() {
+    let c = Corpus::new();
+    let grace = c.seed("still in grace", "Still in grace");
+    c.run(&["sharpen", &grace, "--kill", "if X"]).assert_ok();
+    set_created(&c.node_file(&grace), &date_days_ago(13));
+
+    let due = c.seed("now due", "Now due");
+    c.run(&["sharpen", &due, "--kill", "if Y"]).assert_ok();
+    c.run(&["note", &due, "reasoning is not a reference"])
+        .assert_ok();
+    set_created(&c.node_file(&due), &date_days_ago(14));
+
+    for verb in ["open", "review"] {
+        let out = c.run(&[verb]).assert_ok().stdout();
+        assert!(
+            !out.contains(&grace),
+            "{verb} raised a 13-day-old node:\n{out}"
+        );
+        assert!(
+            out.contains(&due),
+            "{verb} missed a 14-day-old node:\n{out}"
+        );
+    }
 }
 
 #[test]
@@ -1155,6 +1251,7 @@ fn review_reports_untouched_seeds_on_both_sides_of_ninety_days() {
 fn review_reports_nodes_with_no_references() {
     let c = Corpus::new();
     let bare = c.seed("a bare idea", "A bare idea");
+    set_created(&c.node_file(&bare), &date_days_ago(14));
 
     let cited = c.seed("a cited idea", "A cited idea");
     c.run(&["cite", &cited, "--uri", "http://example.com", "--note", "n"])
@@ -1221,6 +1318,7 @@ fn review_json_emits_all_four_rule_names() {
     set_updated(&c.node_file(&stale_seed), &date_days_ago(120));
 
     c.seed("bare idea", "Bare idea");
+    set_created(&c.node_file("bare-idea"), &date_days_ago(14));
 
     c.run(&["capture", "an old capture"]).assert_ok();
     set_inbox_stamp_for(&c.root, "an old capture", &stamp_days_ago(20));
@@ -1249,6 +1347,7 @@ fn review_json_emits_all_four_rule_names() {
 fn review_out_writes_the_report_and_prints_nothing_else() {
     let c = Corpus::new();
     let bare = c.seed("an idea needing a look", "An idea needing a look");
+    set_created(&c.node_file(&bare), &date_days_ago(14));
     let out_path = c.workdir().join("review.md");
     let run = c
         .run(&["review", "--out", out_path.to_str().unwrap()])

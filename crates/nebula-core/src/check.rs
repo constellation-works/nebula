@@ -252,6 +252,17 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, r: &mut Report) {
     let n = &doc.node;
     let id = Some(n.id.as_str());
     for f in &n.references {
+        if f.uri.is_none() && f.kind != "discussion" {
+            r.push(
+                Severity::Error,
+                8,
+                id,
+                format!(
+                    "reference `{}` has kind `{}` but no URI; only discussions may omit it",
+                    f.id, f.kind
+                ),
+            );
+        }
         // 9. A bare link is how a collection like this rots.
         if f.note.as_ref().is_none_or(|s| s.trim().is_empty()) {
             r.push(
@@ -263,14 +274,18 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, r: &mut Report) {
         }
         // 8. A local path that does not resolve is a citation to nothing.
         //    External URLs are not fetched; `check` stays offline and fast.
-        if is_local_path(&f.uri) && !resolve_local(corpus, &f.uri).exists() {
+        if let Some(uri) = f
+            .uri
+            .as_deref()
+            .filter(|uri| is_local_path(uri) && !resolve_local(corpus, uri).exists())
+        {
             r.push(
                 Severity::Error,
                 8,
                 id,
                 format!(
                     "reference `{}` points at a path that does not resolve: {}",
-                    f.id, f.uri
+                    f.id, uri
                 ),
             );
         }

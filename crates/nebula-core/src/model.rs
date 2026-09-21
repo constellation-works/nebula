@@ -197,8 +197,9 @@ pub struct Reference {
     /// `paper`, `study`, `article`, `note`, `discussion`, `book`, `dataset`,
     /// `thread` or `other`.
     pub kind: String,
-    /// A URL, DOI, repo path, or almanac wikilink.
-    pub uri: String,
+    /// A URL, DOI, repo path, or almanac wikilink. Discussions may omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
     /// Human-readable name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,

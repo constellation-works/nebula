@@ -38,7 +38,14 @@ pub fn node(view: &NodeView) -> String {
     if !n.references.is_empty() {
         let _ = writeln!(out, "{}", dim("references"));
         for r in &n.references {
-            let _ = writeln!(out, "  {} {:<10} {}", bold(&r.id), r.kind, r.uri);
+            match &r.uri {
+                Some(uri) => {
+                    let _ = writeln!(out, "  {} {:<10} {uri}", bold(&r.id), r.kind);
+                }
+                None => {
+                    let _ = writeln!(out, "  {} {}", bold(&r.id), r.kind);
+                }
+            }
             let text = r.note.as_deref().map_or("(no note)", str::trim);
             let _ = writeln!(out, "     {}", dim(text));
         }

@@ -326,7 +326,7 @@ impl Relabel<'_> {
             self.out.push(Reference {
                 id: r.id,
                 kind: r.kind,
-                uri: r.uri,
+                uri: Some(r.uri),
                 title: r.title,
                 note: r.note,
                 added: r.added,
@@ -351,7 +351,7 @@ impl Relabel<'_> {
         self.out.push(Reference {
             id: id.clone(),
             kind: "other".into(),
-            uri,
+            uri: Some(uri),
             title,
             note: Some(note),
             added,
