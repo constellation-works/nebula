@@ -70,8 +70,11 @@ Rules for the lines:
 - Never run `sharpen --confirm` yourself, in either mode: confirming a kill
   condition is the human saying they stand behind it.
 - Never propose a new tag without saying `(new tag)` after the reason.
-- Never propose `migrate`, `init` or anything touching `config.yaml`; if
-  `check` fails to open the corpus, that failure is the entire review.
+- Never propose `migrate`, `init`, `config` or anything else touching
+  `config.yaml`; if `check` fails to open the corpus, that failure is the
+  entire review. An observatory-root warning is the one exception worth
+  reporting: say which records did not resolve and leave the setting to the
+  human.
 
 ## Provenance
 

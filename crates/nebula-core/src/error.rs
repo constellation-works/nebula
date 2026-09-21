@@ -113,6 +113,12 @@ pub enum Error {
     #[error("title `{0}` does not reduce to a usable id")]
     UnusableTitle(String),
 
+    /// An `observatory` reference's `uri` is not a bare record id.
+    #[error(
+        "`{0}` is not an Observatory record id: one of Q, H, T or R followed by digits, such as `Q002`"
+    )]
+    InvalidObservatoryId(String),
+
     /// A user-supplied `--id` does not follow the slug rules: lowercase
     /// words joined by single dashes, no leading, trailing, or doubled
     /// dash, 60 characters or fewer.

@@ -15,7 +15,7 @@ use crate::model::{Doc, EdgeType, Status};
 use crate::store::Corpus;
 use serde::Serialize;
 use std::collections::{BTreeSet, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// How badly a finding breaks the corpus.
 ///
@@ -69,7 +69,7 @@ impl Report {
 /// Run every invariant over a graph.
 ///
 /// The corpus is needed for rule 8 alone, which asks the filesystem whether a
-/// local reference resolves.
+/// local reference resolves, and where the Observatory checkout is.
 ///
 /// Rule 7 never reaches this function: a reference carrying a `verdict` or
 /// `strength`, or a node with an unknown field, fails to deserialize, so the
@@ -81,9 +81,10 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
         nodes: docs.len(),
         ..Report::default()
     };
+    let observatory = corpus.observatory_root().root;
 
     for doc in docs {
-        check_node(doc, &ids, corpus, &mut r);
+        check_node(doc, &ids, corpus, observatory.as_deref(), &mut r);
     }
 
     // 4. `contradicts` is a claim about both nodes, so a one-sided declaration
@@ -183,15 +184,78 @@ fn has_scheme(uri: &str) -> bool {
 /// Where a local reference URI lands: relative to the `nodes/` directory,
 /// used as given and never canonicalized (macOS temp dirs sit under a
 /// symlink, and resolving would pass on one platform and fail on the other).
-pub(crate) fn resolve_local(corpus: &Corpus, uri: &str) -> std::path::PathBuf {
+pub(crate) fn resolve_local(corpus: &Corpus, uri: &str) -> PathBuf {
     corpus.root().join("nodes").join(Path::new(uri))
 }
 
+/// The reference kind whose `uri` is a bare Observatory record id rather
+/// than a location: `Q002`, `H007`, `T003`, `R012`. Where the record is on
+/// this machine is the corpus's `observatory_root` setting, so the reference
+/// itself carries nothing machine-specific.
+pub const OBSERVATORY: &str = "observatory";
+
+/// Whether `id` has the shape of an Observatory record id: one of `Q`, `H`,
+/// `T`, `R` followed by digits. The shape is the whole contract; how many
+/// digits Observatory uses is its business.
+pub fn is_observatory_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    chars.next().is_some_and(|c| observatory_dir(c).is_some())
+        && !chars.as_str().is_empty()
+        && chars.all(|c| c.is_ascii_digit())
+}
+
+/// The Observatory directory a record id's letter files it under. Research
+/// layout v2: questions, hypotheses and theories are files, research
+/// records are directories.
+fn observatory_dir(letter: char) -> Option<&'static str> {
+    match letter {
+        'Q' => Some("questions"),
+        'H' => Some("hypotheses"),
+        'T' => Some("theories"),
+        'R' => Some("research"),
+        _ => None,
+    }
+}
+
+/// Where an Observatory record is under `root`: the entry of the id's
+/// directory whose name is the id, or the id followed by `-` or `.`, so
+/// `Q002` finds `questions/Q002-is-proper-time-a-count.md` without the
+/// reference having to know the slug. `None` when the id has the wrong
+/// shape, the directory is unreadable, or nothing there starts with it.
+///
+/// Matched by prefix in a listing rather than by resolving a path, and used
+/// as given: nothing is canonicalized. Ties (two records claiming one id)
+/// go to the first in name order, which `check` in Observatory is the place
+/// to catch.
+pub fn resolve_observatory(root: &Path, id: &str) -> Option<PathBuf> {
+    if !is_observatory_id(id) {
+        return None;
+    }
+    let dir = root.join(observatory_dir(id.chars().next()?)?);
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .ok()?
+        .filter_map(std::result::Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            name.strip_prefix(id)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(['-', '.']))
+        })
+        .collect();
+    names.sort();
+    names.into_iter().next().map(|name| dir.join(name))
+}
+
 /// Every invariant that can be judged from a single node plus the id set.
-fn check_node(doc: &Doc, ids: &HashSet<&str>, corpus: &Corpus, r: &mut Report) {
+fn check_node(
+    doc: &Doc,
+    ids: &HashSet<&str>,
+    corpus: &Corpus,
+    observatory: Option<&Path>,
+    r: &mut Report,
+) {
     status_rules(doc, r);
     edge_rules(doc, ids, r);
-    reference_rules(doc, corpus, r);
+    reference_rules(doc, corpus, observatory, r);
 }
 
 /// Rules about where a node sits in its lifecycle and what that costs.
@@ -248,7 +312,7 @@ fn edge_rules(doc: &Doc, ids: &HashSet<&str>, r: &mut Report) {
 }
 
 /// Rules about the references hanging off a node.
-fn reference_rules(doc: &Doc, corpus: &Corpus, r: &mut Report) {
+fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &mut Report) {
     let n = &doc.node;
     let id = Some(n.id.as_str());
     for f in &n.references {
@@ -272,6 +336,41 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, r: &mut Report) {
                 format!("reference `{}` has no note saying why it is here", f.id),
             );
         }
+        // 8, for an Observatory record: the id is the reference, and where
+        //    it is on this machine is a setting. Not finding it here says
+        //    the setting is missing or the checkout is behind, not that the
+        //    record is gone, so the finding is a warning rather than an
+        //    error and the reference stays valid on a machine that has it.
+        if f.kind == OBSERVATORY {
+            if let Some(record) = f.uri.as_deref() {
+                match observatory {
+                    None => r.push(
+                        Severity::Warn,
+                        8,
+                        id,
+                        format!(
+                            "reference `{}` names Observatory record `{record}` but no \
+                             observatory root is set (config observatory_root or \
+                             $OBSERVATORY_ROOT)",
+                            f.id
+                        ),
+                    ),
+                    Some(root) if resolve_observatory(root, record).is_none() => r.push(
+                        Severity::Warn,
+                        8,
+                        id,
+                        format!(
+                            "reference `{}` names Observatory record `{record}`, which does \
+                             not resolve under {}",
+                            f.id,
+                            root.display()
+                        ),
+                    ),
+                    Some(_) => {}
+                }
+            }
+            continue;
+        }
         // 8. A local path that does not resolve is a citation to nothing.
         //    External URLs are not fetched; `check` stays offline and fast.
         if let Some(uri) = f
@@ -294,7 +393,7 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, r: &mut Report) {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_local_path, tag_drift};
+    use super::{is_local_path, is_observatory_id, resolve_observatory, tag_drift};
 
     #[test]
     fn tag_drift_catches_case_and_plurals_only() {
@@ -319,5 +418,44 @@ mod tests {
         for uri in ["./notes/x.md", "notes/x.md", "C:/x.md", "x"] {
             assert!(is_local_path(uri), "{uri}");
         }
+    }
+
+    #[test]
+    fn an_observatory_id_is_one_letter_of_four_then_digits() {
+        for id in ["Q002", "H7", "T003", "R012"] {
+            assert!(is_observatory_id(id), "{id}");
+        }
+        for id in ["", "Q", "q002", "X002", "Q002-slug", "Q 2", "/abs/Q002.md"] {
+            assert!(!is_observatory_id(id), "{id}");
+        }
+    }
+
+    /// The record is found by its id alone, whatever slug follows it, and a
+    /// longer id that merely starts with the same digits is not a match.
+    #[test]
+    fn a_record_resolves_by_id_prefix_in_its_own_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("questions")).unwrap();
+        std::fs::create_dir_all(root.join("research").join("R012-arc")).unwrap();
+        std::fs::write(root.join("questions").join("Q002-a-question.md"), "").unwrap();
+        std::fs::write(root.join("questions").join("Q0021-not-it.md"), "").unwrap();
+        std::fs::write(root.join("questions").join("README.md"), "").unwrap();
+
+        assert_eq!(
+            resolve_observatory(root, "Q002"),
+            Some(root.join("questions").join("Q002-a-question.md"))
+        );
+        assert_eq!(
+            resolve_observatory(root, "R012"),
+            Some(root.join("research").join("R012-arc"))
+        );
+        assert_eq!(resolve_observatory(root, "Q003"), None);
+        assert_eq!(
+            resolve_observatory(root, "H001"),
+            None,
+            "no hypotheses/ at all"
+        );
+        assert_eq!(resolve_observatory(root, "Q002-a-question"), None);
     }
 }

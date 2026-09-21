@@ -15,6 +15,7 @@ exit non-zero; `warn` findings do not.
 | 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status` |
 | 7 | A reference carries no `verdict`/`strength` | error | parse |
 | 8 | Local reference URIs resolve, relative to `nodes/` | error | `cite`, `check` |
+| 8 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`) |
 | 9 | Every reference has a note | warn | `check` |
 | 10 | No two tags differ only by case or a trailing `s` | warn | `check` |
 
@@ -39,6 +40,7 @@ Refusals are typed. The message is what the CLI prints; the variant is what
 | `\`X\` is refuted and cannot simply reopen` | `RefutedCannotReopen` | 6 | Refuted is final. `neb new "..." && neb link <new> reopens X` so the fact that it once died stays visible. Only with the human's say-so. |
 | `\`X\` cannot become \`Y\`` | `InvalidTransition` | — | A guard you have not seen. Report it verbatim; do not work around it. |
 | `\`../x.md\` does not resolve from .../nodes` | `UnresolvedUri` | 8 | Local URIs are relative to `nodes/`. Fix the path (`../../studies/x.md`) or use a URL/wikilink. |
+| `\`X\` is not an Observatory record id` | `InvalidObservatoryId` | 8 | `--kind observatory` takes the bare id (`Q002`, `H007`, `T003`, `R012`), never a path or a slug. Never fall back to `--uri <absolute path>`: it breaks on every other machine. |
 | `no open inbox entry \`X\`` | `NoSuchInboxEntry` | — | Already promoted or dropped, or the id is wrong. `neb inbox --json`. |
 | `node \`X\` already exists` | `NodeExists` | — | A node with that slug exists. Show it; the human decides whether this is a duplicate (drop) or a refinement (`new` with a different title + `refines`). |
 | `no corpus at <dir>` | `NoCorpus` | — | The root is wrong. Do **not** `neb init` somewhere new; confirm `NEBULA_ROOT` with the human. |
@@ -49,6 +51,10 @@ Refusals are typed. The message is what the CLI prints; the variant is what
 
 - **Rule 9** — a reference with no note. Add one with the human's reason for
   attaching it; if you cited it, you know why.
+- **Rule 8, observatory** — the record does not resolve, or no root is set.
+  Never "fix" this by rewriting the reference as a path. Tell the human to run
+  `neb config observatory-root <DIR>` or export `$OBSERVATORY_ROOT`; if the
+  root is right, the checkout simply does not carry that record yet.
 - **Rule 10** — `Design` next to `design`, or `study` next to `studies`. Tags
   are normalised on write, so this only arises from hand edits; propose
   `neb tag <id> --remove <bad> --add <good>` and name the node.

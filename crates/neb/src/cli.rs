@@ -20,8 +20,8 @@
 use crate::render;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use nebula_core::{
-    Citation, Corpus, Direction, EdgeType, Error, Graph, NewNode, Origin, Promotion, Severity,
-    Status, check, graph, migrate, ops,
+    Citation, Corpus, Direction, EdgeType, Error, Graph, NewNode, OBSERVATORY,
+    OBSERVATORY_ROOT_ENV, Origin, Promotion, Severity, Status, check, graph, migrate, ops,
 };
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -37,6 +37,7 @@ Corpus:
   init         Create an empty corpus
   check        Run the invariants. Exits non-zero on any error
   migrate      Bring a v1 corpus forward to the v2 schema, in place
+  config       Read or set a corpus setting
   completions  Generate shell completion scripts
 
 Inbox:
@@ -159,6 +160,15 @@ enum Command {
     /// so the migration lands as its own commit. Evidence, task links and
     /// the removed edge kinds become references; nothing is dropped.
     Migrate,
+
+    /// Read or set a corpus setting.
+    ///
+    /// `config.yaml` stays machine-written: this rewrites it whole rather
+    /// than inviting a hand edit.
+    Config {
+        #[command(subcommand)]
+        setting: ConfigSetting,
+    },
 
     /// Generate shell completion scripts.
     Completions {
@@ -335,7 +345,9 @@ enum Command {
         /// Where it lives. A URL, DOI, path, or almanac wikilink.
         #[arg(long)]
         uri: Option<String>,
-        /// paper, study, article, note, discussion, book, dataset, thread, other.
+        /// paper, study, article, note, discussion, book, dataset, thread,
+        /// observatory, other. With `observatory`, `--uri` is a bare record
+        /// id (`Q002`) resolved through the configured observatory root.
         #[arg(long, default_value = "other")]
         kind: String,
         /// Human-readable name.
@@ -417,6 +429,18 @@ enum Command {
         /// Write the report here instead of stdout.
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+}
+
+/// The settings `neb config` reads and writes.
+#[derive(Subcommand)]
+enum ConfigSetting {
+    /// Where the Observatory checkout is, so `cite --kind observatory Q002`
+    /// resolves. Without a directory, prints the effective root and where it
+    /// came from. Falls back to `$OBSERVATORY_ROOT` when unset here.
+    ObservatoryRoot {
+        /// The checkout. Omit to read the current setting.
+        dir: Option<PathBuf>,
     },
 }
 
@@ -503,6 +527,22 @@ fn run(cli: Cli) -> Outcome {
                 out_json(&report)?;
             } else {
                 print!("{}", render::migration(&report));
+            }
+            Ok(ok)
+        }
+
+        Command::Config {
+            setting: ConfigSetting::ObservatoryRoot { dir },
+        } => {
+            let mut corpus = Corpus::open(root)?;
+            let setting = match dir {
+                Some(dir) => ops::set_observatory_root(&mut corpus, dir)?,
+                None => corpus.observatory_root(),
+            };
+            if json {
+                out_json(&setting)?;
+            } else {
+                print!("{}", render::observatory_root(&setting));
             }
             Ok(ok)
         }
@@ -743,7 +783,7 @@ fn run(cli: Cli) -> Outcome {
                 &node,
                 &Citation {
                     uri,
-                    kind,
+                    kind: kind.clone(),
                     title,
                     note,
                     by,
@@ -751,6 +791,38 @@ fn run(cli: Cli) -> Outcome {
                 },
             )?;
             println!("{} {}", render::bold(&node), render::bold(&cited.reference));
+            if kind == OBSERVATORY {
+                let setting = corpus.observatory_root();
+                let record = cited
+                    .doc
+                    .node
+                    .references
+                    .iter()
+                    .find(|r| r.id == cited.reference)
+                    .and_then(|r| r.uri.clone())
+                    .unwrap_or_default();
+                match setting.root.as_deref() {
+                    None => println!(
+                        "\n{}",
+                        render::dim(&format!(
+                            "No observatory root set, so `{record}` cannot be located. \
+                             Set one with `neb config observatory-root <DIR>` or \
+                             ${OBSERVATORY_ROOT_ENV}."
+                        ))
+                    ),
+                    Some(dir) => match check::resolve_observatory(dir, &record) {
+                        Some(path) => println!("{}", render::dim(&path.display().to_string())),
+                        None => println!(
+                            "\n{}",
+                            render::dim(&format!(
+                                "`{record}` does not resolve under {}; `check` will keep \
+                                 saying so until the checkout has it.",
+                                dir.display()
+                            ))
+                        ),
+                    },
+                }
+            }
             if bare {
                 println!(
                     "\n{}",
@@ -765,7 +837,9 @@ fn run(cli: Cli) -> Outcome {
         Command::Show { node } => {
             let corpus = Corpus::open(root)?;
             let docs = corpus.load_all()?;
-            let view = graph::node(&Graph::build(&docs)?, &node)?;
+            let observatory = corpus.observatory_root().root;
+            let view =
+                graph::node(&Graph::build(&docs)?, &node)?.with_observatory(observatory.as_deref());
             if json {
                 out_json(&view)?;
             } else {
@@ -893,7 +967,7 @@ mod tests {
             assert!(flat.contains(&row), "help is missing the row {row:?}");
             seen += 1;
         }
-        assert_eq!(seen, 22, "template rows need updating for a new subcommand");
+        assert_eq!(seen, 23, "template rows need updating for a new subcommand");
         assert!(
             Cli::command().find_subcommand("help").is_none(),
             "clap's `help` subcommand should be disabled"
@@ -936,7 +1010,7 @@ mod tests {
             .map(|s| s.get_name().to_string())
             .collect();
         let expected = [
-            ["init", "check", "migrate", "completions"].as_slice(),
+            ["init", "check", "migrate", "config", "completions"].as_slice(),
             &["capture", "inbox", "promote", "drop"],
             &["new", "sharpen", "status", "link", "tag", "note"],
             &["cite"],

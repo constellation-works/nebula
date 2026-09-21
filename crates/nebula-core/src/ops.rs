@@ -9,7 +9,8 @@
 //! Which invariants live here rather than in `check` is a deliberate choice
 //! per rule. See `docs/design/lineage-graph/specs/invariants.md`.
 
-use crate::check::{is_local_path, resolve_local};
+use crate::check::{OBSERVATORY, is_local_path, is_observatory_id, resolve_local};
+use crate::config::ObservatoryRoot;
 use crate::error::{Error, Result};
 use crate::graph;
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
@@ -97,11 +98,11 @@ pub struct Promotion {
 /// Everything that goes into a reference.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Citation {
-    /// Where it lives: a URL, DOI, path, or almanac wikilink. Optional only
-    /// for a discussion.
+    /// Where it lives: a URL, DOI, path, almanac wikilink, or — with kind
+    /// `observatory` — a bare record id. Optional only for a discussion.
     pub uri: Option<String>,
     /// `paper`, `study`, `article`, `note`, `discussion`, `book`, `dataset`,
-    /// `thread` or `other`.
+    /// `thread`, `observatory` or `other`.
     pub kind: String,
     /// Human-readable name.
     pub title: Option<String>,
@@ -360,6 +361,12 @@ pub fn note(corpus: &Corpus, id: &str, text: &str, by: Option<&str>) -> Result<D
 }
 
 /// Attach context to a node. The note is the field that matters.
+///
+/// An `observatory` reference stores a bare record id rather than a
+/// location, so the citation says the same thing on every machine. Whether
+/// that record is on *this* machine is a question for `check`, which warns
+/// rather than refuses: a checkout that is not there yet is not a broken
+/// citation.
 pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     let by = model::author(args.by.as_deref())?;
     let mut doc = corpus.load(id)?;
@@ -368,12 +375,25 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
             "--uri is required unless --kind is discussion",
         ));
     }
+    // An Observatory record id is checked for its shape at the point of
+    // action, because a path or a slug stored here would never resolve and
+    // the mistake is obvious now and cryptic later.
+    let uri = match (args.kind.as_str(), args.uri.as_deref()) {
+        (OBSERVATORY, Some(record)) => {
+            let record = record.trim().to_ascii_uppercase();
+            if !is_observatory_id(&record) {
+                return Err(Error::InvalidObservatoryId(record));
+            }
+            Some(record)
+        }
+        _ => args.uri.clone(),
+    };
     // Rule 8 at the point of action: a local path that does not resolve is a
     // citation to nothing, and refusing it here is cheaper than finding it
     // in `check` after the context of why it was attached has gone.
-    if let Some(uri) = args
-        .uri
+    if let Some(uri) = uri
         .as_deref()
+        .filter(|_| args.kind != OBSERVATORY)
         .filter(|uri| is_local_path(uri) && !resolve_local(corpus, uri).exists())
     {
         return Err(Error::UnresolvedUri {
@@ -385,7 +405,7 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     doc.node.references.push(Reference {
         id: reference.clone(),
         kind: args.kind.clone(),
-        uri: args.uri.clone(),
+        uri,
         title: args.title.clone(),
         note: args.note.clone(),
         added: store::today(),
@@ -394,6 +414,15 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     });
     corpus.save(&mut doc)?;
     Ok(Cited { doc, reference })
+}
+
+/// Record where the Observatory checkout is, in the corpus's `config.yaml`.
+///
+/// Returns the setting as it now resolves, which is the config's value: a
+/// root written here takes precedence over `$OBSERVATORY_ROOT`.
+pub fn set_observatory_root(corpus: &mut Corpus, dir: PathBuf) -> Result<ObservatoryRoot> {
+    corpus.set_observatory_root(dir)?;
+    Ok(corpus.observatory_root())
 }
 
 /// Move a node to a new status, with the transition guards applied.

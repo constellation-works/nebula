@@ -7,7 +7,7 @@
 //! Nothing here prints. A caller that wants to tell someone what happened gets
 //! back the data and says it in its own voice.
 
-use crate::config::Config;
+use crate::config::{Config, ObservatoryRoot};
 use crate::error::{Error, Result};
 use crate::model::{self, Doc};
 use serde::Serialize;
@@ -20,6 +20,7 @@ use time::{
 #[derive(Debug, Clone)]
 pub struct Corpus {
     root: PathBuf,
+    config: Config,
 }
 
 impl Corpus {
@@ -41,19 +42,21 @@ impl Corpus {
         if !root.join("nodes").is_dir() {
             return Err(Error::NoCorpus(root));
         }
-        // Loaded for its schema check alone: a corpus at an older schema
-        // refuses to open until `neb migrate` has brought it forward.
-        Config::load(&root, || corpus_id(&root))?;
-        Ok(Self { root })
+        // A corpus at an older schema refuses to open until `neb migrate`
+        // has brought it forward.
+        let config = Config::load(&root, || corpus_id(&root))?;
+        Ok(Self { root, config })
     }
 
     /// Create an empty corpus.
     pub fn init(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root.join("nodes"))?;
         std::fs::create_dir_all(root.join("inbox"))?;
-        Config::fresh(corpus_id(root)).save(root)?;
+        let config = Config::fresh(corpus_id(root));
+        config.save(root)?;
         Ok(Self {
             root: root.to_path_buf(),
+            config,
         })
     }
 
@@ -74,6 +77,25 @@ impl Corpus {
     /// Where the corpus lives.
     pub(crate) fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Where `observatory` references resolve: `observatory_root` in
+    /// `config.yaml`, else `$OBSERVATORY_ROOT`, else nowhere.
+    ///
+    /// The path is used as given and never canonicalized, like every other
+    /// path here.
+    pub fn observatory_root(&self) -> ObservatoryRoot {
+        self.config.observatory_root()
+    }
+
+    /// Record where the Observatory checkout is, in `config.yaml`.
+    ///
+    /// The file stays machine-written: this rewrites it whole, header and
+    /// all, rather than editing a line. The directory is not required to
+    /// exist yet; `check` says so when a reference fails to resolve under it.
+    pub(crate) fn set_observatory_root(&mut self, dir: PathBuf) -> Result<()> {
+        self.config.observatory_root = Some(dir);
+        self.config.save(&self.root)
     }
 
     /// Path of a node file, whether or not it exists.

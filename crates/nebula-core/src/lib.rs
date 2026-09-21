@@ -18,7 +18,7 @@
 //! - [`store`]  [`Corpus`]: where it lives, loading, saving, the inbox
 //! - [`graph`]  [`Graph`] and the pure queries over it
 //! - [`ops`]    the mutations, each enforcing its point-of-action invariants
-//! - [`check`]  the invariant checker
+//! - [`check`]  the invariant checker, and where an `observatory` record resolves
 //! - [`migrate`] v1 → v2, with its own lenient v1 model kept private
 //!
 //! The public API is exactly what this file names. A consumer that needs more
@@ -46,13 +46,13 @@ pub mod model;
 pub mod ops;
 pub mod store;
 
-pub use check::{Finding, Report, Severity};
-pub use config::SCHEMA_VERSION;
+pub use check::{Finding, OBSERVATORY, Report, Severity};
+pub use config::{OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, SCHEMA_VERSION};
 pub use error::{Error, Result};
 pub use graph::{
     Direction, EdgeRecord, Graph, GraphExport, HYPOTHESIS_DAYS, INBOX_DAYS, Impact, Listing,
-    NodeSummary, NodeView, OpenItem, OpenReport, ReviewItem, ReviewReport, ReviewRule, SEED_DAYS,
-    TagCount, TagCounts, Touched, Trace, TraceNode, Via,
+    NodeSummary, NodeView, ObservatoryLink, OpenItem, OpenReport, ReviewItem, ReviewReport,
+    ReviewRule, SEED_DAYS, TagCount, TagCounts, Touched, Trace, TraceNode, Via,
 };
 pub use migrate::{MigrationReport, NodeMigration};
 pub use model::{Closed, Doc, Edge, EdgeType, HUMAN, Node, Note, Origin, Reference, Status};
@@ -94,6 +94,7 @@ mod ts_export {
         StatusChange::export_all(&cfg).unwrap();
         Initialized::export_all(&cfg).unwrap();
         Direction::export_all(&cfg).unwrap();
+        ObservatoryRoot::export_all(&cfg).unwrap();
 
         assert!(
             cfg.out_dir().join("Node.ts").exists(),

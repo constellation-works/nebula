@@ -36,10 +36,21 @@ corpus is clean. A corpus at schema 1 refuses to open until `neb migrate`.
 ## The verbs
 
 Mutating: `capture`, `promote`, `drop`, `new`, `sharpen`, `status`, `link`,
-`tag`, `note`, `cite`, `migrate`. Read-only: `inbox`, `show`, `list`, `trace`,
+`tag`, `note`, `cite`, `migrate`, `config`. Read-only: `inbox`, `show`, `list`, `trace`,
 `impact`, `graph --json`, `open`, `review`, `check`, `tag list`. Every verb
 takes `--json`; [verbs.md](references/verbs.md) has each one's flags and its
 real `--json` shape. Prefer `--json` for anything you will reason over.
+
+## Linking to Observatory
+
+A node that became an Observatory record is cited by the record's id, never
+by a path: `neb cite <node> --kind observatory --uri Q002 --note "why"`.
+Record ids are `Q###` (questions), `H###` (hypotheses), `T###` (theories) and
+`R###` (research). The path is reconstructed per machine from
+`observatory_root` in `config.yaml` (`neb config observatory-root <DIR>`) or
+`$OBSERVATORY_ROOT`, so an absolute path in a reference is a bug: it breaks
+everywhere else and `check` cannot judge it. An unresolved record is a
+warning about this machine, not something to rewrite.
 
 ## Capture from conversation
 

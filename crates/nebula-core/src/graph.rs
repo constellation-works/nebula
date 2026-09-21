@@ -7,11 +7,13 @@
 //! `--json` output and the desktop's IPC payload. That is what lets the
 //! desktop hold a graph in memory and rebuild it on a file-watch event.
 
+use crate::check::{OBSERVATORY, resolve_observatory};
 use crate::error::{Error, Result};
 use crate::model::{self, Doc, EdgeType, Node, Note, Status};
 use crate::store::{self, Inbox};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 /// Days a seed may sit untouched before `open` and `review` raise it.
 pub const SEED_DAYS: i64 = 90;
@@ -476,6 +478,54 @@ pub struct NodeView {
     /// Dated reasoning parsed from the last `## Notes` section, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Note>,
+    /// Where each `observatory` reference lands on this machine. Filled in
+    /// by [`NodeView::with_observatory`], and empty until a caller asks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observatory: Vec<ObservatoryLink>,
+}
+
+/// One `observatory` reference, located on this machine.
+///
+/// The record id is what the corpus stores; the path is what this machine
+/// happens to have, and is absent when no root is set or the checkout does
+/// not carry the record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ObservatoryLink {
+    /// The reference id within the node, `r1` and up.
+    pub reference: String,
+    /// The Observatory record id, as stored: `Q002`, `H007`, `R012`.
+    pub record: String,
+    /// Where that record is, when it resolves under the configured root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+}
+
+impl NodeView {
+    /// Locate every `observatory` reference under `root`.
+    ///
+    /// The one query here that touches the filesystem, which is why it is a
+    /// step a caller takes rather than part of [`node`]: a reader that only
+    /// wants the node pays nothing, and the rest of this module stays pure
+    /// over the graph.
+    #[must_use]
+    pub fn with_observatory(mut self, root: Option<&Path>) -> Self {
+        self.observatory = self
+            .node
+            .references
+            .iter()
+            .filter(|r| r.kind == OBSERVATORY)
+            .filter_map(|r| {
+                let record = r.uri.clone()?;
+                Some(ObservatoryLink {
+                    reference: r.id.clone(),
+                    path: root.and_then(|root| resolve_observatory(root, &record)),
+                    record,
+                })
+            })
+            .collect();
+        self
+    }
 }
 
 /// Show one node in full.
@@ -490,6 +540,7 @@ pub fn node(graph: &Graph<'_>, id: &str) -> Result<NodeView> {
         node: doc.node.clone().with_authorship_stated(),
         notes: model::notes_from_body(&body),
         body,
+        observatory: Vec::new(),
     })
 }
 
