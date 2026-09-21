@@ -15,4 +15,9 @@ at: string,
 /**
  * The reasoning, in the author's words.
  */
-text: string, };
+text: string, 
+/**
+ * Who wrote it. A projection rather than a stored field, so this is
+ * always stated: the human's line simply does not name an author.
+ */
+by: string, };

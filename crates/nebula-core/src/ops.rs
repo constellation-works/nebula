@@ -71,6 +71,9 @@ pub struct NewNode {
     /// Explicit id, overriding the title's slug. Validated with the same
     /// rules a derived slug already follows, and refused on collision.
     pub id: Option<String>,
+    /// Who wrote the title, the kill condition and the parent edges. `None`
+    /// is the human, which is what an unattributed write means.
+    pub by: Option<String>,
 }
 
 /// Everything that goes into a node promoted from the inbox.
@@ -87,6 +90,8 @@ pub struct Promotion {
     /// Explicit id, overriding the title's slug. Validated with the same
     /// rules a derived slug already follows, and refused on collision.
     pub id: Option<String>,
+    /// Who wrote the title and chose the parents. `None` is the human.
+    pub by: Option<String>,
 }
 
 /// Everything that goes into a reference.
@@ -102,6 +107,8 @@ pub struct Citation {
     pub title: Option<String>,
     /// Why this is attached. The only field that matters in a year.
     pub note: Option<String>,
+    /// Who attached it and wrote the note. `None` is the human.
+    pub by: Option<String>,
     /// What produced it.
     pub origin: Option<Origin>,
 }
@@ -135,7 +142,7 @@ pub fn drop(corpus: &Corpus, entry: &str) -> Result<InboxEntry> {
 pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion) -> Result<Created> {
     let e = corpus.inbox_entry(entry)?;
     let title = args.title.clone().unwrap_or_else(|| e.text.clone());
-    let doc = build(
+    let mut doc = build(
         corpus,
         &NewNode {
             title,
@@ -144,10 +151,16 @@ pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion) -> Result<Created
             tags: args.tags.clone(),
             origin: args.origin.clone(),
             id: args.id.clone(),
+            by: args.by.clone(),
         },
         Status::Seed,
         &e.text,
     )?;
+    // A capture promoted as it was captured is titled in the human's own
+    // words. Whoever ran the verb authored the edges, not that sentence.
+    if args.title.is_none() {
+        doc.node.title_by = None;
+    }
     corpus.create(&doc)?;
     corpus.settle_inbox(&e, &format!("-> {}", doc.node.id))?;
     Ok(Created {
@@ -196,14 +209,18 @@ fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<
         }
     }
     let now = store::today();
+    let by = model::author(spec.by.as_deref())?;
     Ok(Doc {
         node: Node {
             id,
             title: spec.title.clone(),
+            title_by: by.clone(),
             status,
             created: now.clone(),
             updated: now,
             kill: spec.kill.clone(),
+            // A node with no kill condition has nobody to credit for one.
+            kill_by: spec.kill.as_ref().and(by.clone()),
             tags: model::normalize_tags(&spec.tags),
             edges: spec
                 .parents
@@ -211,6 +228,7 @@ fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<
                 .map(|p| Edge {
                     kind: EdgeType::DerivesFrom,
                     to: p.clone(),
+                    by: by.clone(),
                 })
                 .collect(),
             references: vec![],
@@ -222,11 +240,14 @@ fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<
 }
 
 /// Sharpen a seed into a hypothesis by naming what would kill it.
-pub fn sharpen(corpus: &Corpus, id: &str, kill: &str) -> Result<Doc> {
+///
+/// `by` is whoever wrote the kill condition; `None` is the human.
+pub fn sharpen(corpus: &Corpus, id: &str, kill: &str, by: Option<&str>) -> Result<Doc> {
     let mut doc = corpus.load(id)?;
     if kill.trim().is_empty() {
         return Err(Error::EmptyKill);
     }
+    doc.node.kill_by = model::author(by)?;
     doc.node.kill = Some(kill.to_string());
     if doc.node.status == Status::Seed {
         doc.node.status = Status::Hypothesis;
@@ -235,24 +256,50 @@ pub fn sharpen(corpus: &Corpus, id: &str, kill: &str) -> Result<Doc> {
     Ok(doc)
 }
 
+/// Adopt an existing kill condition as the human's own.
+///
+/// The text is not touched and nothing is appended: this records that the
+/// human read what somebody else proposed and now stands behind it, which is
+/// the only thing that takes the node off `review`'s unconfirmed list.
+pub fn confirm_kill(corpus: &Corpus, id: &str) -> Result<Doc> {
+    let mut doc = corpus.load(id)?;
+    if doc.node.kill.as_ref().is_none_or(|k| k.trim().is_empty()) {
+        return Err(Error::corpus(
+            "there is no kill condition to confirm; name one with --kill",
+        ));
+    }
+    doc.node.kill_by = None;
+    corpus.save(&mut doc)?;
+    Ok(doc)
+}
+
 /// Add a typed edge between two nodes.
 ///
 /// Returns every node that changed: a `contradicts` edge is a claim about both
 /// ends, so it is recorded on both.
-pub fn link(corpus: &Corpus, from: &str, kind: EdgeType, to: &str) -> Result<Vec<Doc>> {
+///
+/// `by` is whoever claims the relation; `None` is the human.
+pub fn link(
+    corpus: &Corpus,
+    from: &str,
+    kind: EdgeType,
+    to: &str,
+    by: Option<&str>,
+) -> Result<Vec<Doc>> {
     if from == to {
         return Err(Error::SelfLoop);
     }
+    let by = model::author(by)?;
     let mut doc = corpus.load(from)?;
     corpus.load(to)?;
-    let edge = Edge {
-        kind,
-        to: to.to_string(),
-    };
-    if doc.node.edges.contains(&edge) {
+    if doc.node.has_edge(kind, to) {
         return Err(Error::DuplicateEdge);
     }
-    doc.node.edges.push(edge);
+    doc.node.edges.push(Edge {
+        kind,
+        to: to.to_string(),
+        by: by.clone(),
+    });
 
     // Genealogy must stay acyclic, so refuse the edge that would close a
     // loop rather than leaving `check` to find it later.
@@ -273,12 +320,12 @@ pub fn link(corpus: &Corpus, from: &str, kind: EdgeType, to: &str) -> Result<Vec
     // `contradicts` is a claim about both nodes, so record it on both.
     if kind == EdgeType::Contradicts {
         let mut other = corpus.load(to)?;
-        let back = Edge {
-            kind,
-            to: from.to_string(),
-        };
-        if !other.node.edges.contains(&back) {
-            other.node.edges.push(back);
+        if !other.node.has_edge(kind, from) {
+            other.node.edges.push(Edge {
+                kind,
+                to: from.to_string(),
+                by,
+            });
             corpus.save(&mut other)?;
             changed.push(other);
         }
@@ -291,7 +338,10 @@ pub fn link(corpus: &Corpus, from: &str, kind: EdgeType, to: &str) -> Result<Vec
 /// Creates a `## Notes` section at the end of the body if needed, then
 /// appends `- YYYY-MM-DD: <text>`. Earlier body text, status, edges and tags
 /// are left as they are. `updated` is stamped by [`Corpus::save`].
-pub fn note(corpus: &Corpus, id: &str, text: &str) -> Result<Doc> {
+///
+/// `by` is whoever wrote the paragraph; `None` is the human, whose line
+/// carries no attribution.
+pub fn note(corpus: &Corpus, id: &str, text: &str, by: Option<&str>) -> Result<Doc> {
     let text = text
         .trim()
         .lines()
@@ -302,14 +352,16 @@ pub fn note(corpus: &Corpus, id: &str, text: &str) -> Result<Doc> {
     if text.is_empty() {
         return Err(Error::corpus("a note cannot be empty"));
     }
+    let by = model::author(by)?;
     let mut doc = corpus.load(id)?;
-    doc.body = model::append_note(&doc.body, &store::today(), &text);
+    doc.body = model::append_note(&doc.body, &store::today(), &text, by.as_deref());
     corpus.save(&mut doc)?;
     Ok(doc)
 }
 
 /// Attach context to a node. The note is the field that matters.
 pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
+    let by = model::author(args.by.as_deref())?;
     let mut doc = corpus.load(id)?;
     if args.uri.is_none() && args.kind != "discussion" {
         return Err(Error::corpus(
@@ -337,6 +389,7 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
         title: args.title.clone(),
         note: args.note.clone(),
         added: store::today(),
+        by,
         origin: args.origin.clone(),
     });
     corpus.save(&mut doc)?;

@@ -35,6 +35,10 @@ note?: string | null,
  */
 added: string, 
 /**
+ * Who attached it and wrote the note. Absent is [`HUMAN`].
+ */
+by?: string | null, 
+/**
  * What produced it.
  */
 origin?: Origin | null, };

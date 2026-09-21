@@ -18,6 +18,10 @@ id: string,
  */
 title: string, 
 /**
+ * Who wrote that line. Absent is [`HUMAN`].
+ */
+title_by?: string | null, 
+/**
  * Where it is in its lifecycle.
  */
 status: Status, 
@@ -35,6 +39,12 @@ updated: string,
  * instead of retroactive.
  */
 kill?: string | null, 
+/**
+ * Who wrote the kill condition. Absent is [`HUMAN`]. A kill somebody
+ * else proposed is a claim the human has not yet made: `review` lists
+ * it until one is confirmed.
+ */
+kill_by?: string | null, 
 /**
  * Free-form labels, lowercase kebab-case, normalised on every write.
  * No declared list: `check` warns on drift instead of walling it off.

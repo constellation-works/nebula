@@ -1110,6 +1110,312 @@ fn note_appends_in_order_and_show_exposes_them() {
         .says("no node `nope`");
 }
 
+// ------------------------------------------------------------- authorship --
+
+/// Who wrote what is stored per field, and the human is stored by omission:
+/// a corpus written by hand looks exactly as it did before this existed.
+#[test]
+fn an_unattributed_write_is_the_humans_and_leaves_the_file_alone() {
+    let c = Corpus::new();
+    let parent = c.seed("a parent idea", "A parent idea");
+    let id = c.seed("an idea worth keeping", "An idea worth keeping");
+    c.run(&["sharpen", &id, "--kill", "if X never happens"])
+        .assert_ok();
+    c.run(&["link", &id, "derives-from", &parent]).assert_ok();
+    c.run(&["cite", &id, "--uri", "https://example.org", "--note", "why"])
+        .assert_ok();
+    c.run(&["note", &id, "my own reasoning"]).assert_ok();
+
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(
+        !raw.contains("title_by") && !raw.contains("kill_by") && !raw.contains("by:"),
+        "the human is stored by omission:\n{raw}"
+    );
+    let today = date_days_ago(0);
+    assert!(
+        raw.contains(&format!("- {today}: my own reasoning")),
+        "the human's note line names no author:\n{raw}"
+    );
+
+    // `show --json` states the default rather than making a reader know it.
+    let out = c.run(&["--json", "show", &id]).assert_ok().stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).expect("show --json is valid JSON");
+    assert_eq!(v["node"]["title_by"], "human");
+    assert_eq!(v["node"]["kill_by"], "human");
+    assert_eq!(v["node"]["edges"][0]["by"], "human");
+    assert_eq!(v["node"]["references"][0]["by"], "human");
+    assert_eq!(v["notes"][0]["by"], "human");
+
+    let listed = c.run(&["--json", "list"]).assert_ok().stdout();
+    let nodes: Vec<serde_json::Value> = serde_json::from_str(&listed).expect("list --json");
+    assert!(nodes.iter().all(|n| n["title_by"] == "human"));
+
+    // Nothing here is the agent's, so review has nothing to confirm.
+    let report = c.run(&["review"]).assert_ok().stdout();
+    let section = report
+        .split("## Agent-authored kills not yet confirmed by a human")
+        .nth(1)
+        .expect("the section is always printed");
+    assert!(section.trim_start().starts_with("_none_"), "{report}");
+}
+
+/// `--by` is free text — a session id, a crew name, anything the writer
+/// answers to — and lands on the field that write authored, not on the node.
+#[test]
+fn by_records_the_author_of_each_field_it_wrote() {
+    let c = Corpus::new();
+    let by = "agent:crew-alpha";
+    let parent = c.seed("a parent idea", "A parent idea");
+
+    let entry = c.run(&["capture", "the human's own words"]).stdout_trim();
+    c.run(&["promote", &entry, "--by", by, "--parent", &parent])
+        .assert_ok();
+    let promoted = std::fs::read_to_string(c.node_file("the-human-s-own-words")).unwrap();
+    assert!(
+        !promoted.contains("title_by"),
+        "a capture promoted as captured is titled in the human's words:\n{promoted}"
+    );
+    assert!(
+        promoted.contains(&format!("to: {parent}\n  by: {by}")),
+        "the parent edge was the agent's call:\n{promoted}"
+    );
+
+    let entry = c.run(&["capture", "another thought"]).stdout_trim();
+    c.run(&[
+        "promote",
+        &entry,
+        "--title",
+        "A title the agent wrote",
+        "--by",
+        by,
+    ])
+    .assert_ok();
+    let retitled = std::fs::read_to_string(c.node_file("a-title-the-agent-wrote")).unwrap();
+    assert!(
+        retitled.contains(&format!("title_by: {by}")),
+        "a title the agent wrote is the agent's:\n{retitled}"
+    );
+
+    c.run(&["new", "A node the agent made", "--kill", "if Y", "--by", by])
+        .assert_ok();
+    let made = std::fs::read_to_string(c.node_file("a-node-the-agent-made")).unwrap();
+    assert!(
+        made.contains(&format!("title_by: {by}")) && made.contains(&format!("kill_by: {by}")),
+        "{made}"
+    );
+
+    c.run(&[
+        "link",
+        "a-node-the-agent-made",
+        "contradicts",
+        &parent,
+        "--by",
+        by,
+    ])
+    .assert_ok();
+    let both = std::fs::read_to_string(c.node_file(&parent)).unwrap();
+    assert!(
+        both.contains(&format!("by: {by}")),
+        "a contradiction is recorded on both ends, by whoever claimed it:\n{both}"
+    );
+
+    c.run(&[
+        "cite",
+        "a-node-the-agent-made",
+        "--uri",
+        "https://example.org",
+        "--note",
+        "the agent found this",
+        "--by",
+        by,
+    ])
+    .assert_ok();
+    c.run(&["note", "--by", by, "a-node-the-agent-made", "its reasoning"])
+        .assert_ok();
+
+    let raw = std::fs::read_to_string(c.node_file("a-node-the-agent-made")).unwrap();
+    let today = date_days_ago(0);
+    assert!(
+        raw.contains(&format!("- {today} ({by}): its reasoning")),
+        "a note carries its author in the line:\n{raw}"
+    );
+
+    let out = c
+        .run(&["--json", "show", "a-node-the-agent-made"])
+        .assert_ok()
+        .stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).expect("show --json is valid JSON");
+    assert_eq!(v["node"]["title_by"], by);
+    assert_eq!(v["node"]["kill_by"], by);
+    assert_eq!(v["node"]["edges"][0]["by"], by);
+    assert_eq!(v["node"]["references"][0]["by"], by);
+    assert_eq!(v["notes"][0]["by"], by);
+
+    // Orbit's provenance answers a different question and is untouched by it.
+    c.run(&["new", "Run provenance", "--task", "ORB-1", "--by", by])
+        .assert_ok();
+    let orbit = std::fs::read_to_string(c.node_file("run-provenance")).unwrap();
+    assert!(
+        orbit.contains(&format!("title_by: {by}")) && orbit.contains("origin:\n  task: ORB-1"),
+        "{orbit}"
+    );
+
+    // A label that would make a note line ambiguous is refused outright.
+    c.run(&["note", "--by", "crew (alpha)", "run-provenance", "x"])
+        .assert_fails()
+        .says("cannot be an author label");
+}
+
+/// The point of recording authorship: a kill condition the agent proposed is
+/// not yet the human's claim, and `review` says so until one is confirmed.
+#[test]
+fn an_agent_kill_stays_on_review_until_a_human_confirms_it() {
+    let c = Corpus::new();
+    let by = "agent:crew-alpha";
+    let id = c.seed("a sharpenable idea", "A sharpenable idea");
+    c.run(&[
+        "sharpen",
+        &id,
+        "--kill",
+        "if the corpus stays small",
+        "--by",
+        by,
+    ])
+    .assert_ok();
+
+    let json = c.run(&["review", "--json"]).assert_ok().stdout();
+    let items: Vec<serde_json::Value> = serde_json::from_str(&json).expect("review --json");
+    let found = items
+        .iter()
+        .find(|i| i["rule"] == "unconfirmed-kill")
+        .unwrap_or_else(|| panic!("no unconfirmed-kill finding in {json}"));
+    assert_eq!(found["id"], id.as_str());
+    assert!(found["reason"].as_str().unwrap().contains(by), "{json}");
+    c.run(&["review"])
+        .assert_ok()
+        .says("## Agent-authored kills not yet confirmed by a human")
+        .says(&id);
+    c.run(&["show", &id]).assert_ok().says(&format!("({by})"));
+
+    // Confirming changes the author and nothing else.
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    c.run(&["sharpen", &id, "--confirm"]).assert_ok();
+    let after = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(
+        after.contains("kill: if the corpus stays small"),
+        "the kill text is untouched:\n{after}"
+    );
+    assert!(!after.contains("kill_by"), "{after}");
+    assert_eq!(
+        before.replace(&format!("kill_by: {by}\n"), ""),
+        after,
+        "confirming appends nothing and rewrites nothing else"
+    );
+
+    let out = c.run(&["--json", "show", &id]).assert_ok().stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).expect("show --json is valid JSON");
+    assert_eq!(v["node"]["kill_by"], "human");
+    assert_eq!(v["node"]["status"], "hypothesis");
+    assert!(v["notes"].as_array().is_none_or(Vec::is_empty), "{out}");
+
+    let json = c.run(&["review", "--json"]).assert_ok().stdout();
+    let items: Vec<serde_json::Value> = serde_json::from_str(&json).expect("review --json");
+    assert!(
+        !items.iter().any(|i| i["rule"] == "unconfirmed-kill"),
+        "a confirmed kill is off the list: {json}"
+    );
+
+    // Confirming what nobody wrote is a refusal, not a silent no-op.
+    let seed = c.seed("an unsharpened idea", "An unsharpened idea");
+    c.run(&["sharpen", &seed, "--confirm"])
+        .assert_fails()
+        .says("no kill condition to confirm");
+    // `--confirm` is not a way to rewrite the text.
+    c.run(&["sharpen", &id, "--kill", "something else", "--confirm"])
+        .assert_fails()
+        .says("cannot be used with");
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+/// A v2 node as it was written before authorship existed: no `title_by`, no
+/// `kill_by`, no `by` on the edge, the reference or the note.
+const PRE_AUTHORSHIP_NODE: &str = r"---
+id: written-by-hand
+title: Written by hand
+status: hypothesis
+created: 2026-09-01
+updated: 2026-09-01
+kill: if nobody ever writes one
+edges:
+- type: derives-from
+  to: also-by-hand
+references:
+- id: r1
+  kind: article
+  uri: https://example.org
+  note: why it is here
+  added: 2026-09-01
+---
+
+the argument
+
+## Notes
+
+- 2026-09-02: an older note
+";
+
+const PRE_AUTHORSHIP_PARENT: &str = r"---
+id: also-by-hand
+title: Also by hand
+status: seed
+created: 2026-09-01
+updated: 2026-09-01
+---
+
+the older argument
+";
+
+/// A node written before authorship existed loads as the human's own, and
+/// `neb migrate` has nothing to do about it either way.
+#[test]
+fn a_corpus_written_before_authorship_loads_unchanged() {
+    let c = Corpus::new();
+    write(&c.node_file("written-by-hand"), PRE_AUTHORSHIP_NODE);
+    write(&c.node_file("also-by-hand"), PRE_AUTHORSHIP_PARENT);
+    // One authored node beside them, so migration has both shapes to keep.
+    c.run(&["new", "An authored node", "--by", "agent:crew-alpha"])
+        .assert_ok();
+
+    c.run(&["check"]).assert_ok().says("0 errors");
+    let out = c
+        .run(&["--json", "show", "written-by-hand"])
+        .assert_ok()
+        .stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).expect("show --json is valid JSON");
+    for field in ["title_by", "kill_by"] {
+        assert_eq!(v["node"][field], "human", "{field} in {out}");
+    }
+    assert_eq!(v["node"]["edges"][0]["by"], "human");
+    assert_eq!(v["node"]["references"][0]["by"], "human");
+    assert_eq!(v["notes"][0]["by"], "human");
+    let report = c.run(&["review", "--json"]).assert_ok().stdout();
+    assert!(
+        !report.contains("unconfirmed-kill"),
+        "a kill nobody attributed is the human's own: {report}"
+    );
+
+    let before = snapshot_corpus_files(&c.root);
+    c.run(&["migrate"])
+        .assert_ok()
+        .says("already at schema 2; nothing changed");
+    assert_eq!(
+        before,
+        snapshot_corpus_files(&c.root),
+        "migration is a no-op: absent authorship reads as human, and an \
+         authored node keeps its labels"
+    );
+}
+
 // -------------------------------------------------------------------- tags --
 
 #[test]
@@ -1369,10 +1675,11 @@ fn an_empty_corpus_produces_an_empty_review() {
     assert!(out.contains("## Hypotheses untouched for 30 days"));
     assert!(out.contains("## Seeds untouched for 90 days"));
     assert!(out.contains("## Nodes with no references"));
+    assert!(out.contains("## Agent-authored kills not yet confirmed by a human"));
     assert!(out.contains("## Inbox entries waiting 14 days or more"));
     assert_eq!(
         out.matches("_none_").count(),
-        4,
+        5,
         "every section is empty:\n{out}"
     );
 

@@ -6,7 +6,8 @@
 //! is what a consumer that is not a terminal matches on.
 
 use nebula_core::{
-    Corpus, Direction, EdgeType, Error, Graph, NewNode, Promotion, Status, Via, graph, ops,
+    Corpus, Direction, EdgeType, Error, Graph, HUMAN, NewNode, Promotion, ReviewRule, Status, Via,
+    graph, ops,
 };
 
 fn corpus() -> (tempfile::TempDir, Corpus) {
@@ -92,7 +93,7 @@ fn impact_lists_descendants_then_contradictions() {
     let (_dir, corpus) = corpus();
     let [a, b, c, d] = diamond(&corpus);
     let rival = seed(&corpus, "Rival", &[]);
-    ops::link(&corpus, &a, EdgeType::Contradicts, &rival).unwrap();
+    ops::link(&corpus, &a, EdgeType::Contradicts, &rival, None).unwrap();
     let docs = corpus.load_all().unwrap();
     let graph = Graph::build(&docs).unwrap();
 
@@ -149,7 +150,7 @@ fn a_node_cannot_link_to_itself() {
     let (_dir, corpus) = corpus();
     let a = seed(&corpus, "A", &[]);
     assert!(matches!(
-        ops::link(&corpus, &a, EdgeType::Refines, &a),
+        ops::link(&corpus, &a, EdgeType::Refines, &a, None),
         Err(Error::SelfLoop)
     ));
 }
@@ -158,7 +159,7 @@ fn a_node_cannot_link_to_itself() {
 fn a_genealogy_edge_that_closes_a_loop_is_refused() {
     let (_dir, corpus) = corpus();
     let [a, _, _, d] = diamond(&corpus);
-    let err = ops::link(&corpus, &a, EdgeType::DerivesFrom, &d).unwrap_err();
+    let err = ops::link(&corpus, &a, EdgeType::DerivesFrom, &d, None).unwrap_err();
     assert!(
         matches!(&err, Error::Cycle { from, to } if from == &a && to == &d),
         "got {err:?}"
@@ -178,7 +179,7 @@ fn a_genealogy_edge_that_closes_a_loop_is_refused() {
 fn a_contradiction_is_not_genealogy_so_it_may_point_anywhere() {
     let (_dir, corpus) = corpus();
     let [a, _, _, d] = diamond(&corpus);
-    let changed = ops::link(&corpus, &a, EdgeType::Contradicts, &d).unwrap();
+    let changed = ops::link(&corpus, &a, EdgeType::Contradicts, &d, None).unwrap();
     assert_eq!(changed.len(), 2, "recorded on both ends");
 }
 
@@ -190,7 +191,7 @@ fn a_hypothesis_needs_a_kill_condition() {
         ops::set_status(&corpus, &a, Status::Hypothesis, None),
         Err(Error::NeedsKill(Status::Hypothesis))
     ));
-    ops::sharpen(&corpus, &a, "it would fail if …").unwrap();
+    ops::sharpen(&corpus, &a, "it would fail if …", None).unwrap();
     assert_eq!(corpus.load(&a).unwrap().node.status, Status::Hypothesis);
 }
 
@@ -198,7 +199,7 @@ fn a_hypothesis_needs_a_kill_condition() {
 fn refuting_needs_a_reason_and_is_final() {
     let (_dir, corpus) = corpus();
     let a = seed(&corpus, "A", &[]);
-    ops::sharpen(&corpus, &a, "kill").unwrap();
+    ops::sharpen(&corpus, &a, "kill", None).unwrap();
     assert!(matches!(
         ops::set_status(&corpus, &a, Status::Refuted, None),
         Err(Error::RefutedNeedsWhy)
@@ -220,9 +221,82 @@ fn an_empty_kill_condition_is_refused() {
     let (_dir, corpus) = corpus();
     let a = seed(&corpus, "A", &[]);
     assert!(matches!(
-        ops::sharpen(&corpus, &a, "   "),
+        ops::sharpen(&corpus, &a, "   ", None),
         Err(Error::EmptyKill)
     ));
+}
+
+/// Authorship as a consumer that is not a terminal sees it: stored per field,
+/// the human by omission, and confirmable without touching the kill text.
+#[test]
+fn authorship_is_per_field_and_a_human_can_confirm_a_kill() {
+    let (_dir, corpus) = corpus();
+    let by = Some("agent:crew-alpha");
+    let parent = seed(&corpus, "Parent", &[]);
+
+    let mine = seed(&corpus, "Mine", &[&parent]);
+    let node = corpus.load(&mine).unwrap().node;
+    assert_eq!(node.title_by, None, "an unattributed write is the human's");
+    assert_eq!(node.edges[0].by, None);
+
+    let theirs = ops::new_node(
+        &corpus,
+        &NewNode {
+            title: "Theirs".into(),
+            parents: vec![parent.clone()],
+            kill: Some("if X".into()),
+            by: by.map(String::from),
+            ..NewNode::default()
+        },
+    )
+    .unwrap()
+    .doc
+    .node;
+    assert_eq!(theirs.title_by.as_deref(), by);
+    assert_eq!(theirs.kill_by.as_deref(), by);
+    assert_eq!(theirs.edges[0].by.as_deref(), by);
+
+    // `review` asks the human to stand behind a kill somebody else wrote.
+    let flagged = |corpus: &Corpus| -> Vec<String> {
+        let docs = corpus.load_all().unwrap();
+        graph::review(
+            &Graph::build(&docs).unwrap(),
+            &corpus.inbox().unwrap(),
+            None,
+        )
+        .unwrap()
+        .0
+        .into_iter()
+        .filter(|i| i.rule == ReviewRule::UnconfirmedKill)
+        .map(|i| i.id)
+        .collect()
+    };
+    assert_eq!(flagged(&corpus), std::slice::from_ref(&theirs.id));
+
+    let confirmed = ops::confirm_kill(&corpus, &theirs.id).unwrap().node;
+    assert_eq!(
+        confirmed.kill.as_deref(),
+        Some("if X"),
+        "the text is as it was"
+    );
+    assert_eq!(confirmed.kill_by, None);
+    assert_eq!(
+        confirmed.title_by.as_deref(),
+        by,
+        "only the kill is confirmed"
+    );
+    assert!(flagged(&corpus).is_empty());
+
+    // The queries state the default the file leaves out.
+    let docs = corpus.load_all().unwrap();
+    let view = graph::node(&Graph::build(&docs).unwrap(), &theirs.id).unwrap();
+    assert_eq!(view.node.kill_by.as_deref(), Some(HUMAN));
+    assert_eq!(view.node.title_by.as_deref(), by);
+
+    assert!(
+        ops::sharpen(&corpus, &mine, "if Y", Some("crew (alpha)")).is_err(),
+        "a label that would break a note line is refused"
+    );
 }
 
 #[test]
@@ -243,7 +317,7 @@ fn notes_accumulate_in_order_and_unknown_nodes_are_refused() {
     .node
     .id;
     let parent = seed(&corpus, "Parent", &[]);
-    ops::link(&corpus, &id, EdgeType::DerivesFrom, &parent).unwrap();
+    ops::link(&corpus, &id, EdgeType::DerivesFrom, &parent, None).unwrap();
 
     let before = corpus.load(&id).unwrap();
     let status = before.node.status;
@@ -251,8 +325,8 @@ fn notes_accumulate_in_order_and_unknown_nodes_are_refused() {
     let tags = before.node.tags.clone();
     let original = before.body.clone();
 
-    ops::note(&corpus, &id, "first thought").unwrap();
-    let second = ops::note(&corpus, &id, "second thought").unwrap();
+    ops::note(&corpus, &id, "first thought", None).unwrap();
+    let second = ops::note(&corpus, &id, "second thought", None).unwrap();
 
     assert!(
         second.body.contains(original.trim()),
@@ -278,7 +352,7 @@ fn notes_accumulate_in_order_and_unknown_nodes_are_refused() {
     );
 
     assert!(matches!(
-        ops::note(&corpus, "nope", "lost"),
+        ops::note(&corpus, "nope", "lost", None),
         Err(Error::NoSuchNode(missing)) if missing == "nope"
     ));
 }

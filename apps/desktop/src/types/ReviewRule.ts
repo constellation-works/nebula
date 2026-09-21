@@ -3,4 +3,4 @@
 /**
  * Which review rule raised a finding.
  */
-export type ReviewRule = "stale-hypothesis" | "untouched-seed" | "no-references" | "stale-inbox";
+export type ReviewRule = "stale-hypothesis" | "untouched-seed" | "no-references" | "unconfirmed-kill" | "stale-inbox";

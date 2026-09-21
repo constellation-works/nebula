@@ -12,4 +12,8 @@ type: EdgeType,
 /**
  * The node id on the other end.
  */
-to: string, };
+to: string, 
+/**
+ * Who claimed the relation. Absent is [`HUMAN`].
+ */
+by?: string | null, };

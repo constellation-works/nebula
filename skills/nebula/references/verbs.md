@@ -29,7 +29,7 @@ The `--json` excerpts below are real output from a three-node fixture corpus.
 |---|---|---|
 | `neb capture <TEXT>...` | append a thought; prints the entry id; works on a corpus that does not exist yet | — |
 | `neb inbox` | live entries (not promoted, not dropped) | — |
-| `neb promote <ENTRY>` | inbox entry → seed node | `--title`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--task`, `--run` |
+| `neb promote <ENTRY>` | inbox entry → seed node | `--title`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run` |
 | `neb drop <ENTRY>` | strike an entry through; never deleted | — |
 
 ```json
@@ -43,22 +43,24 @@ The `--json` excerpts below are real output from a three-node fixture corpus.
 
 | verb | does | flags |
 |---|---|---|
-| `neb new <TITLE>` | create a node directly | `--parent <ID>`×, `--kill`, `--tag <TAG>`×, `--id <SLUG>`, `--task`, `--run` |
-| `neb sharpen <NODE> --kill <KILL>` | seed → hypothesis by naming the falsifier | — |
+| `neb new <TITLE>` | create a node directly | `--parent <ID>`×, `--kill`, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run` |
+| `neb sharpen <NODE> --kill <KILL>` | seed → hypothesis by naming the falsifier | `--by <LABEL>`, or `--confirm` instead of `--kill` |
 | `neb status <NODE> <STATUS>` | `seed`, `hypothesis`, `refuted`, `abandoned`, with guards | `--why` (required for refuted, optional for abandoned) |
-| `neb link <FROM> <KIND> <TO>` | `derives-from`, `refines`, `generalizes`, `reopens`, `contradicts` | — |
+| `neb link <FROM> <KIND> <TO>` | `derives-from`, `refines`, `generalizes`, `reopens`, `contradicts` | `--by <LABEL>` |
 | `neb tag <NODE>` | edit tags; normalised to lowercase kebab-case | `--add <TAG>`×, `--remove <TAG>`× |
 | `neb tag list` | every tag with its node count | — |
-| `neb note <NODE> <TEXT>...` | append a dated paragraph of reasoning to the body | — |
+| `neb note [--by <LABEL>] <NODE> <TEXT>...` | append a dated paragraph of reasoning to the body | `--by <LABEL>`, before the node id |
 
 `new --kill "..."` starts the node as a hypothesis; without it, a seed.
+`sharpen --confirm` takes no text: it adopts the kill condition already on the
+node as the human's own, changing nothing else and appending nothing.
 `contradicts` is written on both nodes. `link` prints `<from> <kind> <to>`.
 `note` creates a `## Notes` section at the end of the body if needed, then
 appends `- YYYY-MM-DD: <text>`. Repeated notes accumulate in order; earlier
 body text, status, edges and tags are left as they are. `updated` is bumped.
 Unknown nodes are refused (`NoSuchNode`). `--json` is the same `NodeView` as
-`show --json`: `notes` is a list of `{at, text}`, oldest first, omitted when
-empty.
+`show --json`: `notes` is a list of `{at, text, by}`, oldest first, omitted
+when empty.
 
 ```json
 // neb --json note tags-beat-domains "folksonomy is the argument, not a taxonomy with extra steps"
@@ -66,7 +68,8 @@ empty.
   "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis" },
   "body": "tags beat domains because a category you must pick is a decision you skip\n\n## Notes\n\n- 2026-09-21: folksonomy is the argument, not a taxonomy with extra steps",
   "notes": [
-    { "at": "2026-09-21", "text": "folksonomy is the argument, not a taxonomy with extra steps" }
+    { "at": "2026-09-21", "text": "folksonomy is the argument, not a taxonomy with extra steps",
+      "by": "human" }
   ]
 }
 ```
@@ -80,11 +83,27 @@ empty.
 
 | verb | does | flags |
 |---|---|---|
-| `neb cite <NODE> [--uri <URI>]` | attach context | `--kind` (paper, study, article, note, discussion, book, dataset, thread, other), `--title`, `--note`, `--task`, `--run` |
+| `neb cite <NODE> [--uri <URI>]` | attach context | `--kind` (paper, study, article, note, discussion, book, dataset, thread, other), `--title`, `--note`, `--by <LABEL>`, `--task`, `--run` |
 
 `--uri` may be omitted only with `--kind discussion`; every other kind requires
 it. A local URI is resolved relative to `nodes/` and refused if it does not
 exist. Always pass `--note`: it is the only field that matters in a year.
+
+## Authorship
+
+`--by <LABEL>` records who wrote the text a verb authors. The label is free
+text — a session id, a crew name — and defaults to `human`, so an
+unattributed write reads as the human's own. It is stored per field rather
+than per node: `title_by`, `kill_by`, `by` on each edge and each reference,
+and, for a note, inline in the line it writes
+(`- YYYY-MM-DD (agent:crew-alpha): text`; the human's line names nobody). The
+human is stored by omission, so files written before this existed are already
+correct and `neb migrate` has nothing to do; `show --json` and `list --json`
+state the default outright. A label cannot contain parentheses, a newline or
+`: `, since a note line has to parse back.
+
+`--by` is not `--task`/`--run`: those say which Orbit run produced a write,
+not who wrote the words. `check` enforces nothing about authorship.
 
 ## Query
 
@@ -102,19 +121,21 @@ exist. Always pass `--note`: it is the only field that matters in a year.
   "node": {
     "id": "tags-beat-domains",
     "title": "Tags beat domains",
+    "title_by": "human",
     "status": "hypothesis",
     "created": "2026-09-12",
     "updated": "2026-09-12",
     "kill": "a corpus of 50+ nodes needs a cross-cutting query that tags cannot answer",
+    "kill_by": "human",
     "tags": ["design", "corpus"],
     "edges": [
-      { "type": "derives-from", "to": "required-categorical-fields-drift" },
-      { "type": "contradicts", "to": "a-single-global-taxonomy" }
+      { "type": "derives-from", "to": "required-categorical-fields-drift", "by": "human" },
+      { "type": "contradicts", "to": "a-single-global-taxonomy", "by": "human" }
     ],
     "references": [
       { "id": "r1", "kind": "article", "uri": "https://example.org/folksonomy",
         "title": "Folksonomies", "note": "the drift argument, made for web tagging",
-        "added": "2026-09-12" }
+        "added": "2026-09-12", "by": "human" }
     ]
   },
   "body": "tags beat domains because a category you must pick is a decision you skip"
@@ -156,20 +177,20 @@ node carries `"closed": { "why": "...", "at": "2026-09-12" }`; optional fields
 | verb | does | flags |
 |---|---|---|
 | `neb open` | hypotheses created ≥ 14 days ago with no references, seeds untouched ≥ 90 days, inbox entries waiting ≥ 14 days | `--tag <TAG>`× |
-| `neb review` | the weekly report: stale hypotheses (≥ 30 days), untouched seeds (≥ 90), nodes created ≥ 14 days ago with no references, inbox waiting ≥ 14 | `--since <DAYS>`, `--out <FILE>` |
+| `neb review` | the weekly report: stale hypotheses (≥ 30 days), untouched seeds (≥ 90), nodes created ≥ 14 days ago with no references, hypotheses whose kill nobody human wrote, inbox waiting ≥ 14 | `--since <DAYS>`, `--out <FILE>` |
 
 Both are read-only by the spec's hard rule.
 Notes are reasoning, not context: adding a note does not count as adding a
 reference and does not close the no-references finding after the grace period.
 
 ```json
-// neb review --json     (rule: stale-hypothesis | untouched-seed | no-references | inbox-waiting)
+// neb review --json     (rule: stale-hypothesis | untouched-seed | no-references | unconfirmed-kill | stale-inbox)
 [
   { "rule": "no-references", "id": "required-categorical-fields-drift",
     "title": "Required categorical fields drift", "reason": "no references attached" }
 ]
 ```
 
-`neb review` without `--json` prints four `##` sections in that order, each
+`neb review` without `--json` prints five `##` sections in that order, each
 `_none_` or a `- \`id\` Title — reason` list; `--out review.md` writes it to a
 file. `neb open --json` is an array of `{id, title, status, reason}`.
