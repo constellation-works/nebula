@@ -21,9 +21,10 @@ related_artifacts: []
 This repository holds the tool. It never holds the corpus.
 
 The corpus spans work and personal thinking across unrelated fields, so it is
-found at runtime through `--root`, else `NEBULA_ROOT`, else `~/.nebula`. Keeping
-them apart means the code can be public while the notes stay private, and the
-notes can be backed up without dragging a build tree along.
+found at runtime through `--root`, else `$NEBULA_ROOT`, else
+`~/.config/nebula/root`, else `~/.nebula`. Keeping them apart means the code
+can be public while the notes stay private, and the notes can be backed up
+without dragging a build tree along.
 
 ## Storage
 
