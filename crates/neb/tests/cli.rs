@@ -377,6 +377,81 @@ fn root_discovery_prefers_flag_then_environment_then_config_then_default() {
         .says("0 nodes");
 }
 
+/// An exported-but-blank `NEBULA_ROOT` must be treated as unset, not as the
+/// current directory: every later `join` would otherwise silently target
+/// whatever directory the shell happened to be in.
+#[test]
+fn empty_nebula_root_env_falls_through_to_configured_then_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let configured = dir.path().join("configured");
+
+    run_from_home(&home, Some(&configured), &["init", "--set-root"], None).assert_ok();
+
+    let out = Command::new(bin())
+        .args(["check"])
+        .env("HOME", &home)
+        .env("NO_COLOR", "1")
+        .env("NEBULA_ROOT", "")
+        .env_remove("OBSERVATORY_ROOT")
+        .output()
+        .unwrap();
+    Run {
+        args: "check".into(),
+        out,
+    }
+    .assert_ok()
+    .says("0 nodes");
+
+    let default_home = dir.path().join("default-home");
+    let default = default_home.join(".nebula");
+    run_from_home(&default_home, Some(&default), &["init"], None).assert_ok();
+
+    let out = Command::new(bin())
+        .args(["check"])
+        .env("HOME", &default_home)
+        .env("NO_COLOR", "1")
+        .env("NEBULA_ROOT", "")
+        .env_remove("OBSERVATORY_ROOT")
+        .output()
+        .unwrap();
+    Run {
+        args: "check".into(),
+        out,
+    }
+    .assert_ok()
+    .says("0 nodes");
+}
+
+#[test]
+fn empty_root_flag_is_refused_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = Command::new(bin())
+        .args(["--root", "", "inbox"])
+        .env("HOME", dir.path())
+        .env("NO_COLOR", "1")
+        .env_remove("NEBULA_ROOT")
+        .env_remove("OBSERVATORY_ROOT")
+        .output()
+        .unwrap();
+    Run {
+        args: "--root \"\" inbox".into(),
+        out,
+    }
+    .assert_fails()
+    .says("--root");
+}
+
+/// `resolve_root` itself refuses an empty explicit root with a typed error,
+/// so a caller that reaches it without going through clap's own parsing
+/// (the desktop app, the agent skill) is covered the same way the CLI is.
+#[test]
+fn resolve_root_refuses_an_empty_explicit_path() {
+    let err = nebula_core::Corpus::resolve_root(Some(PathBuf::new()))
+        .expect_err("an empty explicit root must be refused");
+    assert_eq!(err.to_string(), "--root cannot be empty");
+}
+
 #[test]
 fn plain_init_never_changes_the_machine_root_setting() {
     let dir = tempfile::tempdir().unwrap();
