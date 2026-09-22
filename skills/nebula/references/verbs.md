@@ -156,6 +156,10 @@ way: no `near` key.
 `new --body <TEXT>` sets the prose at creation; `--body -` reads it from
 standard input. `new --kill "..."` starts the node as a hypothesis; without
 it, a seed.
+`sharpen --kill` refuses to replace a kill condition already present on an open
+node and prints the existing falsifier. A changed falsifier is a changed idea:
+create a new node and relate it to the old one instead of overwriting the
+record. On a refuted node, the stricter final-verdict refusal still applies.
 `sharpen --confirm` takes no text: it adopts the kill condition already on the
 node as the human's own, changing nothing else and appending nothing.
 `contradicts` is written on both nodes. `link` prints `<from> <kind> <to>`.

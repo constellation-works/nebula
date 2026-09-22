@@ -1094,12 +1094,25 @@ fn run(cli: Cli) -> Outcome {
                 return Err(Failure::say("pass --kill <KILL>, or --confirm"));
             };
             let (corpus, _lock) = open_locked(root)?;
+            let before = corpus.load(&node).map_err(|e| Failure::about(&e, &node))?;
             let doc = ops::sharpen(&corpus, &node, &kill, by.as_deref())
                 .map_err(|e| Failure::about(&e, &node))?;
             if json {
                 out_json(&doc)?;
-            } else {
+            } else if before.node.status != doc.node.status {
                 println!("{} is now {}", render::bold(&node), doc.node.status);
+            } else if before.node.kill.is_some() {
+                println!(
+                    "{} kill condition replaced; status remains {}",
+                    render::bold(&node),
+                    doc.node.status
+                );
+            } else {
+                println!(
+                    "{} kill condition set; status remains {}",
+                    render::bold(&node),
+                    doc.node.status
+                );
             }
             commit(&corpus, commits, "sharpen", &[&node])?;
             Ok(ok)

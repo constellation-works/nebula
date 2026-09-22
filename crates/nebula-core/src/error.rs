@@ -99,6 +99,10 @@ pub enum Error {
     #[error("a kill condition cannot be empty; that is the whole point of it")]
     EmptyKill,
 
+    /// A falsifier is content, not a field that `sharpen` may silently replace.
+    #[error("kill condition is already `{0}`; it was not replaced")]
+    KillAlreadySet(String),
+
     /// Refuting asserts the kill condition fired, and that has to be written.
     #[error("refuted needs a reason: say how the kill condition fired")]
     RefutedNeedsWhy,
