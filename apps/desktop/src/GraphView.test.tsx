@@ -1,7 +1,8 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { GraphView } from "./GraphView";
+import { useGraph } from "./useGraph";
 import type { GraphExport } from "./types/GraphExport";
 import type { NodeSummary } from "./types/NodeSummary";
 
@@ -37,6 +38,16 @@ function synthetic(n: number): GraphExport {
     }
   }
   return { nodes, edges };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 const canvas = () => screen.getByRole("img", { name: "Graph" });
@@ -172,5 +183,96 @@ describe("GraphView", () => {
     // jsdom is slower than the webview; this is a ceiling, not the number.
     console.info(`200 nodes: layout + render in jsdom took ${Math.round(ms)} ms`);
     expect(ms).toBeLessThan(5000);
+  });
+});
+
+describe("useGraph", () => {
+  it("keeps a newer snapshot when an older success settles last", async () => {
+    const olderRequest = deferred<GraphExport>();
+    const newerRequest = deferred<GraphExport>();
+    const newer = synthetic(2);
+    mocked.graph.mockReturnValueOnce(olderRequest.promise).mockReturnValueOnce(newerRequest.promise);
+    const { result } = renderHook(() => useGraph());
+    await waitFor(() => expect(mocked.graph).toHaveBeenCalledTimes(1));
+
+    act(() => void result.current.refresh());
+    await waitFor(() => expect(mocked.graph).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      newerRequest.resolve(newer);
+      await newerRequest.promise;
+    });
+    expect(result.current.graph).toEqual(newer);
+
+    await act(async () => {
+      olderRequest.resolve(synthetic(0));
+      await olderRequest.promise;
+    });
+    expect(result.current.graph).toEqual(newer);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("keeps a newer snapshot when an older failure settles last", async () => {
+    const olderRequest = deferred<GraphExport>();
+    const newerRequest = deferred<GraphExport>();
+    const newer = synthetic(2);
+    mocked.graph.mockReturnValueOnce(olderRequest.promise).mockReturnValueOnce(newerRequest.promise);
+    const { result } = renderHook(() => useGraph());
+    await waitFor(() => expect(mocked.graph).toHaveBeenCalledTimes(1));
+
+    act(() => void result.current.refresh());
+    await waitFor(() => expect(mocked.graph).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      newerRequest.resolve(newer);
+      await newerRequest.promise;
+    });
+
+    await act(async () => {
+      olderRequest.reject(new Error("older failure"));
+      await olderRequest.promise.catch(() => undefined);
+    });
+    expect(result.current.graph).toEqual(newer);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("keeps a newer error when an older success settles last", async () => {
+    const olderRequest = deferred<GraphExport>();
+    const newerRequest = deferred<GraphExport>();
+    mocked.graph.mockReturnValueOnce(olderRequest.promise).mockReturnValueOnce(newerRequest.promise);
+    const { result } = renderHook(() => useGraph());
+    await waitFor(() => expect(mocked.graph).toHaveBeenCalledTimes(1));
+
+    act(() => void result.current.refresh());
+    await waitFor(() => expect(mocked.graph).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      newerRequest.reject(new Error("newer failure"));
+      await newerRequest.promise.catch(() => undefined);
+    });
+    expect(result.current.error).toBe("Error: newer failure");
+
+    await act(async () => {
+      olderRequest.resolve(synthetic(1));
+      await olderRequest.promise;
+    });
+    expect(result.current.graph).toBeNull();
+    expect(result.current.error).toBe("Error: newer failure");
+  });
+
+  it("does not install a pending request after unmount and disposes its listener", async () => {
+    const request = deferred<GraphExport>();
+    const off = vi.fn();
+    mocked.graph.mockReturnValueOnce(request.promise);
+    mocked.onCorpusChanged.mockResolvedValueOnce(off);
+    const { result, unmount } = renderHook(() => useGraph());
+    await waitFor(() => expect(mocked.graph).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocked.onCorpusChanged).toHaveBeenCalledTimes(1));
+
+    unmount();
+    expect(off).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      request.resolve(synthetic(1));
+      await request.promise;
+    });
+    expect(result.current.graph).toBeNull();
+    expect(result.current.loaded).toBe(false);
   });
 });

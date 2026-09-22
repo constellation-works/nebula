@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { App } from "./App";
@@ -91,6 +91,97 @@ describe("InboxView", () => {
     // The list is asked again once the confirmation has been shown.
     expect(mocked.inbox).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+});
+
+describe("useInbox", () => {
+  const newer = [{ id: "e5f6", at: "2026-09-13T11:00", text: "newer" }];
+
+  it("keeps a newer snapshot when an older success settles last", async () => {
+    const olderRequest = deferred<InboxEntry[]>();
+    const newerRequest = deferred<InboxEntry[]>();
+    mocked.inbox.mockReturnValueOnce(olderRequest.promise).mockReturnValueOnce(newerRequest.promise);
+    const { result } = renderHook(() => useInbox());
+    await waitFor(() => expect(mocked.inbox).toHaveBeenCalledTimes(1));
+
+    act(() => void result.current.refresh());
+    await waitFor(() => expect(mocked.inbox).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      newerRequest.resolve(newer);
+      await newerRequest.promise;
+    });
+    expect(result.current.entries).toEqual(newer);
+
+    await act(async () => {
+      olderRequest.resolve([]);
+      await olderRequest.promise;
+    });
+    expect(result.current.entries).toEqual(newer);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("keeps a newer snapshot when an older failure settles last", async () => {
+    const olderRequest = deferred<InboxEntry[]>();
+    const newerRequest = deferred<InboxEntry[]>();
+    mocked.inbox.mockReturnValueOnce(olderRequest.promise).mockReturnValueOnce(newerRequest.promise);
+    const { result } = renderHook(() => useInbox());
+    await waitFor(() => expect(mocked.inbox).toHaveBeenCalledTimes(1));
+
+    act(() => void result.current.refresh());
+    await waitFor(() => expect(mocked.inbox).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      newerRequest.resolve(newer);
+      await newerRequest.promise;
+    });
+
+    await act(async () => {
+      olderRequest.reject(new Error("older failure"));
+      await olderRequest.promise.catch(() => undefined);
+    });
+    expect(result.current.entries).toEqual(newer);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("keeps a newer error when an older success settles last", async () => {
+    const olderRequest = deferred<InboxEntry[]>();
+    const newerRequest = deferred<InboxEntry[]>();
+    mocked.inbox.mockReturnValueOnce(olderRequest.promise).mockReturnValueOnce(newerRequest.promise);
+    const { result } = renderHook(() => useInbox());
+    await waitFor(() => expect(mocked.inbox).toHaveBeenCalledTimes(1));
+
+    act(() => void result.current.refresh());
+    await waitFor(() => expect(mocked.inbox).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      newerRequest.reject(new Error("newer failure"));
+      await newerRequest.promise.catch(() => undefined);
+    });
+    expect(result.current.error).toBe("Error: newer failure");
+
+    await act(async () => {
+      olderRequest.resolve(entries);
+      await olderRequest.promise;
+    });
+    expect(result.current.entries).toEqual([]);
+    expect(result.current.error).toBe("Error: newer failure");
+  });
+
+  it("does not install a pending request after unmount and disposes its listener", async () => {
+    const request = deferred<InboxEntry[]>();
+    const off = vi.fn();
+    mocked.inbox.mockReturnValueOnce(request.promise);
+    mocked.onCorpusChanged.mockResolvedValueOnce(off);
+    const { result, unmount } = renderHook(() => useInbox());
+    await waitFor(() => expect(mocked.inbox).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocked.onCorpusChanged).toHaveBeenCalledTimes(1));
+
+    unmount();
+    expect(off).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      request.resolve(entries);
+      await request.promise;
+    });
+    expect(result.current.entries).toEqual([]);
+    expect(result.current.loaded).toBe(false);
   });
 });
 
