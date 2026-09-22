@@ -48,8 +48,8 @@ A corpus written by v0.1 is brought forward in place with `neb migrate`.
 ## Status
 
 v0.2: the reduced model — four statuses, five edge kinds, references with
-notes, tags, and ten invariants. Everything past that is a guess until
-roughly fifty real nodes exist.
+notes, tags, and a checker-enforced invariant set. Everything past that is a
+guess until roughly fifty real nodes exist.
 
 ## Three ways in
 
@@ -57,7 +57,7 @@ roughly fifty real nodes exist.
 [skills/nebula/](skills/nebula/SKILL.md) teaches a session-directed or
 unattended agent the verbs, their `--json` shapes, the invariants and the two
 operating modes — `make skill-link` symlinks it into `~/.claude/skills`. A
-desktop app that draws the whole corpus as a graph and captures from a global
-shortcut is being built on the same `nebula-core`, scoped in
+desktop app draws the whole corpus as a graph and captures from a global
+shortcut on the same `nebula-core`, as documented in
 [docs/design/v0.2/](docs/design/v0.2/2_architecture.md). All three read and write the same `nodes/` and
 `inbox/` — there is one corpus underneath, never three.

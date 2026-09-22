@@ -22,8 +22,10 @@ a terminal is not where a thought arrives. v0.2 cuts the model to what a
 person actually uses, hands the machinery to an agent, and puts the capture
 path and the graph on screen.
 
-This document is the authoritative target for every v0.2 task. `docs/spec.md`
-and `docs/design/lineage-graph/` describe v0.1 until they are rewritten.
+This document records the maintained v0.2 contract. `docs/spec.md` is the
+original v0.1 design record; more focused documents under
+`docs/design/lineage-graph/` remain authoritative where they explicitly name
+v0.2 behavior.
 
 ## What is removed
 
@@ -98,14 +100,18 @@ Field rules:
   other`). `note` is the field that matters; `check` warns when it is empty.
   A `verdict` or `strength` key is a parse error (`deny_unknown_fields`).
 - `origin`: unchanged from v0.1. Recorded, never typed by hand.
-- `schema_version: 2` in `config.yaml`. `config.yaml` keeps `corpus_id` and
-  `schema_version` only.
+- `schema_version: 2` in `config.yaml`. It also keeps the stable `corpus_id`
+  and optional machine-written settings for `observatory_root` and automatic
+  `commit` behavior. Use `neb config observatory-root` and `neb config commit`
+  rather than editing it by hand.
 
 ## Inbox
 
 Unchanged: `inbox/YYYY-MM.md`, one timestamped line per capture, entries are
-not nodes, `promote` and `drop` settle them. `promote` takes `--parent` (0..n)
-and `--tag` (0..n); nothing else.
+not nodes, `promote` and `drop` settle them. `promote` can override the
+generated title or id, append body text, add parents and tags, record author
+and Orbit provenance, and suppress nearest-node suggestions; run
+`neb promote --help` for the complete flag list.
 
 ## Verbs
 
@@ -113,20 +119,20 @@ and `--tag` (0..n); nothing else.
 |---|---|
 | `capture <text>` | the five-second path |
 | `inbox` | list unsettled captures |
-| `promote <ref> [--parent ..] [--tag ..]` | inbox entry becomes a seed node |
+| `promote <ref> [--title ..] [--body ..] [--parent ..] [--tag ..] [--id ..] [--by ..] [--task ..] [--run ..] [--quiet]` | inbox entry becomes a seed node |
 | `drop <ref>` | settle an inbox entry without a node |
 | `new <title> [--parent ..] [--tag ..] [--kill ..]` | create a node directly |
 | `sharpen <id> --kill "..."` | seed becomes hypothesis |
 | `link <from> <type> <to>` | add an edge; refuses a genealogy cycle |
 | `cite <id> --kind --uri --note [--title]` | attach a reference |
-| `status <id> <status> [--why ..] [--reopen]` | move status under the rules above |
+| `status <id> <status> [--why ..]` | move status under the rules above; reopening requires a new node and a `reopens` edge |
 | `tag <id> [--add ..] [--remove ..]` / `tag list` | edit tags; list tags with counts |
 | `trace <id> [--down]` | ancestry walk, or descent |
 | `impact <id>` | what `contradicts` or descends from this |
 | `open [--tag ..]` | hypotheses with no references; seeds untouched ≥ 90 d; inbox entries ≥ 14 d |
 | `show <id>` / `list [--tag ..] [--status ..]` | read |
 | `review [--since] [--out]` | weekly maintenance report; proposes, never mutates |
-| `graph` | `--json` only: `{nodes: [...], edges: [...]}` for the whole corpus, one call |
+| `graph` | `--json` emits `{nodes: [...], edges: [...]}`; `--mermaid [--from <id>]` emits a diagram |
 | `check` | the invariants |
 | `migrate` | v1 corpus → v2, see below |
 | `completions <shell>` | unchanged |
@@ -164,7 +170,8 @@ writes them back in v2 form:
 - each `tasks[]` entry → a reference `{kind: other, uri: "orbit:<id>", title: <id>, note: <why>}`.
 - `status: testing | supported` → `hypothesis`.
 - `status: graduated` → `abandoned` with `closed: {why: "graduated to <graduated_to>"}`.
-- `config.yaml` loses `domains` and `default_domain`.
+- `config.yaml` loses `domains` and `default_domain`; existing
+  `observatory_root` and `commit` settings are preserved.
 
 Nothing is dropped; the mapping is a lossless re-labelling into references,
 which is the whole point of keeping references and cutting the rest.

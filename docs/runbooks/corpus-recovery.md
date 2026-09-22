@@ -58,9 +58,9 @@ by hand. The message names the whole path:
 ERROR [1] corpus genealogy cycle: a -> b -> a
 ```
 
-Remove whichever edge is wrong. `derives-from`, `refines` and `generalizes` are
-the only edges that can create one; `contradicts` cannot, since it is symmetric
-rather than directional.
+Remove whichever edge is wrong. `derives-from`, `refines`, `generalizes` and
+`reopens` are genealogy edges and can create a cycle; `contradicts` cannot,
+since it is symmetric rather than directional.
 
 ## Symptom: an edge points at a node that does not exist
 
