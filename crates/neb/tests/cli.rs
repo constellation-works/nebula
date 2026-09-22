@@ -4722,6 +4722,15 @@ fn log_and_show_at_read_a_node_sharpened_across_two_commits() {
     c.run(&["show", &id, "--at", "2019-12-31"])
         .assert_fails()
         .says("no node `history-shape` at `2019-12-31`");
+
+    for at in ["not-a-date", "2026-99-99", "2026-13-01", "2027-02-29"] {
+        c.run(&["show", &id, "--at", at])
+            .assert_fails()
+            .says(&format!("invalid --at value `{at}`"));
+    }
+
+    // A real leap date is a date, not malformed.
+    c.run(&["show", &id, "--at", "2028-02-29"]).assert_ok();
 }
 
 #[test]
