@@ -4626,6 +4626,70 @@ fn migrate_refuses_an_unknown_node_field_in_a_v2_corpus() {
     assert!(git(&c.root, &["status", "--porcelain"]).trim().is_empty());
 }
 
+#[test]
+fn check_and_migrate_refuse_unknown_nested_v2_data_without_rewriting() {
+    for nested in [
+        "origin:\n  task: FIXTURE-1\n  future_field: IRREPLACEABLE\n",
+        "references:\n- id: r1\n  kind: study\n  added: 2026-09-22\n  origin:\n    task: FIXTURE-1\n    future_field: IRREPLACEABLE\n",
+        "edges:\n- type: derives-from\n  to: parent\n  future_field: IRREPLACEABLE\n",
+    ] {
+        let c = committed_v2_corpus();
+        let id = c.seed("an idea", "An idea");
+        let path = c.node_file(&id);
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let edited = raw.replacen("---\n\n", &format!("{nested}---\n\n"), 1);
+        assert_ne!(raw, edited);
+        write(&path, &edited);
+        git(&c.root, &["add", "-A"]);
+        git(&c.root, &["commit", "-q", "-m", "unknown nested data"]);
+
+        let before = snapshot_corpus_files(&c.root);
+        c.run(&["check"]).assert_fails().says("future_field");
+        c.run(&["migrate"])
+            .assert_fails()
+            .says("schema_version 2")
+            .says("future_field")
+            .says("nothing was changed");
+        assert_eq!(before, snapshot_corpus_files(&c.root));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
+    }
+}
+
+#[test]
+fn migrate_preflights_late_nested_unknown_before_normalising_earlier_node() {
+    let c = committed_v2_corpus();
+    let alpha = c.seed("first", "Alpha idea");
+    let zeta = c.seed("last", "Zeta idea");
+    assert!(alpha < zeta);
+    with_an_unnormalised_tag(&c, &alpha);
+
+    let path = c.node_file(&zeta);
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let edited = raw.replacen(
+        "---\n\n",
+        "origin:\n  task: FIXTURE-1\n  future_field: IRREPLACEABLE\n---\n\n",
+        1,
+    );
+    assert_ne!(raw, edited);
+    write(&path, &edited);
+    git(&c.root, &["add", "-A"]);
+    git(&c.root, &["commit", "-q", "-m", "late nested unknown"]);
+
+    let before = snapshot_corpus_files(&c.root);
+    c.run(&["check"]).assert_fails().says("future_field");
+    c.run(&["migrate"])
+        .assert_fails()
+        .says("future_field")
+        .says("nothing was changed");
+    assert_eq!(before, snapshot_corpus_files(&c.root));
+    assert_eq!(std::fs::read_to_string(path).unwrap(), edited);
+    assert!(
+        std::fs::read_to_string(c.node_file(&alpha))
+            .unwrap()
+            .contains("- Orrery")
+    );
+}
+
 /// Invariant 7 is enforced by `deny_unknown_fields` on the reference, not by
 /// a check, so a `verdict` on a v2 reference has to fail to parse. The v1
 /// reference model tolerates one because a v1 corpus really did carry
@@ -4687,6 +4751,35 @@ fn migrate_still_drops_an_unknown_field_from_a_v1_corpus() {
             .unwrap()
             .contains("retired_v1_key")
     );
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+#[test]
+fn migrate_keeps_valid_v1_origin_mapping_with_retired_nested_keys() {
+    let c = v1_corpus();
+    let path = c.node_file("wake-retardation");
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let edited = raw
+        .replacen(
+            "    task: DANI-10001\n",
+            "    task: DANI-10001\n    retired_v1_origin_key: gone\n",
+            1,
+        )
+        .replacen(
+            "---\n\n",
+            "origin:\n  task: DANI-10002\n  retired_v1_origin_key: gone\n---\n\n",
+            1,
+        );
+    assert_ne!(raw, edited);
+    write(&path, &edited);
+
+    c.run(&["migrate"])
+        .assert_ok()
+        .says("4 of 4 nodes rewritten");
+    let migrated = std::fs::read_to_string(path).unwrap();
+    assert!(migrated.contains("task: DANI-10001"), "{migrated}");
+    assert!(migrated.contains("task: DANI-10002"), "{migrated}");
+    assert!(!migrated.contains("retired_v1_origin_key"), "{migrated}");
     c.run(&["check"]).assert_ok().says("0 errors");
 }
 

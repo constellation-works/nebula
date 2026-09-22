@@ -53,7 +53,7 @@ struct V1Node {
     #[serde(default)]
     tasks: Vec<V1Task>,
     #[serde(default)]
-    origin: Option<Origin>,
+    origin: Option<V1Origin>,
     #[serde(default)]
     graduated_to: Option<String>,
     #[serde(default)]
@@ -80,7 +80,7 @@ struct V1Evidence {
     #[serde(default)]
     note: Option<String>,
     #[serde(default)]
-    origin: Option<Origin>,
+    origin: Option<V1Origin>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,7 +99,32 @@ struct V1Reference {
     #[serde(default)]
     promoted_to: Option<String>,
     #[serde(default)]
-    origin: Option<Origin>,
+    origin: Option<V1Origin>,
+}
+
+// Only the legacy reader is lenient. Reusing the current Origin here would
+// reject retired v1 provenance keys after current-schema reads become strict.
+#[derive(Debug, Deserialize)]
+struct V1Origin {
+    task: Option<String>,
+    workspace: Option<String>,
+    run: Option<String>,
+    artifact: Option<String>,
+    agent: Option<String>,
+    at: Option<String>,
+}
+
+impl From<V1Origin> for Origin {
+    fn from(old: V1Origin) -> Self {
+        Self {
+            task: old.task,
+            workspace: old.workspace,
+            run: old.run,
+            artifact: old.artifact,
+            agent: old.agent,
+            at: old.at,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -425,7 +450,7 @@ fn convert(v1: V1Node) -> Result<(Node, Vec<String>)> {
             edges,
             references,
             closed,
-            origin: v1.origin,
+            origin: v1.origin.map(Into::into),
         },
         notes,
     ))
@@ -457,7 +482,7 @@ impl Relabel<'_> {
                 note: r.note,
                 added: r.added,
                 by: r.by,
-                origin: r.origin,
+                origin: r.origin.map(Into::into),
             });
         }
         self.next = model::next_reference_index(&self.out);
@@ -503,7 +528,7 @@ impl Relabel<'_> {
                 format!("[{}/{}] {note}", ev.verdict, ev.strength)
             };
             let added = ev.date.unwrap_or_else(|| self.updated.to_string());
-            let id = self.push(ev.source, title, note, added, ev.origin);
+            let id = self.push(ev.source, title, note, added, ev.origin.map(Into::into));
             self.notes
                 .push(format!("evidence {} -> reference {id}", ev.id));
         }
