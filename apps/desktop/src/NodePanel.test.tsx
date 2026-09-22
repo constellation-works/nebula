@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { NodePanel } from "./NodePanel";
@@ -90,6 +90,24 @@ const nodes: NodeSummary[] = [
   { id: "capture-under-five-seconds", title: "Capture must stay under five seconds", status: "hypothesis", tags: [], created: "", updated: "" },
   { id: "dashboards-earn-their-keep", title: "Dashboards earn their keep", status: "seed", tags: [], created: "", updated: "" },
 ];
+
+function nodeView(id: string, title: string, body: string): NodeView {
+  return {
+    ...fixture,
+    node: { ...fixture.node, id, title },
+    body,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -199,5 +217,81 @@ describe("NodePanel", () => {
     mocked.node.mockRejectedValue("no such node: gone");
     renderPanel();
     expect(await screen.findByRole("alert")).toHaveTextContent("no such node: gone");
+  });
+
+  it("hides the prior node while a new selection loads and after it fails", async () => {
+    const first = nodeView("first", "First node", "Body from first");
+    const second = deferred<NodeView>();
+    mocked.node.mockResolvedValueOnce(first).mockReturnValueOnce(second.promise);
+
+    const { rerender } = render(
+      <NodePanel
+        id="first"
+        nodes={nodes}
+        revision={1}
+        width={380}
+        onResize={() => {}}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    expect(await screen.findByText("Body from first")).toBeInTheDocument();
+
+    rerender(
+      <NodePanel
+        id="second"
+        nodes={nodes}
+        revision={1}
+        width={380}
+        onResize={() => {}}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText("second")).toHaveClass("panel__id");
+    expect(screen.queryByText("First node")).toBeNull();
+    expect(screen.queryByText("Body from first")).toBeNull();
+
+    await act(async () => second.reject("no such node: second"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("no such node: second");
+    expect(screen.queryByText("First node")).toBeNull();
+    expect(screen.queryByText("Body from first")).toBeNull();
+  });
+
+  it("keeps only the current node when requests resolve out of order", async () => {
+    const first = deferred<NodeView>();
+    const second = deferred<NodeView>();
+    mocked.node.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+    const { rerender } = render(
+      <NodePanel
+        id="first"
+        nodes={nodes}
+        revision={1}
+        width={380}
+        onResize={() => {}}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    rerender(
+      <NodePanel
+        id="second"
+        nodes={nodes}
+        revision={1}
+        width={380}
+        onResize={() => {}}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    await act(async () => second.resolve(nodeView("second", "Second node", "Body from second")));
+    expect(await screen.findByText("Body from second")).toBeInTheDocument();
+
+    await act(async () => first.resolve(nodeView("first", "First node", "Late body from first")));
+    expect(screen.getByText("Second node")).toBeInTheDocument();
+    expect(screen.getByText("Body from second")).toBeInTheDocument();
+    expect(screen.queryByText("Late body from first")).toBeNull();
   });
 });
