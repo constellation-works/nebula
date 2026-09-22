@@ -329,6 +329,57 @@ fn capture_then_promote_leaves_the_original_text_in_the_node() {
 }
 
 #[test]
+fn multiline_capture_is_refused_without_writing() {
+    let c = Corpus::new();
+
+    c.run(&["capture", "first line\nsecond line", "--quiet", "--json"])
+        .assert_fails()
+        .says("capture text must fit on one line");
+
+    assert_eq!(
+        std::fs::read_dir(c.root.join("inbox")).unwrap().count(),
+        0,
+        "a refused capture must not create an inbox record"
+    );
+    c.run(&["inbox", "--json"]).assert_ok().says("[]");
+}
+
+#[test]
+fn capture_after_an_unterminated_record_round_trips_through_promotion() {
+    let c = Corpus::new();
+    let first = c.run(&["capture", "the first thought"]).stdout_trim();
+    let month = std::fs::read_dir(c.root.join("inbox"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let unterminated = std::fs::read_to_string(&month)
+        .unwrap()
+        .trim_end_matches('\n')
+        .to_string();
+    std::fs::write(&month, unterminated).unwrap();
+
+    let second = c.run(&["capture", "the second thought"]).stdout_trim();
+    let listing = c.run(&["inbox", "--json"]).assert_ok().stdout();
+    let entries: serde_json::Value = serde_json::from_str(&listing).unwrap();
+    assert_eq!(entries.as_array().unwrap().len(), 2);
+    assert!(listing.contains(&first));
+    assert!(listing.contains(&second));
+
+    let node = c
+        .run(&["promote", &second, "--title", "Second thought"])
+        .assert_ok()
+        .stdout_trim();
+    let body = std::fs::read_to_string(c.node_file(&node)).unwrap();
+    assert!(body.ends_with("the second thought\n"));
+    c.run(&["inbox", "--json"])
+        .assert_ok()
+        .says(&first)
+        .says("the first thought");
+}
+
+#[test]
 fn promoted_and_dropped_entries_leave_the_inbox_but_stay_on_disk() {
     let c = Corpus::new();
     let keep = c.run(&["capture", "worth keeping"]).stdout_trim();

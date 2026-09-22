@@ -409,6 +409,56 @@ fn settling_refuses_when_the_indexed_line_has_another_entry_id() {
 }
 
 #[test]
+fn multiline_capture_is_refused_without_writing() {
+    let (_dir, corpus) = corpus();
+    let existing = ops::capture(&corpus, "already here").unwrap();
+    let before = std::fs::read_to_string(&existing.file).unwrap();
+
+    let error = ops::capture(&corpus, "first line\nsecond line").unwrap_err();
+
+    assert!(
+        matches!(error, Error::Corpus(message) if message == "capture text must fit on one line")
+    );
+    assert_eq!(
+        std::fs::read_to_string(&existing.file).unwrap(),
+        before,
+        "a refused capture must not change the inbox file"
+    );
+    assert_eq!(corpus.inbox().unwrap().0.len(), 1);
+}
+
+#[test]
+fn capture_after_an_unterminated_record_stays_independent_and_promotes() {
+    let (_dir, corpus) = corpus();
+    let first = ops::capture(&corpus, "the first thought").unwrap();
+    let unterminated = std::fs::read_to_string(&first.file)
+        .unwrap()
+        .trim_end_matches('\n')
+        .to_string();
+    std::fs::write(&first.file, unterminated).unwrap();
+
+    let second = ops::capture(&corpus, "the second thought").unwrap();
+    let inbox = corpus.inbox().unwrap();
+    assert_eq!(inbox.0.len(), 2);
+    assert_eq!(corpus.inbox_entry(&first.id).unwrap().text, first.text);
+    assert_eq!(corpus.inbox_entry(&second.id).unwrap().text, second.text);
+
+    let promoted = ops::promote(
+        &corpus,
+        &second.id,
+        &Promotion {
+            title: Some("Second thought".into()),
+            ..Promotion::default()
+        },
+        0,
+    )
+    .unwrap();
+    assert_eq!(promoted.doc.body.trim(), "the second thought");
+    assert_eq!(corpus.inbox().unwrap().0.len(), 1);
+    assert_eq!(corpus.inbox_entry(&first.id).unwrap().text, first.text);
+}
+
+#[test]
 fn capture_ids_are_unique_across_month_files_and_older_entries_still_resolve() {
     for _ in 0..3 {
         let (_dir, corpus) = corpus();

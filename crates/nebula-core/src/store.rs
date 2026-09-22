@@ -571,6 +571,9 @@ impl Corpus {
     /// Append a capture to the current month's inbox file.
     pub fn capture(&self, text: &str) -> Result<InboxEntry> {
         use std::io::Write;
+        if text.contains(['\n', '\r']) {
+            return Err(Error::corpus("capture text must fit on one line"));
+        }
         let text = text.trim();
         if text.is_empty() {
             return Err(Error::corpus("nothing to capture"));
@@ -588,6 +591,9 @@ impl Corpus {
             .create(true)
             .append(true)
             .open(&path)?;
+        if !existing.is_empty() && !existing.ends_with('\n') {
+            writeln!(f)?;
+        }
         writeln!(f, "- [{id}] {now} {text}")?;
         Ok(InboxEntry {
             id,
