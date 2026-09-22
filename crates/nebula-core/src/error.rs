@@ -159,6 +159,28 @@ pub enum Error {
     )]
     InvalidId(String),
 
+    /// An id that cannot name a file under `nodes/`: it holds a path
+    /// separator, a `.`/`..` or root component, a control character, or
+    /// surrounding whitespace. Refused before any read or write derives a
+    /// path from it, whether it came from a caller or out of a node file
+    /// somebody edited by hand.
+    #[error(
+        "`{0}` cannot be a node id: an id names one file under nodes/, so it cannot hold a path separator, `.`, `..`, or a control character"
+    )]
+    UnsafeId(String),
+
+    /// A node file's name and the id it stores disagree. Nothing is read or
+    /// written: a node's id decides where a write lands, so a file that
+    /// claims to be another node would make the next verb overwrite that
+    /// other node.
+    #[error("{} stores the id `{id}`, which is not the node its file name names; nothing was read or written", .path.display())]
+    IdMismatch {
+        /// The file that was read.
+        path: PathBuf,
+        /// The id it stores.
+        id: String,
+    },
+
     /// Another writer holds the corpus lock and did not release it within
     /// the bounded wait. Nothing was written: the refusal comes before the
     /// op reads anything, so there is no half-applied change to undo.

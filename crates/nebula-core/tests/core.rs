@@ -831,7 +831,7 @@ fn a_commit_is_refused_when_something_outside_the_corpus_is_staged_and_the_write
     );
     assert_eq!(head(&outer), before, "nothing was committed");
     assert!(
-        corpus.node_path(&a).exists(),
+        corpus.node_path(&a).unwrap().exists(),
         "the write is never rolled back because of git"
     );
     let status = git(&outer, &["status", "--porcelain"]);
@@ -868,7 +868,7 @@ fn commit_on_in_a_corpus_the_containing_repository_ignores_is_a_typed_error() {
         ops::commit(&corpus, "new", &[&a]),
         Err(Error::CorpusIgnored(r)) if r == root
     ));
-    assert!(corpus.node_path(&a).exists());
+    assert!(corpus.node_path(&a).unwrap().exists());
 }
 
 // -------------------------------------------------------------------- lock --
@@ -912,7 +912,7 @@ fn two_concurrent_tag_adds_on_one_node_both_survive() {
 fn a_write_against_a_held_lock_refuses_and_changes_nothing() {
     let (dir, corpus) = corpus();
     let id = seed(&corpus, "A node nobody gets to edit", &[]);
-    let before = std::fs::read_to_string(corpus.node_path(&id)).unwrap();
+    let before = std::fs::read_to_string(corpus.node_path(&id).unwrap()).unwrap();
     let root = dir.path().join("corpus");
 
     // Held on another thread, because the lock is re-entrant on the thread
@@ -936,7 +936,7 @@ fn a_write_against_a_held_lock_refuses_and_changes_nothing() {
         "got {refused:?}"
     );
     assert_eq!(
-        std::fs::read_to_string(corpus.node_path(&id)).unwrap(),
+        std::fs::read_to_string(corpus.node_path(&id).unwrap()).unwrap(),
         before,
         "the refusal came before the write, so the node is untouched"
     );
@@ -980,4 +980,187 @@ fn the_lock_file_is_neither_committed_nor_checked() {
     let report = nebula_core::check::run(&Graph::build(&docs).unwrap(), &corpus).unwrap();
     assert_eq!(report.nodes, 1, "the lock file is not read as a node");
     assert!(report.findings.is_empty(), "{:?}", report.findings);
+}
+
+// ---------------------------------------------------------------- node ids --
+
+/// Rewrite the id a node file stores, the way a hand edit would.
+fn rewrite_stored_id(path: &std::path::Path, to: &str) {
+    let raw = std::fs::read_to_string(path).expect("node file");
+    let (first, rest) = raw.split_once('\n').expect("frontmatter");
+    assert!(first == "---", "a node file starts with `---`");
+    let rewritten = rest
+        .lines()
+        .map(|line| {
+            if line.starts_with("id: ") {
+                format!("id: {to}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(path, format!("---\n{rewritten}\n")).expect("rewrite");
+}
+
+/// A stored id that is not one file name never becomes a `Doc`, so no verb
+/// downstream can derive a destination from it. The file that proved this
+/// necessary said `id: ../../escaped` and a `note` wrote `escaped.md` beside
+/// the corpus root.
+#[test]
+fn a_stored_id_that_leaves_nodes_fails_to_load_and_writes_nothing() {
+    for escape in ["../../escaped", "../escaped", "nodes/elsewhere", ".."] {
+        let (dir, corpus) = corpus();
+        let id = seed(&corpus, "Safe", &[]);
+        let path = corpus.node_path(&id).unwrap();
+        rewrite_stored_id(&path, escape);
+
+        let refused = ops::note(&corpus, &id, "a fixture note", None);
+        assert!(
+            matches!(&refused, Err(Error::IdMismatch { path: p, id: stored }) if p == &path && stored == escape),
+            "`{escape}` got {refused:?}"
+        );
+        assert!(corpus.load(&id).is_err(), "`{escape}` still loads");
+        assert!(corpus.load_all().is_err(), "`{escape}` survives a scan");
+        let outside: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.file_name()))
+            .collect();
+        assert_eq!(outside, ["corpus"], "`{escape}` wrote beside the corpus");
+    }
+}
+
+/// An absolute id is the same escape spelled differently, and is refused the
+/// same way rather than replacing the join wholesale.
+#[test]
+fn a_stored_id_that_is_an_absolute_path_fails_to_load() {
+    let (dir, corpus) = corpus();
+    let id = seed(&corpus, "Safe", &[]);
+    let elsewhere = dir.path().join("escaped");
+    rewrite_stored_id(
+        &corpus.node_path(&id).unwrap(),
+        &elsewhere.display().to_string(),
+    );
+
+    assert!(ops::note(&corpus, &id, "a fixture note", None).is_err());
+    assert!(!elsewhere.with_extension("md").exists(), "wrote outside");
+}
+
+/// The quieter half of the same bug: a stored id that *is* a valid id, but
+/// another node's. `save` writes where the id says, so loading this file and
+/// noting on it overwrote the node it named.
+#[test]
+fn a_node_file_that_claims_another_nodes_id_is_refused_before_the_write() {
+    let (_dir, corpus) = corpus();
+    let safe = seed(&corpus, "Safe", &[]);
+    let victim = seed(&corpus, "Victim", &[]);
+    let victim_path = corpus.node_path(&victim).unwrap();
+    let before = std::fs::read_to_string(&victim_path).unwrap();
+    rewrite_stored_id(&corpus.node_path(&safe).unwrap(), &victim);
+
+    let refused = ops::note(&corpus, &safe, "a fixture note", None);
+    assert!(
+        matches!(&refused, Err(Error::IdMismatch { path, id }) if path == &corpus.node_path(&safe).unwrap() && id == &victim),
+        "got {refused:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&victim_path).unwrap(),
+        before,
+        "the other node is untouched"
+    );
+    // A scan finds nodes by path, so it refuses from the other direction
+    // rather than answering every query from the wrong file.
+    assert!(matches!(corpus.load_all(), Err(Error::IdMismatch { .. })));
+}
+
+/// A caller-supplied id is a path the moment it is used, whether it came from
+/// a terminal, the desktop, or an agent.
+#[test]
+fn a_caller_supplied_id_that_is_not_one_file_name_is_refused() {
+    let (dir, corpus) = corpus();
+    seed(&corpus, "Safe", &[]);
+    // A real node file outside the corpus: the refusal must not depend on
+    // there being nothing to find.
+    let secret = dir.path().join("secret");
+    std::fs::create_dir_all(&secret).unwrap();
+    std::fs::write(
+        secret.join("leak.md"),
+        "---\nid: leak\ntitle: fixture node outside the corpus\nstatus: seed\n\
+         created: 2026-09-22\nupdated: 2026-09-22\n---\n\nfixture body\n",
+    )
+    .unwrap();
+    let absolute = secret.join("leak").display().to_string();
+
+    for id in ["../../secret/leak", "../secret/leak", &absolute, "..", ""] {
+        assert!(
+            matches!(corpus.node_path(id), Err(Error::UnsafeId(_))),
+            "node_path accepted `{id}`"
+        );
+        for refused in [
+            ops::note(&corpus, id, "a fixture note", None).err(),
+            ops::sharpen(&corpus, id, "a fixture kill", None).err(),
+            ops::tag_add(&corpus, id, &["fixture".to_string()]).err(),
+            corpus.load(id).err(),
+            corpus.history(id).err(),
+        ] {
+            assert!(
+                matches!(refused, Some(Error::UnsafeId(_) | Error::NotGitWorkTree(_))),
+                "`{id}` got {refused:?}"
+            );
+        }
+    }
+    assert!(
+        !corpus.node_path("leak").unwrap().exists(),
+        "nothing outside the root was read into the corpus"
+    );
+}
+
+/// The rule is about path structure, not about the alphabet: a Unicode id
+/// still captures, loads, saves and checks. macOS stores a file name in a
+/// normalization of its own choosing, so this is also where a scan that
+/// compared names byte for byte would fail on one platform and pass on the
+/// other.
+#[test]
+fn a_unicode_id_still_round_trips_through_a_write() {
+    let (_dir, corpus) = corpus();
+    let id = seed(&corpus, "Ünïcode título → ok", &[]);
+    assert_eq!(id, "ünïcode-título-ok");
+    let korean = seed(&corpus, "시간은 프레임의 수다", &[]);
+
+    ops::note(&corpus, &id, "a fixture note", None).expect("note");
+    ops::note(&corpus, &korean, "a fixture note", None).expect("note");
+    assert_eq!(corpus.load(&id).unwrap().node.id, id);
+    let docs = corpus.load_all().expect("a scan reads both back");
+    assert_eq!(docs.len(), 2);
+    let report = nebula_core::check::run(&Graph::build(&docs).unwrap(), &corpus).unwrap();
+    assert!(report.findings.is_empty(), "{:?}", report.findings);
+}
+
+/// macOS temporary directories sit under a symlink, so a corpus reached
+/// through one is the normal case there rather than an exotic one. Nothing
+/// in the id rules canonicalizes, so the path is used as given and the same
+/// verbs work.
+#[cfg(unix)]
+#[test]
+fn a_corpus_reached_through_a_symlinked_root_still_writes_and_loads() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let real = dir.path().join("real");
+    let corpus = Corpus::init(&real).expect("init");
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+    let linked = Corpus::open(Some(link.clone())).expect("open through the link");
+    let id = seed(&linked, "Reached through a link", &[]);
+    ops::note(&linked, &id, "a fixture note", None).expect("note");
+
+    assert_eq!(
+        linked.node_path(&id).unwrap(),
+        link.join("nodes").join(format!("{id}.md")),
+        "the path is the one given, not a resolved one"
+    );
+    assert!(
+        corpus.load(&id).is_ok(),
+        "the same node through the real path"
+    );
+    assert_eq!(linked.load_all().unwrap().len(), 1);
 }

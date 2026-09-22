@@ -51,5 +51,5 @@ pub fn node(corpus: &Corpus, id: &str) -> Result<NodeView> {
 /// not exist, so a typo does not open an empty editor.
 pub fn node_file(corpus: &Corpus, id: &str) -> Result<PathBuf> {
     corpus.load(id)?;
-    Ok(corpus.node_path(id))
+    corpus.node_path(id)
 }

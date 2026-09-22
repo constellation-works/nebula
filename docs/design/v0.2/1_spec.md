@@ -151,6 +151,7 @@ return type serialised; see [2_architecture.md](2_architecture.md).
 | 11 | `closed` is set only on `refuted`/`abandoned`, never on an open node | error | `check` |
 | 11 | A `seed` does not carry a `kill` condition | warn | `check` |
 | 12 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
+| 13 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse; `store` before any read or write |
 
 ## Migration (`neb migrate`)
 

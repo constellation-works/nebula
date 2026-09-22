@@ -273,7 +273,7 @@ pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion, near_k: usize) ->
     corpus.create(&doc)?;
     corpus.settle_inbox(&e, &format!("-> {}", doc.node.id))?;
     Ok(Created {
-        path: corpus.node_path(&doc.node.id),
+        path: corpus.node_path(&doc.node.id)?,
         doc,
         near,
     })
@@ -295,7 +295,7 @@ pub fn new_node(corpus: &Corpus, args: &NewNode) -> Result<Created> {
     let doc = build(corpus, args, status, &args.body)?;
     corpus.create(&doc)?;
     Ok(Created {
-        path: corpus.node_path(&doc.node.id),
+        path: corpus.node_path(&doc.node.id)?,
         doc,
         near: Vec::new(),
     })
@@ -316,7 +316,7 @@ fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<
         return Err(Error::UnusableTitle(spec.title.clone()));
     }
     for p in &spec.parents {
-        if !corpus.node_path(p).exists() {
+        if !corpus.node_path(p)?.exists() {
             return Err(Error::MissingParent(p.clone()));
         }
     }

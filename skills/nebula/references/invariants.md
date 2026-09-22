@@ -1,6 +1,6 @@
 # Invariants and refusals
 
-Twelve rules. Each is enforced at one of three strengths — at parse (the file
+Thirteen rules. Each is enforced at one of three strengths — at parse (the file
 will not load), at the point of action (the verb refuses), or by `neb check`
 (a finding) — and the strength is deliberate. `error` findings make `check`
 exit non-zero; `warn` findings do not.
@@ -21,6 +21,16 @@ exit non-zero; `warn` findings do not.
 | 11 | `closed` is set only on a `refuted`/`abandoned` node, never an open one | error | `check` |
 | 11 | A `seed` does not carry a `kill` condition | warn | `check` |
 | 12 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
+| 13 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse (the shape); every read and write (the agreement) |
+
+Rule 13 is the one rule `check` cannot hold: an id decides which file a write
+lands in, so a corpus whose ids disagree with their file names is one `check`
+could not load to report on. A file whose stored id could
+not name a node file, and a file whose name and stored id simply disagree,
+are both refused by every verb that touches them — `check` included — and the
+refusal names the file and the id it stores. Both mean a hand edit, and both
+are the human's to resolve: never yours to "repair" by renaming a file or
+rewriting an `id`.
 
 Genealogy means the four directed kinds: `derives-from`, `refines`,
 `generalizes`, `reopens`. `contradicts` is symmetric and not genealogy, so it
@@ -62,6 +72,8 @@ Refusals are typed. The message is what the CLI prints; the variant is what
 | `parent \`X\` does not exist` | `MissingParent` | — | The parent id is wrong or has not been created. Check `neb list --json`; use an existing parent, or create the intended parent only with the human's approval. |
 | `title \`X\` does not reduce to a usable id` | `UnusableTitle` | — | Give `neb new` or `neb promote` a title containing letters or numbers, or provide a valid `--id`. Do not retry the same unusable title. |
 | `\`X\` is not a valid id: ids are lowercase words joined by single dashes, 60 characters or fewer` | `InvalidId` | — | Use a lowercase slug of single-dash-separated words, at most 60 characters, for `neb new` or `neb promote --id`. Do not retry the invalid id. |
+| `\`X\` cannot be a node id: an id names one file under nodes/, ...` | `UnsafeId` | 13 | The id **you passed** holds a path separator, a `.`/`..`, a root, or a control character, so it could not name a node file. Nothing was read or written. Get the real id from `neb list --json`; never rewrite an id into a path, and do not retry. |
+| `<file> stores the id \`X\`, which is not the node its file name names` | `IdMismatch {path, id}` | 13 | A node **file**'s name and its stored `id` disagree — because the id is another node's, or because it is not a name a file can have at all (`../../escaped`). A write derives its destination from the stored id, so this would land on some other node or outside the corpus; nothing was read or written. Report the path and the stored id; do not "fix" it by renaming the file or editing the id, and do not retry the verb. Only the human knows which of the two the node really is. |
 | `\`../x.md\` does not resolve from .../nodes` | `UnresolvedUri` | 8 | Local URIs are relative to `nodes/`. Fix the path (`../../studies/x.md`) or use a URL/wikilink. |
 | `\`X\` is not an Observatory record id` | `InvalidObservatoryId` | 8 | `--kind observatory` takes the bare id (`Q002`, `H007`, `T003`, `R012`), never a path or a slug. Never fall back to `--uri <absolute path>`: it breaks on every other machine. |
 | `no open inbox entry \`X\`` | `NoSuchInboxEntry` | — | Already promoted or dropped, or the id is wrong. `neb inbox --json`. |

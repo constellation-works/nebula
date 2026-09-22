@@ -4227,3 +4227,138 @@ fn the_lock_file_is_never_staged_and_never_checked() {
     assert_eq!(report["nodes"], 1, "the lock file is not read as a node");
     assert_eq!(report["findings"].as_array().unwrap().len(), 0);
 }
+
+// ------------------------------------------------------------- node ids --
+
+/// Rewrite the id a node file stores, the way a hand edit would.
+fn rewrite_stored_id(path: &Path, to: &str) {
+    let raw = std::fs::read_to_string(path).expect("node file");
+    let rewritten: String = raw
+        .lines()
+        .map(|line| {
+            if line.starts_with("id: ") {
+                format!("id: {to}\n")
+            } else {
+                format!("{line}\n")
+            }
+        })
+        .collect();
+    write(path, &rewritten);
+}
+
+/// The reproduction this rule exists for: `nodes/safe.md` hand-edited to
+/// `id: ../../escaped`, then an ordinary verb. It used to succeed and write
+/// `escaped.md` beside the corpus root.
+#[test]
+fn a_hand_edited_traversal_id_refuses_and_writes_nothing_outside_the_root() {
+    let c = Corpus::new();
+    c.run(&["new", "Safe"]).assert_ok();
+    rewrite_stored_id(&c.node_file("safe"), "../../escaped");
+
+    // Reported against the file it came out of, since that is what the
+    // human has to go and look at.
+    c.run(&["note", "safe", "a fixture note"])
+        .assert_fails()
+        .says("nodes/safe.md stores the id `../../escaped`");
+    assert!(
+        !c.workdir().join("escaped.md").exists(),
+        "a write landed beside the corpus root"
+    );
+    assert!(!c.root.join("escaped.md").exists());
+    // Every verb that reads the corpus refuses the same way rather than one
+    // of them quietly skipping the file.
+    for args in [
+        vec!["check"],
+        vec!["list"],
+        vec!["show", "safe"],
+        vec!["tag", "safe", "--add", "fixture"],
+    ] {
+        c.run(&args)
+            .assert_fails()
+            .says("is not the node its file name names");
+    }
+}
+
+/// The quieter half: a valid id, but another node's. `save` writes where the
+/// id says, so this overwrote the node it named.
+#[test]
+fn a_node_file_claiming_another_nodes_id_refuses_before_overwriting_it() {
+    let c = Corpus::new();
+    c.run(&["new", "Safe"]).assert_ok();
+    c.run(&["new", "Victim"]).assert_ok();
+    let victim = c.node_file("victim");
+    let before = std::fs::read_to_string(&victim).unwrap();
+    rewrite_stored_id(&c.node_file("safe"), "victim");
+
+    c.run(&["note", "safe", "a fixture note"])
+        .assert_fails()
+        .says("is not the node its file name names");
+    assert_eq!(
+        std::fs::read_to_string(&victim).unwrap(),
+        before,
+        "the other node is untouched"
+    );
+    c.run(&["check"])
+        .assert_fails()
+        .says("is not the node its file name names");
+}
+
+/// A caller-supplied id is a path the moment a verb uses it, and a real file
+/// outside the corpus is exactly what it used to reach.
+#[test]
+fn a_caller_supplied_traversal_or_absolute_id_is_refused() {
+    let c = Corpus::new();
+    c.run(&["new", "Safe"]).assert_ok();
+    let secret = c.workdir().join("secret");
+    std::fs::create_dir_all(&secret).unwrap();
+    let leak = secret.join("leak.md");
+    write(
+        &leak,
+        "---\nid: leak\ntitle: fixture node outside the corpus\nstatus: seed\n\
+         created: 2026-09-22\nupdated: 2026-09-22\n---\n\nfixture body, not corpus content\n",
+    );
+    let absolute = secret.join("leak").display().to_string();
+
+    for id in ["../../secret/leak", "..", &absolute] {
+        for args in [
+            vec!["note", id, "a fixture note"],
+            vec!["sharpen", id, "--kill", "a fixture kill"],
+            vec!["tag", id, "--add", "fixture"],
+            vec!["log", id],
+        ] {
+            c.run(&args).assert_fails().says("cannot be a node id");
+        }
+    }
+    assert!(
+        !c.node_file("leak").exists(),
+        "a file outside the root was read into the corpus"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&leak).unwrap().lines().count(),
+        9,
+        "the file outside the root is untouched"
+    );
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+/// The rule is about path structure, not about the alphabet a thought was
+/// named in: a Unicode id captures, notes, shows and checks as before.
+#[test]
+fn unicode_ids_still_work_end_to_end() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "Ünïcode título → ok"])
+        .assert_ok()
+        .stdout_trim();
+    assert_eq!(id, "ünïcode-título-ok");
+    let korean = c
+        .run(&["new", "시간은 프레임의 수다"])
+        .assert_ok()
+        .stdout_trim();
+
+    c.run(&["note", &id, "a fixture note"]).assert_ok();
+    c.run(&["note", &korean, "a fixture note"]).assert_ok();
+    c.run(&["show", &id]).assert_ok().says("Ünïcode título");
+    c.run(&["check"]).assert_ok().says("0 errors");
+    assert!(c.node_file(&id).exists() && c.node_file(&korean).exists());
+}
