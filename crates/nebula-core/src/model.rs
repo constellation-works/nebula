@@ -12,6 +12,7 @@ use crate::error::{Error, Result};
 use crate::store::write_atomic;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::ops::Range;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -535,34 +536,66 @@ pub(crate) fn append_note(body: &str, date: &str, text: &str, by: Option<&str>) 
 }
 
 fn has_terminal_notes_section(body: &str) -> bool {
-    let Some(idx) = last_notes_heading(body) else {
-        return false;
-    };
-    let after = &body[idx + NOTES_HEADING.len()..];
-    !after.lines().skip(1).any(|line| line.starts_with("## "))
+    notes_section_ranges(body)
+        .last()
+        .is_some_and(|section| section.end == body.len())
 }
 
-fn last_notes_heading(body: &str) -> Option<usize> {
-    let mut found = None;
+/// Byte ranges of every `## Notes` section, in the order they appear. A
+/// section runs from its heading to the next `## ` heading, or to the end of
+/// the body when nothing closes it.
+///
+/// There can be more than one: [`append_note`] never rewrites earlier body
+/// text, so a note landing on a body whose notes are followed by another
+/// section opens a fresh section at the end rather than reaching back. Every
+/// one of them holds reasoning somebody wrote, so nothing here may look at
+/// the last section alone.
+fn notes_section_ranges(body: &str) -> Vec<Range<usize>> {
+    let mut sections: Vec<Range<usize>> = Vec::new();
+    let mut open: Option<usize> = None;
     let mut offset = 0;
     for line in body.split_inclusive('\n') {
         let content = line.trim_end_matches(['\n', '\r']);
-        if content == NOTES_HEADING {
-            found = Some(offset);
+        let opens = content == NOTES_HEADING;
+        // A `## ` heading closes the section it follows, its own included:
+        // two notes sections in a row are two sections. A deeper heading
+        // does not, so `### ` subheadings stay inside the notes they head.
+        let closes = opens || content.starts_with("## ");
+        if closes && let Some(start) = open.take() {
+            sections.push(start..offset);
+        }
+        if opens {
+            open = Some(offset);
         }
         offset += line.len();
     }
-    found
+    if let Some(start) = open {
+        sections.push(start..body.len());
+    }
+    sections
 }
 
-/// Notes from the last `## Notes` section, oldest first. Lines that are not
+/// Every `## Notes` section in a body, heading included, in the order they
+/// appear.
+///
+/// Public because the CLI's editor flow has to refuse an edit that touches
+/// any of them, and the rule for where a section starts and ends belongs
+/// beside the code that writes one.
+#[must_use]
+pub fn notes_sections(body: &str) -> Vec<&str> {
+    notes_section_ranges(body)
+        .into_iter()
+        .map(|section| &body[section])
+        .collect()
+}
+
+/// Notes from every `## Notes` section, oldest first. Lines that are not
 /// `- YYYY-MM-DD: text` are ignored, so hand-written asides stay asides.
 pub(crate) fn notes_from_body(body: &str) -> Vec<Note> {
-    let Some(idx) = last_notes_heading(body) else {
-        return Vec::new();
-    };
-    let after = &body[idx + NOTES_HEADING.len()..];
-    after.lines().filter_map(parse_note_line).collect()
+    notes_sections(body)
+        .into_iter()
+        .flat_map(|section| section.lines().filter_map(parse_note_line))
+        .collect()
 }
 
 fn parse_note_line(line: &str) -> Option<Note> {
@@ -736,5 +769,47 @@ mod tests {
             "intro\n\n## Next\n\ndo x\n\n## Notes\n\n- 2026-09-21: why"
         );
         assert_eq!(notes_from_body(&body)[0].text, "why");
+    }
+
+    /// A body whose notes are followed by other prose gets a second section
+    /// rather than an edit to the first, and both are reasoning: the
+    /// projection reads every section, so the older thought is not hidden by
+    /// the newer one.
+    #[test]
+    fn notes_in_an_earlier_section_are_still_read_back() {
+        let body =
+            "the argument\n\n## Notes\n\n- 2026-09-21: the first thought\n\n## More\n\nstill to do";
+        let after = append_note(body, "2026-09-22", "the second thought", None);
+        assert_eq!(
+            after,
+            format!("{body}\n\n## Notes\n\n- 2026-09-22: the second thought"),
+            "a closed notes section is left alone and a new one opens at the end"
+        );
+
+        let sections = notes_sections(&after);
+        assert_eq!(sections.len(), 2, "{sections:?}");
+        assert_eq!(
+            sections[0].trim_end(),
+            "## Notes\n\n- 2026-09-21: the first thought",
+            "a section ends at the heading that follows it"
+        );
+
+        let notes = notes_from_body(&after);
+        assert_eq!(
+            notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(),
+            vec!["the first thought", "the second thought"],
+            "every section is read, oldest first"
+        );
+    }
+
+    /// Note-shaped lines outside a notes section are somebody's prose, not
+    /// reasoning the corpus promised to keep.
+    #[test]
+    fn a_dated_line_outside_a_notes_section_is_not_a_note() {
+        let body = "## Log\n\n- 2026-09-21: not a note\n\n## Notes\n\n- 2026-09-22: a note";
+        assert_eq!(notes_sections(body).len(), 1);
+        let notes = notes_from_body(body);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert_eq!(notes[0].text, "a note");
     }
 }

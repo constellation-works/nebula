@@ -166,7 +166,9 @@ body text, status, edges and tags are left as they are. `updated` is bumped.
 over `$EDITOR`, then saves the result after the editor exits successfully.
 Frontmatter is never exposed. If the node already has a `## Notes` section,
 removing, moving or changing it is refused; append reasoning with `note`
-instead. `--by` is accepted and validated, but records nothing because the
+instead. A body can hold more than one such section, because `note` opens a
+fresh one rather than reach back into a section other prose has closed, and
+every one of them is protected. `--by` is accepted and validated, but records nothing because the
 body has no per-field author in the current schema. With neither environment
 variable set, `edit` refuses and names both variables.
 Unknown nodes are refused (`NoSuchNode`). `--json` is the same `NodeView` as

@@ -16,7 +16,7 @@ node: Node,
  */
 body: string, 
 /**
- * Dated reasoning parsed from the last `## Notes` section, oldest first.
+ * Dated reasoning parsed from every `## Notes` section, oldest first.
  */
 notes?: Array<Note>, 
 /**
