@@ -1778,6 +1778,110 @@ fn dangling_edges_are_caught() {
     c.run(&["check"]).assert_fails().says("missing node");
 }
 
+/// `status` always clears `closed` the moment a node leaves refuted or
+/// abandoned, so a `closed` block on a seed or hypothesis is not a state any
+/// verb produces — only a hand edit that reopened the node outside `status`
+/// leaves one behind.
+#[test]
+fn a_closed_block_on_an_open_node_is_a_rule_11_error() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    write(
+        &c.node_file(&id),
+        &raw.replace(
+            "status: hypothesis",
+            "status: hypothesis\nclosed:\n  why: it was abandoned once\n  at: 2026-09-01",
+        ),
+    );
+    c.run(&["check"])
+        .assert_fails()
+        .says("[11]")
+        .says("status is `hypothesis` but a `closed` block is still set")
+        .says("1 errors");
+}
+
+/// `new --kill` and `sharpen` always move status to `hypothesis` together
+/// with writing `kill`, so a `seed` carrying one was set by hand without the
+/// guard. Not wrong by itself, so it is a warning rather than an error.
+#[test]
+fn a_seed_with_a_kill_condition_is_a_rule_11_warning() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    write(
+        &c.node_file(&id),
+        &raw.replace("status: seed", "status: seed\nkill: if X"),
+    );
+    c.run(&["check"])
+        .assert_ok()
+        .says("[11]")
+        .says("status is seed but a kill condition is set")
+        .says("0 errors, 1 warnings");
+}
+
+/// `ops.rs` only ever stamps `created`/`updated` from `store::today()`, so
+/// either field failing to parse, or `updated` landing before `created`, is
+/// a hand edit — and `review`/`open` then silently treat the node as never
+/// stale, since `days_since` returns `None` for a date it cannot parse.
+#[test]
+fn an_unparsable_created_or_updated_date_is_a_rule_12_error() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    set_created(&c.node_file(&id), "not-a-date");
+    c.run(&["check"])
+        .assert_fails()
+        .says("[12]")
+        .says("created `not-a-date` is not a YYYY-MM-DD date")
+        .says("1 errors");
+}
+
+#[test]
+fn updated_earlier_than_created_is_a_rule_12_error() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    set_created(&c.node_file(&id), &date_days_ago(1));
+    set_updated(&c.node_file(&id), &date_days_ago(2));
+    c.run(&["check"])
+        .assert_fails()
+        .says("[12]")
+        .says("updated")
+        .says("earlier than created")
+        .says("1 errors");
+}
+
+/// A reference's `added` date is stamped the same way and can go wrong the
+/// same way, so rule 12 covers it too.
+#[test]
+fn an_unparsable_reference_added_date_is_a_rule_12_error() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&[
+        "cite",
+        &id,
+        "--uri",
+        "https://example.org",
+        "--kind",
+        "paper",
+        "--note",
+        "n",
+    ])
+    .assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    let needle = "\n  added: ";
+    let start = raw.find(needle).expect("added: line") + needle.len();
+    let end = start + 10;
+    let mut raw = raw;
+    raw.replace_range(start..end, "not-a-date");
+    write(&c.node_file(&id), &raw);
+    c.run(&["check"])
+        .assert_fails()
+        .says("[12]")
+        .says("reference `r1` has an added date `not-a-date` that does not parse")
+        .says("1 errors");
+}
+
 // ------------------------------------------------------------------ triage --
 
 #[test]

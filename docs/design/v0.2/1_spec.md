@@ -1,8 +1,8 @@
 ---
 title: v0.2 — Reduced model
 owner: claude
-last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_updated: 2026-09-22
+last_validated: 2026-09-22
 status: Accepted
 feature: v0.2
 doc_role: spec
@@ -148,6 +148,9 @@ return type serialised; see [2_architecture.md](2_architecture.md).
 | 8 | Local reference URIs resolve | error | `cite`, `check` |
 | 9 | Every reference has a note | warn | `check` |
 | 10 | No two tags differ only by case or a trailing `s` | warn | `check` |
+| 11 | `closed` is set only on `refuted`/`abandoned`, never on an open node | error | `check` |
+| 11 | A `seed` does not carry a `kill` condition | warn | `check` |
+| 12 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
 
 ## Migration (`neb migrate`)
 

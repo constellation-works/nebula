@@ -1,6 +1,6 @@
 # Invariants and refusals
 
-Ten rules. Each is enforced at one of three strengths — at parse (the file
+Twelve rules. Each is enforced at one of three strengths — at parse (the file
 will not load), at the point of action (the verb refuses), or by `neb check`
 (a finding) — and the strength is deliberate. `error` findings make `check`
 exit non-zero; `warn` findings do not.
@@ -18,6 +18,9 @@ exit non-zero; `warn` findings do not.
 | 8 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`) |
 | 9 | Every reference has a note | warn | `check` |
 | 10 | No two tags differ only by case or a trailing `s` | warn | `check` |
+| 11 | `closed` is set only on a `refuted`/`abandoned` node, never an open one | error | `check` |
+| 11 | A `seed` does not carry a `kill` condition | warn | `check` |
+| 12 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
 
 Genealogy means the four directed kinds: `derives-from`, `refines`,
 `generalizes`, `reopens`. `contradicts` is symmetric and not genealogy, so it
