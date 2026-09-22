@@ -97,6 +97,8 @@ pub struct StatusChange {
 pub struct NewNode {
     /// One line naming the idea.
     pub title: String,
+    /// The argument, sketch or thought itself.
+    pub body: String,
     /// Ids this descends from. More than one is a merge.
     pub parents: Vec<String>,
     /// What would falsify it. Naming one starts the node as a hypothesis.
@@ -118,6 +120,8 @@ pub struct NewNode {
 pub struct Promotion {
     /// Node title. Defaults to the captured text.
     pub title: Option<String>,
+    /// Prose appended after the captured text.
+    pub body: String,
     /// Ids this descends from.
     pub parents: Vec<String>,
     /// Labels.
@@ -241,10 +245,16 @@ pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion, near_k: usize) ->
     } else {
         Vec::new()
     };
+    let body = if args.body.trim().is_empty() {
+        e.text.clone()
+    } else {
+        format!("{}\n\n{}", e.text, args.body.trim())
+    };
     let mut doc = build(
         corpus,
         &NewNode {
             title,
+            body: String::new(),
             parents: args.parents.clone(),
             kill: None,
             tags: args.tags.clone(),
@@ -253,7 +263,7 @@ pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion, near_k: usize) ->
             by: args.by.clone(),
         },
         Status::Seed,
-        &e.text,
+        &body,
     )?;
     // A capture promoted as it was captured is titled in the human's own
     // words. Whoever ran the verb authored the edges, not that sentence.
@@ -282,7 +292,7 @@ pub fn new_node(corpus: &Corpus, args: &NewNode) -> Result<Created> {
     } else {
         Status::Seed
     };
-    let doc = build(corpus, args, status, "")?;
+    let doc = build(corpus, args, status, &args.body)?;
     corpus.create(&doc)?;
     Ok(Created {
         path: corpus.node_path(&doc.node.id),
@@ -337,7 +347,7 @@ fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<
             closed: None,
             origin: spec.origin.clone(),
         },
-        body: body.to_string(),
+        body: body.trim().to_string(),
     })
 }
 
@@ -474,6 +484,21 @@ pub fn note(corpus: &Corpus, id: &str, text: &str, by: Option<&str>) -> Result<D
     let by = model::author(by)?;
     let mut doc = corpus.load(id)?;
     doc.body = model::append_note(&doc.body, &store::today(), &text, by.as_deref());
+    corpus.save(&mut doc)?;
+    Ok(doc)
+}
+
+/// Replace a node's prose body, leaving its structured fields alone.
+///
+/// `by` is validated for consistency with other authored writes, but is not
+/// stored: bodies do not yet carry per-field authorship. `updated` is stamped
+/// by [`Corpus::save`]. Callers that expose free-form editing must preserve
+/// append-only sections before calling this operation.
+pub fn set_body(corpus: &Corpus, id: &str, body: &str, by: Option<&str>) -> Result<Doc> {
+    let _lock = corpus.lock()?;
+    model::author(by)?;
+    let mut doc = corpus.load(id)?;
+    doc.body = body.trim().to_string();
     corpus.save(&mut doc)?;
     Ok(doc)
 }

@@ -66,6 +66,14 @@ five-second path and must stay one.
   is final. `abandoned` may carry `--why` and should.
 - Never move a `refuted` node. Reviving it is `new` + `link <new> reopens <old>`.
 
+## Body work
+
+- Use `note <id> <text>` for a new dated reasoning step. Notes are append-only
+  and preserve the order in which the inquiry developed.
+- Use `edit <id>` only to revise the undated argument or sketch already in the
+  body. The editor never receives frontmatter and cannot remove, move or change
+  an existing `## Notes` section. Do not use `edit` to append a note.
+
 ## End of session
 
 Propose, do not run, up to five captures from the discussion, each a ready
