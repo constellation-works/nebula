@@ -1062,6 +1062,28 @@ fn orbit_provenance_is_recorded_only_when_supplied() {
 // ------------------------------------------------------------------ --id --
 
 #[test]
+fn unicode_titles_derive_stable_ids_that_are_accepted_explicitly() {
+    let c = Corpus::new();
+    let accented = c
+        .run(&["new", "Ünïcode título → ok"])
+        .assert_ok()
+        .stdout_trim();
+    assert_eq!(accented, "ünïcode-título-ok");
+
+    let korean = c
+        .run(&["new", "시간은 프레임의 수다"])
+        .assert_ok()
+        .stdout_trim();
+    assert_eq!(korean, "시간은-프레임의-수다");
+
+    let explicit = Corpus::new();
+    explicit
+        .run(&["new", "Explicit Unicode id", "--id", "ünïcode-título-ok"])
+        .assert_ok();
+    assert!(explicit.node_file("ünïcode-título-ok").exists());
+}
+
+#[test]
 fn new_and_promote_accept_an_explicit_id_overriding_the_slug() {
     let c = Corpus::new();
     let node = c

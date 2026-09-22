@@ -77,6 +77,10 @@ Free prose.
 
 Field rules:
 
+- `id`: derived from the title by lowercasing Unicode letters and digits and
+  joining runs with a single `-`; other characters are separators. It is at
+  most 60 characters and is cut only at a word boundary. The same rule
+  validates an explicit `--id`, so non-ASCII scripts are preserved.
 - `status`: `seed → hypothesis → refuted | abandoned`. `hypothesis` requires a
   non-empty `kill`. `refuted` requires `closed.why` (you are asserting the kill
   condition fired; the reference that convinced you goes in `references`).
@@ -84,8 +88,9 @@ Field rules:
   never returns to `seed`/`hypothesis`; reviving it means a **new** node with a
   `reopens` edge to it.
 - `tags`: free strings, lowercase kebab-case enforced on write (`Physics` →
-  `physics`). No declared list. `check` warns on two tags that differ only by
-  case or a trailing `s`, so drift is visible without a wall.
+  `physics`), using the same Unicode letter-and-digit rule as ids. No declared
+  list. `check` warns on two tags that differ only by case or a trailing `s`,
+  so drift is visible without a wall.
 - `edges`: genealogy `derives-from | refines | generalizes | reopens`, enforced
   acyclic; `contradicts`, symmetric, written on both nodes by `link`.
 - `references`: `id, kind, uri, title, note, added`; `kind` as in v0.1
