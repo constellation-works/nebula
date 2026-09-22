@@ -2978,6 +2978,38 @@ fn an_agent_kill_stays_on_review_until_a_human_confirms_it() {
     assert_eq!(v["node"]["status"], "hypothesis");
     assert!(v["notes"].as_array().is_none_or(Vec::is_empty), "{out}");
 
+    // A confirmed falsifier is human-owned content, not a field an agent can
+    // quietly replace by sharpening the already-open hypothesis again.
+    let confirmed = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    let refused = c
+        .run(&[
+            "sharpen",
+            &id,
+            "--kill",
+            "if an agent prefers a different test",
+            "--by",
+            by,
+        ])
+        .assert_fails();
+    assert!(refused.stdout().is_empty(), "{}", refused.stdout());
+    assert!(
+        refused
+            .stderr()
+            .contains("kill condition is already `if the corpus stays small`; it was not replaced"),
+        "{}",
+        refused.stderr()
+    );
+    assert!(
+        !refused.stderr().contains("is now hypothesis"),
+        "a refused re-sharpen must not report a status transition: {}",
+        refused.stderr()
+    );
+    assert_eq!(
+        confirmed,
+        std::fs::read_to_string(c.node_file(&id)).unwrap(),
+        "a refused re-sharpen leaves the confirmed falsifier untouched"
+    );
+
     let json = c.run(&["review", "--json"]).assert_ok().stdout();
     let items: Vec<serde_json::Value> = serde_json::from_str(&json).expect("review --json");
     assert!(

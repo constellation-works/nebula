@@ -357,9 +357,11 @@ fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<
 /// Sharpen a seed into a hypothesis by naming what would kill it.
 ///
 /// `by` is whoever wrote the kill condition; `None` is the human.
-/// A refuted node's kill is part of the recorded verdict, so rewriting it
-/// is refused the same way a status change is: the idea stays dead, and a
-/// new node with a `reopens` edge is the way back.
+/// An open node's existing kill is content rather than a replaceable field,
+/// so a different falsifier needs a new node. A refuted node's kill is part
+/// of the recorded verdict, so rewriting it is refused the same way a status
+/// change is: the idea stays dead, and a new node with a `reopens` edge is the
+/// way back.
 pub fn sharpen(corpus: &Corpus, id: &str, kill: &str, by: Option<&str>) -> Result<Doc> {
     let _lock = corpus.lock()?;
     let mut doc = corpus.load(id)?;
@@ -368,6 +370,15 @@ pub fn sharpen(corpus: &Corpus, id: &str, kill: &str, by: Option<&str>) -> Resul
     }
     if kill.trim().is_empty() {
         return Err(Error::EmptyKill);
+    }
+    if doc.node.status.is_open()
+        && let Some(existing) = doc
+            .node
+            .kill
+            .as_ref()
+            .filter(|kill| !kill.trim().is_empty())
+    {
+        return Err(Error::KillAlreadySet(existing.clone()));
     }
     doc.node.kill_by = model::author(by)?;
     doc.node.kill = Some(kill.to_string());
