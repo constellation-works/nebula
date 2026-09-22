@@ -9,7 +9,7 @@
  */
 export type InboxEntry = { 
 /**
- * Short id, unique within its file.
+ * Short id, unique among the corpus's live inbox entries.
  */
 id: string, 
 /**

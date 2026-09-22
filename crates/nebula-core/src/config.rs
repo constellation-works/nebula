@@ -117,7 +117,9 @@ impl Config {
     pub(crate) fn load(root: &Path, fallback_id: impl FnOnce() -> String) -> Result<Self> {
         let path = root.join(FILE);
         if !path.exists() {
-            return Ok(Self::fresh(fallback_id()));
+            let config = Self::fresh(fallback_id());
+            config.save(root)?;
+            return Ok(config);
         }
         let raw = std::fs::read_to_string(&path)?;
         // Probe the version before the strict parse, so a v1 file with its

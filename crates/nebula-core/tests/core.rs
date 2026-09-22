@@ -408,6 +408,28 @@ fn settling_refuses_when_the_indexed_line_has_another_entry_id() {
     assert_eq!(std::fs::read_to_string(&entry.file).unwrap(), replacement);
 }
 
+#[test]
+fn capture_ids_are_unique_across_month_files_and_older_entries_still_resolve() {
+    for _ in 0..3 {
+        let (_dir, corpus) = corpus();
+        let first = ops::capture(&corpus, "the same thought").unwrap();
+        let older_file = first.file.with_file_name("2000-01.md");
+        std::fs::rename(&first.file, &older_file).unwrap();
+
+        let second = ops::capture(&corpus, "the same thought").unwrap();
+        if first.at != second.at {
+            continue;
+        }
+
+        assert_ne!(second.id, first.id, "ids are unique across month files");
+        let resolved = corpus.inbox_entry(&first.id).unwrap();
+        assert_eq!(resolved.file, older_file);
+        assert_eq!(resolved.text, first.text);
+        return;
+    }
+    panic!("the clock crossed a minute during all three fixture attempts");
+}
+
 // -------------------------------------------------------------------- near --
 
 /// A small corpus with vocabulary that overlaps in known ways: two nodes
@@ -611,6 +633,30 @@ fn opening_a_missing_corpus_is_a_typed_error() {
         Corpus::open(Some(missing.clone())),
         Err(Error::NoCorpus(p)) if p == missing
     ));
+}
+
+#[test]
+fn opening_a_configless_corpus_persists_its_synthesized_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("corpus");
+    std::fs::create_dir_all(root.join("nodes")).unwrap();
+    let config = root.join("config.yaml");
+    assert!(!config.exists());
+
+    Corpus::open(Some(root.clone())).unwrap();
+    let first = std::fs::read_to_string(&config).unwrap();
+    let first_id = first
+        .lines()
+        .find_map(|line| line.strip_prefix("corpus_id: "))
+        .expect("persisted corpus_id");
+
+    Corpus::open(Some(root)).unwrap();
+    let second = std::fs::read_to_string(config).unwrap();
+    let second_id = second
+        .lines()
+        .find_map(|line| line.strip_prefix("corpus_id: "))
+        .expect("reloaded corpus_id");
+    assert_eq!(second_id, first_id);
 }
 
 // ------------------------------------------------------------------ commit --
