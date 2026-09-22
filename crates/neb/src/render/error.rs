@@ -18,6 +18,11 @@ pub fn message(e: &Error) -> String {
             "no corpus at {0}\n\nCreate one with:  neb init {0}",
             root.display()
         ),
+        Error::SchemaMismatch {
+            found, expected, ..
+        } if found > expected => {
+            format!("{e}\n\nThis corpus was written by a newer nebula. Upgrade this build.")
+        }
         Error::SchemaMismatch { .. } => {
             format!("{e}\n\nBring the corpus forward with:  neb migrate")
         }
