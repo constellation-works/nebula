@@ -192,6 +192,8 @@ fn walk_lineage(graph: &GraphExport, at: &str, up: bool, included: &mut HashSet<
 fn mermaid_label(title: &str) -> String {
     title
         .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('[', "&#91;")
         .replace(']', "&#93;")

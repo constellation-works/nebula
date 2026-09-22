@@ -1299,7 +1299,7 @@ fn graph_exports_mermaid_and_limits_it_to_lineage() {
     let c = Corpus::new();
     c.run(&[
         "new",
-        "A \"quoted\" [ancestor] & source",
+        "A \"quoted\" [ancestor] & <source>",
         "--id",
         "ancestor",
     ])
@@ -1338,7 +1338,9 @@ fn graph_exports_mermaid_and_limits_it_to_lineage() {
     let whole = c.run(&["graph", "--mermaid"]).assert_ok().stdout();
     assert!(whole.starts_with("graph BT\n"), "{whole}");
     assert!(
-        whole.contains("ancestor[\"A &quot;quoted&quot; &#91;ancestor&#93; &amp; source\"]:::seed"),
+        whole.contains(
+            "ancestor[\"A &quot;quoted&quot; &#91;ancestor&#93; &amp; &lt;source&gt;\"]:::seed"
+        ),
         "{whole}"
     );
     for status in ["seed", "hypothesis", "refuted", "abandoned"] {
