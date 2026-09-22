@@ -622,6 +622,96 @@ fn set_root_requires_force_to_replace_a_different_corpus() {
 }
 
 #[test]
+fn set_root_refuses_a_relative_path_before_mutating_anything() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let from = dir.path().join("from");
+    std::fs::create_dir_all(&from).unwrap();
+
+    let out = Command::new(bin())
+        .args(["--root", "relative", "init", "--set-root"])
+        .current_dir(&from)
+        .env("HOME", &home)
+        .env("NO_COLOR", "1")
+        .env_remove("NEBULA_ROOT")
+        .env_remove("OBSERVATORY_ROOT")
+        .output()
+        .unwrap();
+    Run {
+        args: "--root relative init --set-root".into(),
+        out,
+    }
+    .assert_fails()
+    .says("--set-root requires an absolute corpus path")
+    .says("rerun with an absolute path");
+
+    assert!(
+        !from.join("relative").exists(),
+        "a refused relative root must not initialize a corpus"
+    );
+    assert!(
+        !home.join(".config/nebula/root").exists(),
+        "a refused relative root must not create the machine setting"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn set_root_preserves_an_absolute_symlink_spelling_across_working_directories() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let real_parent = dir.path().join("real-parent");
+    let alias_parent = dir.path().join("alias-parent");
+    let from = dir.path().join("from");
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::create_dir_all(&real_parent).unwrap();
+    std::fs::create_dir_all(&from).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    symlink(&real_parent, &alias_parent).unwrap();
+    let root = alias_parent.join("corpus");
+
+    let init = Command::new(bin())
+        .arg("--root")
+        .arg(&root)
+        .args(["init", "--set-root"])
+        .current_dir(&from)
+        .env("HOME", &home)
+        .env("NO_COLOR", "1")
+        .env_remove("NEBULA_ROOT")
+        .env_remove("OBSERVATORY_ROOT")
+        .output()
+        .unwrap();
+    Run {
+        args: format!("--root {} init --set-root", root.display()),
+        out: init,
+    }
+    .assert_ok();
+
+    assert_eq!(
+        std::fs::read_to_string(home.join(".config/nebula/root")).unwrap(),
+        format!("{}\n", root.display()),
+        "the configured root must preserve the caller's symlink spelling"
+    );
+
+    let inbox = Command::new(bin())
+        .arg("inbox")
+        .current_dir(&elsewhere)
+        .env("HOME", &home)
+        .env("NO_COLOR", "1")
+        .env_remove("NEBULA_ROOT")
+        .env_remove("OBSERVATORY_ROOT")
+        .output()
+        .unwrap();
+    Run {
+        args: "inbox from a different working directory".into(),
+        out: inbox,
+    }
+    .assert_ok();
+}
+
+#[test]
 fn repeated_init_and_set_root_preserve_the_existing_corpus_byte_for_byte() {
     let c = Corpus::new();
     let observatory = c.workdir().join("observatory");

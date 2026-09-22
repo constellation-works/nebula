@@ -21,7 +21,11 @@ neb init ~/corpus/nebula --set-root
 
 `--set-root` writes this non-default location to
 `~/.config/nebula/root`, so every command finds it even from shells that do
-not load your shell profile. Plain `neb init` never changes that machine-wide
+not load your shell profile. The path must be absolute: a relative path is
+refused before either the corpus or the setting is created because it would
+name a different directory after changing shells or working directories.
+Absolute paths are stored as written, including symlink spellings. Plain
+initialization (`neb init` without `--set-root`) never changes that machine-wide
 setting: when it is absent, the command prints the opt-in command above. If the
 file already names a different corpus, `--set-root` refuses to replace it;
 review the two paths and pass `--force` only when redirecting the machine is
