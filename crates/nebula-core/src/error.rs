@@ -31,6 +31,12 @@ pub enum Error {
     #[error("no corpus at {}", .0.display())]
     NoCorpus(PathBuf),
 
+    /// An explicit `--root` was empty. Every `join` built from it would
+    /// silently resolve to the current directory, which is exactly the bug
+    /// this refuses.
+    #[error("--root cannot be empty")]
+    EmptyRoot,
+
     /// A machine-local root setting already names a different corpus. The
     /// caller must opt in to replacing it rather than redirecting commands
     /// silently.

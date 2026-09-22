@@ -27,8 +27,11 @@ file already names a different corpus, `--set-root` refuses to replace it;
 review the two paths and pass `--force` only when redirecting the machine is
 intentional.
 The resolver checks `--root`, `$NEBULA_ROOT`, that config file, then
-`~/.nebula` in that order. You can still export the environment variable when
-you want a shell-specific override:
+`~/.nebula` in that order. An exported-but-empty `$NEBULA_ROOT` is treated as
+unset, not as the current directory, so it falls through to the config file
+and then `~/.nebula`; an explicit `--root ""` is refused outright rather than
+resolving to the current directory. You can still export the environment
+variable when you want a shell-specific override:
 
 ```sh
 echo 'export NEBULA_ROOT=$HOME/corpus/nebula' >> ~/.zshrc

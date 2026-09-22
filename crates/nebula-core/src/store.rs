@@ -36,9 +36,12 @@ impl Corpus {
     /// configured root, else `~/.nebula`.
     pub fn resolve_root(explicit: Option<PathBuf>) -> Result<PathBuf> {
         if let Some(p) = explicit {
+            if p.as_os_str().is_empty() {
+                return Err(Error::EmptyRoot);
+            }
             return Ok(p);
         }
-        if let Ok(p) = std::env::var("NEBULA_ROOT") {
+        if let Some(p) = std::env::var_os("NEBULA_ROOT").filter(|v| !v.is_empty()) {
             return Ok(PathBuf::from(p));
         }
         if let Some(p) = Self::configured_root()? {
