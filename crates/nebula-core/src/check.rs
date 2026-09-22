@@ -194,6 +194,27 @@ pub(crate) fn resolve_local(corpus: &Corpus, uri: &str) -> PathBuf {
 /// itself carries nothing machine-specific.
 pub const OBSERVATORY: &str = "observatory";
 
+/// The closed vocabulary accepted for new references. The model deliberately
+/// keeps `kind` as a string so older, hand-edited corpora still load; `check`
+/// reports values outside this list instead of turning them into parse errors.
+pub const REFERENCE_KINDS: [&str; 10] = [
+    "paper",
+    "study",
+    "article",
+    "note",
+    "discussion",
+    "book",
+    "dataset",
+    "thread",
+    OBSERVATORY,
+    "other",
+];
+
+/// Whether a reference kind belongs to the vocabulary accepted for new writes.
+pub fn is_reference_kind(kind: &str) -> bool {
+    REFERENCE_KINDS.contains(&kind)
+}
+
 /// Whether `id` has the shape of an Observatory record id: one of `Q`, `H`,
 /// `T`, `R` followed by digits. The shape is the whole contract; how many
 /// digits Observatory uses is its business.
@@ -410,6 +431,19 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
     let n = &doc.node;
     let id = Some(n.id.as_str());
     for f in &n.references {
+        if !is_reference_kind(&f.kind) {
+            r.push(
+                Severity::Warn,
+                14,
+                id,
+                format!(
+                    "reference `{}` has unexpected kind `{}`; accepted kinds: {}",
+                    f.id,
+                    f.kind,
+                    REFERENCE_KINDS.join(", ")
+                ),
+            );
+        }
         if f.uri.as_deref().is_none_or(|uri| uri.trim().is_empty()) && f.kind != "discussion" {
             r.push(
                 Severity::Error,

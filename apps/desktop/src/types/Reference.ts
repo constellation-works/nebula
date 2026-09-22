@@ -15,7 +15,7 @@ export type Reference = {
 id: string, 
 /**
  * `paper`, `study`, `article`, `note`, `discussion`, `book`, `dataset`,
- * `thread` or `other`.
+ * `thread`, `observatory` or `other`.
  */
 kind: string, 
 /**
