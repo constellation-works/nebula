@@ -386,6 +386,15 @@ fn settling_an_inbox_entry_is_atomic_and_leaves_no_temporary_file() {
     corpus.settle_inbox(&entry, "dropped").unwrap();
 
     assert!(!tmp.exists(), "successful settlement left a temporary file");
+    let leftovers: Vec<_> = std::fs::read_dir(entry.file.parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .filter(|name| name != entry.file.file_name().unwrap())
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "successful settlement left {leftovers:?} beside the month file"
+    );
     assert!(
         std::fs::read_to_string(&entry.file)
             .unwrap()
@@ -410,6 +419,107 @@ fn an_interrupted_settlement_copy_does_not_resurrect_an_entry() {
         corpus.inbox_entry(&entry.id),
         Err(Error::NoSuchInboxEntry(id)) if id == entry.id
     ));
+}
+
+/// Every write in the corpus goes through one atomic replacement, so a
+/// symlink planted where that replacement's temporary file would go must be
+/// refused for a node, for the inbox and for the config alike. These three
+/// name the same guard from the three callers that reach it.
+#[cfg(unix)]
+#[test]
+fn a_node_write_cannot_reach_a_file_outside_the_corpus_through_its_temporary() {
+    let (dir, corpus) = corpus();
+    let outside = dir.path().join("outside-sentinel.txt");
+    std::fs::write(&outside, "IRREPLACEABLE FIXTURE").unwrap();
+    let id = seed(&corpus, "Safe", &[]);
+    let node = dir.path().join("corpus").join("nodes").join("safe.md");
+    let planted = dir.path().join("corpus").join("nodes").join("safe.md.tmp");
+    std::os::unix::fs::symlink(&outside, &planted).unwrap();
+
+    ops::note(&corpus, &id, "probe", None).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "IRREPLACEABLE FIXTURE",
+        "the note was written outside the corpus"
+    );
+    assert!(
+        std::fs::symlink_metadata(&node)
+            .unwrap()
+            .file_type()
+            .is_file(),
+        "the planted symlink became the node"
+    );
+    let docs = corpus.load_all().unwrap();
+    let view = graph::node(&Graph::build(&docs).unwrap(), &id).unwrap();
+    assert_eq!(
+        view.notes
+            .iter()
+            .map(|n| n.text.as_str())
+            .collect::<Vec<_>>(),
+        ["probe"],
+        "the note did not reach the node it named"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn settling_an_inbox_entry_cannot_reach_a_file_outside_the_corpus() {
+    let (dir, corpus) = corpus();
+    let outside = dir.path().join("outside-sentinel.txt");
+    std::fs::write(&outside, "IRREPLACEABLE FIXTURE").unwrap();
+    let entry = ops::capture(&corpus, "a thought to settle").unwrap();
+    let mut planted = entry.file.as_os_str().to_os_string();
+    planted.push(".tmp");
+    std::os::unix::fs::symlink(&outside, std::path::PathBuf::from(planted)).unwrap();
+
+    corpus.settle_inbox(&entry, "dropped").unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "IRREPLACEABLE FIXTURE",
+        "the settlement was written outside the corpus"
+    );
+    assert!(
+        std::fs::symlink_metadata(&entry.file)
+            .unwrap()
+            .file_type()
+            .is_file(),
+        "the planted symlink became the month file"
+    );
+    assert!(corpus.inbox().unwrap().0.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_config_write_cannot_reach_a_file_outside_the_corpus() {
+    let (dir, mut corpus) = corpus();
+    let outside = dir.path().join("outside-sentinel.txt");
+    std::fs::write(&outside, "IRREPLACEABLE FIXTURE").unwrap();
+    let config = dir.path().join("corpus").join("config.yaml");
+    let mut planted = config.as_os_str().to_os_string();
+    planted.push(".tmp");
+    std::os::unix::fs::symlink(&outside, std::path::PathBuf::from(planted)).unwrap();
+
+    ops::set_commit(&mut corpus, true).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "IRREPLACEABLE FIXTURE",
+        "the config was written outside the corpus"
+    );
+    assert!(
+        std::fs::symlink_metadata(&config)
+            .unwrap()
+            .file_type()
+            .is_file(),
+        "the planted symlink became config.yaml"
+    );
+    let reopened = Corpus::open(Some(dir.path().join("corpus"))).unwrap();
+    assert!(
+        reopened.commit_setting().enabled,
+        "the setting did not reach config.yaml"
+    );
 }
 
 #[test]

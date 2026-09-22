@@ -4917,6 +4917,48 @@ fn a_hand_edited_traversal_id_refuses_and_writes_nothing_outside_the_root() {
     }
 }
 
+/// The same boundary from the side no id check can see: the temporary file a
+/// write goes through is a corpus path too, and its name was predictable.
+/// Planted as a symlink, it carried an ordinary `note` straight out of the
+/// corpus, truncating whatever it pointed at, and then landed as the node.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_temporary_neither_escapes_the_corpus_nor_becomes_the_node() {
+    let c = Corpus::new();
+    c.run(&["new", "Safe"]).assert_ok();
+    let outside = c.workdir().join("outside-sentinel.txt");
+    std::fs::write(&outside, "IRREPLACEABLE FIXTURE\n").unwrap();
+    let mut planted = c.node_file("safe").into_os_string();
+    planted.push(".tmp");
+    let planted = PathBuf::from(planted);
+    std::os::unix::fs::symlink(&outside, &planted).unwrap();
+
+    c.run(&["note", "safe", "probe"]).assert_ok();
+
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "IRREPLACEABLE FIXTURE\n",
+        "the note was written through the planted temporary, outside the corpus"
+    );
+    assert!(
+        std::fs::symlink_metadata(c.node_file("safe"))
+            .unwrap()
+            .file_type()
+            .is_file(),
+        "the planted symlink was renamed onto the node"
+    );
+    // The note landed where it was addressed, and the planted path is left
+    // where it was found: nothing here deletes what it did not create.
+    c.run(&["show", "safe"]).assert_ok().says("probe");
+    assert!(
+        std::fs::symlink_metadata(&planted)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    c.run(&["check"]).assert_ok();
+}
+
 /// The quieter half: a valid id, but another node's. `save` writes where the
 /// id says, so this overwrote the node it named.
 #[test]
