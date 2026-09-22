@@ -138,6 +138,7 @@ impl FromStr for EdgeType {
 /// A typed link to another node.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(deny_unknown_fields)]
 pub struct Edge {
     /// The relation this edge asserts.
     #[serde(rename = "type")]
@@ -193,6 +194,7 @@ pub fn author(by: Option<&str>) -> Result<Option<String>> {
 /// shower and a provenance block that demanded filling would just go unfilled.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(deny_unknown_fields)]
 pub struct Origin {
     /// Orbit task id, e.g. `ORB-11440`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

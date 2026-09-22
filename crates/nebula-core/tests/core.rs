@@ -32,6 +32,27 @@ fn seed(corpus: &Corpus, title: &str, parents: &[&str]) -> String {
     .id
 }
 
+#[test]
+fn current_model_refuses_unknown_fields_in_nested_node_data() {
+    for nested in [
+        "origin:\n  task: FIXTURE-1\n  future_field: IRREPLACEABLE\n",
+        "references:\n- id: r1\n  kind: study\n  added: 2026-09-22\n  origin:\n    task: FIXTURE-1\n    future_field: IRREPLACEABLE\n",
+        "edges:\n- type: derives-from\n  to: parent\n  future_field: IRREPLACEABLE\n",
+    ] {
+        let (dir, corpus) = corpus();
+        let id = seed(&corpus, "Nested data", &[]);
+        let path = dir.path().join("corpus/nodes").join(format!("{id}.md"));
+        let original = std::fs::read_to_string(&path).unwrap();
+        let edited = original.replacen("---\n\n", &format!("{nested}---\n\n"), 1);
+        assert_ne!(original, edited);
+        std::fs::write(&path, &edited).unwrap();
+
+        let error = corpus.load_all().unwrap_err().to_string();
+        assert!(error.contains("future_field"), "{error}");
+        assert_eq!(std::fs::read_to_string(path).unwrap(), edited);
+    }
+}
+
 /// A diamond: `d` descends from `b` and `c`, both of which descend from `a`.
 fn diamond(corpus: &Corpus) -> [String; 4] {
     let a = seed(corpus, "A", &[]);
