@@ -37,10 +37,12 @@ One append-only file per month, `inbox/YYYY-MM.md`, one entry per line:
 - [62fe] 2026-09-06T20:48 gravity might be about scarcity, not curvature
 ```
 
-The short id is a hash of the timestamp and text, extended until it is unique
-across every live entry in the inbox. Capture reads the inbox to enforce that
-corpus-wide uniqueness, then appends one new line to the current month's file;
-it never rewrites an existing line.
+The short id is a hash of the timestamp and text, allocated from a fixed
+four-hex-character space across every live entry in the inbox. Capture tries
+hash-derived candidates, then the remaining space; if every id is occupied, it
+refuses the capture rather than reusing an id. It reads the inbox to enforce
+that corpus-wide uniqueness, then appends one new line to the current month's
+file; it never rewrites an existing line.
 
 ## Settling an entry
 

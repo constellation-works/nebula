@@ -38,15 +38,15 @@ every node fails to load and the error names `neb migrate` — see
 Prefer the CLI over hand-editing. Every command that mutates a node writes valid
 frontmatter by construction.
 
-## Symptom: a stray `.md.tmp` file
+## Symptom: a stray `.md.<pid>-<counter>-<nanos>.tmp` file
 
 Node writes render to a sibling temporary file and rename, so a crash mid-write
-leaves the original intact and a `.md.tmp` beside it. The temporary file is
-never read. Delete it, or inspect it first if you suspect the write was the one
-you wanted:
+leaves the original intact and a nonce-named `.md.<pid>-<counter>-<nanos>.tmp`
+beside it. The temporary file is never read. Delete it, or inspect it first if
+you suspect the write was the one you wanted:
 
 ```sh
-find "$NEBULA_ROOT/nodes" -name '*.md.tmp'
+find "$NEBULA_ROOT/nodes" -name '*.md.*.tmp'
 ```
 
 ## Symptom: check reports a genealogy cycle

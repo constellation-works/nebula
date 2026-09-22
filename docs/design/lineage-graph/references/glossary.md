@@ -50,9 +50,8 @@ trailing `s`. `tag list` shows every tag in the corpus with its node count.
 
 **Graph.** The whole corpus as one `{nodes, edges}` export: what
 [docs/design/v0.2/1_spec.md](../../v0.2/1_spec.md) specifies as `neb graph
---json` (not yet built — see [3_plan.md](../../v0.2/3_plan.md), task B) and
-what the desktop app's graph view will draw from. The same shape a `trace` or
-`impact` walk is computed over, just unfiltered.
+--json`, which the CLI exports for tools and the desktop app's graph view. The
+same shape a `trace` or `impact` walk is computed over, just unfiltered.
 
 **Migrate.** `neb migrate`: a one-shot, idempotent pass that brings a v1
 corpus forward to the current schema, re-labelling everything the reduction
