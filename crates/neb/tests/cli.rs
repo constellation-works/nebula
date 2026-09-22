@@ -1089,6 +1089,35 @@ fn capture_prints_its_id_before_a_node_that_will_not_parse_can_get_in_the_way() 
 }
 
 #[test]
+fn every_graph_reader_names_a_node_with_structurally_invalid_frontmatter() {
+    for (contents, message) in [
+        (
+            "this node lost its opening delimiter\n",
+            "missing YAML frontmatter",
+        ),
+        (
+            "---\nid: broken\ntitle: Broken\nstatus: seed\ncreated: 2026-09-01\nupdated: 2026-09-01\n\nthe closing delimiter was lost\n",
+            "frontmatter is not terminated",
+        ),
+    ] {
+        let c = Corpus::new();
+        let healthy = c.seed("a healthy node", "Healthy");
+        let broken = c.node_file("broken");
+        write(&broken, contents);
+        let path = broken.display().to_string();
+
+        for args in [
+            vec!["check"],
+            vec!["list"],
+            vec!["show", healthy.as_str()],
+            vec!["graph", "--json"],
+        ] {
+            c.run(&args).assert_fails().says(message).says(&path);
+        }
+    }
+}
+
+#[test]
 fn capture_json_carries_the_entry_and_its_neighbours() {
     let c = Corpus::new();
     lexical_fixture(&c);

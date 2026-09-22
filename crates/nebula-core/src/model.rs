@@ -456,6 +456,7 @@ pub(crate) fn read(path: &Path) -> Result<Doc> {
             context: format!("in {}: {context}", path.display()),
             source,
         },
+        Error::Corpus(message) => Error::Corpus(format!("in {}: {message}", path.display())),
         // An id out of a *file* is reported against that file: a name that
         // could not be one is a disagreement with the file it was found in,
         // and the path is what the human needs to go and look at.
