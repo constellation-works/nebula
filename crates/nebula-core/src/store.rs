@@ -232,11 +232,39 @@ impl Corpus {
         CorpusLock::acquire(&self.root)
     }
 
+    /// `config.yaml` as it stands on disk, rather than the snapshot
+    /// [`Self::open`] took.
+    ///
+    /// Only meaningful under the write lock, and every caller here holds one.
+    /// `open` takes no lock on purpose, so by the time a writer gets in its
+    /// snapshot can be arbitrarily old: a cooperating writer that was ahead in
+    /// the queue may have changed a setting in between. Rewriting the whole
+    /// file from the stale copy would erase that change, and deciding from it
+    /// would decide on a configuration nobody holds any more.
+    ///
+    /// The corpus id in hand is the fallback rather than a freshly synthesized
+    /// one, so a config deleted underneath a live corpus comes back with the
+    /// identity it had instead of a new one.
+    fn current_config(&self) -> Result<Config> {
+        let id = self.config.corpus_id.clone();
+        Config::load(&self.root, || id)
+    }
+
+    /// Re-read `config.yaml`, so the rewrite that follows starts from the
+    /// settings in force rather than the ones this corpus opened with.
+    fn reload_config(&mut self) -> Result<()> {
+        self.config = self.current_config()?;
+        Ok(())
+    }
+
     /// Where `observatory` references resolve: `observatory_root` in
     /// `config.yaml`, else `$OBSERVATORY_ROOT`, else nowhere.
     ///
     /// The path is used as given and never canonicalized, like every other
     /// path here.
+    ///
+    /// The snapshot [`Self::open`] took, which is what a read wants: it
+    /// answers without waiting on a writer.
     pub fn observatory_root(&self) -> ObservatoryRoot {
         self.config.observatory_root()
     }
@@ -246,12 +274,20 @@ impl Corpus {
     /// The file stays machine-written: this rewrites it whole, header and
     /// all, rather than editing a line. The directory is not required to
     /// exist yet; `check` says so when a reference fails to resolve under it.
+    ///
+    /// Rewriting it whole is why the reload comes first: this sets one key
+    /// and must carry every other key across as it stands under the caller's
+    /// lock, not as it stood when the corpus was opened.
     pub(crate) fn set_observatory_root(&mut self, dir: PathBuf) -> Result<()> {
+        self.reload_config()?;
         self.config.observatory_root = Some(dir);
         self.config.save(&self.root)
     }
 
     /// Whether a write is followed by a commit, per `config.yaml`.
+    ///
+    /// The snapshot [`Self::open`] took, like [`Self::observatory_root`]: a
+    /// read of the setting never waits on a writer.
     pub fn commit_setting(&self) -> CommitSetting {
         CommitSetting {
             enabled: self.config.commit,
@@ -259,8 +295,10 @@ impl Corpus {
     }
 
     /// Record in `config.yaml` whether writes are committed. Rewrites the
-    /// file whole, like every other setting.
+    /// file whole, like every other setting, and so reloads first for the
+    /// same reason [`Self::set_observatory_root`] does.
     pub(crate) fn set_commit(&mut self, enabled: bool) -> Result<()> {
+        self.reload_config()?;
         self.config.commit = enabled;
         self.config.save(&self.root)
     }
@@ -276,8 +314,13 @@ impl Corpus {
     /// the corpus, and folding a stranger's staged work into one would misfile
     /// it. The write is on disk before this runs and stays there whatever
     /// git says. Never pushes.
+    ///
+    /// The setting is read from disk under the caller's lock rather than from
+    /// the snapshot: whether this write is recorded is a question about the
+    /// configuration in force, and a writer that waited its turn opened before
+    /// the writer ahead of it had finished saying what that configuration is.
     pub(crate) fn commit(&self, verb: &str, ids: &[&str]) -> Result<Option<Committed>> {
-        if !self.config.commit {
+        if !self.current_config()?.commit {
             return Ok(None);
         }
         let root = &self.root;

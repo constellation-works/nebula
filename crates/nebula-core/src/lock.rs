@@ -12,6 +12,14 @@
 //! **Reads never take it.** [`crate::store::Corpus::open`], the queries and
 //! the desktop's file watcher must never wait on a writer.
 //!
+//! That rule has a consequence a writer has to answer for: the config an
+//! `open` reads is a snapshot from before the lock, and a writer that waited
+//! its turn opened while the writer ahead of it was still working. So a
+//! writer re-reads `config.yaml` under the lock before rewriting it or
+//! deciding from it — otherwise the whole-file rewrite erases the setting the
+//! writer ahead just landed. The config writers on [`crate::store::Corpus`]
+//! do this; its readers deliberately do not.
+//!
 //! Exclusion has to hold at three ranges, and no single mechanism covers all
 //! three:
 //!

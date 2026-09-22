@@ -968,6 +968,129 @@ fn commit_on_in_a_corpus_the_containing_repository_ignores_is_a_typed_error() {
     assert!(corpus.node_path(&a).unwrap().exists());
 }
 
+// -------------------------------------------- settings written under a lock --
+
+/// `Corpus::open` reads `config.yaml` without the lock, because a read must
+/// never wait on a writer. A writer that then waits its turn is holding a
+/// snapshot from before the writer ahead of it finished, and every config
+/// write rewrites the file whole — so without a reload under the lock the
+/// waiter carries the stale copy of every key it is not setting back to disk
+/// and the other writer's setting is gone without a word.
+///
+/// Two `Corpus` handles on one thread rather than two threads: the interleave
+/// under test is a *stale open*, not contention, and sequencing it by hand is
+/// what makes the loss deterministic. `crates/neb/tests/cli.rs` runs the same
+/// shape across two processes against a really held `flock`.
+#[test]
+fn a_setting_landed_since_open_survives_the_next_writers_rewrite() {
+    let (dir, _corpus) = corpus();
+    let root = dir.path().join("corpus");
+    let observatory = dir.path().join("observatory");
+
+    // The waiter opens — and so snapshots the config — before the writer
+    // ahead of it in the queue has written anything.
+    let mut waiting = Corpus::open(Some(root.clone())).unwrap();
+    assert!(!waiting.commit_setting().enabled);
+
+    // The writer ahead finishes its own config write and lets go.
+    let mut ahead = Corpus::open(Some(root.clone())).unwrap();
+    assert!(ops::set_commit(&mut ahead, true).unwrap().enabled);
+
+    // The waiter gets in and sets a different key.
+    let setting = ops::set_observatory_root(&mut waiting, observatory.clone()).unwrap();
+    assert_eq!(setting.root.as_deref(), Some(observatory.as_path()));
+
+    let reopened = Corpus::open(Some(root)).unwrap();
+    assert!(
+        reopened.commit_setting().enabled,
+        "the commit setting written after the waiter opened was erased by its rewrite"
+    );
+    assert_eq!(
+        reopened.observatory_root().root.as_deref(),
+        Some(observatory.as_path()),
+        "and the waiter's own setting must still have landed"
+    );
+}
+
+/// The same loss in the other direction, so neither setting is merely the one
+/// that happens to be written last.
+#[test]
+fn a_stale_commit_write_keeps_the_observatory_root_written_since_it_opened() {
+    let (dir, _corpus) = corpus();
+    let root = dir.path().join("corpus");
+    let observatory = dir.path().join("observatory");
+
+    let mut waiting = Corpus::open(Some(root.clone())).unwrap();
+    assert!(waiting.observatory_root().root.is_none());
+
+    let mut ahead = Corpus::open(Some(root.clone())).unwrap();
+    ops::set_observatory_root(&mut ahead, observatory.clone()).unwrap();
+
+    assert!(ops::set_commit(&mut waiting, true).unwrap().enabled);
+
+    let reopened = Corpus::open(Some(root)).unwrap();
+    assert_eq!(
+        reopened.observatory_root().root.as_deref(),
+        Some(observatory.as_path()),
+        "the observatory root written after the waiter opened was erased"
+    );
+    assert!(reopened.commit_setting().enabled);
+}
+
+/// Whether a write is recorded is a question about the configuration in
+/// force, not the one this corpus happened to open with. A verb that waited
+/// out a writer who turned the setting on commits; one that waited out a
+/// writer who turned it off does not.
+#[test]
+fn the_commit_decision_follows_the_setting_on_disk_not_the_one_at_open() {
+    let (dir, _corpus) = corpus();
+    let root = dir.path().join("corpus");
+    git_init(&root);
+
+    // Opened while the setting was off.
+    let stale_off = Corpus::open(Some(root.clone())).unwrap();
+    assert!(!stale_off.commit_setting().enabled);
+
+    // Another writer turns it on and records that.
+    let mut ahead = Corpus::open(Some(root.clone())).unwrap();
+    ops::set_commit(&mut ahead, true).unwrap();
+    ops::commit(&ahead, "config", &["commit"])
+        .unwrap()
+        .expect("turning it on records itself");
+
+    let entry = ops::capture(&stale_off, "a thought the setting now says to record").unwrap();
+    let done = ops::commit(&stale_off, "capture", &[&entry.id])
+        .unwrap()
+        .expect("the setting in force is on, so the write is recorded");
+    assert_eq!(done.message, format!("neb capture {}", entry.id));
+    assert!(
+        committed_paths(&root, "HEAD")
+            .iter()
+            .all(|p| p.starts_with("inbox/")),
+        "{:?}",
+        committed_paths(&root, "HEAD")
+    );
+
+    // And the other way: opened while it was on, but off by the time the
+    // verb lands.
+    let stale_on = Corpus::open(Some(root.clone())).unwrap();
+    assert!(stale_on.commit_setting().enabled);
+    let mut ahead = Corpus::open(Some(root.clone())).unwrap();
+    ops::set_commit(&mut ahead, false).unwrap();
+
+    let before = head(&root);
+    let entry = ops::capture(&stale_on, "a thought the setting now says to leave").unwrap();
+    assert!(matches!(
+        ops::commit(&stale_on, "capture", &[&entry.id]),
+        Ok(None)
+    ));
+    assert_eq!(head(&root), before, "nothing was committed");
+    assert!(
+        git(&root, &["status", "--porcelain"]).contains(" M inbox/"),
+        "the capture is on disk, just not recorded"
+    );
+}
+
 // -------------------------------------------------------------------- lock --
 
 /// Two writers editing one node's tags at the same time. Each op is a load,

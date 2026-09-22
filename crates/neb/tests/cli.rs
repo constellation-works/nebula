@@ -4413,10 +4413,14 @@ fn a_writer_that_waits_out_the_lock_refuses_with_a_hint_and_writes_nothing() {
         before,
         "the refusal came before the write"
     );
-    // A read never waits on a writer, whoever is holding it.
+    // A read never waits on a writer, whoever is holding it. The reading
+    // forms of `neb config` are reads too: they answer from the config the
+    // open snapshotted and take no lock at all.
     c.run(&["show", &id]).assert_ok();
     c.run(&["list"]).assert_ok();
     c.run(&["check"]).assert_ok();
+    c.run(&["config", "commit"]).assert_ok().says("off");
+    c.run(&["config", "observatory-root"]).assert_ok();
 
     // And once it is free, the same write goes through.
     drop(held);
@@ -4426,6 +4430,61 @@ fn a_writer_that_waits_out_the_lock_refuses_with_a_hint_and_writes_nothing() {
             .unwrap()
             .contains("never")
     );
+}
+
+/// The interleave this was found by. A config write rewrites `config.yaml`
+/// whole, and the writer doing it opened — and so read the file — before the
+/// writer ahead of it in the queue had finished its own config write. Without
+/// a reload under the lock the waiter exits 0 and quietly takes the other
+/// writer's setting back out.
+///
+/// A real `flock` held in this process and contended by a spawned `neb`, so
+/// this is the cross-process shape; `crates/nebula-core/tests/core.rs`
+/// sequences the same staleness by hand, which is what makes it deterministic.
+#[test]
+fn a_config_write_that_waited_out_the_lock_keeps_the_setting_written_meanwhile() {
+    let (c, _remote) = corpus_repo();
+    let observatory = c.workdir().join("observatory");
+    let observatory = observatory.to_str().expect("a utf-8 temporary path");
+
+    let held = nebula_core::CorpusLock::acquire(&c.root).expect("holding the lock");
+
+    // The waiter opens — snapshotting a config with no `commit` key — and
+    // then polls for the lock this thread is holding.
+    let waiting = c.spawn(&["config", "observatory-root", observatory]);
+
+    // Long enough for the spawned `neb` to be past its open and into the
+    // wait, and far short of the five seconds it would wait in total. On a
+    // machine slow enough that it has not opened yet, the snapshot it takes
+    // is simply a fresh one and this passes without having raced — the core
+    // test is the one that cannot miss.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // The writer ahead finishes its config write and lets go. Taking the
+    // lock again underneath is the re-entry the CLI relies on too.
+    let mut ahead = nebula_core::Corpus::open(Some(c.root.clone())).expect("open");
+    assert!(
+        nebula_core::ops::set_commit(&mut ahead, true)
+            .unwrap()
+            .enabled
+    );
+    drop(held);
+
+    waiting.wait().assert_ok();
+
+    let raw = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    assert!(
+        raw.contains("commit: true"),
+        "the waiter rewrote the config from its pre-lock snapshot: {raw}"
+    );
+    assert!(
+        raw.contains(observatory),
+        "and the waiter's own setting must still have landed: {raw}"
+    );
+    c.run(&["config", "commit"]).assert_ok().says("on");
+    c.run(&["config", "observatory-root"])
+        .assert_ok()
+        .says(observatory);
 }
 
 /// The lock file is the one thing under the root that is not corpus content,
