@@ -176,6 +176,15 @@ writes them back in v2 form:
 Nothing is dropped; the mapping is a lossless re-labelling into references,
 which is the whole point of keeping references and cutting the rest.
 
+The lenient read is scoped to corpora that declare an older schema. A
+`config.yaml` already at `schema_version: 2` has nothing left to re-label, so
+every node is read with the strict current model first, over the whole corpus
+and before any file is written; a node that will not parse refuses the run
+with the bytes untouched. Leniency there could only delete a key this build
+does not know and report the node as migrated, and a refusal that came per
+node instead would leave the corpus half rewritten. A future schema is
+refused the same way, at the config.
+
 ## Out of scope for v0.2
 
 Search beyond `list`. Sync beyond git. Evidence weighting in any form.

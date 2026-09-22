@@ -4137,6 +4137,173 @@ fn migrate_refuses_a_future_schema_without_changing_any_corpus_file() {
     );
 }
 
+/// A v2 corpus whose nodes are committed, so `migrate` gets past the
+/// dirty-tree refusal and the assertions are about what it does to content.
+fn committed_v2_corpus() -> Corpus {
+    let c = Corpus::new();
+    git_init(&c.root);
+    git(&c.root, &["add", "-A"]);
+    git(&c.root, &["commit", "-q", "-m", "v2 corpus"]);
+    c
+}
+
+/// Give `c`'s node `id` a tag in a case the current model accepts but
+/// `migrate` does not render, so the v1 pass normalises it and writes the
+/// file back. Returns the bytes that are now on disk.
+fn with_an_unnormalised_tag(c: &Corpus, id: &str) -> String {
+    let path = c.node_file(id);
+    // The first `---\n\n` closes the frontmatter, so this appends to it.
+    let raw =
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .replacen("---\n\n", "tags:\n- Orrery\n---\n\n", 1);
+    write(&path, &raw);
+    raw
+}
+
+/// The positive control for the test below: on its own, the node that test
+/// expects `migrate` to leave alone really is one `migrate` would rewrite.
+/// Without this, "the earlier node was not rewritten" would pass just as
+/// happily against a fixture `migrate` never had any reason to touch.
+#[test]
+fn migrate_rewrites_an_unnormalised_tag_in_a_v2_corpus() {
+    let c = committed_v2_corpus();
+    let id = c.seed("an idea", "Alpha idea");
+    let before = with_an_unnormalised_tag(&c, &id);
+    git(&c.root, &["add", "-A"]);
+    git(&c.root, &["commit", "-q", "-m", "an unnormalised tag"]);
+
+    c.run(&["migrate"])
+        .assert_ok()
+        .says("tags normalised: orrery");
+    let after = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert_ne!(before, after);
+    assert!(after.contains("- orrery"), "{after}");
+}
+
+/// A corpus already at schema 2 has nothing left to convert, so a node the
+/// current model cannot read is a hand edit this build does not understand,
+/// not old content to re-label. Reading it through the lenient v1 model
+/// would drop the field and report the node as successfully migrated, which
+/// is data loss wearing a success message.
+///
+/// The good node here sorts first and is one `migrate` genuinely would
+/// rewrite — its tag needs normalising — so this also pins that the refusal
+/// comes before the rewrite loop rather than during it. Refusing per node
+/// would leave `alpha-idea` normalised on disk and the run half applied.
+#[test]
+fn migrate_refuses_an_unknown_node_field_in_a_v2_corpus() {
+    let c = committed_v2_corpus();
+    let alpha = c.seed("an idea", "Alpha idea");
+    let zeta = c.seed("another idea", "Zeta idea");
+    assert!(alpha < zeta, "{alpha} must sort before {zeta}");
+
+    // Valid v2, but not in the form `migrate` renders. What it does to this
+    // node alone is pinned by the test above.
+    with_an_unnormalised_tag(&c, &alpha);
+
+    let path = c.node_file(&zeta);
+    let raw = std::fs::read_to_string(&path).unwrap();
+    write(
+        &path,
+        &raw.replacen("status: seed", "status: seed\nfuture_field: valuable", 1),
+    );
+    git(&c.root, &["add", "-A"]);
+    git(&c.root, &["commit", "-q", "-m", "hand edits"]);
+
+    let before = snapshot_corpus_files(&c.root);
+    let config_before = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+
+    c.run(&["migrate"])
+        .assert_fails()
+        .says("schema_version 2")
+        .says("future_field")
+        .says("nothing was changed");
+
+    assert_eq!(before, snapshot_corpus_files(&c.root));
+    assert_eq!(
+        config_before,
+        std::fs::read_to_string(c.root.join("config.yaml")).unwrap()
+    );
+    // Byte for byte: the unknown field survives, and the node that sorts
+    // ahead of it was never normalised.
+    assert!(
+        std::fs::read_to_string(c.node_file(&zeta))
+            .unwrap()
+            .contains("future_field: valuable")
+    );
+    assert!(
+        std::fs::read_to_string(c.node_file(&alpha))
+            .unwrap()
+            .contains("- Orrery")
+    );
+    assert!(git(&c.root, &["status", "--porcelain"]).trim().is_empty());
+}
+
+/// Invariant 7 is enforced by `deny_unknown_fields` on the reference, not by
+/// a check, so a `verdict` on a v2 reference has to fail to parse. The v1
+/// reference model tolerates one because a v1 corpus really did carry
+/// weighed references; applied to a v2 corpus that tolerance would delete
+/// the key and call it a migration.
+#[test]
+fn migrate_refuses_a_reference_verdict_in_a_v2_corpus() {
+    let c = committed_v2_corpus();
+    let id = c.seed("an idea", "An idea");
+    c.run(&[
+        "cite",
+        &id,
+        "--uri",
+        "https://example.invalid/p",
+        "--note",
+        "a paper",
+    ])
+    .assert_ok();
+    let path = c.node_file(&id);
+    let raw = std::fs::read_to_string(&path).unwrap();
+    write(
+        &path,
+        &raw.replacen("  kind: ", "  verdict: supports\n  kind: ", 1),
+    );
+    git(&c.root, &["add", "-A"]);
+    git(&c.root, &["commit", "-q", "-m", "a weighed reference"]);
+
+    let before = snapshot_corpus_files(&c.root);
+    c.run(&["migrate"])
+        .assert_fails()
+        .says("schema_version 2")
+        .says("verdict");
+    assert_eq!(before, snapshot_corpus_files(&c.root));
+}
+
+/// The strict read is scoped to corpora that declare the current schema. A
+/// v1 one keeps the leniency it was written for: its retired keys are
+/// exactly what migration is there to drop, so an unrecognised key in a v1
+/// file must still convert rather than refuse.
+#[test]
+fn migrate_still_drops_an_unknown_field_from_a_v1_corpus() {
+    let c = v1_corpus();
+    let node = c.node_file("wake-retardation");
+    let raw = std::fs::read_to_string(&node).unwrap();
+    write(
+        &node,
+        &raw.replacen(
+            "status: supported",
+            "status: supported\nretired_v1_key: gone",
+            1,
+        ),
+    );
+
+    c.run(&["migrate"])
+        .assert_ok()
+        .says("4 of 4 nodes rewritten");
+    assert!(
+        !std::fs::read_to_string(&node)
+            .unwrap()
+            .contains("retired_v1_key")
+    );
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
 #[test]
 fn migrate_refuses_a_malformed_config_before_changing_any_corpus_file() {
     let c = v1_corpus();
