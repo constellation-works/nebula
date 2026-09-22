@@ -9,6 +9,7 @@
 //! directory sits under a symlink, and a checker that resolved paths would pass
 //! on Linux and fail here.
 
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -342,6 +343,96 @@ fn multiline_capture_is_refused_without_writing() {
         "a refused capture must not create an inbox record"
     );
     c.run(&["inbox", "--json"]).assert_ok().says("[]");
+}
+
+fn inbox_id_candidates(stamp: &str, text: &str) -> Vec<String> {
+    fn fnv(s: &str) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in s.as_bytes() {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    let mut h = fnv(&format!("{stamp}{text}"));
+    let mut ids = Vec::new();
+    for _ in 0..64 {
+        let id = format!("{:04x}", (h & 0xffff) as u16);
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+        h = fnv(&format!("{h}"));
+    }
+    ids
+}
+
+#[test]
+fn capture_collision_fallback_promotes_the_new_thought() {
+    const TEXT: &str = "the intended new thought";
+
+    for _ in 0..3 {
+        let c = Corpus::new();
+        c.run(&["capture", TEXT]).assert_ok();
+        let month = std::fs::read_dir(c.root.join("inbox"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let raw = std::fs::read_to_string(&month).unwrap();
+        let stamp = raw.split_whitespace().nth(2).unwrap();
+        let occupied = inbox_id_candidates(stamp, TEXT);
+        let mut fixture = String::new();
+        for (i, id) in occupied.iter().enumerate() {
+            writeln!(fixture, "- [{id}] {stamp} fixture {i}").unwrap();
+        }
+        std::fs::write(&month, fixture).unwrap();
+
+        let captured = c.run(&["capture", TEXT]).assert_ok().stdout_trim();
+        let listing = c.run(&["inbox", "--json"]).assert_ok().stdout();
+        let entries: serde_json::Value = serde_json::from_str(&listing).unwrap();
+        let new_entry = entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == captured)
+            .unwrap();
+        if new_entry["at"] != stamp {
+            continue;
+        }
+
+        assert!(!occupied.contains(&captured));
+        c.run(&["promote", &captured, "--title", "Intended new thought"])
+            .assert_ok();
+        let node = std::fs::read_to_string(c.node_file("intended-new-thought")).unwrap();
+        assert!(node.ends_with("the intended new thought\n"));
+        return;
+    }
+    panic!("the clock crossed a minute during all three collision fixtures");
+}
+
+#[test]
+fn capture_reports_id_exhaustion_without_appending() {
+    let c = Corpus::new();
+    c.run(&["capture", "locate the current inbox file"])
+        .assert_ok();
+    let month = std::fs::read_dir(c.root.join("inbox"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let mut fixture = String::new();
+    for id in 0..=u16::MAX {
+        writeln!(fixture, "- [{id:04x}] 2000-01-01T00:00 occupied").unwrap();
+    }
+    std::fs::write(&month, &fixture).unwrap();
+
+    c.run(&["capture", "there is no id left"])
+        .assert_fails()
+        .says("inbox id namespace exhausted; nothing captured");
+    assert_eq!(std::fs::read_to_string(month).unwrap(), fixture);
 }
 
 #[test]

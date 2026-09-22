@@ -19,6 +19,7 @@ use crate::error::{Error, Result};
 use crate::lock::CorpusLock;
 use crate::model::{self, Doc};
 use serde::Serialize;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
@@ -652,7 +653,7 @@ impl Corpus {
         let path = dir.join(format!("{month}.md"));
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
         let inbox = self.inbox()?;
-        let id = unique_entry_id(&format!("{now}{text}"), &inbox);
+        let id = unique_entry_id(&format!("{now}{text}"), &inbox)?;
         let line = existing.lines().count();
         let mut f = std::fs::OpenOptions::new()
             .create(true)
@@ -1011,17 +1012,31 @@ pub(crate) fn days_since_stamp(stamp: &str) -> Option<i64> {
     days_since(stamp.get(..10)?)
 }
 
-/// A short id for an inbox entry, retried until it is unique in the live inbox.
-fn unique_entry_id(seed: &str, inbox: &Inbox) -> String {
+/// A short id unique in the live inbox, or a refusal when all ids are occupied.
+fn unique_entry_id(seed: &str, inbox: &Inbox) -> Result<String> {
+    let used: HashSet<&str> = inbox.0.iter().map(|entry| entry.id.as_str()).collect();
     let mut h = fnv(seed);
     for _ in 0..64 {
         let id = format!("{:04x}", (h & 0xffff) as u16);
-        if inbox.0.iter().all(|entry| entry.id != id) {
-            return id;
+        if !used.contains(id.as_str()) {
+            return Ok(id);
         }
         h = fnv(&format!("{h}"));
     }
-    format!("{:04x}", (fnv(seed) & 0xffff) as u16)
+
+    // Hashing keeps the ordinary path short and makes ids hard to predict from
+    // their position. Once that bounded path collides, walk the finite id space
+    // rather than returning an occupied candidate. A full inbox is unusual but
+    // valid input, and refusing it is the only unambiguous result.
+    for candidate in 0..=u16::MAX {
+        let id = format!("{candidate:04x}");
+        if !used.contains(id.as_str()) {
+            return Ok(id);
+        }
+    }
+    Err(Error::corpus(
+        "inbox id namespace exhausted; nothing captured",
+    ))
 }
 
 /// A stable id for a corpus, derived from where it was created and when.
