@@ -41,6 +41,27 @@ A corpus that is not a git repository at all is migrated as is — put it under
 git first if you want the safety net (see
 [corpus-setup.md](corpus-setup.md)).
 
+## The already-at-v2 refusal
+
+Running it on a corpus that is already at `schema_version: 2` is a no-op, and
+that is the point: there is nothing left to re-label. So before writing
+anything, `migrate` reads every node with the strict current model — the same
+one `neb check` uses — and refuses the whole run if one will not parse:
+
+```
+error: the corpus already declares schema_version 2, and in /corpus/nodes/current.md:
+parsing frontmatter: unknown field `future_field`, expected one of `id`, `title`, ...;
+migration will not rewrite a node it cannot read, so nothing was changed
+```
+
+Without that, the lenient v1 read below would swallow the unrecognised key,
+write the node back without it, and report it as migrated. The check runs over
+the whole corpus first rather than node by node, so a bad node late in the
+sequence cannot leave the earlier ones rewritten.
+
+Fix the node by hand — `neb check` names the same problem — then run
+`neb migrate` again. Nothing on disk changed, so there is nothing to undo.
+
 ## What changes
 
 Per node, `neb migrate` reads the old, lenient shape and writes the new one

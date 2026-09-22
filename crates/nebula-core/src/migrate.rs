@@ -7,6 +7,12 @@
 //! removed edge kinds all become references, since a reference with a good
 //! note carries the same information. See `docs/design/v0.2/1_spec.md`,
 //! "Migration".
+//!
+//! That leniency is scoped to old content. A corpus whose `config.yaml`
+//! already declares this build's schema is read with the strict current
+//! model before anything is written, because there is nothing left to
+//! re-label there and the only thing tolerance could do is quietly drop a
+//! field the build does not know.
 
 use crate::config::{self, Config};
 use crate::error::{Error, Result};
@@ -162,6 +168,18 @@ pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
         .collect();
     paths.sort();
     report.nodes = paths.len();
+    // A corpus already at this build's schema has nothing to convert, so
+    // every node in it must already read under the current model. Proving
+    // that here, over the whole corpus and before the loop below writes
+    // anything, is what stops the v1 model's leniency from turning a no-op
+    // migration into a silent deletion: unknown keys are tolerated because a
+    // v1 file holds retired ones, and the only thing that tolerance can do to
+    // current-schema content is drop what this build does not recognise. Up
+    // front rather than per node, so an unreadable node late in the corpus
+    // cannot leave the earlier ones rewritten.
+    if config.version == config::SCHEMA_VERSION {
+        preflight_nodes(&paths, config.version)?;
+    }
     for path in &paths {
         let raw = std::fs::read_to_string(path)?;
         let (front, body) = model::split_frontmatter(&raw).map_err(|e| in_file(e, path))?;
@@ -187,6 +205,25 @@ pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
 
     report.config_rewritten = migrate_config(&root, config)?;
     Ok(report)
+}
+
+/// Refuse a corpus that declares the current schema but holds a node this
+/// build cannot read, naming the first such file in corpus order.
+///
+/// Reads with the same model every other verb reads with, so `migrate`
+/// accepts exactly what `check` accepts and neither one's idea of a node can
+/// drift from the other's.
+fn preflight_nodes(paths: &[PathBuf], version: u32) -> Result<()> {
+    for path in paths {
+        if let Err(source) = model::read(path) {
+            return Err(Error::CurrentSchemaUnreadable {
+                path: path.clone(),
+                version,
+                source: Box::new(source),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Name the file a complaint about the corpus came from.
@@ -247,6 +284,9 @@ struct V1Config {
 }
 
 struct MigrationConfig {
+    /// The schema the corpus declares, which decides how its nodes are read.
+    /// Absent `schema_version` means v1, as it always has.
+    version: u32,
     existing: Option<String>,
     corpus_id: Option<String>,
     observatory_root: Option<PathBuf>,
@@ -299,6 +339,7 @@ fn preflight_config(root: &Path) -> Result<MigrationConfig> {
         }
     };
     Ok(MigrationConfig {
+        version,
         existing,
         corpus_id,
         observatory_root,
@@ -308,6 +349,7 @@ fn preflight_config(root: &Path) -> Result<MigrationConfig> {
 
 fn migrate_config(root: &Path, config: MigrationConfig) -> Result<bool> {
     let MigrationConfig {
+        version: _,
         existing,
         corpus_id,
         observatory_root,

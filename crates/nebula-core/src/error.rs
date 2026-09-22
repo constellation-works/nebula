@@ -74,6 +74,28 @@ pub enum Error {
         expected: u32,
     },
 
+    /// A corpus that already declares this build's schema holds a node file
+    /// that does not parse under it.
+    ///
+    /// Raised by [`crate::migrate`] alone, and before it writes anything.
+    /// Migration reads nodes through a deliberately lenient v1 model that
+    /// tolerates unknown keys, because a v1 file holds retired ones; content
+    /// already at the current schema gets no such latitude, since the only
+    /// thing that leniency could do there is drop a field this build does
+    /// not recognise.
+    #[error(
+        "the corpus already declares schema_version {version}, and {source}; \
+         migration will not rewrite a node it cannot read, so nothing was changed"
+    )]
+    CurrentSchemaUnreadable {
+        /// The node file that would not parse.
+        path: PathBuf,
+        /// The schema the corpus declares, which is this build's own.
+        version: u32,
+        /// Why it would not parse, as the current model complained.
+        source: Box<Error>,
+    },
+
     /// The edge would make a node its own ancestor. Genealogy is a DAG.
     #[error("that edge would make `{from}` its own ancestor")]
     Cycle {
