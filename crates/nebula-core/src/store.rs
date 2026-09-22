@@ -607,23 +607,26 @@ impl Corpus {
     /// reading as the node it claims — or, through [`Self::save`], from
     /// becoming a write over that node.
     ///
-    /// The names are compared by asking the filesystem rather than by
-    /// comparing bytes. A volume may store a name in a different Unicode
-    /// normalization than the id it was written from — `título` is two
-    /// spellings of the same word — and a byte comparison would call a
-    /// perfectly ordinary node a mismatch. Nothing is canonicalized: the
-    /// question asked is whether the path the id names holds this same file's
-    /// text, which a symlinked root answers the same way on either platform.
+    /// The names are compared by asking the filesystem which file each one
+    /// opens. A volume may store a name in a different Unicode normalization
+    /// than the id it was written from — `título` is two spellings of the
+    /// same word — and a byte comparison would call a perfectly ordinary
+    /// node a mismatch. What the fallback asks is [`is_same_file`]: whether
+    /// the path the id names *is* this file. Nothing is canonicalized; both
+    /// paths are used as given, which is what keeps a symlinked root
+    /// answering the same way on either platform.
+    ///
+    /// Equal *text* is not that question and never was. Two distinct files
+    /// hold equal text the moment one is copied over the other, so a
+    /// comparison of contents let `nodes/safe.md` — a byte-for-byte copy of
+    /// `nodes/victim.md` — authorize `victim` as the id `safe` had asked
+    /// for, and the write that followed landed on the other node.
     fn require_file_agrees(&self, path: &Path, doc: &Doc) -> Result<()> {
         if path.file_stem() == Some(OsStr::new(doc.node.id.as_str())) {
             return Ok(());
         }
         let declared = self.node_path(&doc.node.id)?;
-        let same = std::fs::read_to_string(&declared)
-            .ok()
-            .zip(std::fs::read_to_string(path).ok())
-            .is_some_and(|(declared, found)| declared == found);
-        if same {
+        if is_same_file(path, &declared) {
             return Ok(());
         }
         Err(Error::IdMismatch {
@@ -1042,6 +1045,38 @@ pub(crate) fn is_path_safe_id(id: &str) -> bool {
     let single =
         matches!(components.next(), Some(Component::Normal(name)) if name == OsStr::new(id));
     single && components.next().is_none()
+}
+
+/// Whether two paths name the same file on disk.
+///
+/// Identity, because that is the only reason two different spellings may name
+/// one node: a volume may store a file name in a different Unicode
+/// normalization than the id it was written from, and the filesystem is the
+/// one that knows the two are one file. A device and inode pair is that
+/// answer. Both paths are used as given — nothing is resolved or
+/// canonicalized — so a corpus reached through a symlinked root, which is
+/// every corpus under a macOS temporary directory, answers this the same way
+/// a corpus reached directly does.
+///
+/// A path that cannot be read is not the same file as anything, including
+/// itself: the caller is deciding whether to trust a mismatched name, and an
+/// unanswered question is not a yes.
+#[cfg(unix)]
+fn is_same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+/// Elsewhere the question does not arise. A Windows volume compares file
+/// names case-insensitively but not across Unicode normalizations, so a name
+/// that differs from the id it stores differs for some other reason, and the
+/// byte comparison the caller already made is the whole answer.
+#[cfg(not(unix))]
+fn is_same_file(_a: &Path, _b: &Path) -> bool {
+    false
 }
 
 #[cfg(test)]
