@@ -394,6 +394,53 @@ fn settling_an_inbox_entry_is_atomic_and_leaves_no_temporary_file() {
 }
 
 #[test]
+fn an_interrupted_settlement_copy_does_not_resurrect_an_entry() {
+    let (_dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "a thought to settle").unwrap();
+    let mut tmp = entry.file.as_os_str().to_os_string();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+    let unsettled = std::fs::read(&entry.file).unwrap();
+
+    corpus.settle_inbox(&entry, "dropped").unwrap();
+    std::fs::write(&tmp, unsettled).unwrap();
+
+    assert!(corpus.inbox().unwrap().0.is_empty());
+    assert!(matches!(
+        corpus.inbox_entry(&entry.id),
+        Err(Error::NoSuchInboxEntry(id)) if id == entry.id
+    ));
+}
+
+#[test]
+fn inbox_ignores_everything_except_month_markdown_files() {
+    let (_dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "the live thought").unwrap();
+    let inbox_dir = entry.file.parent().unwrap();
+
+    for name in ["notes.md", "2026-00.md", "2026-13.md", "2026-09.md.tmp"] {
+        std::fs::write(inbox_dir.join(name), b"not utf-8: \xff").unwrap();
+    }
+    std::fs::create_dir(inbox_dir.join("2000-01.md")).unwrap();
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::ffi::OsStringExt;
+
+        let invalid_name = std::ffi::OsString::from_vec(b"2000-01-\xff.md".to_vec());
+        std::fs::write(inbox_dir.join(invalid_name), "unrelated").unwrap();
+    }
+
+    let listed = corpus.inbox().unwrap();
+    assert_eq!(listed.0.len(), 1);
+    assert_eq!(listed.0[0].id, entry.id);
+
+    let captured = ops::capture(&corpus, "another thought").unwrap();
+    assert_ne!(captured.id, entry.id);
+    assert_eq!(corpus.inbox().unwrap().0.len(), 2);
+}
+
+#[test]
 fn settling_refuses_when_the_indexed_line_has_another_entry_id() {
     let (_dir, corpus) = corpus();
     let entry = ops::capture(&corpus, "the original thought").unwrap();
