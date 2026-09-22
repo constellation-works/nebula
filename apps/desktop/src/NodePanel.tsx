@@ -19,6 +19,10 @@ interface Props {
   onClose: () => void;
 }
 
+type LoadResult =
+  | { id: string; revision: unknown; status: "loaded"; view: NodeView }
+  | { id: string; revision: unknown; status: "error"; message: string };
+
 export const PANEL_MIN = 280;
 export const PANEL_MAX = 720;
 
@@ -83,8 +87,7 @@ function EdgeList({
  * session with the agent or in the editor, which is one double-click away.
  */
 export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onClose }: Props) {
-  const [view, setView] = useState<NodeView | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<LoadResult | null>(null);
   const resize = useRef<{ x: number; w: number } | null>(null);
 
   useEffect(() => {
@@ -92,11 +95,10 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
     api.node(id).then(
       (v) => {
         if (!live) return;
-        setView(v);
-        setError(null);
+        setResult({ id, revision, status: "loaded", view: v });
       },
       (e: unknown) => {
-        if (live) setError(String(e));
+        if (live) setResult({ id, revision, status: "error", message: String(e) });
       },
     );
     return () => {
@@ -128,6 +130,9 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
   }
 
   const titles = new Map(nodes.map((n) => [n.id, n.title]));
+  const currentResult = result?.id === id && Object.is(result.revision, revision) ? result : null;
+  const view = currentResult?.status === "loaded" ? currentResult.view : null;
+  const error = currentResult?.status === "error" ? currentResult.message : null;
   const node = view?.node;
   const edges = node?.edges ?? [];
   const references = node?.references ?? [];
