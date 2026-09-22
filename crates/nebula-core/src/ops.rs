@@ -556,10 +556,12 @@ pub fn set_status(
     if status.needs_kill() && doc.node.kill.as_ref().is_none_or(|k| k.trim().is_empty()) {
         return Err(Error::NeedsKill(status));
     }
-    // Rule 6: a ruled-out idea cannot quietly come back. Reviving one takes
-    // a new node with a `reopens` edge, so the fact that it was once dead
-    // stays visible.
-    if from.is_closed_by_verdict() && status != from {
+    // Rule 6: a ruled-out idea cannot quietly come back, and a verdict is
+    // part of the record: even refuted -> refuted is refused, because it
+    // would silently replace `closed.why` and its date rather than leaving
+    // them as the recorded verdict. Reviving one takes a new node with a
+    // `reopens` edge, so the fact that it was once dead stays visible.
+    if from.is_closed_by_verdict() {
         return Err(Error::RefutedCannotReopen);
     }
     doc.node.status = status;
