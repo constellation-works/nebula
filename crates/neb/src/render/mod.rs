@@ -89,6 +89,9 @@ pub fn list(nodes: &[Node], total: usize) -> String {
 
 /// Commits that changed a node, newest first.
 pub fn history(entries: &[HistoryEntry]) -> String {
+    if entries.is_empty() {
+        return format!("{}\n", dim("no commits touched this node"));
+    }
     let mut out = String::new();
     for entry in entries {
         let short = entry.hash.get(..7).unwrap_or(&entry.hash);
