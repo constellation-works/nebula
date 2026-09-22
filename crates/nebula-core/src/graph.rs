@@ -360,7 +360,7 @@ pub fn review(graph: &Graph<'_>, inbox: &Inbox, since: Option<i64>) -> Result<Re
                 reason: format!("seed untouched for {seed_days} days; propose: status abandoned"),
             });
         }
-        if n.status.is_open()
+        if n.status == Status::Hypothesis
             && n.references.is_empty()
             && older_than(&n.created, NO_REFERENCES_DAYS)
         {
