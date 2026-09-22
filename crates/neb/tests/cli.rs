@@ -552,6 +552,10 @@ fn set_root_requires_force_to_replace_a_different_corpus() {
         format!("{}\n", first.display()),
         "a refused replacement must preserve the setting"
     );
+    assert!(
+        !second.exists(),
+        "a root-setting conflict must be refused before creating the target corpus"
+    );
 
     run_from_home(
         &home,
@@ -564,6 +568,80 @@ fn set_root_requires_force_to_replace_a_different_corpus() {
         std::fs::read_to_string(&config_path).unwrap(),
         format!("{}\n", second.display())
     );
+}
+
+#[test]
+fn repeated_init_and_set_root_preserve_the_existing_corpus_byte_for_byte() {
+    let c = Corpus::new();
+    let observatory = c.workdir().join("observatory");
+    c.run(&["config", "observatory-root", observatory.to_str().unwrap()])
+        .assert_ok();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    c.seed("an idea that must survive init", "Durable idea");
+    c.run(&["capture", "an inbox thought that must survive init"])
+        .assert_ok();
+
+    let config_before = std::fs::read(c.root.join("config.yaml")).unwrap();
+    let content_before = snapshot_corpus_files(&c.root);
+
+    c.run(&["init"]).assert_ok();
+    assert_eq!(
+        config_before,
+        std::fs::read(c.root.join("config.yaml")).unwrap()
+    );
+    assert_eq!(content_before, snapshot_corpus_files(&c.root));
+
+    // The documented positional recipe must be just as safe, while still
+    // creating the machine-local root setting when it is absent.
+    run_from_home(
+        c.workdir(),
+        None,
+        &["init", c.root.to_str().unwrap(), "--set-root"],
+        None,
+    )
+    .assert_ok();
+    assert_eq!(
+        config_before,
+        std::fs::read(c.root.join("config.yaml")).unwrap()
+    );
+    assert_eq!(content_before, snapshot_corpus_files(&c.root));
+    assert_eq!(
+        std::fs::read_to_string(c.workdir().join(".config/nebula/root")).unwrap(),
+        format!("{}\n", c.root.display())
+    );
+}
+
+#[test]
+fn init_refuses_invalid_existing_configs_without_mutation() {
+    for config in [
+        "schema_version: 1\ncorpus_id: neb-old\n",
+        "schema_version: [not, a, number]\ncorpus_id: neb-broken\n",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let root = dir.path().join("corpus");
+        std::fs::create_dir_all(root.join("nodes")).unwrap();
+        std::fs::create_dir_all(root.join("inbox")).unwrap();
+        write(&root.join("config.yaml"), config);
+        write(
+            &root.join("nodes/keep.md"),
+            "node bytes that must survive\n",
+        );
+        write(
+            &root.join("inbox/keep.md"),
+            "inbox bytes that must survive\n",
+        );
+        let config_before = std::fs::read(root.join("config.yaml")).unwrap();
+        let content_before = snapshot_corpus_files(&root);
+
+        run_from_home(&home, Some(&root), &["init"], None).assert_fails();
+
+        assert_eq!(
+            config_before,
+            std::fs::read(root.join("config.yaml")).unwrap()
+        );
+        assert_eq!(content_before, snapshot_corpus_files(&root));
+    }
 }
 
 #[test]

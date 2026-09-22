@@ -164,6 +164,9 @@ pub fn init(
     force: bool,
 ) -> Result<Initialized> {
     let target = Corpus::resolve_root(path.or(root))?;
+    if set_root {
+        Corpus::check_root_config(&target, force)?;
+    }
     // The lock lives inside the root, so the root has to exist before it can
     // be taken. `Corpus::init` would create it a moment later anyway.
     std::fs::create_dir_all(&target)?;

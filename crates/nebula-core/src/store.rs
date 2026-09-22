@@ -96,6 +96,20 @@ impl Corpus {
     /// Paths are compared as given, like every other corpus path.
     pub fn write_root_config(root: &Path, force: bool) -> Result<PathBuf> {
         let path = Self::root_config_path()?;
+        Self::check_root_config(root, force)?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| Error::corpus("root configuration path has no parent"))?;
+        std::fs::create_dir_all(parent)?;
+        std::fs::write(&path, format!("{}\n", root.display()))?;
+        Ok(path)
+    }
+
+    /// Refuse a conflicting machine-local default before initializing a
+    /// corpus. The write is deliberately separate so a refused `--set-root`
+    /// cannot create or rewrite the requested corpus first.
+    pub(crate) fn check_root_config(root: &Path, force: bool) -> Result<()> {
+        let path = Self::root_config_path()?;
         if let Some(configured) = Self::configured_root()?
             && configured != root
             && !force
@@ -106,12 +120,7 @@ impl Corpus {
                 requested: root.to_path_buf(),
             });
         }
-        let parent = path
-            .parent()
-            .ok_or_else(|| Error::corpus("root configuration path has no parent"))?;
-        std::fs::create_dir_all(parent)?;
-        std::fs::write(&path, format!("{}\n", root.display()))?;
-        Ok(path)
+        Ok(())
     }
 
     /// A conflicting machine setting is worth naming before creating the
@@ -157,12 +166,32 @@ impl Corpus {
         Ok(Self { root, config })
     }
 
-    /// Create an empty corpus.
+    /// Create an empty corpus, or open an existing one without resetting it.
     pub fn init(root: &Path) -> Result<Self> {
+        // Re-running init on a corpus is an open, not a reset. In particular,
+        // opening first validates an existing config before any directory or
+        // file can be created, and leaves its spelling and bytes untouched.
+        if root.join("nodes").is_dir() {
+            return Self::open(Some(root.to_path_buf()));
+        }
+
+        // A config can survive an interrupted or partial initialization. Read
+        // it before creating anything so malformed and incompatible files are
+        // refused without mutation, while a valid identity and settings are
+        // preserved as the missing directories are completed.
+        let existing_config = root.join(config::FILE).exists();
+        let config = existing_config
+            .then(|| Config::load(root, || corpus_id(root)))
+            .transpose()?;
         std::fs::create_dir_all(root.join("nodes"))?;
         std::fs::create_dir_all(root.join("inbox"))?;
-        let config = Config::fresh(corpus_id(root));
-        config.save(root)?;
+        let config = if let Some(config) = config {
+            config
+        } else {
+            let config = Config::fresh(corpus_id(root));
+            config.save(root)?;
+            config
+        };
         Ok(Self {
             root: root.to_path_buf(),
             config,
