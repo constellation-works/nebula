@@ -846,20 +846,123 @@ fn repeated_init_and_set_root_preserve_the_existing_corpus_byte_for_byte() {
 #[test]
 fn repeated_init_adds_the_lock_ignore_without_replacing_existing_rules() {
     let c = Corpus::new();
-    write(&c.root.join(".gitignore"), "private-notes/\n");
+    write(&c.root.join(".gitignore"), "private-notes/\r\n");
 
     c.run(&["init"]).assert_ok();
     assert_eq!(
-        std::fs::read_to_string(c.root.join(".gitignore")).unwrap(),
-        "private-notes/\n/.lock\n"
+        std::fs::read(c.root.join(".gitignore")).unwrap(),
+        b"private-notes/\r\n/.lock\n"
     );
 
     c.run(&["init"]).assert_ok();
     assert_eq!(
-        std::fs::read_to_string(c.root.join(".gitignore")).unwrap(),
-        "private-notes/\n/.lock\n",
+        std::fs::read(c.root.join(".gitignore")).unwrap(),
+        b"private-notes/\r\n/.lock\n",
         "the setup repair is idempotent"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn init_replaces_a_gitignore_symlink_even_when_its_target_already_has_the_rule() {
+    use std::os::unix::fs::symlink;
+
+    let c = Corpus::new();
+    git_init(&c.root);
+    let ignore = c.root.join(".gitignore");
+    let target = c.workdir().join("external.gitignore");
+    let target_bytes = b"private-notes/\n/.lock\n";
+    write(&target, std::str::from_utf8(target_bytes).unwrap());
+    std::fs::remove_file(&ignore).unwrap();
+    symlink(&target, &ignore).unwrap();
+
+    c.run(&["init"]).assert_ok();
+
+    assert_eq!(std::fs::read(&target).unwrap(), target_bytes);
+    assert!(
+        !std::fs::symlink_metadata(&ignore)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "git only honors a regular .gitignore"
+    );
+    assert_eq!(std::fs::read(&ignore).unwrap(), target_bytes);
+    assert_eq!(git(&c.root, &["check-ignore", ".lock"]), ".lock\n");
+    assert!(
+        !git(&c.root, &["status", "--porcelain"]).contains(".lock"),
+        "the runtime lock must be absent from actual git status"
+    );
+
+    c.run(&["config", "commit", "on"])
+        .assert_ok()
+        .says("committed ");
+    git(&c.root, &["add", "-A"]);
+    assert!(
+        !git(&c.root, &["diff", "--cached", "--name-only"]).contains(".lock"),
+        "git add -A must not stage the runtime lock"
+    );
+    c.run(&["new", "Still commits", "--id", "still-commits"])
+        .assert_ok()
+        .says("committed ");
+    assert_eq!(log(&c.root)[0], "neb new still-commits");
+    assert!(dirt(&c.root).is_empty(), "{}", dirt(&c.root));
+}
+
+#[cfg(unix)]
+#[test]
+fn init_copies_a_gitignore_symlink_target_without_mutating_it() {
+    use std::os::unix::fs::symlink;
+
+    let c = Corpus::new();
+    let ignore = c.root.join(".gitignore");
+    let target = c.workdir().join("external.gitignore");
+    let target_bytes = b"private-notes/\r\n";
+    write(&target, std::str::from_utf8(target_bytes).unwrap());
+    std::fs::remove_file(&ignore).unwrap();
+    symlink(&target, &ignore).unwrap();
+
+    c.run(&["init"]).assert_ok();
+
+    assert_eq!(std::fs::read(&target).unwrap(), target_bytes);
+    assert_eq!(
+        std::fs::read(&ignore).unwrap(),
+        b"private-notes/\r\n/.lock\n"
+    );
+    assert!(
+        !std::fs::symlink_metadata(&ignore)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let local_before = std::fs::read(&ignore).unwrap();
+    c.run(&["init"]).assert_ok();
+    assert_eq!(std::fs::read(&ignore).unwrap(), local_before);
+    assert_eq!(std::fs::read(&target).unwrap(), target_bytes);
+}
+
+#[cfg(unix)]
+#[test]
+fn init_replaces_a_dangling_gitignore_symlink_with_an_effective_local_file() {
+    use std::os::unix::fs::symlink;
+
+    let c = Corpus::new();
+    let ignore = c.root.join(".gitignore");
+    let missing = c.workdir().join("missing.gitignore");
+    std::fs::remove_file(&ignore).unwrap();
+    symlink(&missing, &ignore).unwrap();
+
+    c.run(&["init"]).assert_ok();
+
+    assert!(!missing.exists(), "init must not create the symlink target");
+    assert_eq!(std::fs::read(&ignore).unwrap(), b"/.lock\n");
+    assert!(
+        !std::fs::symlink_metadata(&ignore)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    git_init(&c.root);
+    assert_eq!(git(&c.root, &["check-ignore", ".lock"]), ".lock\n");
 }
 
 #[test]

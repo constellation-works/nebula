@@ -907,9 +907,17 @@ fn is_corpus_path(prefix: &str, path: &str) -> bool {
 ///
 /// Existing ignore content is preserved. Re-running `init` is idempotent when
 /// the final effective rule is already ours; if the user later adds another
-/// rule, a later `init` puts this root-specific rule last again.
+/// rule, a later `init` puts this root-specific rule last again. Git does not
+/// follow a `.gitignore` symlink, so even a symlink whose target already ends
+/// in our rule is replaced atomically with a regular file containing the same
+/// bytes. The target itself is never changed.
 fn ensure_lock_ignored(root: &Path) -> Result<()> {
     let path = root.join(GITIGNORE_FILE);
+    let is_symlink = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata.file_type().is_symlink(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(Error::io_at("inspecting", &path, error)),
+    };
     let mut contents = match std::fs::read(&path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
@@ -921,7 +929,11 @@ fn ensure_lock_ignored(root: &Path) -> Result<()> {
         .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
         .rfind(|line| !line.is_empty() && !line.starts_with(b"#"));
     if last_rule == Some(expected.as_bytes()) {
-        return Ok(());
+        return if is_symlink {
+            write_atomic(&path, contents)
+        } else {
+            Ok(())
+        };
     }
 
     if !contents.is_empty() && !contents.ends_with(b"\n") {

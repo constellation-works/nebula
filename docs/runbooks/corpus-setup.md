@@ -63,6 +63,12 @@ git -C "$NEBULA_ROOT" commit -m "corpus"
 lock never appears in `git status` or gets swept up by `git add -A`. For a
 corpus created by an older `neb`, run `neb init "$NEBULA_ROOT"` once; it keeps
 the corpus and existing ignore rules intact while adding the missing rule.
+Git does not honor a symlink at `.gitignore`, so `neb init` replaces one with
+an effective regular file in the corpus: a readable target's bytes are copied
+before `/.lock` is added when needed, while a dangling link becomes a local
+file containing only `/.lock`. The external target is never changed. If the
+link cannot be read for another reason, initialization fails instead of
+claiming the lock is ignored.
 
 A repository at the root means the containing repository's `.gitignore` is
 irrelevant: a corpus kept under a vault or a notes checkout that ignores it
