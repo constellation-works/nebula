@@ -18,7 +18,7 @@ The `--json` excerpts below are real output from a three-node fixture corpus.
 
 | verb | does | flags |
 |---|---|---|
-| `neb init [PATH]` | create an empty corpus | — |
+| `neb init [PATH]` | create an empty corpus without changing the machine default | `--set-root`, `--force` (requires `--set-root`) |
 | `neb check` | run the ten invariants; exit non-zero on any error | — |
 | `neb migrate` | v1 → v2 in place; idempotent; refuses on a dirty git tree | — |
 | `neb config observatory-root [DIR]` | read or set where the Observatory checkout is | — |
@@ -33,6 +33,11 @@ it prints the effective root and which setting supplied it
 // neb init /Users/you/.nebula --json
 { "root": "/Users/you/.nebula" }
 ```
+
+Plain `init` never writes `~/.config/nebula/root`. For a primary non-default
+corpus, pass `--set-root`; it refuses to replace a setting that names another
+corpus unless `--force` is also explicit. Scratch corpora use `--root` and
+never `--set-root`.
 
 ```json
 // neb config observatory-root --json     (source: config | env | unset)

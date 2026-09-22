@@ -155,6 +155,12 @@ enum Command {
     Init {
         /// Where to create it. Defaults to the resolved corpus location.
         path: Option<PathBuf>,
+        /// Make this corpus the machine default in `~/.config/nebula/root`.
+        #[arg(long)]
+        set_root: bool,
+        /// Replace a machine default that names a different corpus.
+        #[arg(long, requires = "set_root")]
+        force: bool,
     },
 
     /// Run the invariants. Exits non-zero on any error.
@@ -618,18 +624,36 @@ fn run(cli: Cli) -> Outcome {
     };
 
     match cli.command {
-        Command::Init { path } => {
+        Command::Init {
+            path,
+            set_root,
+            force,
+        } => {
             let target = Corpus::resolve_root(path.clone().or(root.clone()))?;
             let root_config_path = Corpus::root_config_path_if_absent(&target)?;
-            let default_root_warning = Corpus::warning_before_default_init(&target)?;
-            let shadowing_warning = Corpus::warning_before_shadowing_init(&target)?;
-            let done = ops::init(root, path)?;
+            let default_root_warning = (!set_root)
+                .then(|| Corpus::warning_before_default_init(&target))
+                .transpose()?
+                .flatten();
+            let shadowing_warning = (!set_root)
+                .then(|| Corpus::warning_before_shadowing_init(&target))
+                .transpose()?
+                .flatten();
+            let done = ops::init(root, path, set_root, force)?;
             if json {
                 out_json(&done)?;
             } else {
                 println!("corpus ready at {}", done.root.display());
-                if let Some(config) = root_config_path {
-                    println!("wrote {} so every command finds it", config.display());
+                if set_root {
+                    println!(
+                        "wrote {} so every command finds it",
+                        Corpus::root_config_path()?.display()
+                    );
+                } else if root_config_path.is_some() {
+                    println!(
+                        "run `neb init {} --set-root` to make this corpus the machine default",
+                        target.display()
+                    );
                 }
             }
             if let Some(configured) = default_root_warning {

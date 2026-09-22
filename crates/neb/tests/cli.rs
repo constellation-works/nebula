@@ -345,7 +345,7 @@ fn root_discovery_prefers_flag_then_environment_then_config_then_default() {
     let environment = dir.path().join("environment");
     let explicit = dir.path().join("explicit");
 
-    let init = run_from_home(&home, Some(&configured), &["init"], None).assert_ok();
+    let init = run_from_home(&home, Some(&configured), &["init", "--set-root"], None).assert_ok();
     let config_path = home.join(".config/nebula/root");
     assert_eq!(
         std::fs::read_to_string(&config_path).unwrap(),
@@ -375,6 +375,76 @@ fn root_discovery_prefers_flag_then_environment_then_config_then_default() {
     run_from_home(&default_home, None, &["check"], None)
         .assert_ok()
         .says("0 nodes");
+}
+
+#[test]
+fn plain_init_never_changes_the_machine_root_setting() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let scratch = dir.path().join("scratch");
+    let config_path = home.join(".config/nebula/root");
+
+    let out = run_from_home(&home, Some(&scratch), &["init"], None).assert_ok();
+    assert!(
+        !config_path.exists(),
+        "plain init must leave an absent root setting absent"
+    );
+    assert!(
+        out.stdout().contains("--set-root")
+            && out.stdout().contains(&scratch.display().to_string()),
+        "plain init should name the opt-in command in:\n{}",
+        out.stdout()
+    );
+
+    let configured = dir.path().join("configured");
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(&config_path, format!("{}\n", configured.display())).unwrap();
+    let other = dir.path().join("other");
+    run_from_home(&home, Some(&other), &["init"], None).assert_ok();
+    assert_eq!(
+        std::fs::read_to_string(&config_path).unwrap(),
+        format!("{}\n", configured.display()),
+        "plain init must leave an existing root setting untouched"
+    );
+}
+
+#[test]
+fn set_root_requires_force_to_replace_a_different_corpus() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    let config_path = home.join(".config/nebula/root");
+
+    run_from_home(&home, Some(&first), &["init", "--set-root"], None).assert_ok();
+    assert_eq!(
+        std::fs::read_to_string(&config_path).unwrap(),
+        format!("{}\n", first.display())
+    );
+
+    let refused = run_from_home(&home, Some(&second), &["init", "--set-root"], None).assert_fails();
+    assert!(
+        refused.stderr().contains("pass --force to replace it"),
+        "expected typed conflict in:\n{}",
+        refused.stderr()
+    );
+    assert_eq!(
+        std::fs::read_to_string(&config_path).unwrap(),
+        format!("{}\n", first.display()),
+        "a refused replacement must preserve the setting"
+    );
+
+    run_from_home(
+        &home,
+        Some(&second),
+        &["init", "--set-root", "--force"],
+        None,
+    )
+    .assert_ok();
+    assert_eq!(
+        std::fs::read_to_string(&config_path).unwrap(),
+        format!("{}\n", second.display())
+    );
 }
 
 #[test]

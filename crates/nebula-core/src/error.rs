@@ -31,6 +31,19 @@ pub enum Error {
     #[error("no corpus at {}", .0.display())]
     NoCorpus(PathBuf),
 
+    /// A machine-local root setting already names a different corpus. The
+    /// caller must opt in to replacing it rather than redirecting commands
+    /// silently.
+    #[error("{} already points to {}, not {}; pass --force to replace it", .path.display(), .configured.display(), .requested.display())]
+    RootConfigConflict {
+        /// The machine-local setting file.
+        path: PathBuf,
+        /// The corpus it currently names.
+        configured: PathBuf,
+        /// The corpus the caller asked to make the default.
+        requested: PathBuf,
+    },
+
     /// The corpus on disk follows a schema this build does not read.
     #[error("{} is schema_version {found}, and this build understands {expected}", .path.display())]
     SchemaMismatch {
