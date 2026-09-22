@@ -679,8 +679,8 @@ pub(crate) fn slugify(s: &str) -> String {
     let mut out = String::new();
     let mut dash = false;
     for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
+        if c.is_alphanumeric() {
+            out.extend(c.to_lowercase().filter(|lower| lower.is_alphanumeric()));
             dash = false;
         } else if !dash && !out.is_empty() {
             out.push('-');
@@ -730,6 +730,19 @@ mod tests {
     #[test]
     fn a_short_title_slugifies_whole() {
         assert_eq!(slugify("Tags beat domains"), "tags-beat-domains");
+    }
+
+    #[test]
+    fn unicode_titles_slugify_to_stable_valid_ids() {
+        for (title, expected) in [
+            ("Ünïcode título → ok", "ünïcode-título-ok"),
+            ("시간은 프레임의 수다", "시간은-프레임의-수다"),
+            ("Tags beat domains", "tags-beat-domains"),
+        ] {
+            let slug = slugify(title);
+            assert_eq!(slug, expected);
+            assert!(is_slug(&slug), "derived id is not a valid slug: {slug}");
+        }
     }
 
     #[test]

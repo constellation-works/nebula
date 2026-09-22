@@ -395,8 +395,8 @@ pub fn normalize_tag(raw: &str) -> String {
     let mut out = String::new();
     let mut dash = false;
     for c in raw.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
+        if c.is_alphanumeric() {
+            out.extend(c.to_lowercase().filter(|lower| lower.is_alphanumeric()));
             dash = false;
         } else if !dash && !out.is_empty() {
             out.push('-');
@@ -596,6 +596,11 @@ mod tests {
         assert_eq!(normalize_tag("Physics"), "physics");
         assert_eq!(normalize_tag("Machine Learning"), "machine-learning");
         assert_eq!(normalize_tag("foo_bar--baz "), "foo-bar-baz");
+        assert_eq!(normalize_tag("Ünïcode título"), "ünïcode-título");
+        assert_eq!(
+            normalize_tag("시간은 프레임의 수다"),
+            "시간은-프레임의-수다"
+        );
         assert_eq!(normalize_tag("  "), "");
         assert_eq!(
             normalize_tags(&["A".into(), "a".into(), String::new(), "B c".into()]),
