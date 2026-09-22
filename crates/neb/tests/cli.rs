@@ -3948,7 +3948,7 @@ fn a_v1_corpus_refuses_to_open_until_migrated() {
     c.run(&["list"])
         .assert_fails()
         .says("schema_version 1")
-        .says("neb migrate");
+        .says("Bring the corpus forward with:  neb migrate");
     c.run(&["check"]).assert_fails().says("neb migrate");
 }
 
@@ -4217,7 +4217,16 @@ fn migrate_refuses_a_future_schema_without_changing_any_corpus_file() {
 
     let before = snapshot_corpus_files(&c.root);
     let config_before = std::fs::read_to_string(&config).unwrap();
-    c.run(&["migrate"]).assert_fails().says("schema_version 3");
+    let run = c
+        .run(&["migrate"])
+        .assert_fails()
+        .says("schema_version 3")
+        .says("This corpus was written by a newer nebula. Upgrade this build.");
+    let output = format!("{}{}", run.stdout(), run.stderr());
+    assert!(
+        !output.contains("Bring the corpus forward with:  neb migrate"),
+        "future schema must not suggest migration:\n{output}"
+    );
 
     assert_eq!(before, snapshot_corpus_files(&c.root));
     assert_eq!(config_before, std::fs::read_to_string(&config).unwrap());
