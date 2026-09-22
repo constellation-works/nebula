@@ -58,8 +58,9 @@ use std::time::{Duration, Instant};
 ///
 /// Dot-prefixed and outside `nodes/` and `inbox/`, so nothing that reads the
 /// corpus sees it: `Corpus::load_all` takes `nodes/*.md`, the inbox reader
-/// takes `inbox/`, `neb commit` stages those two plus `config.yaml`, and the
-/// desktop's watcher watches the same two directories.
+/// takes `inbox/`, `neb commit` stages those two plus `config.yaml` and the
+/// generated `.gitignore`, and the desktop's watcher watches the same two
+/// directories.
 pub const LOCK_FILE: &str = ".lock";
 
 /// How long a writer waits for the writer ahead of it before refusing.

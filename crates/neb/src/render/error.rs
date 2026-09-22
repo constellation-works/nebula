@@ -34,7 +34,7 @@ pub fn message(e: &Error) -> String {
         ),
         Error::StagedElsewhere { root, .. } => format!(
             "{e}\n\nCommit or unstage them, then catch the corpus up:\n  \
-             git -C {0} add nodes inbox config.yaml && git -C {0} commit -m \"neb\"\n\n\
+             git -C {0} add nodes inbox config.yaml .gitignore && git -C {0} commit -m \"neb\"\n\n\
              Or skip the commit next time with --no-commit.",
             root.display()
         ),

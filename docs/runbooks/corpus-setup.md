@@ -59,6 +59,11 @@ git -C "$NEBULA_ROOT" add -A
 git -C "$NEBULA_ROOT" commit -m "corpus"
 ```
 
+`neb init` writes `/.lock` to the corpus `.gitignore`, so the advisory runtime
+lock never appears in `git status` or gets swept up by `git add -A`. For a
+corpus created by an older `neb`, run `neb init "$NEBULA_ROOT"` once; it keeps
+the corpus and existing ignore rules intact while adding the missing rule.
+
 A repository at the root means the containing repository's `.gitignore` is
 irrelevant: a corpus kept under a vault or a notes checkout that ignores it
 (the usual arrangement, since a corpus should not ride along in someone else's
@@ -103,9 +108,10 @@ $ git -C "$NEBULA_ROOT" log --oneline -1
 
 What it does, and does not do:
 
-- The commit stages `nodes/`, `inbox/` and `config.yaml` under the corpus
-  root and nothing else. Anything else under the root, and everything outside
-  it, is left as it was. The message is `neb <verb> <ids>`.
+- The commit stages `nodes/`, `inbox/`, `config.yaml` and the generated
+  `.gitignore` under the corpus root and nothing else. Anything else under the
+  root, and everything outside it, is left as it was. The message is
+  `neb <verb> <ids>`.
 - It never pushes. Push on your own schedule (`git -C "$NEBULA_ROOT" push`),
   or from a cron job, and the remote is your off-disk copy.
 - It needs a git identity, like any commit: `git -C "$NEBULA_ROOT" config

@@ -127,13 +127,11 @@ through, which is the trade: writers wait for each other, readers never wait
 at all. Per-file atomic replacement is what keeps a reader from seeing half
 a node.
 
-The lock file is runtime state, not corpus content: when `neb config commit on`
-is enabled, a mutating verb stages only `nodes/`, `inbox/` and `config.yaml`;
-`check` reads only `nodes/` and
-`inbox/`, and `migrate`'s refusal to run on a dirty tree excludes it. In a
-corpus that is its own git repository it therefore shows up as an untracked
-`.lock` and stays that way; `echo .lock >> <root>/.gitignore` is the one-line
-answer if that bothers you.
+The lock file is runtime state, not corpus content: `neb init` adds `/.lock` to
+the corpus `.gitignore`, and when `neb config commit on` is enabled a mutating
+verb stages only `nodes/`, `inbox/`, `config.yaml` and that generated ignore
+file. `check` reads only `nodes/` and `inbox/`, and `migrate`'s refusal to run on
+a dirty tree excludes the ignored lock.
 
 ## `neb`
 
