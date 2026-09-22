@@ -1898,6 +1898,97 @@ fn a_reference_cannot_smuggle_in_a_verdict() {
 }
 
 #[test]
+fn cite_accepts_the_documented_kinds_and_refuses_other_values() {
+    const ACCEPTED: [&str; 10] = [
+        "paper",
+        "study",
+        "article",
+        "note",
+        "discussion",
+        "book",
+        "dataset",
+        "thread",
+        "observatory",
+        "other",
+    ];
+    const ACCEPTED_MESSAGE: &str = "accepted kinds: paper, study, article, note, discussion, book, dataset, thread, observatory, other";
+
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    for kind in ACCEPTED {
+        let uri = if kind == "observatory" {
+            "Q002"
+        } else {
+            "https://example.org"
+        };
+        c.run(&[
+            "cite", "--kind", kind, "--uri", uri, "--note", "context", &id,
+        ])
+        .assert_ok();
+    }
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    for kind in ACCEPTED {
+        assert!(
+            raw.contains(&format!("  kind: {kind}")),
+            "{kind} missing from:\n{raw}"
+        );
+    }
+
+    let before = raw;
+    for kind in ["bogus", "VERDICT", "", "not a kind"] {
+        c.run(&[
+            "cite",
+            "--kind",
+            kind,
+            "--uri",
+            "https://example.org/unexpected",
+            "--note",
+            "context",
+            &id,
+        ])
+        .assert_fails()
+        .says(ACCEPTED_MESSAGE);
+    }
+    assert_eq!(
+        before,
+        std::fs::read_to_string(c.node_file(&id)).unwrap(),
+        "refused kinds must not change the node"
+    );
+}
+
+#[test]
+fn check_warns_about_a_legacy_unexpected_reference_kind_without_rejecting_the_file() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&[
+        "cite",
+        &id,
+        "--kind",
+        "paper",
+        "--uri",
+        "https://example.org",
+        "--note",
+        "context",
+    ])
+    .assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    write(
+        &c.node_file(&id),
+        &raw.replace("  kind: paper\n", "  kind: bogus\n"),
+    );
+
+    let shown = c.run(&["show", "--json", &id]).assert_ok().stdout();
+    let node: serde_json::Value = serde_json::from_str(&shown).expect("show --json is valid JSON");
+    assert_eq!(node["node"]["references"][0]["kind"], "bogus");
+    c.run(&["check"])
+        .assert_ok()
+        .says("[14]")
+        .says("reference `r1` has unexpected kind `bogus`")
+        .says("accepted kinds: paper, study, article, note, discussion, book, dataset, thread, observatory, other")
+        .says("0 errors, 1 warnings");
+}
+
+#[test]
 fn a_reference_with_no_note_warns_and_a_noted_one_does_not() {
     let c = Corpus::new();
     let bare = c.seed("an idea", "An idea");
@@ -1982,6 +2073,11 @@ fn a_discussion_reference_may_omit_its_uri_but_other_kinds_may_not() {
     c.run(&["cite", &id, "--kind", "paper", "--note", "missing URI"])
         .assert_fails()
         .says("--uri is required unless --kind is discussion");
+    for kind in ["Discussion", "discussions"] {
+        c.run(&["cite", &id, "--kind", kind, "--note", "missing URI"])
+            .assert_fails()
+            .says("--uri is required unless --kind is discussion");
+    }
     c.run(&[
         "cite",
         &id,

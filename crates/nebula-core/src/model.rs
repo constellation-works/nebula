@@ -239,7 +239,7 @@ pub struct Reference {
     /// Unique within the node, never reused.
     pub id: String,
     /// `paper`, `study`, `article`, `note`, `discussion`, `book`, `dataset`,
-    /// `thread` or `other`.
+    /// `thread`, `observatory` or `other`.
     pub kind: String,
     /// A URL, DOI, repo path, or almanac wikilink. Discussions may omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]

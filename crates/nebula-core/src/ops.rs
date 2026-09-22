@@ -24,7 +24,10 @@
 //! Which invariants live here rather than in `check` is a deliberate choice
 //! per rule. See `docs/design/lineage-graph/specs/invariants.md`.
 
-use crate::check::{OBSERVATORY, is_local_path, is_observatory_id, resolve_local};
+use crate::check::{
+    OBSERVATORY, REFERENCE_KINDS, is_local_path, is_observatory_id, is_reference_kind,
+    resolve_local,
+};
 use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
 use crate::graph::{self, Graph, Neighbour};
@@ -538,6 +541,13 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
         return Err(Error::corpus(
             "--uri is required unless --kind is discussion",
         ));
+    }
+    if !is_reference_kind(&args.kind) {
+        return Err(Error::corpus(format!(
+            "`{}` is not an accepted reference kind; accepted kinds: {}",
+            args.kind,
+            REFERENCE_KINDS.join(", ")
+        )));
     }
     // An Observatory record id is checked for its shape at the point of
     // action, because a path or a slug stored here would never resolve and

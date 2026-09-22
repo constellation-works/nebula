@@ -95,9 +95,11 @@ Field rules:
   so drift is visible without a wall.
 - `edges`: genealogy `derives-from | refines | generalizes | reopens`, enforced
   acyclic; `contradicts`, symmetric, written on both nodes by `link`.
-- `references`: `id, kind, uri, title, note, added`; `kind` as in v0.1
-  (`paper | study | article | note | discussion | book | dataset | thread |
-  other`). `note` is the field that matters; `check` warns when it is empty.
+- `references`: `id, kind, uri, title, note, added`; `kind` is one of `paper |
+  study | article | note | discussion | book | dataset | thread | observatory |
+  other`. `cite` refuses other values; `check` warns about unexpected values in
+  an existing corpus so older or hand-edited files still load. `note` is the
+  field that matters; `check` warns when it is empty.
   A `verdict` or `strength` key is a parse error (`deny_unknown_fields`).
 - `origin`: unchanged from v0.1. Recorded, never typed by hand.
 - `schema_version: 2` in `config.yaml`. It also keeps the stable `corpus_id`
@@ -158,6 +160,7 @@ return type serialised; see [2_architecture.md](2_architecture.md).
 | 11 | A `seed` does not carry a `kill` condition | warn | `check` |
 | 12 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
 | 13 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse; `store` before any read or write |
+| 14 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |
 
 ## Migration (`neb migrate`)
 

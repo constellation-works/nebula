@@ -42,6 +42,7 @@ and its "What is removed" table for the rules this replaced.
 | 11 | A `seed` does not carry a `kill` condition — a sign status changed by hand | warn | `check` |
 | 12 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
 | 13 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse; `store` before any read or write |
+| 14 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |
 
 ## Where a rule lives matters
 
