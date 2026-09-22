@@ -55,7 +55,7 @@ with the check line and the date.
 - `neb link tags-beat-domains contradicts a-single-global-taxonomy` — already recorded both ways; nothing to do
 
 ## cite
-- `neb cite required-categorical-fields-drift --uri "..." --note "..."` — `review` rule no-references; the human knows the source
+- `neb cite tags-beat-domains --uri "..." --note "..."` — `review` no-references rule for an aged hypothesis; the human knows the source
 
 ## abandon
 - `neb status stale-idea abandoned --why "..."` — hypothesis untouched 30 days with no reference; propose closing, reason is theirs
@@ -88,8 +88,8 @@ their own `--task`/`--run` if they have one.
 $ neb check --json
 { "findings": [], "nodes": 3 }
 $ neb review --json
-[ { "rule": "no-references", "id": "required-categorical-fields-drift",
-    "title": "Required categorical fields drift", "reason": "no references attached" } ]
+[ { "rule": "no-references", "id": "tags-beat-domains",
+    "title": "Tags beat domains", "reason": "no references attached" } ]
 $ neb inbox --json
 [ { "id": "a6e8", "at": "2026-09-12T18:16", "text": "nebula review as a weekly orbit routine" } ]
 $ neb open --json
@@ -114,7 +114,7 @@ Written to `$NEBULA_ROOT/review.md`:
 - `neb sharpen required-categorical-fields-drift --kill "..."` — seed with no falsifier; `tags-beat-domains` derives from it, so a kill here matters downstream
 
 ## cite
-- `neb cite required-categorical-fields-drift --uri "..." --note "..."` — `review` no-references; the v0.1 domain-list drift is the obvious source
+- `neb cite tags-beat-domains --uri "..." --note "..."` — `review` no-references for an aged hypothesis; the v0.1 domain-list drift is the obvious source
 ```
 
 Nothing was written to `nodes/` or `inbox/`. The routine exits 0 whether or

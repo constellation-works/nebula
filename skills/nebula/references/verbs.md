@@ -413,7 +413,7 @@ straight to `--parent` unread is the automatic linking the spec rules out.
 | verb | does | flags |
 |---|---|---|
 | `neb open` | hypotheses created ≥ 14 days ago with no references, seeds untouched ≥ 90 days, inbox entries waiting ≥ 14 days | `--tag <TAG>`× |
-| `neb review` | the weekly report: stale hypotheses (≥ 30 days), untouched seeds (≥ 90), nodes created ≥ 14 days ago with no references, hypotheses whose kill nobody human wrote, inbox waiting ≥ 14 | `--since <DAYS>`, `--out <FILE>` |
+| `neb review` | the weekly report: stale hypotheses (≥ 30 days), untouched seeds (≥ 90), hypotheses created ≥ 14 days ago with no references, hypotheses whose kill nobody human wrote, inbox waiting ≥ 14 | `--since <DAYS>`, `--out <FILE>` |
 
 Both are read-only by the spec's hard rule.
 Notes are reasoning, not context: adding a note does not count as adding a
@@ -422,8 +422,8 @@ reference and does not close the no-references finding after the grace period.
 ```json
 // neb review --json     (rule: stale-hypothesis | untouched-seed | no-references | unconfirmed-kill | stale-inbox)
 [
-  { "rule": "no-references", "id": "required-categorical-fields-drift",
-    "title": "Required categorical fields drift", "reason": "no references attached" }
+  { "rule": "no-references", "id": "tags-beat-domains",
+    "title": "Tags beat domains", "reason": "no references attached" }
 ]
 ```
 

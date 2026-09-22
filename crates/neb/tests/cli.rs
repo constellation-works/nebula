@@ -2265,22 +2265,27 @@ fn review_reports_untouched_seeds_on_both_sides_of_ninety_days() {
 }
 
 #[test]
-fn review_reports_nodes_with_no_references() {
+fn open_and_review_report_only_aged_hypotheses_with_no_references() {
     let c = Corpus::new();
-    let bare = c.seed("a bare idea", "A bare idea");
-    set_created(&c.node_file(&bare), &date_days_ago(14));
+    let seed = c.seed("an old seed", "An old seed");
+    set_created(&c.node_file(&seed), &date_days_ago(30));
 
-    let cited = c.seed("a cited idea", "A cited idea");
-    c.run(&["cite", &cited, "--uri", "http://example.com", "--note", "n"])
+    let hypothesis = c.seed("an old hypothesis", "An old hypothesis");
+    c.run(&["sharpen", &hypothesis, "--kill", "if X"])
         .assert_ok();
+    set_created(&c.node_file(&hypothesis), &date_days_ago(30));
 
-    let abandoned = c.seed("an abandoned idea", "An abandoned idea");
-    c.run(&["status", &abandoned, "abandoned"]).assert_ok();
-
-    let out = c.run(&["review"]).assert_ok().stdout();
-    assert!(out.contains(&format!("`{bare}`")), "{out}");
-    assert!(!out.contains(&format!("`{cited}`")), "{out}");
-    assert!(!out.contains(&format!("`{abandoned}`")), "{out}");
+    for verb in ["open", "review"] {
+        let out = c.run(&[verb]).assert_ok().stdout();
+        assert!(
+            !out.contains(&seed),
+            "{verb} incorrectly reported an old seed with no references:\n{out}"
+        );
+        assert!(
+            out.contains(&hypothesis),
+            "{verb} missed an old hypothesis with no references:\n{out}"
+        );
+    }
 }
 
 #[test]
@@ -2334,8 +2339,10 @@ fn review_json_emits_all_four_rule_names() {
     .assert_ok();
     set_updated(&c.node_file(&stale_seed), &date_days_ago(120));
 
-    c.seed("bare idea", "Bare idea");
-    set_created(&c.node_file("bare-idea"), &date_days_ago(14));
+    let bare_hypothesis = c.seed("bare hypothesis", "Bare hypothesis");
+    c.run(&["sharpen", &bare_hypothesis, "--kill", "if Z"])
+        .assert_ok();
+    set_created(&c.node_file(&bare_hypothesis), &date_days_ago(14));
 
     c.run(&["capture", "an old capture"]).assert_ok();
     set_inbox_stamp_for(&c.root, "an old capture", &stamp_days_ago(20));
@@ -2363,7 +2370,8 @@ fn review_json_emits_all_four_rule_names() {
 #[test]
 fn review_out_writes_the_report_and_prints_nothing_else() {
     let c = Corpus::new();
-    let bare = c.seed("an idea needing a look", "An idea needing a look");
+    let bare = c.seed("a hypothesis needing a look", "A hypothesis needing a look");
+    c.run(&["sharpen", &bare, "--kill", "if X"]).assert_ok();
     set_created(&c.node_file(&bare), &date_days_ago(14));
     let out_path = c.workdir().join("review.md");
     let run = c
