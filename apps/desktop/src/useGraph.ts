@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
 import type { GraphExport } from "./types/GraphExport";
 
@@ -21,21 +21,29 @@ export function useGraph(): GraphState {
   const [graph, setGraph] = useState<GraphExport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const mounted = useRef(false);
+  const latestRequest = useRef(0);
 
   const refresh = useCallback(async () => {
+    if (!mounted.current) return;
+    const request = ++latestRequest.current;
     try {
-      setGraph(await api.graph());
+      const next = await api.graph();
+      if (!mounted.current || request !== latestRequest.current) return;
+      setGraph(next);
       setError(null);
     } catch (e) {
+      if (!mounted.current || request !== latestRequest.current) return;
       setError(String(e));
     } finally {
-      setLoaded(true);
+      if (mounted.current && request === latestRequest.current) setLoaded(true);
     }
   }, []);
 
   useEffect(() => {
     let live = true;
     let unlisten: (() => void) | undefined;
+    mounted.current = true;
     void refresh();
     api
       .onCorpusChanged(() => void refresh())
@@ -48,6 +56,8 @@ export function useGraph(): GraphState {
       });
     return () => {
       live = false;
+      mounted.current = false;
+      latestRequest.current += 1;
       unlisten?.();
     };
   }, [refresh]);
