@@ -19,15 +19,16 @@ The `--json` excerpts below are real output from a three-node fixture corpus.
 | verb | does | flags |
 |---|---|---|
 | `neb init [PATH]` | create an empty corpus without changing the machine default | `--set-root`, `--force` (requires `--set-root`) |
-| `neb check` | run the ten invariants; exit non-zero on any error | — |
+| `neb check` | run the 14 invariants; exit non-zero on any error | — |
 | `neb migrate` | v1 → v2 in place; idempotent; refuses on a dirty git tree | — |
 | `neb config observatory-root [DIR]` | read or set where the Observatory checkout is | — |
 | `neb config commit [on\|off]` | read or set whether each write is committed to the corpus's git repository | — |
 
-`config` is the only verb that writes `config.yaml`, and it rewrites the file
-whole: the file stays machine-written and is never hand-edited. Without `DIR`
-it prints the effective root and which setting supplied it
-(`observatory_root` in `config.yaml`, else `$OBSERVATORY_ROOT`, else nothing).
+`config` rewrites `config.yaml` whole when a setting changes; `init`, `migrate`,
+and `capture` when it initializes a corpus can write it too. The file stays
+machine-written and is never hand-edited. Without `DIR` it prints the effective
+root and which setting supplied it (`observatory_root` in `config.yaml`, else
+`$OBSERVATORY_ROOT`, else nothing).
 
 ```json
 // neb init /Users/you/.nebula --json
