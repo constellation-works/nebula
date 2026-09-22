@@ -31,7 +31,9 @@ export function CaptureWindow() {
         ref={input}
         autoFocus
         placeholder="Capture… (Enter to save, Esc to close)"
-        onCaptured={hide}
+        onCaptured={(_, hasActiveDraft) => {
+          if (!hasActiveDraft) hide();
+        }}
         onEscape={hide}
       />
     </div>

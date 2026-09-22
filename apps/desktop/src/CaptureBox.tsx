@@ -12,19 +12,20 @@ interface Props {
   autoFocus?: boolean;
   placeholder?: string;
   /** After a successful capture, once the confirmation has been shown. */
-  onCaptured?: (entry: InboxEntry) => void;
+  onCaptured?: (entry: InboxEntry, hasActiveDraft: boolean) => void;
   onEscape?: () => void;
 }
 
 /**
- * One input. Enter captures; the box clears at once, says "captured" for a
- * second, and is ready for the next thought. The same box sits at the top of
- * the inbox and alone in the floating capture window.
+ * One input. Enter captures; after success the box clears only the submitted
+ * text, says "captured" for a second, and is ready for the next thought. The
+ * same box sits at the top of the inbox and alone in the floating window.
  */
 export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape }: Props) {
   const [text, setText] = useState("");
   const [status, setStatus] = useState<"idle" | "busy" | "captured" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
+  const textRef = useRef("");
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const input = useRef<HTMLInputElement>(null);
   useImperativeHandle(ref, () => input.current!);
@@ -34,16 +35,21 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape }
   async function submit() {
     const trimmed = text.trim();
     if (!trimmed || status === "busy") return;
+    const submitted = text;
+    clearTimeout(timer.current);
+    setMessage(null);
     setStatus("busy");
     try {
       const entry = await api.capture(trimmed);
-      setText("");
+      if (textRef.current === submitted) {
+        textRef.current = "";
+        setText("");
+      }
       setMessage(null);
       setStatus("captured");
-      clearTimeout(timer.current);
       timer.current = setTimeout(() => {
         setStatus("idle");
-        onCaptured?.(entry);
+        onCaptured?.(entry, Boolean(textRef.current.trim()));
       }, CONFIRM_MS);
     } catch (e) {
       setStatus("error");
@@ -74,7 +80,10 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape }
         autoFocus={autoFocus}
         autoComplete="off"
         spellCheck
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => {
+          textRef.current = e.target.value;
+          setText(e.target.value);
+        }}
         onKeyDown={onKeyDown}
       />
       <span className={`capture__status capture__status--${status}`} role="status">

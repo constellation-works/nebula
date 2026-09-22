@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { App } from "./App";
+import { CaptureBox, CONFIRM_MS } from "./CaptureBox";
 import { InboxView } from "./InboxView";
 import { useInbox } from "./useInbox";
 import type { InboxEntry } from "./types/InboxEntry";
@@ -14,6 +15,16 @@ const entries: InboxEntry[] = [
   { id: "a1b2", at: "2026-09-13T09:00", text: "capture must stay under five seconds" },
   { id: "c3d4", at: "2026-09-13T10:30", text: "the tray count is the whole status bar" },
 ];
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 /** The view as the shell mounts it: over the hook, over the (mocked) api. */
 function Harness() {
@@ -80,6 +91,86 @@ describe("InboxView", () => {
     // The list is asked again once the confirmation has been shown.
     expect(mocked.inbox).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+});
+
+describe("CaptureBox", () => {
+  it("keeps a new thought typed while capture is pending and does not dismiss it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const capture = deferred<InboxEntry>();
+    const hide = vi.fn();
+    mocked.capture.mockReturnValue(capture.promise);
+    render(
+      <CaptureBox
+        onCaptured={(_, hasActiveDraft) => {
+          if (!hasActiveDraft) hide();
+        }}
+      />,
+    );
+    const input = screen.getByLabelText("Capture");
+
+    fireEvent.change(input, { target: { value: "first thought" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(mocked.capture).toHaveBeenCalledWith("first thought"));
+    fireEvent.change(input, { target: { value: "second thought" } });
+    await act(async () => {
+      capture.resolve({ id: "9999", at: "2026-09-13T12:00", text: "first thought" });
+      await capture.promise;
+    });
+
+    expect(input).toHaveValue("second thought");
+    expect(screen.getByText("captured")).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CONFIRM_MS + 1);
+    });
+    expect(hide).not.toHaveBeenCalled();
+    expect(input).toHaveValue("second thought");
+    vi.useRealTimers();
+  });
+
+  it("keeps the current text retryable when a pending capture fails", async () => {
+    const capture = deferred<InboxEntry>();
+    mocked.capture.mockReturnValue(capture.promise);
+    render(<CaptureBox />);
+    const input = screen.getByLabelText("Capture");
+
+    fireEvent.change(input, { target: { value: "retry this thought" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(mocked.capture).toHaveBeenCalledWith("retry this thought"));
+    await act(async () => {
+      capture.reject(new Error("offline"));
+      try {
+        await capture.promise;
+      } catch {
+        // CaptureBox renders the rejection and keeps the input retryable.
+      }
+    });
+
+    expect(input).toHaveValue("retry this thought");
+    expect(screen.getByRole("status")).toHaveTextContent("Error: offline");
+  });
+
+  it("does not replace newer text when an earlier capture fails", async () => {
+    const capture = deferred<InboxEntry>();
+    mocked.capture.mockReturnValue(capture.promise);
+    render(<CaptureBox />);
+    const input = screen.getByLabelText("Capture");
+
+    fireEvent.change(input, { target: { value: "failed thought" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(mocked.capture).toHaveBeenCalledWith("failed thought"));
+    fireEvent.change(input, { target: { value: "new draft" } });
+    await act(async () => {
+      capture.reject(new Error("offline"));
+      try {
+        await capture.promise;
+      } catch {
+        // CaptureBox renders the rejection without replacing the new draft.
+      }
+    });
+
+    expect(input).toHaveValue("new draft");
+    expect(screen.getByRole("status")).toHaveTextContent("Error: offline");
   });
 });
 
