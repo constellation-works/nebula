@@ -952,6 +952,43 @@ fn a_commit_is_refused_when_something_outside_the_corpus_is_staged_and_the_write
 }
 
 #[test]
+fn staged_corpus_paths_with_unicode_spaces_and_newlines_are_unambiguous() {
+    let dir = tempfile::tempdir().unwrap();
+    let outer = dir.path().join("outer");
+    let root = outer.join("corpus");
+    let mut corpus = Corpus::init(&root).unwrap();
+    git_init(&outer);
+    git(&outer, &["add", "-A"]);
+    git(&outer, &["commit", "-q", "-m", "start"]);
+    ops::set_commit(&mut corpus, true).unwrap();
+    ops::commit(&corpus, "config", &["commit"])
+        .unwrap()
+        .unwrap();
+
+    let names = ["시간.md", "two words.md", "two\nlines.md"];
+    for name in names {
+        std::fs::write(root.join("inbox").join(name), "fixture\n").unwrap();
+    }
+    git(&outer, &["add", "--", "corpus/inbox"]);
+
+    let id = seed(&corpus, "A", &[]);
+    ops::commit(&corpus, "new", &[&id]).unwrap().unwrap();
+
+    let committed = git(&outer, &["show", "--name-only", "--format=", "-z", "HEAD"]);
+    let paths: Vec<&str> = committed
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .collect();
+    for name in names {
+        assert!(
+            paths.contains(&format!("corpus/inbox/{name}").as_str()),
+            "missing {name:?} from {paths:?}"
+        );
+    }
+    assert!(paths.contains(&format!("corpus/nodes/{id}.md").as_str()));
+}
+
+#[test]
 fn commit_on_in_a_corpus_the_containing_repository_ignores_is_a_typed_error() {
     let dir = tempfile::tempdir().unwrap();
     let outer = dir.path().join("outer");
