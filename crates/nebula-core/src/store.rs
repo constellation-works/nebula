@@ -9,9 +9,10 @@
 //!
 //! The corpus may sit inside a git work tree, and when `config.yaml` says
 //! `commit: true` a write ends with a commit of the corpus paths and nothing
-//! else. That is the whole of what this module knows about git: it never
-//! pushes, never stages a path outside the root, and never undoes a write
-//! because the commit failed.
+//! else. Read-only history queries use those commits as the record of how a
+//! node changed. This module never pushes, never checks a historical tree out,
+//! never stages a path outside the root, and never undoes a write because the
+//! commit failed.
 
 use crate::config::{self, CommitSetting, Config, ObservatoryRoot};
 use crate::error::{Error, Result};
@@ -337,6 +338,87 @@ impl Corpus {
         model::read(&path)
     }
 
+    /// Commits that changed one node, newest first.
+    pub fn history(&self, id: &str) -> Result<Vec<HistoryEntry>> {
+        self.require_git()?;
+        self.load(id)?;
+        let path = format!("nodes/{id}.md");
+        let raw = git_ok(
+            &self.root,
+            &[
+                "log",
+                "-z",
+                "--follow",
+                "--format=%H%x00%cs%x00%s",
+                "--",
+                &path,
+            ],
+        )?;
+        let fields: Vec<&str> = raw.split('\0').filter(|field| !field.is_empty()).collect();
+        if !fields.len().is_multiple_of(3) {
+            return Err(Error::corpus("git log returned a malformed history record"));
+        }
+        Ok(fields
+            .chunks_exact(3)
+            .map(|field| HistoryEntry {
+                hash: field[0].to_string(),
+                date: field[1].to_string(),
+                message: field[2].to_string(),
+            })
+            .collect())
+    }
+
+    /// Read one node as it existed at a commit hash or at the end of a date.
+    pub fn load_at(&self, id: &str, at: &str) -> Result<Doc> {
+        self.require_git()?;
+        let path = format!("nodes/{id}.md");
+        let revision = if Date::parse(at, &Iso8601::DATE).is_ok() {
+            let before = format!("{at} 23:59:59");
+            git_ok(
+                &self.root,
+                &[
+                    "rev-list",
+                    "-1",
+                    &format!("--before={before}"),
+                    "HEAD",
+                    "--",
+                    &path,
+                ],
+            )?
+            .trim()
+            .to_string()
+        } else if at.len() >= 4 && at.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            at.to_string()
+        } else {
+            String::new()
+        };
+        if revision.is_empty() {
+            return Err(Error::NoNodeAtRevision {
+                node: id.to_string(),
+                revision: at.to_string(),
+            });
+        }
+
+        let prefix = git_ok(&self.root, &["rev-parse", "--show-prefix"])?;
+        let object = format!("{revision}:{}nodes/{id}.md", prefix.trim());
+        let shown = git(&self.root, &["show", "--no-ext-diff", "--format=", &object])?;
+        if !shown.status.success() {
+            return Err(Error::NoNodeAtRevision {
+                node: id.to_string(),
+                revision: at.to_string(),
+            });
+        }
+        model::parse(&String::from_utf8_lossy(&shown.stdout))
+    }
+
+    fn require_git(&self) -> Result<()> {
+        if inside_work_tree(&self.root).map_err(|error| git_unavailable(&self.root, &error))? {
+            Ok(())
+        } else {
+            Err(Error::NotGitWorkTree(self.root.clone()))
+        }
+    }
+
     /// Write one node, stamping `updated`.
     pub fn save(&self, doc: &mut Doc) -> Result<()> {
         doc.node.updated = today();
@@ -498,6 +580,18 @@ pub struct Committed {
     /// The full commit hash.
     pub hash: String,
     /// The message, `neb <verb> <ids>`.
+    pub message: String,
+}
+
+/// One commit that changed a node.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct HistoryEntry {
+    /// The full commit hash.
+    pub hash: String,
+    /// The commit date, `YYYY-MM-DD`.
+    pub date: String,
+    /// The commit's first-line message.
     pub message: String,
 }
 

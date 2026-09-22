@@ -3422,6 +3422,26 @@ fn git_init(dir: &Path) {
     git(dir, &["config", "commit.gpgsign", "false"]);
 }
 
+/// Commit the current index at a fixed date, independent of machine config
+/// and wall-clock time, so date-based history assertions are deterministic.
+fn git_commit_at(dir: &Path, date: &str, message: &str) {
+    git(dir, &["add", "-A"]);
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["commit", "-q", "-m", message])
+        .env("GIT_AUTHOR_DATE", format!("{date}T12:00:00Z"))
+        .env("GIT_COMMITTER_DATE", format!("{date}T12:00:00Z"))
+        .output()
+        .expect("running git commit");
+    assert!(
+        out.status.success(),
+        "git commit failed in {}:\n{}",
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 /// `git status --porcelain`, minus the corpus write lock.
 ///
 /// `.lock` is runtime state rather than corpus content: `neb` never stages
@@ -3471,6 +3491,83 @@ fn corpus_repo() -> (Corpus, PathBuf) {
         &["remote", "add", "origin", remote.to_str().unwrap()],
     );
     (c, remote)
+}
+
+#[test]
+fn log_and_show_at_read_a_node_sharpened_across_two_commits() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "History has a shape", "--id", "history-shape"])
+        .assert_ok()
+        .stdout_trim();
+    git_init(&c.root);
+    git_commit_at(&c.root, "2020-01-01", &format!("neb new {id}"));
+    let created = git(&c.root, &["rev-parse", "HEAD"]).trim().to_string();
+
+    c.run(&["sharpen", &id, "--kill", "the past cannot be read"])
+        .assert_ok();
+    git_commit_at(&c.root, "2020-01-02", &format!("neb sharpen {id}"));
+    let sharpened = git(&c.root, &["rev-parse", "HEAD"]).trim().to_string();
+
+    let text = c.run(&["log", &id]).assert_ok().stdout();
+    let mut lines = text.lines();
+    let newest = lines.next().expect("sharpen history line");
+    let oldest = lines.next().expect("creation history line");
+    assert!(newest.starts_with(&sharpened[..7]), "{text}");
+    assert!(
+        newest.contains("2020-01-02 neb sharpen history-shape"),
+        "{text}"
+    );
+    assert!(oldest.starts_with(&created[..7]), "{text}");
+    assert!(
+        oldest.contains("2020-01-01 neb new history-shape"),
+        "{text}"
+    );
+    assert!(lines.next().is_none(), "{text}");
+
+    let json = c.run(&["--json", "log", &id]).assert_ok().stdout();
+    let entries: Vec<serde_json::Value> = serde_json::from_str(&json).expect("log --json");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["hash"], sharpened);
+    assert_eq!(entries[0]["date"], "2020-01-02");
+    assert_eq!(entries[0]["message"], "neb sharpen history-shape");
+    assert_eq!(entries[1]["hash"], created);
+
+    for at in [&created, "2020-01-01"] {
+        let shown = c
+            .run(&["--json", "show", &id, "--at", at])
+            .assert_ok()
+            .stdout();
+        let view: serde_json::Value = serde_json::from_str(&shown).expect("historical NodeView");
+        assert_eq!(view["node"]["status"], "seed");
+        assert_eq!(view["node"]["title_by"], "human");
+        assert_eq!(view["body"], "");
+        assert!(view.get("observatory").is_none());
+    }
+    for at in [&sharpened, "2020-01-02"] {
+        let shown = c
+            .run(&["--json", "show", &id, "--at", at])
+            .assert_ok()
+            .stdout();
+        let view: serde_json::Value = serde_json::from_str(&shown).expect("historical NodeView");
+        assert_eq!(view["node"]["status"], "hypothesis");
+        assert_eq!(view["node"]["kill"], "the past cannot be read");
+    }
+    c.run(&["show", &id, "--at", "2019-12-31"])
+        .assert_fails()
+        .says("no node `history-shape` at `2019-12-31`");
+}
+
+#[test]
+fn history_verbs_refuse_a_corpus_outside_a_git_work_tree() {
+    let c = Corpus::new();
+    let id = c.seed("an uncommitted past", "An uncommitted past");
+    c.run(&["log", &id])
+        .assert_fails()
+        .says("is not inside a git work tree");
+    c.run(&["show", &id, "--at", "2020-01-01"])
+        .assert_fails()
+        .says("is not inside a git work tree");
 }
 
 /// The setting is off by default and the verbs behave as they always did;

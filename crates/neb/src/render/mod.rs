@@ -7,7 +7,7 @@ mod error;
 mod report;
 mod tree;
 
-use nebula_core::{EdgeType, GraphExport, Node, Status};
+use nebula_core::{EdgeType, GraphExport, HistoryEntry, Node, Status};
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::io::IsTerminal;
@@ -84,6 +84,22 @@ pub fn list(nodes: &[Node], total: usize) -> String {
         "\n{}",
         dim(&format!("{} of {total} nodes", nodes.len()))
     );
+    out
+}
+
+/// Commits that changed a node, newest first.
+pub fn history(entries: &[HistoryEntry]) -> String {
+    let mut out = String::new();
+    for entry in entries {
+        let short = entry.hash.get(..7).unwrap_or(&entry.hash);
+        let _ = writeln!(
+            out,
+            "{} {} {}",
+            bold(short),
+            dim(&entry.date),
+            entry.message
+        );
+    }
     out
 }
 

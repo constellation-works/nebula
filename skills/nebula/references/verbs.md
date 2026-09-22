@@ -326,7 +326,8 @@ not who wrote the words. `check` enforces nothing about authorship.
 
 | verb | does | flags |
 |---|---|---|
-| `neb show <NODE>` | one node in full, plus its body | — |
+| `neb show <NODE>` | one node in full, plus its body, currently or at a historical revision | `--at <HASH\|YYYY-MM-DD>` |
+| `neb log <NODE>` | commits that changed the node, newest first | — |
 | `neb list` | every node | `--status <S>`, `--tag <TAG>`× (every tag must match) |
 | `neb near <QUERY>...` | the existing nodes closest to free text, or to a node (left out of its own answer), scored `0..=1`, best first | `--limit <K>`/`-k` (default 3); flags may follow the query |
 | `neb trace <NODE>` | ancestry, nearest first, each node once | `--down` for descendants |
@@ -359,6 +360,24 @@ not who wrote the words. `check` enforces nothing about authorship.
   "body": "tags beat domains because a category you must pick is a decision you skip"
 }
 ```
+
+`neb show <NODE> --at <HASH|YYYY-MM-DD>` has exactly the same text and JSON
+shape as current `show`; a date means the final commit on that date. A date
+before the node existed is refused. `neb log <NODE>` prints short hash, date,
+and message; its JSON keeps the full hash:
+
+```json
+// neb log tags-beat-domains --json
+[
+  { "hash": "be82c52c9420bbd5bf50b284ad07a050575524f1", "date": "2026-09-21",
+    "message": "neb sharpen tags-beat-domains" },
+  { "hash": "9cfa9bf3e11b0ad32899d84bf1049511f060f19a", "date": "2026-09-20",
+    "message": "neb new tags-beat-domains" }
+]
+```
+
+Both historical verbs require the corpus to be inside a git work tree and are
+read-only.
 
 `neb list --json` is an array of the same `node` objects (no `body`). A closed
 node carries `"closed": { "why": "...", "at": "2026-09-12" }`; optional fields

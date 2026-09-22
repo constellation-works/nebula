@@ -31,6 +31,19 @@ pub enum Error {
     #[error("no corpus at {}", .0.display())]
     NoCorpus(PathBuf),
 
+    /// A history query requires the corpus to live inside a git work tree.
+    #[error("{} is not inside a git work tree", .0.display())]
+    NotGitWorkTree(PathBuf),
+
+    /// The node did not exist at the requested commit or date.
+    #[error("no node `{node}` at `{revision}`")]
+    NoNodeAtRevision {
+        /// The node requested.
+        node: String,
+        /// The hash or date requested.
+        revision: String,
+    },
+
     /// An explicit `--root` was empty. Every `join` built from it would
     /// silently resolve to the current directory, which is exactly the bug
     /// this refuses.
