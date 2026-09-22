@@ -15,6 +15,7 @@
 
 use crate::config::{self, CommitSetting, Config, ObservatoryRoot};
 use crate::error::{Error, Result};
+use crate::lock::CorpusLock;
 use crate::model::{self, Doc};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -173,6 +174,21 @@ impl Corpus {
         &self.root
     }
 
+    /// Take this corpus's write lock, waiting up to [`crate::LOCK_WAIT`] for
+    /// whoever holds it, and hold it until the returned guard drops.
+    ///
+    /// Every op that writes takes this, so a caller gets it without asking.
+    /// A caller asks for it directly to widen the critical section over more
+    /// than one call — which is what the CLI does, so a verb and the commit
+    /// that records it cannot have another writer's verb between them.
+    /// Re-entrant on one thread, so the op taking it underneath is free.
+    ///
+    /// Deliberately not taken by [`Self::open`]: a read-only verb and the
+    /// desktop's file watcher must never wait on a writer.
+    pub fn lock(&self) -> Result<CorpusLock> {
+        CorpusLock::acquire(&self.root)
+    }
+
     /// Where `observatory` references resolve: `observatory_root` in
     /// `config.yaml`, else `$OBSERVATORY_ROOT`, else nowhere.
     ///
@@ -210,9 +226,9 @@ impl Corpus {
     /// the root is inside a git work tree.
     ///
     /// Stages `nodes/`, `inbox/` and `config.yaml` under the root and
-    /// nothing else, and commits as `neb <verb> <ids>`. `None` when the
-    /// setting is off, the root is not under git, or the write left nothing
-    /// to record. Refused, as [`Error::StagedElsewhere`], when the index
+    /// nothing else — not `.lock`, which records nothing about the corpus —
+    /// and commits as `neb <verb> <ids>`. `None` when the setting is off,
+    /// the root is not under git, or the write left nothing to record. Refused, as [`Error::StagedElsewhere`], when the index
     /// already holds something outside the corpus: a `neb` commit is exactly
     /// the corpus, and folding a stranger's staged work into one would misfile
     /// it. The write is on disk before this runs and stays there whatever
@@ -474,7 +490,10 @@ pub struct Committed {
 }
 
 /// What a `neb` commit may contain, relative to the corpus root. Everything
-/// else under the root, and everything outside it, is left alone.
+/// else under the root, and everything outside it, is left alone — the write
+/// lock's `.lock` included, which is why it is not listed here and never
+/// will be: it is a fact about which process is writing right now, not about
+/// the corpus, and it means nothing on another machine.
 const COMMIT_PATHS: [&str; 3] = ["nodes", "inbox", config::FILE];
 
 /// Whether a path from `git diff --name-only`, relative to the repository's

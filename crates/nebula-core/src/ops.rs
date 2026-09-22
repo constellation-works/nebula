@@ -10,6 +10,17 @@
 //! write's result reaches the caller even when git then refuses: the write is
 //! never rolled back because of git, and the caller can tell the two apart.
 //!
+//! Every op here that writes takes the corpus write lock first and holds it
+//! until it returns, because three processes share one corpus and none of
+//! these is a single atomic file replacement: they are read-modify-write
+//! across steps, sometimes across two files, sometimes followed by a commit.
+//! A caller that wants one critical section over a verb *and* the [`commit`]
+//! that records it takes [`Corpus::lock`] itself and holds it across both;
+//! the lock is re-entrant on one thread, so the op still taking it underneath
+//! costs nothing. Queries take nothing: [`suggest`] and everything in
+//! [`crate::graph`] read a corpus that a writer may be part-way through, and
+//! that is the trade the lock exists to make — writers wait, readers never do.
+//!
 //! Which invariants live here rather than in `check` is a deliberate choice
 //! per rule. See `docs/design/lineage-graph/specs/invariants.md`.
 
@@ -17,6 +28,7 @@ use crate::check::{OBSERVATORY, is_local_path, is_observatory_id, resolve_local}
 use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
 use crate::graph::{self, Graph, Neighbour};
+use crate::lock::CorpusLock;
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
 use crate::store::{self, Committed, Corpus, InboxEntry};
 use serde::{Deserialize, Serialize};
@@ -141,6 +153,10 @@ pub struct Citation {
 /// Create an empty corpus, at `path` if given and the resolved root otherwise.
 pub fn init(root: Option<PathBuf>, path: Option<PathBuf>) -> Result<Initialized> {
     let target = Corpus::resolve_root(path.or(root))?;
+    // The lock lives inside the root, so the root has to exist before it can
+    // be taken. `Corpus::init` would create it a moment later anyway.
+    std::fs::create_dir_all(&target)?;
+    let _lock = CorpusLock::acquire(&target)?;
     Corpus::init(&target)?;
     Corpus::write_root_config_if_absent(&target)?;
     Ok(Initialized { root: target })
@@ -151,6 +167,7 @@ pub fn init(root: Option<PathBuf>, path: Option<PathBuf>) -> Result<Initialized>
 /// No parent, no title, no decisions. A capture step that requires decisions
 /// is a capture step you will skip at the exact moment the idea arrives.
 pub fn capture(corpus: &Corpus, text: &str) -> Result<InboxEntry> {
+    let _lock = corpus.lock()?;
     corpus.capture(text)
 }
 
@@ -163,7 +180,9 @@ pub fn capture(corpus: &Corpus, text: &str) -> Result<InboxEntry> {
 /// caller that wants the entry id out before that read happens runs
 /// [`capture`] and then [`suggest`] itself.
 pub fn capture_near(corpus: &Corpus, text: &str, k: usize) -> Result<Captured> {
-    let entry = corpus.capture(text)?;
+    // Only the capture is locked. The suggestions are a read, and holding a
+    // writer's lock over one would make every other writer wait on it.
+    let entry = capture(corpus, text)?;
     let near = suggest(corpus, &entry.text, k)?;
     Ok(Captured { entry, near })
 }
@@ -184,6 +203,7 @@ pub fn suggest(corpus: &Corpus, text: &str, k: usize) -> Result<Vec<Neighbour>> 
 
 /// Discard a capture, struck through rather than deleted.
 pub fn drop(corpus: &Corpus, entry: &str) -> Result<InboxEntry> {
+    let _lock = corpus.lock()?;
     let e = corpus.inbox_entry(entry)?;
     corpus.settle_inbox(&e, "dropped")?;
     Ok(e)
@@ -200,6 +220,10 @@ pub fn drop(corpus: &Corpus, entry: &str) -> Result<InboxEntry> {
 /// suggestion never blocks the promotion and never becomes an edge. `near_k`
 /// is how many to look for; zero looks for none.
 pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion, near_k: usize) -> Result<Created> {
+    // Held across the whole verb: the node is written and *then* the inbox
+    // line is struck, and a capture landing between the two would shift the
+    // line this entry was found at.
+    let _lock = corpus.lock()?;
     let e = corpus.inbox_entry(entry)?;
     let title = args.title.clone().unwrap_or_else(|| e.text.clone());
     // Read before the write, so the new node is not among its own neighbours.
@@ -243,6 +267,7 @@ pub fn new_node(corpus: &Corpus, args: &NewNode) -> Result<Created> {
     if args.kill.as_ref().is_some_and(|k| k.trim().is_empty()) {
         return Err(Error::EmptyKill);
     }
+    let _lock = corpus.lock()?;
     let status = if args.kill.is_some() {
         Status::Hypothesis
     } else {
@@ -314,6 +339,7 @@ fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<
 /// is refused the same way a status change is: the idea stays dead, and a
 /// new node with a `reopens` edge is the way back.
 pub fn sharpen(corpus: &Corpus, id: &str, kill: &str, by: Option<&str>) -> Result<Doc> {
+    let _lock = corpus.lock()?;
     let mut doc = corpus.load(id)?;
     if doc.node.status.is_closed_by_verdict() {
         return Err(Error::RefutedCannotReopen);
@@ -336,6 +362,7 @@ pub fn sharpen(corpus: &Corpus, id: &str, kill: &str, by: Option<&str>) -> Resul
 /// human read what somebody else proposed and now stands behind it, which is
 /// the only thing that takes the node off `review`'s unconfirmed list.
 pub fn confirm_kill(corpus: &Corpus, id: &str) -> Result<Doc> {
+    let _lock = corpus.lock()?;
     let mut doc = corpus.load(id)?;
     if doc.node.status.is_closed_by_verdict() {
         return Err(Error::RefutedCannotReopen);
@@ -366,6 +393,11 @@ pub fn link(
     if from == to {
         return Err(Error::SelfLoop);
     }
+    // Held across both ends. A `contradicts` edge is saved on `from` and then
+    // on `to`, and the cycle check reads every node before saving one; either
+    // gap is where a second writer leaves a one-sided edge or closes a loop
+    // this check did not see.
+    let _lock = corpus.lock()?;
     let by = model::author(by)?;
     let mut doc = corpus.load(from)?;
     corpus.load(to)?;
@@ -429,6 +461,7 @@ pub fn note(corpus: &Corpus, id: &str, text: &str, by: Option<&str>) -> Result<D
     if text.is_empty() {
         return Err(Error::corpus("a note cannot be empty"));
     }
+    let _lock = corpus.lock()?;
     let by = model::author(by)?;
     let mut doc = corpus.load(id)?;
     doc.body = model::append_note(&doc.body, &store::today(), &text, by.as_deref());
@@ -444,6 +477,7 @@ pub fn note(corpus: &Corpus, id: &str, text: &str, by: Option<&str>) -> Result<D
 /// rather than refuses: a checkout that is not there yet is not a broken
 /// citation.
 pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
+    let _lock = corpus.lock()?;
     let by = model::author(args.by.as_deref())?;
     let mut doc = corpus.load(id)?;
     let uri = args
@@ -503,6 +537,7 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
 /// Returns the setting as it now resolves, which is the config's value: a
 /// root written here takes precedence over `$OBSERVATORY_ROOT`.
 pub fn set_observatory_root(corpus: &mut Corpus, dir: PathBuf) -> Result<ObservatoryRoot> {
+    let _lock = corpus.lock()?;
     corpus.set_observatory_root(dir)?;
     Ok(corpus.observatory_root())
 }
@@ -511,6 +546,7 @@ pub fn set_observatory_root(corpus: &mut Corpus, dir: PathBuf) -> Result<Observa
 ///
 /// Returns the setting as it now stands.
 pub fn set_commit(corpus: &mut Corpus, enabled: bool) -> Result<CommitSetting> {
+    let _lock = corpus.lock()?;
     corpus.set_commit(enabled)?;
     Ok(corpus.commit_setting())
 }
@@ -524,6 +560,10 @@ pub fn set_commit(corpus: &mut Corpus, enabled: bool) -> Result<CommitSetting> {
 /// staged outside the corpus. Called after the write it records, which
 /// stays on disk whatever happens here.
 pub fn commit(corpus: &Corpus, verb: &str, ids: &[&str]) -> Result<Option<Committed>> {
+    // Two commits racing would race on git's index. Taking the lock here
+    // covers a caller that commits on its own; a caller that already holds it
+    // from the write this records re-enters, which is the point.
+    let _lock = corpus.lock()?;
     corpus.commit(verb, ids)
 }
 
@@ -537,6 +577,7 @@ pub fn set_status(
     status: Status,
     why: Option<&str>,
 ) -> Result<StatusChange> {
+    let _lock = corpus.lock()?;
     let mut doc = corpus.load(id)?;
     let from = doc.node.status;
     let why = why.map(str::trim).filter(|w| !w.is_empty());
@@ -594,6 +635,10 @@ pub fn tag_remove(corpus: &Corpus, id: &str, tags: &[String]) -> Result<Doc> {
 }
 
 fn edit_tags(corpus: &Corpus, id: &str, add: &[String], remove: &[String]) -> Result<Doc> {
+    // Both [`tag_add`] and [`tag_remove`] come through here, so the lock does
+    // too. Without it the load and the save are two moments, and a second
+    // process editing the same node between them loses one edit entirely.
+    let _lock = corpus.lock()?;
     let mut doc = corpus.load(id)?;
     let mut tags = model::normalize_tags(&doc.node.tags);
     tags.retain(|t| !remove.contains(t));

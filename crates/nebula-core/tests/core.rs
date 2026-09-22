@@ -6,8 +6,8 @@
 //! is what a consumer that is not a terminal matches on.
 
 use nebula_core::{
-    Corpus, Direction, EdgeType, Error, Graph, HUMAN, NEAR_DEFAULT, NewNode, Promotion, ReviewRule,
-    Status, Via, graph, ops,
+    Corpus, CorpusLock, Direction, EdgeType, Error, Graph, HUMAN, NEAR_DEFAULT, NewNode, Promotion,
+    ReviewRule, Status, Via, graph, ops,
 };
 
 fn corpus() -> (tempfile::TempDir, Corpus) {
@@ -869,4 +869,115 @@ fn commit_on_in_a_corpus_the_containing_repository_ignores_is_a_typed_error() {
         Err(Error::CorpusIgnored(r)) if r == root
     ));
     assert!(corpus.node_path(&a).exists());
+}
+
+// -------------------------------------------------------------------- lock --
+
+/// Two writers editing one node's tags at the same time. Each op is a load,
+/// an edit and a save; without the lock the second load sees the corpus as it
+/// was before the first save, and the later rename wins — one tag survives and
+/// the other is silently gone.
+///
+/// Threads rather than processes here: this is what the in-process half of
+/// the lock is for, since `flock` is held by the open file description and
+/// would let a second thread of one process straight through.
+/// `crates/neb/tests/cli.rs` runs the same race across two spawned binaries,
+/// which is what exercises `flock` itself.
+#[test]
+fn two_concurrent_tag_adds_on_one_node_both_survive() {
+    let (dir, corpus) = corpus();
+    let id = seed(&corpus, "A node two writers will tag", &[]);
+    let root = dir.path().join("corpus");
+
+    let start = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        for tag in ["alpha", "beta"] {
+            let (root, start, id) = (root.clone(), &start, id.clone());
+            scope.spawn(move || {
+                let corpus = Corpus::open(Some(root)).expect("open");
+                start.wait();
+                ops::tag_add(&corpus, &id, &[tag.to_string()]).expect("tag");
+            });
+        }
+    });
+
+    let mut tags = corpus.load(&id).unwrap().node.tags;
+    tags.sort();
+    assert_eq!(tags, ["alpha", "beta"], "one writer's tag was lost");
+}
+
+/// Past the bounded wait the writer refuses rather than proceeding, and
+/// refuses *before* touching the node: the error is the whole outcome.
+#[test]
+fn a_write_against_a_held_lock_refuses_and_changes_nothing() {
+    let (dir, corpus) = corpus();
+    let id = seed(&corpus, "A node nobody gets to edit", &[]);
+    let before = std::fs::read_to_string(corpus.node_path(&id)).unwrap();
+    let root = dir.path().join("corpus");
+
+    // Held on another thread, because the lock is re-entrant on the thread
+    // that already has it — which is what lets the CLI hold it across a verb
+    // and the commit that records it.
+    let held = CorpusLock::acquire(&root).unwrap();
+    let refused = std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                let corpus = Corpus::open(Some(root.clone())).expect("open");
+                // The op uses the real bound, so this waits the full five
+                // seconds before refusing. That wait is the thing under test.
+                ops::tag_add(&corpus, &id, &["never".to_string()])
+            })
+            .join()
+            .expect("the waiting writer did not panic")
+    });
+
+    assert!(
+        matches!(&refused, Err(Error::Locked { root: r }) if r == &root),
+        "got {refused:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(corpus.node_path(&id)).unwrap(),
+        before,
+        "the refusal came before the write, so the node is untouched"
+    );
+
+    // And a reader never waited on any of it.
+    assert!(corpus.load(&id).is_ok());
+    assert!(Corpus::open(Some(root.clone())).is_ok());
+    drop(held);
+}
+
+/// The lock file is the one thing under the root that is not the corpus, so
+/// nothing that reads or records the corpus may see it.
+#[test]
+fn the_lock_file_is_neither_committed_nor_checked() {
+    let (dir, mut corpus) = corpus();
+    let root = dir.path().join("corpus");
+    git_init(&root);
+    ops::set_commit(&mut corpus, true).unwrap();
+    ops::commit(&corpus, "config", &["commit"])
+        .unwrap()
+        .unwrap();
+
+    let id = seed(&corpus, "A node whose write took the lock", &[]);
+    ops::commit(&corpus, "new", &[&id]).unwrap().unwrap();
+    assert!(
+        root.join(nebula_core::LOCK_FILE).exists(),
+        "the write took the lock, so the file is there to be excluded"
+    );
+
+    assert_eq!(committed_paths(&root, "HEAD"), [format!("nodes/{id}.md")]);
+    assert!(
+        !git(&root, &["ls-files"]).contains(nebula_core::LOCK_FILE),
+        "the lock file is not tracked"
+    );
+    assert!(
+        git(&root, &["status", "--porcelain"]).contains("?? .lock"),
+        "it is left untracked rather than swept into the commit"
+    );
+
+    let docs = corpus.load_all().unwrap();
+    let report = nebula_core::check::run(&Graph::build(&docs).unwrap(), &corpus).unwrap();
+    assert_eq!(report.nodes, 1, "the lock file is not read as a node");
+    assert!(report.findings.is_empty(), "{:?}", report.findings);
 }

@@ -10,6 +10,7 @@
 
 use crate::config::{self, Config};
 use crate::error::{Error, Result};
+use crate::lock::{CorpusLock, LOCK_FILE};
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
 use crate::store::{self, Corpus};
 use serde::{Deserialize, Serialize};
@@ -144,6 +145,10 @@ pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
     if !root.join("nodes").is_dir() {
         return Err(Error::NoCorpus(root));
     }
+    // A migration rewrites every node in the corpus, so it is the last write
+    // that should run beside another. Taken after the corpus is known to be
+    // there, so a missing one still reports itself as missing.
+    let _lock = CorpusLock::acquire(&root)?;
     refuse_dirty_tree(&root)?;
 
     let mut report = MigrationReport::default();
@@ -196,7 +201,12 @@ fn refuse_dirty_tree(root: &Path) -> Result<()> {
     if !store::inside_work_tree(root).unwrap_or(false) {
         return Ok(());
     }
-    let status = store::git(root, &["status", "--porcelain", "--", "."])?;
+    // The write lock is a fact about which process is writing, not corpus
+    // content, and it is untracked in a corpus that is its own repository.
+    // Without excluding it here the first `neb` write of the day would leave
+    // `migrate` refusing for good.
+    let exclude = format!(":(exclude){LOCK_FILE}");
+    let status = store::git(root, &["status", "--porcelain", "--", ".", &exclude])?;
     if !status.status.success() {
         return Err(Error::corpus(format!(
             "git status failed in {}:\n{}",

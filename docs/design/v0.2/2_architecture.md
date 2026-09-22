@@ -1,8 +1,8 @@
 ---
 title: v0.2 — Architecture
 owner: claude
-last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_updated: 2026-09-22
+last_validated: 2026-09-22
 status: Accepted
 feature: v0.2
 doc_role: design
@@ -56,6 +56,7 @@ nebula-core/src/
   model.rs        # Node, Status, Edge, EdgeType, Reference, Origin, Closed, InboxEntry
                   # serde with deny_unknown_fields; this is the file format
   store.rs        # Corpus: open/init, load/save nodes, inbox append/settle, config
+  lock.rs         # CorpusLock: the advisory <root>/.lock every write holds
   graph.rs        # Graph: an indexed snapshot of loaded nodes (by_id, parents, children)
                   # + pure queries: trace, impact, open, review, export
   ops.rs          # mutations: capture, promote, drop, new, sharpen, link, cite,
@@ -77,6 +78,7 @@ Design rules for core:
 - **Ops take `&Corpus` and typed args, and validate before they write.** A
   caller cannot produce an invalid corpus through core; `check` exists to catch
   hand edits, not core bugs.
+- **Writes take the corpus lock; reads never do.** See below.
 - **Typed errors.** `Error::Cycle { from, to }`, `Error::NeedsKill(status)`,
   `Error::NoSuchNode(id)`, `Error::RefutedNeedsWhy`, `Error::Io`, ... The CLI
   maps them to messages and exit codes; the desktop maps them to UI. Neither
@@ -86,6 +88,48 @@ Design rules for core:
   frontend never hand-writes a shape.
 - No `pub` module internals beyond what `lib.rs` re-exports. A consumer that
   needs more is a signal to add an API, not to reach in.
+
+## The write lock
+
+Three writers share one corpus — the CLI a human types at, an agent session
+running that same CLI, and the desktop's capture box — and a mutating verb is
+not one atomic file replacement. `tag`, `note`, `cite` and `sharpen` are a
+load, an edit and a save; `link contradicts` saves two nodes in turn;
+`promote` writes a node and then settles an inbox line *by index*; `commit`
+stages and commits. Interleave any of those and an edit is lost, an edge is
+left one-sided, or the wrong inbox line is struck.
+
+So `nebula-core::lock` puts an advisory lock file at **`<root>/.lock`** and
+every op that writes holds it for its whole duration:
+
+- **`flock`**, via `fs4`. Advisory, and released by the kernel when the
+  process dies, so a crash mid-write cannot wedge the corpus the way a lock
+  file that had to be deleted would. (`std::fs::File::lock` would do, but it
+  landed in Rust 1.89 and the workspace's `rust-version` is 1.88.)
+- **A process-wide table of live locks, keyed by root.** `flock` is held by
+  the open file description rather than the thread, so a second thread of one
+  process would otherwise sail straight through it.
+- **Re-entrant on one thread.** `cli.rs` takes the lock for a whole verb
+  *including* the `commit` that records it, and the op underneath takes it
+  again; counting the re-entry is what stops that deadlocking.
+
+Contention blocks for up to five seconds and then fails with
+`Error::Locked { root }` — before the op reads or writes anything, so
+retrying is always safe. A writer that blocked forever on a stuck peer would
+be worse than one that says so.
+
+Deliberately **not** taken by `Corpus::open`, by any query, or by the
+desktop's file watcher. Readers see a corpus a writer may be part-way
+through, which is the trade: writers wait for each other, readers never wait
+at all. Per-file atomic replacement is what keeps a reader from seeing half
+a node.
+
+The lock file is runtime state, not corpus content: `neb commit` stages only
+`nodes/`, `inbox/` and `config.yaml`, `check` reads only `nodes/` and
+`inbox/`, and `migrate`'s refusal to run on a dirty tree excludes it. In a
+corpus that is its own git repository it therefore shows up as an untracked
+`.lock` and stays that way; `echo .lock >> <root>/.gitignore` is the one-line
+answer if that bothers you.
 
 ## `neb`
 
