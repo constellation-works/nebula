@@ -90,10 +90,12 @@ error: /corpus has staged changes outside the corpus (README.md); the write is i
 
 The write happened — the node or inbox line is on disk — but `neb` will not
 fold a stranger's staged work into a `neb` commit, so it left the index
-alone. This can only occur when the corpus is nested inside a larger
-repository rather than being one itself. Commit or unstage the other change,
-then either run any verb (its commit sweeps up the earlier write) or catch
-up by hand:
+alone. It checks for staged paths outside the managed corpus paths (`nodes/`,
+`inbox/`, `config.yaml`, and the generated `.gitignore`), so the refusal can
+also occur in a repository rooted at the corpus when, for example, an
+unrelated `README.md` is staged. Commit or unstage the other change, then
+either run any verb (its commit sweeps up the earlier write) or catch up by
+hand:
 
 ```sh
 git -C "$NEBULA_ROOT" add nodes inbox config.yaml .gitignore
