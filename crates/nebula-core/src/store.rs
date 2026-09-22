@@ -756,13 +756,18 @@ fn is_inbox_month_filename(name: &OsStr) -> bool {
 
 /// Replace a file through a sibling temporary file.
 ///
+/// The temporary file is created, never opened by name a second time, so the
+/// bytes go to the file this call made and to nothing else. Writing by name
+/// would follow whatever already answers to it: a symlink planted at the
+/// temporary path is a write straight through the corpus wall, and the rename
+/// that follows would then install the symlink as the node.
+///
 /// The temporary file is removed when either writing or renaming fails, so a
 /// failed write does not leave debris that could be mistaken for corpus data.
 pub(crate) fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
-    let mut tmp = path.as_os_str().to_os_string();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    let result = std::fs::write(&tmp, contents).and_then(|()| std::fs::rename(&tmp, path));
+    let (tmp, file) = create_temporary_sibling(path)?;
+    let result =
+        write_and_close(file, contents.as_ref()).and_then(|()| std::fs::rename(&tmp, path));
     if let Err(error) = result {
         match std::fs::remove_file(&tmp) {
             Ok(()) => {}
@@ -778,6 +783,68 @@ pub(crate) fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<()
         return Err(error.into());
     }
     Ok(())
+}
+
+/// Write the whole of `contents` and close the file, so the rename that
+/// follows moves a file nobody still holds open.
+fn write_and_close(mut file: std::fs::File, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    file.write_all(contents)
+}
+
+/// How many names a single write tries before giving up. Two names collide
+/// only when another writer picks the same counter in the same nanosecond
+/// under the same process id, or when something is planting files under each
+/// name as fast as they are tried. A few attempts cover the first and a bound
+/// keeps the second from spinning.
+const TEMPORARY_NAME_ATTEMPTS: u32 = 8;
+
+/// Create a temporary file beside `path` and hand back its name and its open
+/// handle.
+///
+/// `create_new` is the guard: it opens with `O_CREAT | O_EXCL`, which refuses
+/// a name that already exists instead of following it, so a symlink sitting at
+/// the temporary path is a refusal rather than a write to its target. The
+/// handle comes back with the name because reopening by name afterwards would
+/// hand the same opening back to whoever won the race.
+///
+/// The name carries a nonce, and not only for the race. A fixed name that
+/// `O_EXCL` refuses would wedge every later write to that file behind one
+/// stale temporary left by a killed process, and nothing here deletes what it
+/// did not create. `.tmp` stays the extension so a temporary that does outlive
+/// a crash stays invisible to `load_all` and to the inbox, which both match on
+/// the name.
+///
+/// The name is built by appending to `path` as given, so a corpus reached
+/// through a symlinked root writes beside the file the caller named. Nothing
+/// is resolved or canonicalized.
+fn create_temporary_sibling(path: &Path) -> Result<(PathBuf, std::fs::File)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    for _ in 0..TEMPORARY_NAME_ATTEMPTS {
+        let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos());
+        let mut name = path.as_os_str().to_os_string();
+        name.push(format!(".{:x}-{count:x}-{nanos:x}.tmp", std::process::id()));
+        let tmp = PathBuf::from(name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(file) => return Ok((tmp, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(Error::corpus(format!(
+        "no free temporary name beside {} after {TEMPORARY_NAME_ATTEMPTS} tries; \
+         something is creating files under them",
+        path.display()
+    )))
 }
 
 /// A commit `neb` made after a write.
@@ -1094,9 +1161,91 @@ mod tests {
             destination.is_dir(),
             "the failed rename left the target alone"
         );
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name != OsStr::new("destination"))
+            .collect();
         assert!(
-            !dir.path().join("destination.tmp").exists(),
-            "the failed rename cleaned up its temporary file"
+            leftovers.is_empty(),
+            "the failed rename left temporary files: {leftovers:?}"
+        );
+    }
+
+    /// The reported break: a symlink planted at the temporary path turned an
+    /// ordinary note into a write outside the corpus, and then became the node.
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_never_writes_through_a_temporary_planted_as_a_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside-sentinel.txt");
+        std::fs::write(&outside, "IRREPLACEABLE FIXTURE").unwrap();
+        let destination = dir.path().join("destination.md");
+        std::fs::write(&destination, "original").unwrap();
+        let planted = dir.path().join("destination.md.tmp");
+        std::os::unix::fs::symlink(&outside, &planted).unwrap();
+
+        write_atomic(&destination, "replacement").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&outside).unwrap(),
+            "IRREPLACEABLE FIXTURE",
+            "the write reached a file outside the corpus"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&destination).unwrap(),
+            "replacement"
+        );
+        assert!(
+            std::fs::symlink_metadata(&destination)
+                .unwrap()
+                .file_type()
+                .is_file(),
+            "the planted symlink was renamed onto the destination"
+        );
+        assert!(
+            std::fs::symlink_metadata(&planted)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the planted path is not ours to delete"
+        );
+    }
+
+    #[test]
+    fn a_temporary_sibling_is_fresh_each_time_and_hides_from_corpus_listings() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = dir.path().join("safe.md");
+        let (first, _handle) = create_temporary_sibling(&node).unwrap();
+        let (second, _handle) = create_temporary_sibling(&node).unwrap();
+
+        assert_ne!(
+            first, second,
+            "a stale temporary must not wedge the next write"
+        );
+        for tmp in [&first, &second] {
+            assert_eq!(tmp.parent(), node.parent(), "the temporary is a sibling");
+            assert!(
+                tmp.file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("safe.md."),
+                "the temporary does not name its destination: {}",
+                tmp.display()
+            );
+            assert_eq!(
+                tmp.extension(),
+                Some(OsStr::new("tmp")),
+                "`load_all` reads every `.md` in `nodes`, so a temporary may not be one"
+            );
+        }
+
+        let (month, _handle) = create_temporary_sibling(&dir.path().join("2026-09.md")).unwrap();
+        assert!(
+            !is_inbox_month_filename(month.file_name().unwrap()),
+            "the inbox would read this temporary as a month file: {}",
+            month.display()
         );
     }
 
