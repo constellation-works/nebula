@@ -490,7 +490,7 @@ impl Corpus {
         let node_path = self.node_path(id)?;
         self.require_git()?;
         let path = format!("nodes/{id}.md");
-        let revision = if Date::parse(at, &Iso8601::DATE).is_ok() {
+        let revision = if model::is_iso_date(at) {
             let before = format!("{at} 23:59:59");
             git_ok(
                 &self.root,
@@ -508,7 +508,9 @@ impl Corpus {
         } else if at.len() >= 4 && at.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             at.to_string()
         } else {
-            String::new()
+            return Err(Error::corpus(format!(
+                "invalid --at value `{at}`: expected a YYYY-MM-DD date or git revision"
+            )));
         };
         if revision.is_empty() {
             return Err(Error::NoNodeAtRevision {
