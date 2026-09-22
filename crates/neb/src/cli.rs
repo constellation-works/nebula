@@ -492,7 +492,7 @@ enum Command {
         #[arg(long, conflicts_with = "json")]
         mermaid: bool,
         /// Limit the Mermaid diagram to this node's ancestors and descendants.
-        #[arg(long, value_name = "ID", requires = "mermaid")]
+        #[arg(long, value_name = "ID", requires = "mermaid", conflicts_with = "json")]
         from: Option<String>,
     },
 

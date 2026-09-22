@@ -1284,6 +1284,11 @@ fn graph_exports_the_whole_corpus_as_json() {
         "{json}"
     );
 
+    let run = c.run(&["graph", "--from", "base", "--json"]);
+    assert_eq!(run.out.status.code(), Some(2));
+    run.assert_fails()
+        .says("the argument '--from <ID>' cannot be used with '--json'");
+
     // There is no default text form: without a format it explains and exits 2.
     let run = c.run(&["graph"]);
     assert_eq!(run.out.status.code(), Some(2));
