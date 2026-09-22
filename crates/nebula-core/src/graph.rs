@@ -475,7 +475,7 @@ pub struct NodeView {
     pub node: Node,
     /// The argument, trimmed. Includes the `## Notes` section when one exists.
     pub body: String,
-    /// Dated reasoning parsed from the last `## Notes` section, oldest first.
+    /// Dated reasoning parsed from every `## Notes` section, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Note>,
     /// Where each `observatory` reference lands on this machine. Filled in

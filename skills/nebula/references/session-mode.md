@@ -72,7 +72,8 @@ five-second path and must stay one.
   and preserve the order in which the inquiry developed.
 - Use `edit <id>` only to revise the undated argument or sketch already in the
   body. The editor never receives frontmatter and cannot remove, move or change
-  an existing `## Notes` section. Do not use `edit` to append a note.
+  any existing `## Notes` section, of which a body may have several. Do not use
+  `edit` to append a note.
 
 ## End of session
 

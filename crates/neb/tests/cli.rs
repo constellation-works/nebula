@@ -2388,6 +2388,83 @@ fn edit_refuses_to_remove_notes_and_leaves_the_node_unchanged() {
     assert_eq!(after, before, "a reordered notes section must not be saved");
 }
 
+/// A node whose notes are followed by other prose ends up with two `## Notes`
+/// sections, because `note` never rewrites body text it did not write. The
+/// older section is reasoning too: an edit may not touch it, and `show` may
+/// not hide it behind the newer one.
+#[cfg(unix)]
+#[test]
+fn edit_protects_notes_that_a_later_section_no_longer_closes() {
+    let c = Corpus::new();
+    let body = "the argument\n\n## Notes\n\n- 2026-09-21: the first reasoning\n\n## More\n\nstill to work out";
+    let id = c
+        .run(&["new", "Two notes sections", "--body", body])
+        .assert_ok()
+        .stdout_trim();
+    c.run(&["note", &id, "the second reasoning"]).assert_ok();
+
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert_eq!(
+        before.matches("## Notes").count(),
+        2,
+        "a closed notes section gets a sibling, not an edit:\n{before}"
+    );
+
+    // The editor rewrites the *earlier* dated note and leaves the final
+    // notes section exactly as it found it.
+    let script = editor_script(
+        &c,
+        "rewrite-earlier-note.sh",
+        "#!/bin/sh\nsed 's/the first reasoning/rewritten reasoning/' \"$1\" > \"$1.new\" && mv \"$1.new\" \"$1\"\n",
+    );
+    c.run_with_env(&["edit", &id], &[("EDITOR", script.to_str().unwrap())])
+        .assert_fails()
+        .says("existing ## Notes section was removed, reordered, or changed");
+    assert_eq!(
+        std::fs::read_to_string(c.node_file(&id)).unwrap(),
+        before,
+        "a refused edit must not touch the node"
+    );
+
+    // Dropping the earlier section outright is the same refusal.
+    let script = editor_script(
+        &c,
+        "drop-earlier-note.sh",
+        "#!/bin/sh\ngrep -v 'the first reasoning' \"$1\" > \"$1.new\" && mv \"$1.new\" \"$1\"\n",
+    );
+    c.run_with_env(&["edit", &id], &[("EDITOR", script.to_str().unwrap())])
+        .assert_fails()
+        .says("existing ## Notes section was removed, reordered, or changed");
+    assert_eq!(
+        std::fs::read_to_string(c.node_file(&id)).unwrap(),
+        before,
+        "a refused edit must not touch the node"
+    );
+
+    // Prose that is not a note is still the editor's to rewrite.
+    let script = editor_script(
+        &c,
+        "rewrite-prose.sh",
+        "#!/bin/sh\nsed 's/still to work out/worked out after all/' \"$1\" > \"$1.new\" && mv \"$1.new\" \"$1\"\n",
+    );
+    c.run_with_env(&["edit", &id], &[("EDITOR", script.to_str().unwrap())])
+        .assert_ok();
+    let after = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(after.contains("worked out after all"), "{after}");
+    assert!(
+        after.contains("- 2026-09-21: the first reasoning"),
+        "{after}"
+    );
+
+    // Both sections' reasoning is exposed, oldest first.
+    let out = c.run(&["--json", "show", &id]).assert_ok().stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).expect("show --json is valid JSON");
+    assert_eq!(v["notes"].as_array().map(Vec::len), Some(2), "{out}");
+    assert_eq!(v["notes"][0]["text"], "the first reasoning");
+    assert_eq!(v["notes"][0]["at"], "2026-09-21");
+    assert_eq!(v["notes"][1]["text"], "the second reasoning");
+}
+
 #[test]
 fn edit_without_visual_or_editor_is_a_named_refusal() {
     let c = Corpus::new();

@@ -22,7 +22,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use nebula_core::{
     Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, NEAR_DEFAULT, NewNode,
     OBSERVATORY, OBSERVATORY_ROOT_ENV, Origin, Promotion, Severity, Status, check, graph, migrate,
-    ops,
+    model, ops,
 };
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitCode};
@@ -295,7 +295,7 @@ enum Command {
 
     /// Edit a node's body in $VISUAL or $EDITOR.
     ///
-    /// The editor sees prose only, never YAML frontmatter. An existing
+    /// The editor sees prose only, never YAML frontmatter. Every existing
     /// `## Notes` section is protected because notes are append-only.
     Edit {
         /// Node id.
@@ -586,7 +586,7 @@ impl std::fmt::Display for EditorError {
                 write!(f, "editor `{editor}` exited unsuccessfully; the node was not changed")
             }
             Self::NotesChanged => f.write_str(
-                "the existing ## Notes section was removed, reordered, or changed; use `neb note` to append notes",
+                "an existing ## Notes section was removed, reordered, or changed; use `neb note` to append notes",
             ),
         }
     }
@@ -652,29 +652,27 @@ fn body_value(value: Option<String>) -> std::result::Result<String, Failure> {
     }
 }
 
-/// Byte offset of the last exact `## Notes` heading in a body.
-fn notes_heading(body: &str) -> Option<usize> {
-    let mut found = None;
-    let mut offset = 0;
-    for line in body.split_inclusive('\n') {
-        if line.trim_end_matches(['\n', '\r']) == "## Notes" {
-            found = Some(offset);
-        }
-        offset += line.len();
-    }
-    found
-}
-
 /// Existing notes are immutable through `edit`; `note` is their append path.
+///
+/// A body can hold more than one `## Notes` section, because `note` opens a
+/// fresh one rather than reach back into a section some other prose already
+/// closed. Every section is checked, not just the last: an edit that rewrote
+/// an earlier dated note while leaving the final section alone would
+/// otherwise overwrite reasoning that was supposed to be append-only.
+/// Prose outside those sections stays editable, which is what `edit` is for.
 fn preserve_notes(before: &str, after: &str) -> std::result::Result<(), EditorError> {
-    let Some(before_at) = notes_heading(before) else {
+    let before_sections = model::notes_sections(before);
+    if before_sections.is_empty() {
         return Ok(());
-    };
-    let Some(after_at) = notes_heading(after) else {
+    }
+    let after_sections = model::notes_sections(after);
+    if before_sections.len() != after_sections.len() {
         return Err(EditorError::NotesChanged);
-    };
-    if before[before_at..].trim_end() != after[after_at..].trim_end() {
-        return Err(EditorError::NotesChanged);
+    }
+    for (before, after) in before_sections.iter().zip(&after_sections) {
+        if before.trim_end() != after.trim_end() {
+            return Err(EditorError::NotesChanged);
+        }
     }
     Ok(())
 }
