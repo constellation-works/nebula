@@ -457,6 +457,8 @@ straight to `--parent` unread is the automatic linking the spec rules out.
 status and every edge labelled by kind. Symmetric `contradicts` edges become
 one dotted, undirected line. Add `--from <ID>` to include only that node, its
 ancestors and its descendants; siblings and unrelated components stay out.
+`--from` requires `--mermaid` and conflicts with `--json`, so JSON always
+exports the whole corpus rather than silently ignoring a requested lineage.
 Titles are escaped so quotes and brackets remain label text.
 
 ```mermaid
