@@ -42,8 +42,8 @@ export function CorpusError({ message, onReloaded }: Props) {
         </p>
       )}
       <p className="error__hint">
-        Set <code>NEBULA_ROOT</code> to your corpus, or run <code>neb init</code> there, then
-        reload.
+        Run <code>neb init</code> at this path, then reload. To use a different root, set
+        <code> NEBULA_ROOT</code> before restarting the desktop app.
       </p>
       <button className="error__reload" type="button" onClick={() => void reload()} disabled={busy}>
         Reload
