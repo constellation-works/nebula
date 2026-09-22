@@ -40,8 +40,11 @@ nebula/
   Makefile
 ```
 
-The corpus still never lives here. `NEBULA_ROOT` / `--root` / `~/.nebula`
-resolution is unchanged and lives in `nebula-core::store`.
+The corpus still never lives here. Root resolution lives in
+`nebula-core::store`: the CLI accepts `--root`, then both consumers fall back
+to `NEBULA_ROOT`, `~/.config/nebula/root`, and `~/.nebula`. The desktop has no
+command-line argument parser, so it starts at the fallback path resolved once
+when its `AppState` is created.
 
 ## `nebula-core`
 
@@ -124,8 +127,9 @@ through, which is the trade: writers wait for each other, readers never wait
 at all. Per-file atomic replacement is what keeps a reader from seeing half
 a node.
 
-The lock file is runtime state, not corpus content: `neb commit` stages only
-`nodes/`, `inbox/` and `config.yaml`, `check` reads only `nodes/` and
+The lock file is runtime state, not corpus content: when `neb config commit on`
+is enabled, a mutating verb stages only `nodes/`, `inbox/` and `config.yaml`;
+`check` reads only `nodes/` and
 `inbox/`, and `migrate`'s refusal to run on a dirty tree excludes it. In a
 corpus that is its own git repository it therefore shows up as an untracked
 `.lock` and stays that way; `echo .lock >> <root>/.gitignore` is the one-line
@@ -150,9 +154,10 @@ Tauri 2, React 19, TypeScript, Vite. Menu-bar app, no dock icon, one window
 that shows one of two views.
 
 - **`src-tauri`** links `nebula-core` (no sidecar, no shelling out). Exposes
-  commands `capture(text)`, `inbox()`, `graph()`, `node(id)`, `open_in_editor(id)`,
-  `corpus_path()`. Holds a `notify` watcher on `nodes/` and `inbox/` and emits a
-  `corpus-changed` event; the frontend refetches on it. Global shortcut
+  commands `capture(text)`, `inbox()`, `graph()`, `node(id)`,
+  `open_in_editor(id)`, `corpus_path()`, `reload()`. Holds a `notify` watcher
+  on `nodes/` and `inbox/` and emits a `corpus-changed` event; the frontend
+  refetches on it. Global shortcut
   (`tauri-plugin-global-shortcut`) toggles a floating capture window; tray icon
   shows the inbox count.
 - **Frontend** is read-only except capture. Views: *Inbox* (capture box, list)
