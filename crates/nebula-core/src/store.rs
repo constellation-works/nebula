@@ -355,15 +355,16 @@ impl Corpus {
             ],
         )?;
         let fields: Vec<&str> = raw.split('\0').filter(|field| !field.is_empty()).collect();
-        if !fields.len().is_multiple_of(3) {
+        let (records, remainder) = fields.as_chunks::<3>();
+        if !remainder.is_empty() {
             return Err(Error::corpus("git log returned a malformed history record"));
         }
-        Ok(fields
-            .chunks_exact(3)
-            .map(|field| HistoryEntry {
-                hash: field[0].to_string(),
-                date: field[1].to_string(),
-                message: field[2].to_string(),
+        Ok(records
+            .iter()
+            .map(|[hash, date, message]| HistoryEntry {
+                hash: hash.to_string(),
+                date: date.to_string(),
+                message: message.to_string(),
             })
             .collect())
     }
