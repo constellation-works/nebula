@@ -384,7 +384,8 @@ not who wrote the words. `check` enforces nothing about authorship.
 `neb show <NODE> --at <HASH|YYYY-MM-DD>` has exactly the same text and JSON
 shape as current `show`; a date means the final commit on that date. A date
 before the node existed is refused. `neb log <NODE>` prints short hash, date,
-and message; its JSON keeps the full hash:
+and message. When no commit has touched the node, text output says `no commits
+touched this node`; its JSON stays `[]`. Otherwise its JSON keeps the full hash:
 
 ```json
 // neb log tags-beat-domains --json

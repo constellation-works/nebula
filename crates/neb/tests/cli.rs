@@ -4357,6 +4357,22 @@ fn log_and_show_at_read_a_node_sharpened_across_two_commits() {
 }
 
 #[test]
+fn log_reports_when_an_uncommitted_node_has_no_history() {
+    let c = Corpus::new();
+    git_init(&c.root);
+    git_commit_at(&c.root, "2020-01-01", "initial repository");
+    let id = c
+        .run(&["new", "Never committed", "--id", "never-committed"])
+        .assert_ok()
+        .stdout_trim();
+
+    c.run(&["log", &id])
+        .assert_ok()
+        .says("no commits touched this node");
+    assert_eq!(c.run(&["--json", "log", &id]).assert_ok().stdout(), "[]\n");
+}
+
+#[test]
 fn history_verbs_refuse_a_corpus_outside_a_git_work_tree() {
     let c = Corpus::new();
     let id = c.seed("an uncommitted past", "An uncommitted past");
