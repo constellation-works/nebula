@@ -9,6 +9,7 @@ use nebula_core::{
     Corpus, CorpusLock, Direction, EdgeType, Error, Graph, HUMAN, NEAR_DEFAULT, NewNode, Promotion,
     ReviewRule, Status, Via, graph, ops,
 };
+use std::fmt::Write as _;
 
 fn corpus() -> (tempfile::TempDir, Corpus) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -582,6 +583,88 @@ fn multiline_capture_is_refused_without_writing() {
         "a refused capture must not change the inbox file"
     );
     assert_eq!(corpus.inbox().unwrap().0.len(), 1);
+}
+
+fn inbox_id_candidates(stamp: &str, text: &str) -> Vec<String> {
+    fn fnv(s: &str) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in s.as_bytes() {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+
+    let mut h = fnv(&format!("{stamp}{text}"));
+    let mut ids = Vec::new();
+    for _ in 0..64 {
+        let id = format!("{:04x}", (h & 0xffff) as u16);
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+        h = fnv(&format!("{h}"));
+    }
+    ids
+}
+
+#[test]
+fn capture_uses_a_free_id_after_the_hash_candidates_collide() {
+    const TEXT: &str = "the intended new thought";
+
+    for _ in 0..3 {
+        let (_dir, corpus) = corpus();
+        let probe = ops::capture(&corpus, TEXT).unwrap();
+        let occupied = inbox_id_candidates(&probe.at, TEXT);
+        let mut fixture = String::new();
+        for (i, id) in occupied.iter().enumerate() {
+            writeln!(fixture, "- [{id}] {} fixture {i}", probe.at).unwrap();
+        }
+        std::fs::write(&probe.file, fixture).unwrap();
+
+        let captured = ops::capture(&corpus, TEXT).unwrap();
+        if captured.at != probe.at {
+            continue;
+        }
+
+        assert!(!occupied.contains(&captured.id));
+        assert_eq!(corpus.inbox_entry(&captured.id).unwrap().text, TEXT);
+        let promoted = ops::promote(
+            &corpus,
+            &captured.id,
+            &Promotion {
+                title: Some("Intended new thought".into()),
+                ..Promotion::default()
+            },
+            0,
+        )
+        .unwrap();
+        assert_eq!(promoted.doc.body.trim(), TEXT);
+        assert_eq!(corpus.inbox().unwrap().0.len(), occupied.len());
+        return;
+    }
+    panic!("the clock crossed a minute during all three collision fixtures");
+}
+
+#[test]
+fn capture_refuses_an_exhausted_id_namespace_without_writing() {
+    let (_dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "locate the current inbox file").unwrap();
+    let mut fixture = String::new();
+    for id in 0..=u16::MAX {
+        writeln!(fixture, "- [{id:04x}] 2000-01-01T00:00 occupied").unwrap();
+    }
+    std::fs::write(&entry.file, &fixture).unwrap();
+
+    let error = ops::capture(&corpus, "there is no id left").unwrap_err();
+
+    assert!(
+        matches!(error, Error::Corpus(message) if message == "inbox id namespace exhausted; nothing captured")
+    );
+    assert_eq!(
+        std::fs::read_to_string(&entry.file).unwrap(),
+        fixture,
+        "exhaustion must be detected before appending"
+    );
 }
 
 #[test]
