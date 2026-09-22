@@ -4387,6 +4387,25 @@ fn commit_on_records_each_mutating_verb_and_never_pushes() {
     }
 }
 
+#[test]
+fn a_staged_unicode_node_is_accepted_with_default_git_quoting() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let id = c
+        .run(&["new", "시간", "--no-commit"])
+        .assert_ok()
+        .stdout_trim();
+    assert_eq!(id, "시간");
+    git(&c.root, &["add", "nodes"]);
+
+    c.run(&["note", &id, "new note"])
+        .assert_ok()
+        .says("committed ");
+
+    assert_eq!(log(&c.root)[0], format!("neb note {id}"));
+    assert!(dirt(&c.root).is_empty(), "{}", dirt(&c.root));
+}
+
 /// The corpus nested in a larger repository, the shape the refusal exists
 /// for: something staged outside the corpus must not ride in a `neb`
 /// commit, and the write must never be undone because of it.

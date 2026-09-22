@@ -346,11 +346,26 @@ impl Corpus {
         // The whole index, not just the part under the root: a path staged
         // elsewhere in the repository is exactly what the refusal is for.
         // Paths come back relative to the top level, hence the prefix.
-        let staged = git_ok(root, &["diff", "--cached", "--name-only", "--no-renames"])?;
+        // `-z` both separates names unambiguously and disables Git's
+        // `core.quotePath` quoting. Newlines therefore stay inside one record,
+        // and non-ASCII names are checked as the paths they actually name.
+        let staged = git(
+            root,
+            &["diff", "--cached", "--name-only", "--no-renames", "-z"],
+        )?;
+        if !staged.status.success() {
+            return Err(git_failed(
+                root,
+                "diff",
+                &String::from_utf8_lossy(&staged.stderr),
+            ));
+        }
         let outside: Vec<String> = staged
-            .lines()
+            .stdout
+            .split(|byte| *byte == b'\0')
+            .filter(|path| !path.is_empty())
+            .map(|path| String::from_utf8_lossy(path).into_owned())
             .filter(|path| !is_corpus_path(prefix, path))
-            .map(String::from)
             .collect();
         if !outside.is_empty() {
             return Err(Error::StagedElsewhere {
@@ -785,10 +800,10 @@ pub struct HistoryEntry {
 /// the corpus, and it means nothing on another machine.
 const COMMIT_PATHS: [&str; 3] = ["nodes", "inbox", config::FILE];
 
-/// Whether a path from `git diff --name-only`, relative to the repository's
-/// top level, is one a `neb` commit may contain. `prefix` is the root's own
-/// position under that top level (`git rev-parse --show-prefix`), empty when
-/// the corpus root is the repository.
+/// Whether a path from a NUL-delimited `git diff --name-only -z`, relative to
+/// the repository's top level, is one a `neb` commit may contain. `prefix` is
+/// the root's own position under that top level (`git rev-parse
+/// --show-prefix`), empty when the corpus root is the repository.
 fn is_corpus_path(prefix: &str, path: &str) -> bool {
     let Some(rest) = path.strip_prefix(prefix) else {
         return false;
