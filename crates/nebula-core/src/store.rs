@@ -358,7 +358,8 @@ impl Corpus {
         let month = &now[..7];
         let path = dir.join(format!("{month}.md"));
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
-        let id = unique_entry_id(&format!("{now}{text}"), &existing);
+        let inbox = self.inbox()?;
+        let id = unique_entry_id(&format!("{now}{text}"), &inbox);
         let line = existing.lines().count();
         let mut f = std::fs::OpenOptions::new()
             .create(true)
@@ -552,7 +553,7 @@ pub struct Inbox(pub Vec<InboxEntry>);
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct InboxEntry {
-    /// Short id, unique within its file.
+    /// Short id, unique among the corpus's live inbox entries.
     pub id: String,
     /// Capture timestamp.
     pub at: String,
@@ -611,12 +612,12 @@ pub(crate) fn days_since_stamp(stamp: &str) -> Option<i64> {
     days_since(stamp.get(..10)?)
 }
 
-/// A short id for an inbox entry, retried until it is unique in the file.
-fn unique_entry_id(seed: &str, existing: &str) -> String {
+/// A short id for an inbox entry, retried until it is unique in the live inbox.
+fn unique_entry_id(seed: &str, inbox: &Inbox) -> String {
     let mut h = fnv(seed);
     for _ in 0..64 {
         let id = format!("{:04x}", (h & 0xffff) as u16);
-        if !existing.contains(&format!("[{id}]")) {
+        if inbox.0.iter().all(|entry| entry.id != id) {
             return id;
         }
         h = fnv(&format!("{h}"));
