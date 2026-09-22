@@ -9,6 +9,7 @@
 //! them, and all the desktop needs to round-trip them through JSON.
 
 use crate::error::{Error, Result};
+use crate::store::write_atomic;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::Path;
@@ -583,10 +584,7 @@ fn is_iso_date(s: &str) -> bool {
 /// crashed process is exactly the failure this system exists to prevent.
 pub(crate) fn write(path: &Path, doc: &Doc) -> Result<()> {
     let out = render(doc)?;
-    let tmp = path.with_extension("md.tmp");
-    std::fs::write(&tmp, out)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    write_atomic(path, out)
 }
 
 #[cfg(test)]

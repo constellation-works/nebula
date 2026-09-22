@@ -10,6 +10,7 @@
 //! asking about a corpus, and [`crate::store::Corpus`] is what answers that.
 
 use crate::error::{Error, Result};
+use crate::store::write_atomic;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -138,10 +139,7 @@ impl Config {
     /// Write the config atomically.
     pub(crate) fn save(&self, root: &Path) -> Result<()> {
         let path = root.join(FILE);
-        let tmp = root.join(format!("{FILE}.tmp"));
-        std::fs::write(&tmp, self.render()?)?;
-        std::fs::rename(&tmp, &path)?;
-        Ok(())
+        write_atomic(&path, self.render()?)
     }
 
     /// The file's text, so a writer can compare before rewriting.

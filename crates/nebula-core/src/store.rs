@@ -425,10 +425,41 @@ impl Corpus {
                 "inbox entry moved underneath us; nothing written",
             ));
         };
+        if !slot.starts_with(&format!("- [{}]", entry.id)) {
+            return Err(Error::corpus(
+                "inbox entry moved underneath us; nothing written",
+            ));
+        }
         *slot = format!("- ~~[{}] {} {}~~ {outcome}", entry.id, entry.at, entry.text);
-        std::fs::write(&entry.file, lines.join("\n") + "\n")?;
+        write_atomic(&entry.file, lines.join("\n") + "\n")?;
         Ok(())
     }
+}
+
+/// Replace a file through a sibling temporary file.
+///
+/// The temporary file is removed when either writing or renaming fails, so a
+/// failed write does not leave debris that could be mistaken for corpus data.
+pub(crate) fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    let result = std::fs::write(&tmp, contents).and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(error) = result {
+        match std::fs::remove_file(&tmp) {
+            Ok(()) => {}
+            Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => {}
+            Err(cleanup) => {
+                return Err(Error::corpus(format!(
+                    "atomic write to {} failed: {error}; removing {} failed: {cleanup}",
+                    path.display(),
+                    tmp.display()
+                )));
+            }
+        }
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 /// A commit `neb` made after a write.
@@ -649,6 +680,23 @@ pub(crate) fn is_slug(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn atomic_write_removes_its_temporary_file_when_rename_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("destination");
+        std::fs::create_dir(&destination).unwrap();
+
+        assert!(write_atomic(&destination, "replacement").is_err());
+        assert!(
+            destination.is_dir(),
+            "the failed rename left the target alone"
+        );
+        assert!(
+            !dir.path().join("destination.tmp").exists(),
+            "the failed rename cleaned up its temporary file"
+        );
+    }
 
     #[test]
     fn a_short_title_slugifies_whole() {

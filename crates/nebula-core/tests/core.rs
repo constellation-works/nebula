@@ -375,6 +375,39 @@ fn notes_accumulate_in_order_and_unknown_nodes_are_refused() {
     ));
 }
 
+#[test]
+fn settling_an_inbox_entry_is_atomic_and_leaves_no_temporary_file() {
+    let (_dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "a thought to settle").unwrap();
+    let mut tmp = entry.file.as_os_str().to_os_string();
+    tmp.push(".tmp");
+    let tmp = std::path::PathBuf::from(tmp);
+
+    corpus.settle_inbox(&entry, "dropped").unwrap();
+
+    assert!(!tmp.exists(), "successful settlement left a temporary file");
+    assert!(
+        std::fs::read_to_string(&entry.file)
+            .unwrap()
+            .contains(&format!("- ~~[{}]", entry.id))
+    );
+}
+
+#[test]
+fn settling_refuses_when_the_indexed_line_has_another_entry_id() {
+    let (_dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "the original thought").unwrap();
+    let replacement = "- [other] 2026-09-22T08:25 another thought\n";
+    std::fs::write(&entry.file, replacement).unwrap();
+
+    let error = corpus.settle_inbox(&entry, "dropped").unwrap_err();
+
+    assert!(
+        matches!(error, Error::Corpus(message) if message == "inbox entry moved underneath us; nothing written")
+    );
+    assert_eq!(std::fs::read_to_string(&entry.file).unwrap(), replacement);
+}
+
 // -------------------------------------------------------------------- near --
 
 /// A small corpus with vocabulary that overlaps in known ways: two nodes
