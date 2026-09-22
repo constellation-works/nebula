@@ -151,14 +151,23 @@ pub struct Citation {
 }
 
 /// Create an empty corpus, at `path` if given and the resolved root otherwise.
-pub fn init(root: Option<PathBuf>, path: Option<PathBuf>) -> Result<Initialized> {
+/// Optionally make it the machine-local default, refusing to replace a
+/// different setting unless `force` is set.
+pub fn init(
+    root: Option<PathBuf>,
+    path: Option<PathBuf>,
+    set_root: bool,
+    force: bool,
+) -> Result<Initialized> {
     let target = Corpus::resolve_root(path.or(root))?;
     // The lock lives inside the root, so the root has to exist before it can
     // be taken. `Corpus::init` would create it a moment later anyway.
     std::fs::create_dir_all(&target)?;
     let _lock = CorpusLock::acquire(&target)?;
     Corpus::init(&target)?;
-    Corpus::write_root_config_if_absent(&target)?;
+    if set_root {
+        Corpus::write_root_config(&target, force)?;
+    }
     Ok(Initialized { root: target })
 }
 

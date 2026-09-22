@@ -16,11 +16,16 @@ the only irreplaceable part of the system.
 ## Create it
 
 ```sh
-neb init ~/corpus/nebula
+neb init ~/corpus/nebula --set-root
 ```
 
-`neb init` writes this non-default location to `~/.config/nebula/root`, so
-every command finds it even from shells that do not load your shell profile.
+`--set-root` writes this non-default location to
+`~/.config/nebula/root`, so every command finds it even from shells that do
+not load your shell profile. Plain `neb init` never changes that machine-wide
+setting: when it is absent, the command prints the opt-in command above. If the
+file already names a different corpus, `--set-root` refuses to replace it;
+review the two paths and pass `--force` only when redirecting the machine is
+intentional.
 The resolver checks `--root`, `$NEBULA_ROOT`, that config file, then
 `~/.nebula` in that order. You can still export the environment variable when
 you want a shell-specific override:
@@ -29,8 +34,9 @@ you want a shell-specific override:
 echo 'export NEBULA_ROOT=$HOME/corpus/nebula' >> ~/.zshrc
 ```
 
-A single command can override it with `--root`, which is how the tests run
-against throwaway corpora.
+A single command can override it with `--root`, which is how tests and agents
+initialize throwaway corpora. Those commands omit `--set-root` so a scratch
+corpus can never claim the machine default.
 
 ## Put it under git
 

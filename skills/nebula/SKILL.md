@@ -36,6 +36,12 @@ clean. If it resolves to `~/.nebula`, stop and ask rather than write unless the
 human has confirmed that is the corpus. A corpus at schema 1 refuses to open
 until `neb migrate`.
 
+Plain `neb init` never changes `~/.config/nebula/root`. A human setting up the
+machine's primary corpus can opt in with `neb init <dir> --set-root`; replacing
+a different configured root also requires `--force`. Agents initializing a
+scratch corpus always use `neb --root <scratch-dir> init` and never pass
+`--set-root`.
+
 ## The verbs
 
 Mutating: `capture`, `promote`, `drop`, `new`, `sharpen`, `status`, `link`,

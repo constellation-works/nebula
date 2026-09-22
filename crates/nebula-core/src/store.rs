@@ -85,19 +85,28 @@ impl Corpus {
         Ok(Some(path))
     }
 
-    /// Write the machine-local root setting when a newly initialized corpus
-    /// is not the default and no setting already exists. Returns the setting
-    /// path when it was written.
-    pub fn write_root_config_if_absent(root: &Path) -> Result<Option<PathBuf>> {
-        let Some(path) = Self::root_config_path_if_absent(root)? else {
-            return Ok(None);
-        };
+    /// Make `root` the machine-local default corpus.
+    ///
+    /// Refuses to replace a different configured root unless `force` is set.
+    /// Paths are compared as given, like every other corpus path.
+    pub fn write_root_config(root: &Path, force: bool) -> Result<PathBuf> {
+        let path = Self::root_config_path()?;
+        if let Some(configured) = Self::configured_root()?
+            && configured != root
+            && !force
+        {
+            return Err(Error::RootConfigConflict {
+                path,
+                configured,
+                requested: root.to_path_buf(),
+            });
+        }
         let parent = path
             .parent()
             .ok_or_else(|| Error::corpus("root configuration path has no parent"))?;
         std::fs::create_dir_all(parent)?;
         std::fs::write(&path, format!("{}\n", root.display()))?;
-        Ok(Some(path))
+        Ok(path)
     }
 
     /// A conflicting machine setting is worth naming before creating the
