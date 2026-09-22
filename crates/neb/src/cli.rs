@@ -25,7 +25,7 @@ use nebula_core::{
     ops,
 };
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command as ProcessCommand, ExitCode};
 
 /// `neb --help`, with the subcommands grouped by lifecycle stage. Each row's
 /// one-liner is the first line of that variant's doc comment, minus the
@@ -49,6 +49,7 @@ Inbox:
 
 Nodes:
   new          Create a node directly, without going through the inbox
+  edit         Edit a node's body in $VISUAL or $EDITOR
   sharpen      Sharpen a seed into a hypothesis by naming what would kill it
   status       Move a node to a new status, with the transition guards applied
   link         Add a typed edge between two nodes
@@ -229,6 +230,9 @@ enum Command {
         /// Node title. Defaults to the captured text.
         #[arg(long)]
         title: Option<String>,
+        /// Prose appended after the captured line. `-` reads standard input.
+        #[arg(long, value_name = "TEXT|-", allow_hyphen_values = true)]
+        body: Option<String>,
         /// A parent this descends from. Repeat for a merge.
         #[arg(long = "parent", value_name = "ID")]
         parents: Vec<String>,
@@ -261,6 +265,9 @@ enum Command {
     New {
         /// Node title.
         title: String,
+        /// The node's prose body. `-` reads standard input.
+        #[arg(long, value_name = "TEXT|-", allow_hyphen_values = true)]
+        body: Option<String>,
         /// A parent this descends from. Repeat for a merge.
         #[arg(long = "parent", value_name = "ID")]
         parents: Vec<String>,
@@ -284,6 +291,19 @@ enum Command {
         /// Orbit run that produced it.
         #[arg(long)]
         run: Option<String>,
+    },
+
+    /// Edit a node's body in $VISUAL or $EDITOR.
+    ///
+    /// The editor sees prose only, never YAML frontmatter. An existing
+    /// `## Notes` section is protected because notes are append-only.
+    Edit {
+        /// Node id.
+        node: String,
+        /// Who edited the body. Accepted for command consistency, but body
+        /// authorship is not represented in the schema and is not recorded.
+        #[arg(long, value_name = "LABEL")]
+        by: Option<String>,
     },
 
     /// Sharpen a seed into a hypothesis by naming what would kill it.
@@ -543,6 +563,35 @@ impl From<OnOff> for bool {
 /// the advice that names commands stays in the crate that has commands.
 struct Failure(String);
 
+/// Refusals specific to the terminal-owned editor flow.
+#[derive(Debug)]
+enum EditorError {
+    NotConfigured,
+    Start {
+        editor: String,
+        source: std::io::Error,
+    },
+    Unsuccessful(String),
+    NotesChanged,
+}
+
+impl std::fmt::Display for EditorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotConfigured => f.write_str("neither $VISUAL nor $EDITOR names an editor"),
+            Self::Start { editor, source } => {
+                write!(f, "could not start editor `{editor}`: {source}")
+            }
+            Self::Unsuccessful(editor) => {
+                write!(f, "editor `{editor}` exited unsuccessfully; the node was not changed")
+            }
+            Self::NotesChanged => f.write_str(
+                "the existing ## Notes section was removed, reordered, or changed; use `neb note` to append notes",
+            ),
+        }
+    }
+}
+
 impl From<Error> for Failure {
     fn from(e: Error) -> Self {
         Self(render::message(&e))
@@ -552,6 +601,12 @@ impl From<Error> for Failure {
 impl From<serde_json::Error> for Failure {
     fn from(e: serde_json::Error) -> Self {
         Self(format!("could not write JSON: {e}"))
+    }
+}
+
+impl From<EditorError> for Failure {
+    fn from(e: EditorError) -> Self {
+        Self(e.to_string())
     }
 }
 
@@ -579,6 +634,77 @@ pub fn main() -> ExitCode {
 }
 
 type Outcome = std::result::Result<ExitCode, Failure>;
+
+/// Resolve a `--body` value, using stdin only for the explicit `-` spelling.
+fn body_value(value: Option<String>) -> std::result::Result<String, Failure> {
+    use std::io::Read;
+
+    match value.as_deref() {
+        None => Ok(String::new()),
+        Some("-") => {
+            let mut body = String::new();
+            std::io::stdin()
+                .read_to_string(&mut body)
+                .map_err(Error::from)?;
+            Ok(body)
+        }
+        Some(_) => Ok(value.unwrap_or_default()),
+    }
+}
+
+/// Byte offset of the last exact `## Notes` heading in a body.
+fn notes_heading(body: &str) -> Option<usize> {
+    let mut found = None;
+    let mut offset = 0;
+    for line in body.split_inclusive('\n') {
+        if line.trim_end_matches(['\n', '\r']) == "## Notes" {
+            found = Some(offset);
+        }
+        offset += line.len();
+    }
+    found
+}
+
+/// Existing notes are immutable through `edit`; `note` is their append path.
+fn preserve_notes(before: &str, after: &str) -> std::result::Result<(), EditorError> {
+    let Some(before_at) = notes_heading(before) else {
+        return Ok(());
+    };
+    let Some(after_at) = notes_heading(after) else {
+        return Err(EditorError::NotesChanged);
+    };
+    if before[before_at..].trim_end() != after[after_at..].trim_end() {
+        return Err(EditorError::NotesChanged);
+    }
+    Ok(())
+}
+
+/// Let the configured editor rewrite body prose in a temporary file.
+fn edit_body(body: &str) -> std::result::Result<String, Failure> {
+    use std::io::Write;
+
+    let editor = ["VISUAL", "EDITOR"]
+        .into_iter()
+        .find_map(|name| std::env::var_os(name).filter(|value| !value.is_empty()))
+        .ok_or(EditorError::NotConfigured)?;
+    let editor_name = editor.to_string_lossy().into_owned();
+    let mut file = tempfile::NamedTempFile::new().map_err(Error::from)?;
+    file.write_all(body.as_bytes()).map_err(Error::from)?;
+    file.flush().map_err(Error::from)?;
+    let status = ProcessCommand::new(&editor)
+        .arg(file.path())
+        .status()
+        .map_err(|source| EditorError::Start {
+            editor: editor_name.clone(),
+            source,
+        })?;
+    if !status.success() {
+        return Err(EditorError::Unsuccessful(editor_name).into());
+    }
+    let edited = std::fs::read_to_string(file.path()).map_err(Error::from)?;
+    preserve_notes(body, &edited)?;
+    Ok(edited)
+}
 
 /// What every mutating arm needs to decide whether to commit and how to say
 /// so: `--no-commit` waives the setting once, and `--json` keeps the
@@ -833,6 +959,7 @@ fn run(cli: Cli) -> Outcome {
             entry,
             quiet,
             title,
+            body,
             parents,
             tags,
             id,
@@ -840,6 +967,7 @@ fn run(cli: Cli) -> Outcome {
             task,
             run,
         } => {
+            let body = body_value(body)?;
             let (corpus, _lock) = open_locked(root)?;
             let k = if quiet { 0 } else { NEAR_DEFAULT };
             let created = ops::promote(
@@ -847,6 +975,7 @@ fn run(cli: Cli) -> Outcome {
                 &entry,
                 &Promotion {
                     title,
+                    body,
                     parents,
                     tags,
                     origin: Origin::of(task, run),
@@ -883,6 +1012,7 @@ fn run(cli: Cli) -> Outcome {
 
         Command::New {
             title,
+            body,
             parents,
             kill,
             tags,
@@ -891,11 +1021,13 @@ fn run(cli: Cli) -> Outcome {
             task,
             run,
         } => {
+            let body = body_value(body)?;
             let (corpus, _lock) = open_locked(root)?;
             let created = ops::new_node(
                 &corpus,
                 &NewNode {
                     title,
+                    body,
                     parents,
                     kill,
                     tags,
@@ -914,6 +1046,23 @@ fn run(cli: Cli) -> Outcome {
                 );
             }
             commit(&corpus, commits, "new", &[&created.doc.node.id])?;
+            Ok(ok)
+        }
+
+        Command::Edit { node, by } => {
+            let (corpus, _lock) = open_locked(root)?;
+            let before = corpus.load(&node).map_err(|e| Failure::about(&e, &node))?;
+            let body = edit_body(&before.body)?;
+            ops::set_body(&corpus, &node, &body, by.as_deref())
+                .map_err(|e| Failure::about(&e, &node))?;
+            if json {
+                let docs = corpus.load_all()?;
+                let view = graph::node(&Graph::build(&docs)?, &node)?;
+                out_json(&view)?;
+            } else {
+                println!("{}", render::bold(&node));
+            }
+            commit(&corpus, commits, "edit", &[&node])?;
             Ok(ok)
         }
 
@@ -1316,7 +1465,7 @@ mod tests {
             assert!(flat.contains(&row), "help is missing the row {row:?}");
             seen += 1;
         }
-        assert_eq!(seen, 25, "template rows need updating for a new subcommand");
+        assert_eq!(seen, 26, "template rows need updating for a new subcommand");
         assert!(
             Cli::command().find_subcommand("help").is_none(),
             "clap's `help` subcommand should be disabled"
@@ -1362,7 +1511,7 @@ mod tests {
         let expected = [
             ["init", "check", "migrate", "config", "completions"].as_slice(),
             &["capture", "inbox", "promote", "drop"],
-            &["new", "sharpen", "status", "link", "tag", "note"],
+            &["new", "edit", "sharpen", "status", "link", "tag", "note"],
             &["cite"],
             &["show", "log", "list", "near", "trace", "impact", "graph"],
             &["open", "review"],

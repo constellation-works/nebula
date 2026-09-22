@@ -9,8 +9,9 @@
 //! directory sits under a symlink, and a checker that resolved paths would pass
 //! on Linux and fail here.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 fn bin() -> PathBuf {
     let mut p = std::env::current_exe().expect("test binary path");
@@ -47,6 +48,8 @@ impl Corpus {
             .env("NO_COLOR", "1")
             .env("HOME", self.workdir())
             .env_remove("NEBULA_ROOT")
+            .env_remove("VISUAL")
+            .env_remove("EDITOR")
             // Removed rather than trusted: a developer with a real
             // Observatory checkout exported would otherwise resolve records
             // these tests expect to go missing.
@@ -55,6 +58,35 @@ impl Corpus {
             cmd.env(key, value);
         }
         let out = cmd.output().expect("running neb");
+        Run {
+            args: args.join(" "),
+            out,
+        }
+    }
+
+    fn run_with_stdin(&self, args: &[&str], input: &str) -> Run {
+        let mut child = Command::new(bin())
+            .arg("--root")
+            .arg(&self.root)
+            .args(args)
+            .env("NO_COLOR", "1")
+            .env("HOME", self.workdir())
+            .env_remove("NEBULA_ROOT")
+            .env_remove("OBSERVATORY_ROOT")
+            .env_remove("VISUAL")
+            .env_remove("EDITOR")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("running neb with stdin");
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(input.as_bytes())
+            .expect("writing stdin");
+        let out = child.wait_with_output().expect("waiting for neb");
         Run {
             args: args.join(" "),
             out,
@@ -194,6 +226,18 @@ impl Run {
 
 fn write(path: &Path, s: &str) {
     std::fs::write(path, s).expect("writing fixture");
+}
+
+#[cfg(unix)]
+fn editor_script(c: &Corpus, name: &str, script: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = c.workdir().join(name);
+    write(&path, script);
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&path, permissions).unwrap();
+    path
 }
 
 /// `YYYY-MM-DD` for `days` ago, computed the same way `store::days_since`
@@ -2007,6 +2051,117 @@ fn round_tripping_a_node_preserves_prose_and_fields() {
     assert!(
         before.contains("id: the-original-thought") && after.contains("id: the-original-thought")
     );
+}
+
+// ------------------------------------------------------------- body/edit --
+
+#[test]
+fn new_reads_body_from_stdin_and_promote_appends_body_after_capture() {
+    let c = Corpus::new();
+    let id = c
+        .run_with_stdin(
+            &["new", "A body from stdin", "--body", "-"],
+            "first\n\nsecond\n",
+        )
+        .assert_ok()
+        .stdout_trim();
+    let node = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(node.ends_with("first\n\nsecond\n"), "{node}");
+
+    let entry = c.run(&["capture", "the captured first line"]).stdout_trim();
+    let promoted = c
+        .run(&[
+            "promote",
+            &entry,
+            "--title",
+            "Promoted body",
+            "--body",
+            "the added argument",
+        ])
+        .assert_ok()
+        .stdout_trim();
+    let node = std::fs::read_to_string(c.node_file(&promoted)).unwrap();
+    let captured = node.find("the captured first line").unwrap();
+    let added = node.find("the added argument").unwrap();
+    assert!(captured < added, "captured text stays first:\n{node}");
+    assert!(
+        node.contains("the captured first line\n\nthe added argument"),
+        "body paragraphs are separated:\n{node}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn edit_exposes_only_body_saves_it_stamps_updated_and_commits() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let id = c
+        .run(&["new", "Editable", "--body", "the old body"])
+        .assert_ok()
+        .stdout_trim();
+    set_updated(&c.node_file(&id), &date_days_ago(7));
+    let before_commits = log(&c.root).len();
+    let script = editor_script(
+        &c,
+        "rewrite-body.sh",
+        "#!/bin/sh\nif grep -q '^---$' \"$1\"; then exit 70; fi\nprintf 'the rewritten body\\n' > \"$1\"\n",
+    );
+
+    c.run_with_env(&["edit", &id], &[("EDITOR", script.to_str().unwrap())])
+        .assert_ok();
+
+    let node = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(node.ends_with("the rewritten body\n"), "{node}");
+    assert!(
+        node.contains(&format!("updated: {}", date_days_ago(0))),
+        "updated is stamped:\n{node}"
+    );
+    assert_eq!(log(&c.root).len(), before_commits + 1);
+    assert_eq!(log(&c.root)[0], format!("neb edit {id}"));
+}
+
+#[cfg(unix)]
+#[test]
+fn edit_refuses_to_remove_notes_and_leaves_the_node_unchanged() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "Protected notes", "--body", "the argument"])
+        .assert_ok()
+        .stdout_trim();
+    c.run(&["note", &id, "an append-only note"]).assert_ok();
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    let script = editor_script(
+        &c,
+        "remove-notes.sh",
+        "#!/bin/sh\nprintf 'the argument, rewritten without notes\\n' > \"$1\"\n",
+    );
+
+    c.run_with_env(&["edit", &id], &[("EDITOR", script.to_str().unwrap())])
+        .assert_fails()
+        .says("existing ## Notes section was removed, reordered, or changed");
+
+    let after = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert_eq!(after, before, "a refused edit must not touch the node");
+
+    let today = date_days_ago(0);
+    let reordered = format!(
+        "#!/bin/sh\nprintf '## Notes\\n\\n- {today}: an append-only note\\n\\nthe argument\\n' > \"$1\"\n"
+    );
+    let script = editor_script(&c, "reorder-notes.sh", &reordered);
+    c.run_with_env(&["edit", &id], &[("EDITOR", script.to_str().unwrap())])
+        .assert_fails()
+        .says("existing ## Notes section was removed, reordered, or changed");
+    let after = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert_eq!(after, before, "a reordered notes section must not be saved");
+}
+
+#[test]
+fn edit_without_visual_or_editor_is_a_named_refusal() {
+    let c = Corpus::new();
+    let id = c.run(&["new", "No editor"]).assert_ok().stdout_trim();
+    c.run(&["edit", &id])
+        .assert_fails()
+        .says("neither $VISUAL nor $EDITOR names an editor");
 }
 
 // --------------------------------------------------------------------- note --

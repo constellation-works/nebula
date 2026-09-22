@@ -70,7 +70,7 @@ for one invocation.
 |---|---|---|
 | `neb capture <TEXT>...` | append a thought; prints the entry id, then the three nearest nodes; works on a corpus that does not exist yet | `--quiet`/`-q` (before or after the text) |
 | `neb inbox` | live entries (not promoted, not dropped) | — |
-| `neb promote <ENTRY>` | inbox entry → seed node; without `--parent`, prints the three nearest nodes and proceeds as a root | `--title`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run`, `--quiet`/`-q` |
+| `neb promote <ENTRY>` | inbox entry → seed node; without `--parent`, prints the three nearest nodes and proceeds as a root | `--title`, `--body <TEXT\|->`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run`, `--quiet`/`-q` |
 | `neb drop <ENTRY>` | strike an entry through; never deleted | — |
 
 ```json
@@ -97,6 +97,10 @@ shares a word with it — promote as a root or drop. The id is printed before
 `nodes/` is read, so a node file that will not parse fails the suggestions
 (non-zero, after the id, like a refused commit) and never the capture;
 `--quiet` does not read `nodes/` at all.
+
+`promote --body <TEXT>` keeps the captured line as the first paragraph and
+appends `TEXT` after it. With `--body -`, the appended prose is read from
+standard input.
 
 ```json
 // neb capture --json "domains drift when a field is required"
@@ -140,7 +144,8 @@ way: no `near` key.
 
 | verb | does | flags |
 |---|---|---|
-| `neb new <TITLE>` | create a node directly | `--parent <ID>`×, `--kill`, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run` |
+| `neb new <TITLE>` | create a node directly | `--body <TEXT\|->`, `--parent <ID>`×, `--kill`, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run` |
+| `neb edit <NODE>` | open the body, without frontmatter, in `$VISUAL` or `$EDITOR` | `--by <LABEL>` |
 | `neb sharpen <NODE> --kill <KILL>` | seed → hypothesis by naming the falsifier | `--by <LABEL>`, or `--confirm` instead of `--kill` |
 | `neb status <NODE> <STATUS>` | `seed`, `hypothesis`, `refuted`, `abandoned`, with guards | `--why` (required for refuted, optional for abandoned) |
 | `neb link <FROM> <KIND> <TO>` | `derives-from`, `refines`, `generalizes`, `reopens`, `contradicts` | `--by <LABEL>` |
@@ -148,13 +153,22 @@ way: no `near` key.
 | `neb tag list` | every tag with its node count | — |
 | `neb note [--by <LABEL>] <NODE> <TEXT>...` | append a dated paragraph of reasoning to the body | `--by <LABEL>` (before or after the text) |
 
-`new --kill "..."` starts the node as a hypothesis; without it, a seed.
+`new --body <TEXT>` sets the prose at creation; `--body -` reads it from
+standard input. `new --kill "..."` starts the node as a hypothesis; without
+it, a seed.
 `sharpen --confirm` takes no text: it adopts the kill condition already on the
 node as the human's own, changing nothing else and appending nothing.
 `contradicts` is written on both nodes. `link` prints `<from> <kind> <to>`.
 `note` creates a `## Notes` section at the end of the body if needed, then
 appends `- YYYY-MM-DD: <text>`. Repeated notes accumulate in order; earlier
 body text, status, edges and tags are left as they are. `updated` is bumped.
+`edit` writes only the prose body to a temporary file, preferring `$VISUAL`
+over `$EDITOR`, then saves the result after the editor exits successfully.
+Frontmatter is never exposed. If the node already has a `## Notes` section,
+removing, moving or changing it is refused; append reasoning with `note`
+instead. `--by` is accepted and validated, but records nothing because the
+body has no per-field author in the current schema. With neither environment
+variable set, `edit` refuses and names both variables.
 Unknown nodes are refused (`NoSuchNode`). `--json` is the same `NodeView` as
 `show --json`: `notes` is a list of `{at, text, by}`, oldest first, omitted
 when empty.
