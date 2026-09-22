@@ -450,7 +450,8 @@ pub struct Doc {
 
 /// Parse a node file.
 pub(crate) fn read(path: &Path) -> Result<Doc> {
-    let raw = std::fs::read_to_string(path)?;
+    let raw =
+        std::fs::read_to_string(path).map_err(|error| Error::io_at("reading", path, error))?;
     parse(&raw).map_err(|e| match e {
         Error::Yaml { context, source } => Error::Yaml {
             context: format!("in {}: {context}", path.display()),

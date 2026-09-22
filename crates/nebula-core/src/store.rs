@@ -649,7 +649,7 @@ impl Corpus {
             return Err(Error::corpus("nothing to capture"));
         }
         let dir = self.root.join("inbox");
-        std::fs::create_dir_all(&dir)?;
+        std::fs::create_dir_all(&dir).map_err(|error| Error::io_at("writing", &dir, error))?;
         let now = stamp();
         let month = &now[..7];
         let path = dir.join(format!("{month}.md"));
@@ -660,11 +660,13 @@ impl Corpus {
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&path)?;
+            .open(&path)
+            .map_err(|error| Error::io_at("writing", &path, error))?;
         if !existing.is_empty() && !existing.ends_with('\n') {
-            writeln!(f)?;
+            writeln!(f).map_err(|error| Error::io_at("writing", &path, error))?;
         }
-        writeln!(f, "- [{id}] {now} {text}")?;
+        writeln!(f, "- [{id}] {now} {text}")
+            .map_err(|error| Error::io_at("writing", &path, error))?;
         Ok(InboxEntry {
             id,
             at: now,
@@ -783,7 +785,7 @@ pub(crate) fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<()
                 )));
             }
         }
-        return Err(error.into());
+        return Err(Error::io_at("writing", path, error));
     }
     Ok(())
 }
@@ -840,7 +842,7 @@ fn create_temporary_sibling(path: &Path) -> Result<(PathBuf, std::fs::File)> {
         {
             Ok(file) => return Ok((tmp, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(Error::io_at("writing", path, error)),
         }
     }
     Err(Error::corpus(format!(
@@ -1173,7 +1175,17 @@ mod tests {
         let destination = dir.path().join("destination");
         std::fs::create_dir(&destination).unwrap();
 
-        assert!(write_atomic(&destination, "replacement").is_err());
+        let error = write_atomic(&destination, "replacement").unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("writing"), "{message}");
+        assert!(
+            message.contains(&destination.display().to_string()),
+            "{message}"
+        );
+        assert!(
+            matches!(error, Error::IoAt { source, .. } if source.raw_os_error().is_some()),
+            "the OS cause was not preserved: {message}"
+        );
         assert!(
             destination.is_dir(),
             "the failed rename left the target alone"
