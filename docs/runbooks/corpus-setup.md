@@ -122,10 +122,12 @@ What it does, and does not do:
   or from a cron job, and the remote is your off-disk copy.
 - It needs a git identity, like any commit: `git -C "$NEBULA_ROOT" config
   user.name ...` and `user.email` if your global config has none.
-- If something outside the corpus is already staged in the repository (which
-  can only happen when the corpus is nested in a larger one), the commit is
-  refused so that a `neb` commit is always exactly the corpus. The write
-  itself is never rolled back; see
+- If something outside the managed corpus paths (`nodes/`, `inbox/`,
+  `config.yaml`, and the generated `.gitignore`) is already staged in the
+  repository, the commit is refused so that a `neb` commit is always exactly
+  the corpus. This includes an unrelated file in a repository rooted at the
+  corpus as well as a change elsewhere in a larger enclosing repository. The
+  write itself is never rolled back; see
   [corpus-recovery.md](corpus-recovery.md#symptom-a-verb-writes-but-refuses-to-commit).
 - If the repository around the corpus ignores it, `neb` says so rather than
   silently commit nothing; the fix is the `git init` at the root above.
