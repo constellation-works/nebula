@@ -1160,6 +1160,23 @@ fn a_refuted_idea_cannot_quietly_come_back() {
         .assert_fails()
         .says("cannot simply reopen");
 
+    // Even refuted -> refuted is refused: a verdict is part of the record,
+    // and a second `--why` would silently overwrite the first one's reason
+    // and date rather than leaving the recorded verdict alone.
+    let before_reverdict = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    c.run(&["status", &id, "refuted", "--why", "second verdict"])
+        .assert_fails()
+        .says("cannot simply reopen");
+    let after_reverdict = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert_eq!(
+        before_reverdict, after_reverdict,
+        "a refused refuted -> refuted leaves the node untouched"
+    );
+    assert!(
+        after_reverdict.contains("why: X happened"),
+        "{after_reverdict}"
+    );
+
     // The kill is part of the verdict: rewriting it would leave closed.why
     // describing a falsifier the node no longer names. `--confirm` is the
     // same write path with different flags.
