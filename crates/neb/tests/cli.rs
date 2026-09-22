@@ -1966,6 +1966,83 @@ fn an_unparsable_created_or_updated_date_is_a_rule_12_error() {
         .says("1 errors");
 }
 
+/// Calendar-looking strings must still name real Gregorian dates. Otherwise
+/// hand edits evade rule 12 while `review` and `open` silently ignore them.
+#[test]
+fn impossible_calendar_dates_are_rule_12_errors() {
+    for (field, date) in [
+        ("created", "2026-99-99"),
+        ("updated", "2026-04-31"),
+        ("created", "2026-02-29"),
+    ] {
+        let c = Corpus::new();
+        let id = c.seed("an idea", "An idea");
+        match field {
+            "created" => set_created(&c.node_file(&id), date),
+            "updated" => set_updated(&c.node_file(&id), date),
+            _ => unreachable!("test fields are explicit"),
+        }
+        c.run(&["check"])
+            .assert_fails()
+            .says("[12]")
+            .says(&format!("{field} `{date}` is not a YYYY-MM-DD date"))
+            .says("1 errors");
+    }
+
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&[
+        "cite",
+        &id,
+        "--uri",
+        "https://example.org",
+        "--kind",
+        "paper",
+        "--note",
+        "n",
+    ])
+    .assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    let needle = "\n  added: ";
+    let start = raw.find(needle).expect("added: line") + needle.len();
+    let end = start + 10;
+    let mut raw = raw;
+    raw.replace_range(start..end, "2026-02-29");
+    write(&c.node_file(&id), &raw);
+    c.run(&["check"])
+        .assert_fails()
+        .says("[12]")
+        .says("reference `r1` has an added date `2026-02-29` that does not parse")
+        .says("1 errors");
+}
+
+#[test]
+fn leap_day_dates_are_valid_for_nodes_and_references() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    set_created(&c.node_file(&id), "2024-02-29");
+    set_updated(&c.node_file(&id), "2024-02-29");
+    c.run(&[
+        "cite",
+        &id,
+        "--uri",
+        "https://example.org",
+        "--kind",
+        "paper",
+        "--note",
+        "n",
+    ])
+    .assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    let needle = "\n  added: ";
+    let start = raw.find(needle).expect("added: line") + needle.len();
+    let end = start + 10;
+    let mut raw = raw;
+    raw.replace_range(start..end, "2024-02-29");
+    write(&c.node_file(&id), &raw);
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
 #[test]
 fn updated_earlier_than_created_is_a_rule_12_error() {
     let c = Corpus::new();

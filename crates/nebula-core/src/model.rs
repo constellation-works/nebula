@@ -15,6 +15,7 @@ use std::fmt;
 use std::ops::Range;
 use std::path::Path;
 use std::str::FromStr;
+use time::{Date, format_description::well_known::Iso8601};
 
 /// Lifecycle. `seed → hypothesis → refuted | abandoned`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -627,6 +628,7 @@ pub(crate) fn is_iso_date(s: &str) -> bool {
                 c.is_ascii_digit()
             }
         })
+        && Date::parse(s, &Iso8601::DATE).is_ok()
 }
 
 /// Write a node file atomically.
