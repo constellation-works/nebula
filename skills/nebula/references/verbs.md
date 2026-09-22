@@ -326,7 +326,7 @@ not who wrote the words. `check` enforces nothing about authorship.
 | `neb near <QUERY>...` | the existing nodes closest to free text, or to a node (left out of its own answer), scored `0..=1`, best first | `--limit <K>`/`-k` (default 3); flags may follow the query |
 | `neb trace <NODE>` | ancestry, nearest first, each node once | `--down` for descendants |
 | `neb impact <NODE>` | descendants plus `contradicts` neighbours | — |
-| `neb graph` | the whole corpus as `{nodes, edges}` | `--json` only; without it, a hint and exit 2 |
+| `neb graph` | the whole corpus as `{nodes, edges}` or a Mermaid diagram | `--json`, or `--mermaid [--from <ID>]`; without a format, a hint and exit 2 |
 
 ```json
 // neb show tags-beat-domains --json
@@ -406,6 +406,23 @@ straight to `--parent` unread is the automatic linking the spec rules out.
     { "from": "a-single-global-taxonomy", "type": "contradicts", "to": "tags-beat-domains" }
   ]
 }
+```
+
+`neb graph --mermaid` emits a `graph BT` block with every node styled by
+status and every edge labelled by kind. Symmetric `contradicts` edges become
+one dotted, undirected line. Add `--from <ID>` to include only that node, its
+ancestors and its descendants; siblings and unrelated components stay out.
+Titles are escaped so quotes and brackets remain label text.
+
+```mermaid
+graph BT
+  tags-beat-domains["Tags beat domains"]:::hypothesis
+  required-categorical-fields-drift["Required categorical fields drift"]:::seed
+  tags-beat-domains -->|derives-from| required-categorical-fields-drift
+  classDef seed fill:#dbeafe,stroke:#2563eb,color:#172554
+  classDef hypothesis fill:#fef3c7,stroke:#d97706,color:#451a03
+  classDef refuted fill:#fee2e2,stroke:#dc2626,color:#450a0a
+  classDef abandoned fill:#f3f4f6,stroke:#6b7280,color:#374151
 ```
 
 ## Maintenance
