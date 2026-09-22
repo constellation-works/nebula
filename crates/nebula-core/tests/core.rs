@@ -1330,6 +1330,91 @@ fn a_node_file_that_claims_another_nodes_id_is_refused_before_the_write() {
     assert!(matches!(corpus.load_all(), Err(Error::IdMismatch { .. })));
 }
 
+/// The same bug without the hand edit. Copying a node file leaves two files
+/// whose text is equal down to the byte, and agreement was once decided by
+/// comparing that text — so `nodes/safe.md`, a copy of `nodes/victim.md`,
+/// vouched for the `victim` it stored and `note safe` appended to the other
+/// node. Equal contents are not one file, and never were the question.
+#[test]
+fn a_copy_of_another_node_file_does_not_authorize_the_id_it_stores() {
+    let (_dir, corpus) = corpus();
+    let victim = seed(&corpus, "Victim", &[]);
+    let victim_path = corpus.node_path(&victim).unwrap();
+    let safe_path = corpus.node_path("safe").unwrap();
+    std::fs::copy(&victim_path, &safe_path).expect("copy");
+    let before = std::fs::read_to_string(&victim_path).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&safe_path).unwrap(),
+        before,
+        "the fixture is a byte-for-byte copy"
+    );
+
+    let refused = ops::note(&corpus, "safe", "a fixture note", None);
+    assert!(
+        matches!(&refused, Err(Error::IdMismatch { path, id }) if path == &safe_path && id == &victim),
+        "got {refused:?}"
+    );
+    // Both doors: the id names the copy, and a scan finds it by path.
+    assert!(
+        matches!(corpus.load("safe"), Err(Error::IdMismatch { .. })),
+        "a read answered from the wrong file"
+    );
+    assert!(
+        matches!(corpus.load_all(), Err(Error::IdMismatch { .. })),
+        "a scan read it as the node it claims"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&victim_path).unwrap(),
+        before,
+        "the node the copy named is untouched"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&safe_path).unwrap(),
+        before,
+        "and so is the file that was asked for"
+    );
+}
+
+/// The one reason two spellings may name one node, pinned to the case it was
+/// written for. A volume may store a file name in a different Unicode
+/// normalization than the id the file stores, and a scan reading that name
+/// back must still recognize the node rather than refuse it. macOS does this
+/// and Linux does not, so the case is *detected* rather than assumed: where
+/// the volume answers both spellings with one file, the node still loads.
+#[test]
+fn a_file_name_stored_in_another_normalization_still_loads_and_scans() {
+    let (_dir, corpus) = corpus();
+    let id = seed(&corpus, "Ünïcode título → ok", &[]);
+    assert_eq!(id, "ünïcode-título-ok");
+    let composed = corpus.node_path(&id).unwrap();
+    // The same word decomposed: each accent written as a combining mark.
+    let decomposed = composed.with_file_name("u\u{308}ni\u{308}code-ti\u{301}tulo-ok.md");
+    std::fs::rename(&composed, &decomposed).expect("rename to the decomposed spelling");
+
+    if !composed.exists() {
+        // A byte-exact volume: the two spellings are two names, the node the
+        // id points at is simply gone, and there is nothing to agree with.
+        assert!(matches!(corpus.load(&id), Err(Error::NoSuchNode(_))));
+        return;
+    }
+
+    assert_eq!(
+        corpus
+            .load(&id)
+            .expect("the id still opens the node")
+            .node
+            .id,
+        id,
+        "the stored id is the composed spelling the volume did not keep"
+    );
+    let docs = corpus
+        .load_all()
+        .expect("a scan accepts the stored spelling");
+    assert_eq!(docs.len(), 1, "one file, read once");
+    assert_eq!(docs[0].node.id, id);
+    ops::note(&corpus, &id, "a fixture note", None).expect("and a write still lands");
+}
+
 /// A caller-supplied id is a path the moment it is used, whether it came from
 /// a terminal, the desktop, or an agent.
 #[test]

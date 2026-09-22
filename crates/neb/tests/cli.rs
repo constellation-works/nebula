@@ -4941,6 +4941,46 @@ fn a_node_file_claiming_another_nodes_id_refuses_before_overwriting_it() {
         .says("is not the node its file name names");
 }
 
+/// The same overwrite reached without touching a file's text: `cp
+/// nodes/victim.md nodes/safe.md`. Agreement was once decided by comparing
+/// the two files' contents, which a copy makes equal by construction, so
+/// `note safe` reported `safe`, left `safe.md` alone and appended to
+/// `victim.md` instead.
+#[test]
+fn a_copied_node_file_refuses_rather_than_redirecting_the_write() {
+    let c = Corpus::new();
+    c.run(&["new", "Victim"]).assert_ok();
+    let victim = c.node_file("victim");
+    let safe = c.node_file("safe");
+    std::fs::copy(&victim, &safe).expect("copy");
+    let before = std::fs::read_to_string(&victim).unwrap();
+
+    c.run(&["note", "safe", "MISDIRECTED"])
+        .assert_fails()
+        .says("is not the node its file name names");
+    assert_eq!(
+        std::fs::read_to_string(&victim).unwrap(),
+        before,
+        "the note landed on the node the copy named"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&safe).unwrap(),
+        before,
+        "the file that was asked for was written to"
+    );
+    // Reads fail the same way rather than answering from the copy.
+    for args in [
+        vec!["show", "safe"],
+        vec!["list"],
+        vec!["check"],
+        vec!["tag", "safe", "--add", "fixture"],
+    ] {
+        c.run(&args)
+            .assert_fails()
+            .says("is not the node its file name names");
+    }
+}
+
 /// A caller-supplied id is a path the moment a verb uses it, and a real file
 /// outside the corpus is exactly what it used to reach.
 #[test]
