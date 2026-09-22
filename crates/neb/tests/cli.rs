@@ -778,7 +778,7 @@ fn promote_json_is_the_created_node_with_its_neighbours() {
 // ------------------------------------------------------------------- graph --
 
 #[test]
-fn graph_exports_the_whole_corpus_as_json_only() {
+fn graph_exports_the_whole_corpus_as_json() {
     let c = Corpus::new();
     let base = c.seed("base", "Base");
     let child = c.seed("child", "Child");
@@ -809,13 +809,96 @@ fn graph_exports_the_whole_corpus_as_json_only() {
         "{json}"
     );
 
-    // There is no text form: without --json it explains and exits 2.
+    // There is no default text form: without a format it explains and exits 2.
     let run = c.run(&["graph"]);
     assert_eq!(run.out.status.code(), Some(2));
     assert!(
-        run.stdout().contains("neb graph --json"),
+        run.stdout().contains("neb graph --json") && run.stdout().contains("neb graph --mermaid"),
         "{}",
         run.stdout()
+    );
+}
+
+#[test]
+fn graph_exports_mermaid_and_limits_it_to_lineage() {
+    let c = Corpus::new();
+    c.run(&[
+        "new",
+        "A \"quoted\" [ancestor] & source",
+        "--id",
+        "ancestor",
+    ])
+    .assert_ok();
+    c.run(&[
+        "new", "Focus", "--id", "focus", "--parent", "ancestor", "--kill", "evidence",
+    ])
+    .assert_ok();
+    c.run(&[
+        "new",
+        "Descendant",
+        "--id",
+        "descendant",
+        "--parent",
+        "focus",
+        "--kill",
+        "evidence",
+    ])
+    .assert_ok();
+    c.run(&[
+        "status",
+        "descendant",
+        "refuted",
+        "--why",
+        "evidence arrived",
+    ])
+    .assert_ok();
+    c.run(&["new", "Sibling", "--id", "sibling", "--parent", "ancestor"])
+        .assert_ok();
+    c.run(&["status", "sibling", "abandoned"]).assert_ok();
+    c.run(&["new", "Unrelated", "--id", "unrelated"])
+        .assert_ok();
+    c.run(&["link", "ancestor", "contradicts", "focus"])
+        .assert_ok();
+
+    let whole = c.run(&["graph", "--mermaid"]).assert_ok().stdout();
+    assert!(whole.starts_with("graph BT\n"), "{whole}");
+    assert!(
+        whole.contains("ancestor[\"A &quot;quoted&quot; &#91;ancestor&#93; &amp; source\"]:::seed"),
+        "{whole}"
+    );
+    for status in ["seed", "hypothesis", "refuted", "abandoned"] {
+        assert!(whole.contains(&format!("  classDef {status} ")), "{whole}");
+    }
+    assert_eq!(whole.matches("|contradicts|").count(), 1, "{whole}");
+    assert_eq!(
+        whole.lines().filter(|line| line.contains(":::")).count(),
+        5,
+        "{whole}"
+    );
+    assert_eq!(
+        whole.lines().filter(|line| line.contains("| ")).count(),
+        4,
+        "{whole}"
+    );
+
+    let lineage = c
+        .run(&["graph", "--mermaid", "--from", "focus"])
+        .assert_ok()
+        .stdout();
+    for id in ["ancestor", "focus", "descendant"] {
+        assert!(lineage.contains(&format!("  {id}[")), "{lineage}");
+    }
+    assert!(!lineage.contains("  sibling["), "{lineage}");
+    assert!(!lineage.contains("  unrelated["), "{lineage}");
+    assert_eq!(
+        lineage.lines().filter(|line| line.contains(":::")).count(),
+        3,
+        "{lineage}"
+    );
+    assert_eq!(
+        lineage.lines().filter(|line| line.contains("| ")).count(),
+        3,
+        "{lineage}"
     );
 }
 

@@ -448,9 +448,16 @@ enum Command {
 
     /// The whole corpus as nodes and edges, for a tool that draws it.
     ///
-    /// JSON only: a whole-corpus DAG has no useful text form, and `trace`
-    /// already draws the part of it you can read in a terminal.
-    Graph,
+    /// Use `--json` for structured data or `--mermaid` for a diagram that can
+    /// be pasted into a document. Without either, this prints a short hint.
+    Graph {
+        /// Emit a Mermaid `graph BT` diagram.
+        #[arg(long, conflicts_with = "json")]
+        mermaid: bool,
+        /// Limit the Mermaid diagram to this node's ancestors and descendants.
+        #[arg(long, value_name = "ID", requires = "mermaid")]
+        from: Option<String>,
+    },
 
     /// Nodes that need attention.
     ///
@@ -1132,14 +1139,24 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Graph => {
-            if !json {
-                println!("neb graph is JSON only; run:  neb graph --json");
+        Command::Graph { mermaid, from } => {
+            if !json && !mermaid {
+                println!(
+                    "neb graph needs an output format; run:  neb graph --json  or  neb graph --mermaid"
+                );
                 return Ok(ExitCode::from(2));
             }
             let corpus = Corpus::open(root)?;
             let docs = corpus.load_all()?;
-            out_json(&graph::export(&Graph::build(&docs)?)?)?;
+            let exported = graph::export(&Graph::build(&docs)?)?;
+            if mermaid {
+                print!(
+                    "{}",
+                    render::mermaid(&exported, from.as_deref()).map_err(Failure::say)?
+                );
+            } else {
+                out_json(&exported)?;
+            }
             Ok(ok)
         }
 
