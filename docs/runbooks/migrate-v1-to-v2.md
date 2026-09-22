@@ -65,9 +65,10 @@ back, printing a line per node changed and a note per thing it did:
 - A v1 `status: refuted` node that never had a reason recorded gets a
   `closed.why` synthesized to say exactly that — nothing here invents a real
   reason, it records that the old record did not have one.
-- `config.yaml` is rewritten to hold only `corpus_id` and
-  `schema_version: 2`; the declared-domain list and default are dropped along
-  with the field they supported.
+- `config.yaml` is rewritten with `corpus_id` and `schema_version: 2`, while
+  preserving `observatory_root` when set and the `commit` setting. The
+  declared-domain list and default are dropped along with the field they
+  supported.
 
 Nothing is deleted. Everything the v0.1 schema could express ends up either
 unchanged (genealogy edges, `contradicts`, existing references) or re-labelled
