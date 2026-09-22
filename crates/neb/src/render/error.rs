@@ -21,6 +21,12 @@ pub fn message(e: &Error) -> String {
         Error::SchemaMismatch { .. } => {
             format!("{e}\n\nBring the corpus forward with:  neb migrate")
         }
+        Error::Locked { .. } => format!(
+            "{e}\n\nAnother `neb`, an agent session, or the desktop app is mid-write. \
+             Nothing changed, so run it again in a moment.\n\n\
+             The lock goes with that writer's process, so there is no stale \
+             .lock to remove.",
+        ),
         Error::StagedElsewhere { root, .. } => format!(
             "{e}\n\nCommit or unstage them, then catch the corpus up:\n  \
              git -C {0} add nodes inbox config.yaml && git -C {0} commit -m \"neb\"\n\n\

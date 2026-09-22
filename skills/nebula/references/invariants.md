@@ -23,6 +23,22 @@ Genealogy means the four directed kinds: `derives-from`, `refines`,
 `generalizes`, `reopens`. `contradicts` is symmetric and not genealogy, so it
 may point anywhere without creating a cycle.
 
+## One writer at a time
+
+Every verb that writes takes an advisory lock on `<root>/.lock` and holds it
+until the write — and the commit that records it — is done. Reads take
+nothing, so `show`, `list`, `trace`, `impact`, `graph`, `near`, `open`,
+`review` and `check` never wait and never block anybody.
+
+This matters to you because you are the second writer. A human at a terminal,
+the desktop's capture box and your session all run the same verbs against one
+corpus, and a write of yours that lands between somebody's load and their save
+is an edit of theirs that quietly disappears. The lock is what stops that; the
+only thing you see of it is the refusal below when the wait runs out.
+
+`<root>/.lock` is not corpus content. It is never committed, never checked,
+and never something to delete or edit.
+
 ## What each refusal means and what to do
 
 Refusals are typed. The message is what the CLI prints; the variant is what
@@ -50,6 +66,7 @@ Refusals are typed. The message is what the CLI prints; the variant is what
 | `no corpus at <dir>` | `NoCorpus` | — | The root is wrong. Do **not** `neb init` somewhere new; confirm `NEBULA_ROOT` with the human. |
 | `... is schema_version 1, and this build understands 2` | `SchemaMismatch` | — | The corpus needs `neb migrate`. In session mode, run it only on a clean git tree and tell the human it lands as its own commit; in routine mode, propose it. |
 | `<root> has staged changes outside the corpus (<paths>); the write is in place and nothing was committed` | `StagedElsewhere { root, paths }` | — | **The write already landed. Do not retry the verb.** Report the staged paths; commit or unstage them, then catch up the corpus with `git -C <root> add nodes inbox config.yaml && git -C <root> commit -m "neb"`, or use `--no-commit` next time. |
+| `another nebula writer is holding <root>; nothing was written` | `Locked { root }` | — | Another `neb`, an agent session, or the desktop app was mid-write and still had the corpus lock after a five-second wait. **Nothing was written, so the same command is safe to run again** — unlike every other refusal in this table, this one is worth retrying, once, after a pause. Do not delete `<root>/.lock`: the lock goes with the writer's process, so there is never a stale one to clear. If it keeps refusing, say so and name the root; something is holding the corpus open. |
 | `<root> is ignored by the git repository that contains it; nothing can be committed` | `CorpusIgnored` | — | The write landed but cannot be committed there. Run `git -C <root> init` to make the corpus its own repository, or turn commits off with `neb config commit off`; do not retry the write. |
 | `git <context> failed in <root>: <stderr>` | `Git { root, context, stderr }` | — | The write is in place; git is what failed. Report the command and stderr, fix the git problem, then catch up the corpus with a separate commit. Do not retry the verb. |
 | `a reason only applies to refuted or abandoned` | `Corpus(..)` | — | Drop `--why` when moving to an open status. |

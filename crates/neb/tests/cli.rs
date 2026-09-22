@@ -61,6 +61,28 @@ impl Corpus {
         }
     }
 
+    /// Start the binary without waiting for it, so two of them can be in
+    /// flight at once. The returned handle is finished with
+    /// [`Spawned::wait`].
+    fn spawn(&self, args: &[&str]) -> Spawned {
+        let child = Command::new(bin())
+            .arg("--root")
+            .arg(&self.root)
+            .args(args)
+            .env("NO_COLOR", "1")
+            .env("HOME", self.workdir())
+            .env_remove("NEBULA_ROOT")
+            .env_remove("OBSERVATORY_ROOT")
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawning neb");
+        Spawned {
+            args: args.join(" "),
+            child,
+        }
+    }
+
     fn workdir(&self) -> &Path {
         self.dir.path()
     }
@@ -103,6 +125,22 @@ fn run_from_home(
     Run {
         args: args.join(" "),
         out,
+    }
+}
+
+/// A `neb` still running, so a test can have two of them racing.
+struct Spawned {
+    args: String,
+    child: std::process::Child,
+}
+
+impl Spawned {
+    fn wait(self) -> Run {
+        let out = self.child.wait_with_output().expect("waiting for neb");
+        Run {
+            args: self.args,
+            out,
+        }
     }
 }
 
@@ -3217,6 +3255,23 @@ fn git_init(dir: &Path) {
     git(dir, &["config", "commit.gpgsign", "false"]);
 }
 
+/// `git status --porcelain`, minus the corpus write lock.
+///
+/// `.lock` is runtime state rather than corpus content: `neb` never stages
+/// it and `check` never reads it, so a corpus that is its own repository
+/// carries it untracked from the first write on. Every assertion below about
+/// a clean tree means clean apart from that one line.
+fn dirt(dir: &Path) -> String {
+    git(dir, &["status", "--porcelain"])
+        .lines()
+        .filter(|line| line.trim_end() != "?? .lock")
+        .fold(String::new(), |mut out, line| {
+            out.push_str(line);
+            out.push('\n');
+            out
+        })
+}
+
 /// Commit messages, newest first.
 fn log(dir: &Path) -> Vec<String> {
     git(dir, &["log", "--format=%s"])
@@ -3387,7 +3442,7 @@ fn commit_on_records_each_mutating_verb_and_never_pushes() {
         .assert_ok()
         .stdout_trim();
     assert_eq!(log(&c.root)[0], format!("neb capture {entry}"));
-    assert!(git(&c.root, &["status", "--porcelain"]).is_empty());
+    assert!(dirt(&c.root).is_empty(), "{}", dirt(&c.root));
 
     // A read-only verb and a no-op write commit nothing.
     let n = log(&c.root).len();
@@ -3536,8 +3591,116 @@ fn migrate_keeps_the_commit_setting_and_commits_itself() {
         .says("4 of 4 nodes rewritten")
         .says("committed ");
     assert_eq!(log(&c.root), ["neb migrate", "v1 corpus"]);
-    assert!(git(&c.root, &["status", "--porcelain"]).is_empty());
+    assert!(dirt(&c.root).is_empty(), "{}", dirt(&c.root));
     let raw = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
     assert!(raw.contains("commit: true"), "{raw}");
     c.run(&["config", "commit"]).assert_ok().says("on");
+}
+
+// --------------------------------------------------------- the write lock --
+
+/// Two `neb` processes editing one node's tags at the same time. Each is a
+/// load, an edit and a save, so without `<root>/.lock` the second reads the
+/// node as it was before the first saved and the later write wins: one tag
+/// lands and the other is gone without a word.
+///
+/// Separate processes deliberately. `flock` is held by the open file
+/// description, so only a second *process* exercises it;
+/// `crates/nebula-core/tests/core.rs` runs the same race across two threads,
+/// which is what exercises the in-process half.
+#[test]
+fn two_concurrent_tag_writes_from_separate_processes_both_land() {
+    let c = Corpus::new();
+    let id = c.seed("a node two writers will tag", "Contended node");
+
+    let first = c.spawn(&["tag", &id, "--add", "alpha"]);
+    let second = c.spawn(&["tag", &id, "--add", "beta"]);
+    first.wait().assert_ok();
+    second.wait().assert_ok();
+
+    let shown = c.run(&["--json", "show", &id]).assert_ok().stdout();
+    let shown: serde_json::Value = serde_json::from_str(&shown).expect("show --json");
+    let mut tags: Vec<&str> = shown["node"]["tags"]
+        .as_array()
+        .expect("tags")
+        .iter()
+        .map(|t| t.as_str().expect("a tag"))
+        .collect();
+    tags.sort_unstable();
+    assert_eq!(tags, ["alpha", "beta"], "one writer's tag was lost");
+    c.run(&["check"]).assert_ok();
+}
+
+/// Past the bounded wait the writer refuses, with the hint that says what to
+/// do. The write never happens, so retrying is safe.
+///
+/// The lock is held here in the test process and contended by a spawned
+/// `neb`, so this is a real cross-process `flock` and not the in-process
+/// table standing in for one.
+#[test]
+fn a_writer_that_waits_out_the_lock_refuses_with_a_hint_and_writes_nothing() {
+    let c = Corpus::new();
+    let id = c.seed("a node nobody else gets to edit", "Locked node");
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+
+    let held = nebula_core::CorpusLock::acquire(&c.root).expect("holding the lock");
+
+    // It waits the full five seconds before giving up, which is the bound
+    // under test.
+    c.run(&["tag", &id, "--add", "never"])
+        .assert_fails()
+        .says("another nebula writer is holding")
+        .says("mid-write")
+        .says("run it again in a moment");
+
+    assert_eq!(
+        std::fs::read_to_string(c.node_file(&id)).unwrap(),
+        before,
+        "the refusal came before the write"
+    );
+    // A read never waits on a writer, whoever is holding it.
+    c.run(&["show", &id]).assert_ok();
+    c.run(&["list"]).assert_ok();
+    c.run(&["check"]).assert_ok();
+
+    // And once it is free, the same write goes through.
+    drop(held);
+    c.run(&["tag", &id, "--add", "never"]).assert_ok();
+    assert!(
+        std::fs::read_to_string(c.node_file(&id))
+            .unwrap()
+            .contains("never")
+    );
+}
+
+/// The lock file is the one thing under the root that is not corpus content,
+/// so `neb commit` never stages it and `check` never reads it.
+#[test]
+fn the_lock_file_is_never_staged_and_never_checked() {
+    let c = Corpus::new();
+    git_init(&c.root);
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let id = c.seed("a write that takes the lock", "Locked write");
+
+    assert!(c.root.join(".lock").exists(), "the write took the lock");
+    assert!(
+        !git(&c.root, &["ls-files"]).contains(".lock"),
+        "the lock file is not tracked"
+    );
+    assert!(
+        git(&c.root, &["status", "--porcelain"]).contains("?? .lock"),
+        "it is left untracked rather than swept into a commit"
+    );
+    assert!(dirt(&c.root).is_empty(), "{}", dirt(&c.root));
+    let paths = head_paths(&c.root);
+    assert!(
+        paths.contains(&format!("nodes/{id}.md")) && paths.iter().all(|p| p != ".lock"),
+        "the commit is the promotion and nothing beside it: {paths:?}"
+    );
+
+    c.run(&["check"]).assert_ok().says("0 errors");
+    let report = c.run(&["--json", "check"]).assert_ok().stdout();
+    let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(report["nodes"], 1, "the lock file is not read as a node");
+    assert_eq!(report["findings"].as_array().unwrap().len(), 0);
 }

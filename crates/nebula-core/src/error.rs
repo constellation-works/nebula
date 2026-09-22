@@ -127,6 +127,15 @@ pub enum Error {
     )]
     InvalidId(String),
 
+    /// Another writer holds the corpus lock and did not release it within
+    /// the bounded wait. Nothing was written: the refusal comes before the
+    /// op reads anything, so there is no half-applied change to undo.
+    #[error("another nebula writer is holding {}; nothing was written", .root.display())]
+    Locked {
+        /// The corpus root whose `.lock` is held.
+        root: PathBuf,
+    },
+
     /// The commit after a write was refused because something outside the
     /// corpus was already staged, and a `neb` commit must be exactly the
     /// corpus. The write itself is in place: git never rolls back a write.

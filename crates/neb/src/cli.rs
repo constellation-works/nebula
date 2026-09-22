@@ -20,8 +20,9 @@
 use crate::render;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use nebula_core::{
-    Citation, Corpus, Direction, EdgeType, Error, Graph, NEAR_DEFAULT, NewNode, OBSERVATORY,
-    OBSERVATORY_ROOT_ENV, Origin, Promotion, Severity, Status, check, graph, migrate, ops,
+    Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, NEAR_DEFAULT, NewNode,
+    OBSERVATORY, OBSERVATORY_ROOT_ENV, Origin, Promotion, Severity, Status, check, graph, migrate,
+    ops,
 };
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -572,6 +573,19 @@ struct CommitOpts {
     json: bool,
 }
 
+/// Open the corpus and hold its write lock until the returned guard drops.
+///
+/// Every mutating arm opens this way, so the verb and the [`commit`] that
+/// records it are one critical section and no other writer can land a verb
+/// between the two. The op underneath takes the same lock again, which costs
+/// nothing: it is re-entrant on one thread. A read-only arm opens with plain
+/// [`Corpus::open`] and waits for nobody.
+fn open_locked(root: Option<PathBuf>) -> std::result::Result<(Corpus, CorpusLock), Failure> {
+    let corpus = Corpus::open(root)?;
+    let lock = corpus.lock()?;
+    Ok((corpus, lock))
+}
+
 /// Commit the corpus after a write, if `config.yaml` asks for it.
 ///
 /// Runs after the verb has printed its own result, because the write has
@@ -659,6 +673,16 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Migrate => {
+            // `migrate` takes this lock itself; held out here it also covers
+            // the commit that records the migration. Only once there is a
+            // corpus to lock: a missing one is `migrate`'s error to report,
+            // and it names the root it looked in.
+            let target = Corpus::resolve_root(root.clone())?;
+            let _lock = target
+                .join("nodes")
+                .is_dir()
+                .then(|| CorpusLock::acquire(&target))
+                .transpose()?;
             let report = migrate::run(root.clone())?;
             if json {
                 out_json(&report)?;
@@ -675,6 +699,9 @@ fn run(cli: Cli) -> Outcome {
             setting: ConfigSetting::ObservatoryRoot { dir },
         } => {
             let mut corpus = Corpus::open(root)?;
+            // Only the form that sets the value writes. Reading it back
+            // takes no lock and so never waits on a writer.
+            let _lock = dir.is_some().then(|| corpus.lock()).transpose()?;
             let (setting, changed) = match dir {
                 Some(dir) => (ops::set_observatory_root(&mut corpus, dir)?, true),
                 None => (corpus.observatory_root(), false),
@@ -694,6 +721,8 @@ fn run(cli: Cli) -> Outcome {
             setting: ConfigSetting::Commit { state },
         } => {
             let mut corpus = Corpus::open(root)?;
+            // As above: reading the setting is a read.
+            let _lock = state.is_some().then(|| corpus.lock()).transpose()?;
             let (setting, changed) = match state {
                 Some(state) => (ops::set_commit(&mut corpus, bool::from(state))?, true),
                 None => (corpus.commit_setting(), false),
@@ -727,6 +756,7 @@ fn run(cli: Cli) -> Outcome {
             let resolved_root = Corpus::resolve_root(root)?;
             let default_root_warning = Corpus::warning_before_default_init(&resolved_root)?;
             let corpus = Corpus::open_or_init(Some(resolved_root))?;
+            let _lock = corpus.lock()?;
             if let Some(configured) = default_root_warning {
                 eprintln!(
                     "warning: creating ~/.nebula while {} points to {}",
@@ -776,7 +806,7 @@ fn run(cli: Cli) -> Outcome {
             task,
             run,
         } => {
-            let corpus = Corpus::open(root)?;
+            let (corpus, _lock) = open_locked(root)?;
             let k = if quiet { 0 } else { NEAR_DEFAULT };
             let created = ops::promote(
                 &corpus,
@@ -806,7 +836,7 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Drop { entry } => {
-            let corpus = Corpus::open(root)?;
+            let (corpus, _lock) = open_locked(root)?;
             let dropped = ops::drop(&corpus, &entry)?;
             if json {
                 out_json(&dropped)?;
@@ -827,7 +857,7 @@ fn run(cli: Cli) -> Outcome {
             task,
             run,
         } => {
-            let corpus = Corpus::open(root)?;
+            let (corpus, _lock) = open_locked(root)?;
             let created = ops::new_node(
                 &corpus,
                 &NewNode {
@@ -860,7 +890,7 @@ fn run(cli: Cli) -> Outcome {
         } => {
             // `--kill` and `--by` conflict with `--confirm` in the clap tree,
             // so there is no text here to reconcile: confirming changes none.
-            let corpus = Corpus::open(root)?;
+            let (corpus, _lock) = open_locked(root)?;
             let doc = ops::confirm_kill(&corpus, &node).map_err(|e| Failure::about(&e, &node))?;
             if json {
                 out_json(&doc)?;
@@ -882,7 +912,7 @@ fn run(cli: Cli) -> Outcome {
             let Some(kill) = kill else {
                 return Err(Failure::say("pass --kill <KILL>, or --confirm"));
             };
-            let corpus = Corpus::open(root)?;
+            let (corpus, _lock) = open_locked(root)?;
             let doc = ops::sharpen(&corpus, &node, &kill, by.as_deref())
                 .map_err(|e| Failure::about(&e, &node))?;
             if json {
@@ -901,7 +931,7 @@ fn run(cli: Cli) -> Outcome {
             if status.is_open() && why.as_ref().is_some_and(|w| !w.trim().is_empty()) {
                 return Err(Failure::say("--why only applies to refuted or abandoned"));
             }
-            let corpus = Corpus::open(root)?;
+            let (corpus, _lock) = open_locked(root)?;
             let changed = ops::set_status(&corpus, &node, status, why.as_deref())
                 .map_err(|e| Failure::about(&e, &node))?;
             if json {
@@ -918,7 +948,7 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Link { from, kind, to, by } => {
-            let corpus = Corpus::open(root)?;
+            let (corpus, _lock) = open_locked(root)?;
             let kind = EdgeType::from(kind);
             let changed = ops::link(&corpus, &from, kind, &to, by.as_deref())?;
             if json {
@@ -961,7 +991,9 @@ fn run(cli: Cli) -> Outcome {
                     "nothing to do; pass --add <tag> or --remove <tag>",
                 ));
             }
-            let corpus = Corpus::open(root)?;
+            // One lock over both edits: `--remove x --add y` is one change
+            // to the node's tags, not two a second writer may split.
+            let (corpus, _lock) = open_locked(root)?;
             let mut doc = ops::tag_remove(&corpus, &target, &remove)?;
             if !add.is_empty() {
                 doc = ops::tag_add(&corpus, &target, &add)?;
@@ -985,7 +1017,7 @@ fn run(cli: Cli) -> Outcome {
             if text.trim().is_empty() {
                 return Err(Failure::say("nothing to note"));
             }
-            let corpus = Corpus::open(root)?;
+            let (corpus, _lock) = open_locked(root)?;
             ops::note(&corpus, &node, &text, by.as_deref())
                 .map_err(|e| Failure::about(&e, &node))?;
             if json {
@@ -1009,7 +1041,7 @@ fn run(cli: Cli) -> Outcome {
             task,
             run,
         } => {
-            let corpus = Corpus::open(root)?;
+            let (corpus, _lock) = open_locked(root)?;
             let bare = note.as_ref().is_none_or(|n| n.trim().is_empty());
             let cited = ops::cite(
                 &corpus,

@@ -16,6 +16,7 @@
 //!
 //! - [`model`]  the file format: [`Node`], [`Status`], [`Edge`], [`Reference`], [`Note`]
 //! - [`store`]  [`Corpus`]: where it lives, loading, saving, the inbox
+//! - `lock`    [`CorpusLock`]: the advisory `.lock` every write holds, and reads never do
 //! - [`graph`]  [`Graph`] and the pure queries over it, `near` included
 //! - [`ops`]    the mutations, each enforcing its point-of-action invariants
 //! - [`check`]  the invariant checker, and where an `observatory` record resolves
@@ -38,6 +39,7 @@
 
 mod config;
 mod error;
+mod lock;
 
 pub mod check;
 pub mod graph;
@@ -57,6 +59,7 @@ pub use graph::{
     ReviewItem, ReviewReport, ReviewRule, SEED_DAYS, TagCount, TagCounts, Touched, Trace,
     TraceNode, Via,
 };
+pub use lock::{CorpusLock, LOCK_FILE, LOCK_WAIT};
 pub use migrate::{MigrationReport, NodeMigration};
 pub use model::{Closed, Doc, Edge, EdgeType, HUMAN, Node, Note, Origin, Reference, Status};
 pub use ops::{Captured, Citation, Cited, Created, Initialized, NewNode, Promotion, StatusChange};
