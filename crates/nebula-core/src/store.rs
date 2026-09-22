@@ -612,7 +612,15 @@ impl Corpus {
             return Ok(Inbox(out));
         }
         let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)?
-            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                if !entry.file_type().ok()?.is_file()
+                    || !is_inbox_month_filename(&entry.file_name())
+                {
+                    return None;
+                }
+                Some(entry.path())
+            })
             .collect();
         files.sort();
         for file in files {
@@ -664,6 +672,19 @@ impl Corpus {
         write_atomic(&entry.file, lines.join("\n") + "\n")?;
         Ok(())
     }
+}
+
+/// Whether a file name is one of the inbox's `YYYY-MM.md` month files.
+fn is_inbox_month_filename(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let bytes = name.as_bytes();
+    bytes.len() == 10
+        && bytes[..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'-'
+        && matches!(&bytes[5..7], [b'0', b'1'..=b'9'] | [b'1', b'0'..=b'2'])
+        && &bytes[7..] == b".md"
 }
 
 /// Replace a file through a sibling temporary file.
