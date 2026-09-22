@@ -109,6 +109,12 @@ impl Corpus {
     /// corpus. The write is deliberately separate so a refused `--set-root`
     /// cannot create or rewrite the requested corpus first.
     pub(crate) fn check_root_config(root: &Path, force: bool) -> Result<()> {
+        if !root.is_absolute() {
+            return Err(Error::corpus(format!(
+                "--set-root requires an absolute corpus path, not {}; rerun with an absolute path",
+                root.display()
+            )));
+        }
         let path = Self::root_config_path()?;
         if let Some(configured) = Self::configured_root()?
             && configured != root
