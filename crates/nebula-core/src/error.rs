@@ -257,6 +257,17 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
+    /// Reading or writing a known corpus path failed.
+    #[error("{action} {}: {source}", .path.display())]
+    IoAt {
+        /// What operation was attempted.
+        action: &'static str,
+        /// The path the operation targeted.
+        path: PathBuf,
+        /// The operating system's reason for refusing or failing it.
+        source: std::io::Error,
+    },
+
     /// A YAML document would not parse or render. The context says which.
     #[error("{context}: {source}")]
     Yaml {
@@ -288,5 +299,18 @@ impl Error {
     /// Anything about the corpus that has no variant of its own.
     pub(crate) fn corpus(message: impl Into<String>) -> Self {
         Self::Corpus(message.into())
+    }
+
+    /// An I/O failure labelled with the path the user can inspect or repair.
+    pub(crate) fn io_at(
+        action: &'static str,
+        path: impl Into<PathBuf>,
+        source: std::io::Error,
+    ) -> Self {
+        Self::IoAt {
+            action,
+            path: path.into(),
+            source,
+        }
     }
 }

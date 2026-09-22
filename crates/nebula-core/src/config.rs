@@ -121,7 +121,8 @@ impl Config {
             config.save(root)?;
             return Ok(config);
         }
-        let raw = std::fs::read_to_string(&path)?;
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|error| Error::io_at("reading", &path, error))?;
         // Probe the version before the strict parse, so a v1 file with its
         // extra keys gets the migrate hint rather than an unknown-field error.
         let version = schema_version_of(&raw)

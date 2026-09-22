@@ -1209,6 +1209,74 @@ fn every_graph_reader_names_a_node_with_structurally_invalid_frontmatter() {
 }
 
 #[test]
+fn every_corpus_reader_names_a_non_regular_node_and_preserves_the_os_cause() {
+    let c = Corpus::new();
+    let healthy = c.seed("a healthy node", "Healthy");
+    let broken = c.node_file("broken");
+    std::fs::create_dir(&broken).unwrap();
+    let path = broken.display().to_string();
+    let cause = std::fs::read_to_string(&broken).unwrap_err().to_string();
+
+    for args in [
+        vec!["check"],
+        vec!["list"],
+        vec!["show", healthy.as_str()],
+        vec!["graph", "--mermaid"],
+        vec!["trace", healthy.as_str()],
+        vec!["review"],
+        vec!["open"],
+        vec!["near", "thing"],
+        vec!["tag", "list"],
+    ] {
+        c.run(&args)
+            .assert_fails()
+            .says("reading")
+            .says(&path)
+            .says(&cause);
+    }
+}
+
+#[test]
+fn opening_a_non_regular_config_names_it_and_preserves_the_os_cause() {
+    let c = Corpus::new();
+    let config = c.root.join("config.yaml");
+    std::fs::remove_file(&config).unwrap();
+    std::fs::create_dir(&config).unwrap();
+    let path = config.display().to_string();
+    let cause = std::fs::read_to_string(&config).unwrap_err().to_string();
+
+    c.run(&["list"])
+        .assert_fails()
+        .says("reading")
+        .says(&path)
+        .says(&cause);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_node_write_failure_names_the_destination_and_preserves_the_os_cause() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let c = Corpus::new();
+    let nodes = c.root.join("nodes");
+    let mut permissions = std::fs::metadata(&nodes).unwrap().permissions();
+    permissions.set_mode(0o500);
+    std::fs::set_permissions(&nodes, permissions).unwrap();
+
+    let destination = c.node_file("cannot-land");
+    let run = c.run(&["new", "Cannot land", "--id", "cannot-land"]);
+
+    let mut permissions = std::fs::metadata(&nodes).unwrap().permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&nodes, permissions).unwrap();
+
+    run.assert_fails()
+        .says("writing")
+        .says(&destination.display().to_string())
+        .says("Permission denied");
+}
+
+#[test]
 fn capture_json_carries_the_entry_and_its_neighbours() {
     let c = Corpus::new();
     lexical_fixture(&c);
