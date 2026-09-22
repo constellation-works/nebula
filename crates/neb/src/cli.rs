@@ -60,6 +60,7 @@ References:
 
 Query:
   show         Show one node in full
+  log          List the commits that changed a node
   list         List nodes
   near         The existing nodes closest to some text, or to a node, with a score
   trace        Walk ancestry. The feature the whole system exists for
@@ -402,6 +403,15 @@ enum Command {
 
     /// Show one node in full.
     Show {
+        /// Node id.
+        node: String,
+        /// Show the node at this commit hash or at the end of this date.
+        #[arg(long, value_name = "HASH|YYYY-MM-DD")]
+        at: Option<String>,
+    },
+
+    /// List the commits that changed a node.
+    Log {
         /// Node id.
         node: String,
     },
@@ -1128,9 +1138,17 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Show { node } => {
+        Command::Show { node, at } => {
             let corpus = Corpus::open(root)?;
-            let docs = corpus.load_all()?;
+            let mut docs = corpus.load_all()?;
+            if let Some(at) = at {
+                let historical = corpus.load_at(&node, &at)?;
+                let current = docs
+                    .iter_mut()
+                    .find(|doc| doc.node.id == node)
+                    .ok_or_else(|| Error::NoSuchNode(node.clone()))?;
+                *current = historical;
+            }
             let observatory = corpus.observatory_root().root;
             let view =
                 graph::node(&Graph::build(&docs)?, &node)?.with_observatory(observatory.as_deref());
@@ -1138,6 +1156,17 @@ fn run(cli: Cli) -> Outcome {
                 out_json(&view)?;
             } else {
                 print!("{}", render::node(&view));
+            }
+            Ok(ok)
+        }
+
+        Command::Log { node } => {
+            let corpus = Corpus::open(root)?;
+            let history = corpus.history(&node)?;
+            if json {
+                out_json(&history)?;
+            } else {
+                print!("{}", render::history(&history));
             }
             Ok(ok)
         }
@@ -1287,7 +1316,7 @@ mod tests {
             assert!(flat.contains(&row), "help is missing the row {row:?}");
             seen += 1;
         }
-        assert_eq!(seen, 24, "template rows need updating for a new subcommand");
+        assert_eq!(seen, 25, "template rows need updating for a new subcommand");
         assert!(
             Cli::command().find_subcommand("help").is_none(),
             "clap's `help` subcommand should be disabled"
@@ -1335,7 +1364,7 @@ mod tests {
             &["capture", "inbox", "promote", "drop"],
             &["new", "sharpen", "status", "link", "tag", "note"],
             &["cite"],
-            &["show", "list", "near", "trace", "impact", "graph"],
+            &["show", "log", "list", "near", "trace", "impact", "graph"],
             &["open", "review"],
         ]
         .concat();

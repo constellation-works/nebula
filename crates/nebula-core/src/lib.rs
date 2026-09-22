@@ -63,7 +63,7 @@ pub use lock::{CorpusLock, LOCK_FILE, LOCK_WAIT};
 pub use migrate::{MigrationReport, NodeMigration};
 pub use model::{Closed, Doc, Edge, EdgeType, HUMAN, Node, Note, Origin, Reference, Status};
 pub use ops::{Captured, Citation, Cited, Created, Initialized, NewNode, Promotion, StatusChange};
-pub use store::{Committed, Corpus, Inbox, InboxEntry};
+pub use store::{Committed, Corpus, HistoryEntry, Inbox, InboxEntry};
 
 /// Writes `apps/desktop/src/types/*.ts` from the types above.
 ///
@@ -105,6 +105,7 @@ mod ts_export {
         ObservatoryRoot::export_all(&cfg).unwrap();
         CommitSetting::export_all(&cfg).unwrap();
         Committed::export_all(&cfg).unwrap();
+        HistoryEntry::export_all(&cfg).unwrap();
 
         assert!(
             cfg.out_dir().join("Node.ts").exists(),
