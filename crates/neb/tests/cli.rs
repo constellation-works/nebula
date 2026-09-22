@@ -3740,6 +3740,109 @@ fn migrate_is_a_no_op_on_a_uri_less_discussion_reference() {
 }
 
 #[test]
+fn migrate_refuses_a_future_schema_without_changing_any_corpus_file() {
+    let c = v1_corpus();
+    let node = c.node_file("wake-retardation");
+    let raw = std::fs::read_to_string(&node).unwrap();
+    write(
+        &node,
+        &raw.replacen(
+            "status: supported",
+            "status: supported\nfuture_field: valuable",
+            1,
+        ),
+    );
+    let config = c.root.join("config.yaml");
+    let raw = std::fs::read_to_string(&config).unwrap();
+    write(
+        &config,
+        &raw.replacen("schema_version: 1", "schema_version: 3", 1),
+    );
+    let git = Command::new("git")
+        .arg("-C")
+        .arg(&c.root)
+        .args(["init", "-q"])
+        .output()
+        .expect("running git init");
+    assert!(
+        git.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git.stderr)
+    );
+    let git = Command::new("git")
+        .arg("-C")
+        .arg(&c.root)
+        .args([
+            "-c",
+            "user.name=neb-test",
+            "-c",
+            "user.email=neb-test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "add",
+            "-A",
+        ])
+        .output()
+        .expect("running git add");
+    assert!(
+        git.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git.stderr)
+    );
+    let git = Command::new("git")
+        .arg("-C")
+        .arg(&c.root)
+        .args([
+            "-c",
+            "user.name=neb-test",
+            "-c",
+            "user.email=neb-test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "future corpus",
+        ])
+        .output()
+        .expect("running git commit");
+    assert!(
+        git.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git.stderr)
+    );
+
+    let before = snapshot_corpus_files(&c.root);
+    let config_before = std::fs::read_to_string(&config).unwrap();
+    c.run(&["migrate"]).assert_fails().says("schema_version 3");
+
+    assert_eq!(before, snapshot_corpus_files(&c.root));
+    assert_eq!(config_before, std::fs::read_to_string(&config).unwrap());
+    assert!(
+        std::fs::read_to_string(node)
+            .unwrap()
+            .contains("future_field: valuable")
+    );
+}
+
+#[test]
+fn migrate_refuses_a_malformed_config_before_changing_any_corpus_file() {
+    let c = v1_corpus();
+    let config = c.root.join("config.yaml");
+    write(&config, "schema_version: 1\ncorpus_id: [not, a, string]\n");
+    let before = snapshot_corpus_files(&c.root);
+    let config_before = std::fs::read_to_string(&config).unwrap();
+
+    c.run(&["migrate"])
+        .assert_fails()
+        .says("parsing")
+        .says("config.yaml");
+
+    assert_eq!(before, snapshot_corpus_files(&c.root));
+    assert_eq!(config_before, std::fs::read_to_string(&config).unwrap());
+}
+
+#[test]
 fn migrate_refuses_a_dirty_git_tree() {
     let c = v1_corpus();
     let git = |args: &[&str]| {

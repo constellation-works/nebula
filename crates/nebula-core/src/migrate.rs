@@ -150,6 +150,10 @@ pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
     // there, so a missing one still reports itself as missing.
     let _lock = CorpusLock::acquire(&root)?;
     refuse_dirty_tree(&root)?;
+    // Validate the config before touching a node. In particular, a future
+    // schema may contain fields this build does not know how to preserve, so
+    // treating it as v1 would turn migration into a destructive downgrade.
+    let config = preflight_config(&root)?;
 
     let mut report = MigrationReport::default();
     let mut paths: Vec<PathBuf> = std::fs::read_dir(root.join("nodes"))?
@@ -181,7 +185,7 @@ pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
         });
     }
 
-    report.config_rewritten = migrate_config(&root)?;
+    report.config_rewritten = migrate_config(&root, config)?;
     Ok(report)
 }
 
@@ -226,31 +230,89 @@ fn refuse_dirty_tree(root: &Path) -> Result<()> {
 /// Rewrite `config.yaml` to hold `corpus_id`, `schema_version`, the
 /// observatory root when one was set, and `commit` when it is on. The v1
 /// keys it drops are named in `docs/runbooks/migrate-v1-to-v2.md`.
-fn migrate_config(root: &Path) -> Result<bool> {
-    #[derive(Deserialize)]
-    struct Lenient {
-        #[serde(default)]
-        corpus_id: Option<String>,
-        #[serde(default)]
-        observatory_root: Option<PathBuf>,
-        #[serde(default)]
-        commit: bool,
-    }
+#[derive(Deserialize)]
+struct ConfigVersion {
+    #[serde(default)]
+    schema_version: Option<u32>,
+}
+
+#[derive(Default, Deserialize)]
+struct V1Config {
+    #[serde(default)]
+    corpus_id: Option<String>,
+    #[serde(default)]
+    observatory_root: Option<PathBuf>,
+    #[serde(default)]
+    commit: bool,
+}
+
+struct MigrationConfig {
+    existing: Option<String>,
+    corpus_id: Option<String>,
+    observatory_root: Option<PathBuf>,
+    commit: bool,
+}
+
+/// Parse and validate the config before migration can rewrite any corpus
+/// content. V1 remains lenient because its retired keys are intentionally
+/// discarded; v2 uses the current strict model, and every other version is
+/// refused rather than guessed at.
+fn preflight_config(root: &Path) -> Result<MigrationConfig> {
     let path = root.join(config::FILE);
     let existing = if path.exists() {
         Some(std::fs::read_to_string(&path)?)
     } else {
         None
     };
-    let lenient = existing
+    let version = existing
         .as_deref()
-        .map(serde_yaml_ng::from_str::<Lenient>)
+        .map(serde_yaml_ng::from_str::<ConfigVersion>)
         .transpose()
-        .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))?;
-    let (corpus_id, observatory_root, commit) = match lenient {
-        Some(l) => (l.corpus_id, l.observatory_root, l.commit),
-        None => (None, None, false),
+        .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))?
+        .and_then(|probe| probe.schema_version)
+        .unwrap_or(1);
+    let (corpus_id, observatory_root, commit) = match version {
+        1 => {
+            let legacy = existing
+                .as_deref()
+                .map(serde_yaml_ng::from_str::<V1Config>)
+                .transpose()
+                .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))?
+                .unwrap_or_default();
+            (legacy.corpus_id, legacy.observatory_root, legacy.commit)
+        }
+        config::SCHEMA_VERSION => {
+            let current: Config = serde_yaml_ng::from_str(existing.as_deref().unwrap_or_default())
+                .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))?;
+            (
+                Some(current.corpus_id),
+                current.observatory_root,
+                current.commit,
+            )
+        }
+        found => {
+            return Err(Error::SchemaMismatch {
+                path,
+                found,
+                expected: config::SCHEMA_VERSION,
+            });
+        }
     };
+    Ok(MigrationConfig {
+        existing,
+        corpus_id,
+        observatory_root,
+        commit,
+    })
+}
+
+fn migrate_config(root: &Path, config: MigrationConfig) -> Result<bool> {
+    let MigrationConfig {
+        existing,
+        corpus_id,
+        observatory_root,
+        commit,
+    } = config;
     let mut fresh = Config::fresh(corpus_id.unwrap_or_else(|| store::corpus_id(root)));
     fresh.observatory_root = observatory_root;
     fresh.commit = commit;
