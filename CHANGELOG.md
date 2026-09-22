@@ -130,7 +130,9 @@ habit. This cut keeps what a person actually uses.
   clippy). The workspace's `rust-version` moves to 1.88 for the desktop's
   dependency tree.
 - `Corpus::node_path` is public, so a consumer that hands a node file to the
-  OS asks for the path rather than re-deriving the layout.
+  OS asks for the path rather than re-deriving the layout. It returns a
+  `Result`: an id becomes a path there, so one that is not a single file name
+  is refused rather than joined.
 - The desktop's Graph view: the whole corpus from one `graph()` call as a
   layered DAG (`elkjs`, in a web worker, plain SVG; genealogy edges layer the
   drawing, `contradicts` is dashed and drawn afterwards). Status is the card
@@ -156,6 +158,15 @@ habit. This cut keeps what a person actually uses.
   Observable CLI behaviour, messages and exit codes are unchanged.
 - The version is written once, in `[workspace.package]`;
   `scripts/release-check.sh` reads it there.
+- A node's id is checked before it becomes a path, and a node file's name and
+  the id it stores have to agree (rule 13). A hand-edited `id: ../../escaped`
+  used to load, and the next verb wrote `escaped.md` outside the corpus root;
+  a hand-edited id naming *another* node used to overwrite that node, since
+  `save` derives its destination from the stored id. Both now refuse, as do a
+  caller-supplied traversal or absolute id (`Error::UnsafeId`,
+  `Error::IdMismatch`). Ids are judged as written and nothing is
+  canonicalized, so a symlinked root behaves as before, and the rule is about
+  path structure rather than alphabet: `ünïcode-título-ok` is still an id.
 
 ## 0.1.0 — unreleased
 

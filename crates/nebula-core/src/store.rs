@@ -19,7 +19,8 @@ use crate::error::{Error, Result};
 use crate::lock::CorpusLock;
 use crate::model::{self, Doc};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
 use time::{
     Date, OffsetDateTime, format_description::well_known::Iso8601, macros::format_description,
@@ -324,22 +325,39 @@ impl Corpus {
     ///
     /// Public so a consumer that hands a node to something outside the
     /// corpus (the desktop's "open in editor") asks for the path rather than
-    /// re-deriving the layout.
-    pub fn node_path(&self, id: &str) -> PathBuf {
-        self.root.join("nodes").join(format!("{id}.md"))
+    /// re-deriving the layout. Fallible because an id becomes a path here:
+    /// one that is not [`is_path_safe_id`] is refused rather than joined, so
+    /// no caller can be handed a path outside `nodes/`.
+    pub fn node_path(&self, id: &str) -> Result<PathBuf> {
+        if !is_path_safe_id(id) {
+            return Err(Error::UnsafeId(id.to_string()));
+        }
+        Ok(self.root.join("nodes").join(format!("{id}.md")))
     }
 
     /// Read one node.
+    ///
+    /// The file's name and the id it stores are one fact, so a file that
+    /// stores a different id is refused rather than read: [`Self::save`]
+    /// derives its destination from the stored id, and a node loaded from
+    /// one file that claims to be another would be written to that other
+    /// one. Refusing here is what keeps a hand edit from turning a later
+    /// verb into an overwrite.
     pub fn load(&self, id: &str) -> Result<Doc> {
-        let path = self.node_path(id);
+        let path = self.node_path(id)?;
         if !path.exists() {
             return Err(Error::NoSuchNode(id.to_string()));
         }
-        model::read(&path)
+        let doc = model::read(&path)?;
+        self.require_file_agrees(&path, &doc)?;
+        Ok(doc)
     }
 
     /// Commits that changed one node, newest first.
     pub fn history(&self, id: &str) -> Result<Vec<HistoryEntry>> {
+        // The id first, then the machine: an id that could not name a node
+        // is refused whether or not the corpus happens to be under git.
+        self.node_path(id)?;
         self.require_git()?;
         self.load(id)?;
         let path = format!("nodes/{id}.md");
@@ -371,6 +389,11 @@ impl Corpus {
 
     /// Read one node as it existed at a commit hash or at the end of a date.
     pub fn load_at(&self, id: &str, at: &str) -> Result<Doc> {
+        // The id becomes half of a git pathspec here rather than a path on
+        // disk, and `git show <rev>:nodes/../../x.md` reads outside the
+        // corpus just as readily as an open would. Checked before the work
+        // tree, so the refusal does not depend on the machine.
+        let node_path = self.node_path(id)?;
         self.require_git()?;
         let path = format!("nodes/{id}.md");
         let revision = if Date::parse(at, &Iso8601::DATE).is_ok() {
@@ -409,7 +432,24 @@ impl Corpus {
                 revision: at.to_string(),
             });
         }
-        model::parse(&String::from_utf8_lossy(&shown.stdout))
+        let doc = model::parse(&String::from_utf8_lossy(&shown.stdout)).map_err(|e| match e {
+            // Same reporting as a read from disk: an id that came out of a
+            // file is a fact about that file.
+            Error::UnsafeId(id) => Error::IdMismatch {
+                path: node_path.clone(),
+                id,
+            },
+            other => other,
+        })?;
+        // Same agreement as [`Self::load`], one revision back: a historical
+        // file that stores another node's id is not this node's history.
+        if doc.node.id != id {
+            return Err(Error::IdMismatch {
+                path: node_path,
+                id: doc.node.id,
+            });
+        }
+        Ok(doc)
     }
 
     fn require_git(&self) -> Result<()> {
@@ -421,14 +461,21 @@ impl Corpus {
     }
 
     /// Write one node, stamping `updated`.
+    ///
+    /// The destination comes from the stored id, so the id is checked before
+    /// anything is written: a `Doc` reaching here holds an id that parsed
+    /// ([`crate::model`] refuses an unsafe one) and that agreed with its file
+    /// ([`Self::load`]), and this is the last of the three places that has to
+    /// hold for a write to land where the node already lives.
     pub fn save(&self, doc: &mut Doc) -> Result<()> {
+        let path = self.node_path(&doc.node.id)?;
         doc.node.updated = today();
-        model::write(&self.node_path(&doc.node.id.clone()), doc)
+        model::write(&path, doc)
     }
 
     /// Write a node that must not already exist.
     pub fn create(&self, doc: &Doc) -> Result<()> {
-        let path = self.node_path(&doc.node.id);
+        let path = self.node_path(&doc.node.id)?;
         if path.exists() {
             return Err(Error::NodeExists(doc.node.id.clone()));
         }
@@ -451,9 +498,45 @@ impl Corpus {
             .collect();
         paths.sort();
         for p in paths {
-            out.push(model::read(&p)?);
+            let doc = model::read(&p)?;
+            self.require_file_agrees(&p, &doc)?;
+            out.push(doc);
         }
         Ok(out)
+    }
+
+    /// Refuse a node file whose name is not the id it stores.
+    ///
+    /// Both doors come through here. [`Self::load`] arrives with the path the
+    /// caller's id names, and a scan arrives with a path it found on disk;
+    /// either way the question is the same, and answering it in one place is
+    /// what keeps a file called one thing and claiming to be another from
+    /// reading as the node it claims — or, through [`Self::save`], from
+    /// becoming a write over that node.
+    ///
+    /// The names are compared by asking the filesystem rather than by
+    /// comparing bytes. A volume may store a name in a different Unicode
+    /// normalization than the id it was written from — `título` is two
+    /// spellings of the same word — and a byte comparison would call a
+    /// perfectly ordinary node a mismatch. Nothing is canonicalized: the
+    /// question asked is whether the path the id names holds this same file's
+    /// text, which a symlinked root answers the same way on either platform.
+    fn require_file_agrees(&self, path: &Path, doc: &Doc) -> Result<()> {
+        if path.file_stem() == Some(OsStr::new(doc.node.id.as_str())) {
+            return Ok(());
+        }
+        let declared = self.node_path(&doc.node.id)?;
+        let same = std::fs::read_to_string(&declared)
+            .ok()
+            .zip(std::fs::read_to_string(path).ok())
+            .is_some_and(|(declared, found)| declared == found);
+        if same {
+            return Ok(());
+        }
+        Err(Error::IdMismatch {
+            path: path.to_path_buf(),
+            id: doc.node.id.clone(),
+        })
     }
 
     /// Append a capture to the current month's inbox file.
@@ -804,6 +887,43 @@ pub(crate) fn is_slug(s: &str) -> bool {
     !s.is_empty() && s.chars().count() <= 60 && slugify(s) == s
 }
 
+/// Whether `id` can name a node file and nothing else.
+///
+/// Every id becomes a path — `nodes/<id>.md` — so it has to be exactly one
+/// ordinary file name: no separator, no `.` or `..`, no root or drive
+/// prefix, no control character, and no surrounding whitespace that would
+/// make two ids look like one name. `../../escaped` and `/etc/passwd` are
+/// what this refuses; `ünïcode-título-ok` and `시간은-프레임의-수다` are
+/// ordinary ids and stay valid, because the rule is about path structure
+/// rather than about which alphabet an idea was named in.
+///
+/// Distinct from [`is_slug`], which is the stricter shape a *new* id has to
+/// take. This is the weaker rule every id must satisfy, including one read
+/// back out of a file somebody edited by hand, so tightening the id a verb
+/// creates never silently makes an existing corpus unreadable.
+///
+/// Asked before any read or write derives a path, and nothing is
+/// canonicalized: the components are judged as written, which is what keeps
+/// the answer the same under a symlinked root.
+pub(crate) fn is_path_safe_id(id: &str) -> bool {
+    if id.is_empty() || id.trim() != id {
+        return false;
+    }
+    if id
+        .chars()
+        .any(|c| c.is_control() || c == '/' || c == '\\' || c == std::path::MAIN_SEPARATOR)
+    {
+        return false;
+    }
+    // One `Normal` component spelled exactly as the id: `.`, `..`, a root and
+    // a Windows prefix are each their own component kind, and an id that
+    // parses to anything else is not a file name.
+    let mut components = Path::new(id).components();
+    let single =
+        matches!(components.next(), Some(Component::Normal(name)) if name == OsStr::new(id));
+    single && components.next().is_none()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -888,6 +1008,63 @@ mod tests {
         // standing in for the title.
         let title = "a".repeat(61);
         assert_eq!(slugify(&title), "");
+    }
+
+    /// The rule an id has to satisfy before it is joined into a path. Every
+    /// spelling here that escapes `nodes/` reached a file outside the corpus
+    /// before this existed.
+    #[test]
+    fn an_id_that_is_not_one_file_name_is_refused() {
+        for id in [
+            "../../escaped",
+            "../escaped",
+            "..",
+            ".",
+            "./escaped",
+            "nodes/other",
+            "a\\b",
+            "/etc/passwd",
+            "/absolute",
+            "",
+            " ",
+            " leading",
+            "trailing ",
+            "new\nline",
+            "nul\0byte",
+        ] {
+            assert!(!is_path_safe_id(id), "accepted `{id}`");
+        }
+    }
+
+    /// The rule is about path structure, not about which alphabet an idea was
+    /// named in: every id a verb has ever derived stays valid.
+    #[test]
+    fn an_ordinary_id_including_a_unicode_one_is_accepted() {
+        for id in [
+            "safe",
+            "self-authored-structure",
+            "ünïcode-título-ok",
+            "시간은-프레임의-수다",
+            "..leading-dots",
+            "a",
+        ] {
+            assert!(is_path_safe_id(id), "refused `{id}`");
+            assert_eq!(
+                Path::new(id).components().count(),
+                1,
+                "`{id}` is more than one component"
+            );
+        }
+        // Everything `slugify` produces satisfies the weaker rule, which is
+        // what keeps the two checks from ever disagreeing about a new node.
+        for title in [
+            "Tags beat domains",
+            "Ünïcode título → ok",
+            "시간은 프레임의 수다",
+        ] {
+            let slug = slugify(title);
+            assert!(is_slug(&slug) && is_path_safe_id(&slug), "{slug}");
+        }
     }
 
     #[test]

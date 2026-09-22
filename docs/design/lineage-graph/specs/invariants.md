@@ -9,7 +9,7 @@ doc_role: spec
 type: design
 summary: What neb check enforces, where each rule is enforced, and which failures block.
 tags: [lineage-graph, invariants]
-paths: ["crates/nebula-core/src/check.rs", "crates/nebula-core/src/model.rs", "crates/nebula-core/src/ops.rs", "crates/nebula-core/src/config.rs"]
+paths: ["crates/nebula-core/src/check.rs", "crates/nebula-core/src/model.rs", "crates/nebula-core/src/ops.rs", "crates/nebula-core/src/store.rs", "crates/nebula-core/src/config.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 ---
@@ -20,7 +20,8 @@ related_artifacts: []
 schema is a suggestion until something refuses a corpus that violates it.
 Ten of these are the rules as of the 2026-09-12 reduction; rules 11 and 12
 were added afterward to catch a hand edit that leaves a node's lifecycle
-fields or dates inconsistent with each other. See
+fields or dates inconsistent with each other, and rule 13 after a hand edit
+to a node's `id` turned an ordinary verb into a write outside the corpus. See
 [docs/design/v0.2/1_spec.md](../../v0.2/1_spec.md) for the model they apply to
 and its "What is removed" table for the rules this replaced.
 
@@ -40,6 +41,7 @@ and its "What is removed" table for the rules this replaced.
 | 11 | `closed` is set only on a `refuted` or `abandoned` node, never an open one | error | `check` |
 | 11 | A `seed` does not carry a `kill` condition — a sign status changed by hand | warn | `check` |
 | 12 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
+| 13 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse; `store` before any read or write |
 
 ## Where a rule lives matters
 
@@ -57,6 +59,9 @@ sharpen`/`neb status` refuse a `hypothesis` or a `refuted` transition that
 does not carry what rule 2 or 5 requires. `neb status` refuses to move a
 `refuted` node to any other status. Catching these when you act is worth more
 than catching them later, because you still remember what you meant.
+
+**Deserialization and the store**, for rule 13, which is the one rule the
+checker cannot hold: see below.
 
 **The checker**, for everything that needs the whole corpus in view, and as a
 backstop for rules also enforced elsewhere, since node files are hand-editable.
@@ -89,6 +94,50 @@ them, only reports.
 The seed-with-kill case is a warning rather than an error: it is not wrong by
 itself, only unusual, since the node has not yet been sharpened through the
 guard that would move its status too.
+
+## Rule 13: the id is a path
+
+A node's id is not only a name. `nodes/<id>.md` is where the node is read
+from and, through `Corpus::save`, where the next write lands. That makes an
+id the one field a hand edit can point at a file the corpus does not own:
+`id: ../../escaped` on `nodes/safe.md` loaded happily, and the next `neb
+note` wrote `escaped.md` beside the corpus root. An id that was another
+node's was the quieter half of the same bug — a valid id, and therefore a
+write straight over that node.
+
+So the rule is two halves, and neither belongs in the checker. The *shape*
+half — an id is exactly one ordinary file name, with no separator, no `.` or
+`..`, no root or drive prefix, no control character — sits in `model::parse`,
+beside rule 7, because a `Doc` that exists at all is one every verb
+downstream may write from. The *agreement* half — a file's name and the id it
+stores are one fact — sits in `store`, at each of the three doors: `load`
+refuses a file that claims to be another node, a scan refuses the same
+mismatch from the path side, and `save` re-derives its destination from an id
+that has passed both. A checker finding would come too late in every one of
+these cases, and a corpus whose ids could not be trusted is exactly the
+corpus `check` could not load to report on.
+
+The two halves meet in the reporting, by where the id came from rather than
+by which check caught it. An id out of a *file* is reported as
+`IdMismatch`, naming the path, because the file is what somebody has to go
+and look at — a traversal id in a node file is a disagreement with that file
+just as surely as another node's id is. An id out of a *caller* — a verb's
+argument, an IPC call — is reported as `UnsafeId`, because there is no file
+to name.
+
+The shape rule is deliberately weaker than the slug rule `neb new --id`
+enforces. Tightening what a *new* id may look like should never make an
+existing corpus unreadable, and the escape is about path structure rather
+than about which alphabet an idea was named in: `ünïcode-título-ok` and
+`시간은-프레임의-수다` are ordinary ids and stay valid.
+
+Nothing here canonicalizes, per the repository's path rule: the components
+are judged as written, so a corpus reached through a symlinked root — which
+is every corpus under a macOS temporary directory — answers the same on both
+platforms. The one place a name is compared against the filesystem, the scan
+that matches a file to the id it stores, asks the filesystem rather than
+comparing bytes, because a volume may store a name in a different Unicode
+normalization than the id it was written from.
 
 ## Errors and warnings
 

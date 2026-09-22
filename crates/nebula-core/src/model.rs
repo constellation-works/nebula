@@ -275,7 +275,9 @@ pub struct Closed {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(deny_unknown_fields)]
 pub struct Node {
-    /// Kebab-case, permanent, never reused.
+    /// Kebab-case, permanent, never reused. Also the name of the file the
+    /// node lives in, which is why an id that could not name one is refused
+    /// when the file is parsed.
     pub id: String,
     /// One line naming the idea.
     pub title: String,
@@ -452,6 +454,13 @@ pub(crate) fn read(path: &Path) -> Result<Doc> {
             context: format!("in {}: {context}", path.display()),
             source,
         },
+        // An id out of a *file* is reported against that file: a name that
+        // could not be one is a disagreement with the file it was found in,
+        // and the path is what the human needs to go and look at.
+        Error::UnsafeId(id) => Error::IdMismatch {
+            path: path.to_path_buf(),
+            id,
+        },
         other => other,
     })
 }
@@ -472,10 +481,20 @@ pub(crate) fn split_frontmatter(raw: &str) -> Result<(&str, &str)> {
 }
 
 /// Parse node text. Split out from [`read`] so it can be tested without a disk.
+///
+/// The id is checked here, at the door, the same placement rule 7 gets and
+/// for the same reason: an id decides which file a later write lands in, so
+/// text carrying `../../escaped` has to fail to parse rather than produce a
+/// `Doc` that every verb downstream would treat as a node. A check at the
+/// point of action alone would have to be repeated in every verb, and the one
+/// that was forgotten would be the one that wrote outside the corpus.
 pub(crate) fn parse(raw: &str) -> Result<Doc> {
     let (front, body) = split_frontmatter(raw)?;
     let node: Node =
         serde_yaml_ng::from_str(front).map_err(|e| Error::yaml("parsing frontmatter", e))?;
+    if !crate::store::is_path_safe_id(&node.id) {
+        return Err(Error::UnsafeId(node.id));
+    }
     Ok(Doc {
         node,
         body: body.to_string(),

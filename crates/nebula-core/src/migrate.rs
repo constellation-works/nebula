@@ -267,6 +267,14 @@ fn migrate_config(root: &Path) -> Result<bool> {
 fn convert(v1: V1Node) -> Result<(Node, Vec<String>)> {
     let mut notes = Vec::new();
 
+    // The v1 model is lenient by design, so this is the one place a v1 id is
+    // looked at. A corpus whose id could not name a file would migrate
+    // cleanly and then refuse to open, which reads as the migration having
+    // broken it.
+    if !store::is_path_safe_id(&v1.id) {
+        return Err(Error::UnsafeId(v1.id));
+    }
+
     let mut tags = model::normalize_tags(&v1.tags);
     if tags != v1.tags {
         notes.push(format!("tags normalised: {}", tags.join(", ")));

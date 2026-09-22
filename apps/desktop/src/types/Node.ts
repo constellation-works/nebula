@@ -10,7 +10,9 @@ import type { Status } from "./Status";
  */
 export type Node = { 
 /**
- * Kebab-case, permanent, never reused.
+ * Kebab-case, permanent, never reused. Also the name of the file the
+ * node lives in, which is why an id that could not name one is refused
+ * when the file is parsed.
  */
 id: string, 
 /**
