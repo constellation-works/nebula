@@ -536,9 +536,10 @@ enum ConfigSetting {
 
     /// Whether each mutating verb commits the corpus afterwards, when the
     /// root is inside a git work tree. Off by default. The commit stages
-    /// `nodes/`, `inbox/` and `config.yaml` only, is `neb <verb> <ids>`,
-    /// never pushes, and is refused (the write kept) when something outside
-    /// the corpus is already staged. `--no-commit` skips it once.
+    /// `nodes/`, `inbox/`, `config.yaml` and the generated `.gitignore` only,
+    /// is `neb <verb> <ids>`, never pushes, and is refused (the write kept)
+    /// when something outside the corpus is already staged. `--no-commit`
+    /// skips it once.
     Commit {
         /// `on` or `off`. Omit to read the current setting.
         state: Option<OnOff>,

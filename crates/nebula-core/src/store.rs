@@ -16,7 +16,7 @@
 
 use crate::config::{self, CommitSetting, Config, ObservatoryRoot};
 use crate::error::{Error, Result};
-use crate::lock::CorpusLock;
+use crate::lock::{CorpusLock, LOCK_FILE};
 use crate::model::{self, Doc};
 use serde::Serialize;
 use std::collections::HashSet;
@@ -177,9 +177,12 @@ impl Corpus {
     pub fn init(root: &Path) -> Result<Self> {
         // Re-running init on a corpus is an open, not a reset. In particular,
         // opening first validates an existing config before any directory or
-        // file can be created, and leaves its spelling and bytes untouched.
+        // file can be created. The one setup repair it may make afterwards is
+        // adding the runtime lock to `.gitignore`.
         if root.join("nodes").is_dir() {
-            return Self::open(Some(root.to_path_buf()));
+            let corpus = Self::open(Some(root.to_path_buf()))?;
+            ensure_lock_ignored(root)?;
+            return Ok(corpus);
         }
 
         // A config can survive an interrupted or partial initialization. Read
@@ -199,6 +202,7 @@ impl Corpus {
             config.save(root)?;
             config
         };
+        ensure_lock_ignored(root)?;
         Ok(Self {
             root: root.to_path_buf(),
             config,
@@ -313,14 +317,15 @@ impl Corpus {
     /// Commit the corpus after a write, when `config.yaml` asks for it and
     /// the root is inside a git work tree.
     ///
-    /// Stages `nodes/`, `inbox/` and `config.yaml` under the root and
-    /// nothing else — not `.lock`, which records nothing about the corpus —
-    /// and commits as `neb <verb> <ids>`. `None` when the setting is off,
-    /// the root is not under git, or the write left nothing to record. Refused, as [`Error::StagedElsewhere`], when the index
-    /// already holds something outside the corpus: a `neb` commit is exactly
-    /// the corpus, and folding a stranger's staged work into one would misfile
-    /// it. The write is on disk before this runs and stays there whatever
-    /// git says. Never pushes.
+    /// Stages `nodes/`, `inbox/`, `config.yaml` and the generated `.gitignore`
+    /// under the root and nothing else — not `.lock`, which records nothing
+    /// about the corpus — and commits as `neb <verb> <ids>`. `None` when the
+    /// setting is off, the root is not under git, or the write left nothing to
+    /// record. Refused, as [`Error::StagedElsewhere`], when the index already
+    /// holds something outside the corpus: a `neb` commit is exactly the
+    /// corpus, and folding a stranger's staged work into one would misfile it.
+    /// The write is on disk before this runs and stays there whatever git says.
+    /// Never pushes.
     ///
     /// The setting is read from disk under the caller's lock rather than from
     /// the snapshot: whether this write is recorded is a question about the
@@ -878,8 +883,11 @@ pub struct HistoryEntry {
 /// else under the root, and everything outside it, is left alone — the write
 /// lock's `.lock` included, which is why it is not listed here and never
 /// will be: it is a fact about which process is writing right now, not about
-/// the corpus, and it means nothing on another machine.
-const COMMIT_PATHS: [&str; 3] = ["nodes", "inbox", config::FILE];
+/// the corpus, and it means nothing on another machine. `.gitignore` is
+/// corpus setup metadata: `init` maintains it so ordinary git commands cannot
+/// mistake the lock for corpus content.
+const GITIGNORE_FILE: &str = ".gitignore";
+const COMMIT_PATHS: [&str; 4] = ["nodes", "inbox", config::FILE, GITIGNORE_FILE];
 
 /// Whether a path from a NUL-delimited `git diff --name-only -z`, relative to
 /// the repository's top level, is one a `neb` commit may contain. `prefix` is
@@ -889,7 +897,39 @@ fn is_corpus_path(prefix: &str, path: &str) -> bool {
     let Some(rest) = path.strip_prefix(prefix) else {
         return false;
     };
-    rest == config::FILE || rest.starts_with("nodes/") || rest.starts_with("inbox/")
+    rest == config::FILE
+        || rest == GITIGNORE_FILE
+        || rest.starts_with("nodes/")
+        || rest.starts_with("inbox/")
+}
+
+/// Keep the process-local advisory lock out of the corpus repository.
+///
+/// Existing ignore content is preserved. Re-running `init` is idempotent when
+/// the final effective rule is already ours; if the user later adds another
+/// rule, a later `init` puts this root-specific rule last again.
+fn ensure_lock_ignored(root: &Path) -> Result<()> {
+    let path = root.join(GITIGNORE_FILE);
+    let mut contents = match std::fs::read(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(Error::io_at("reading", &path, error)),
+    };
+    let expected = format!("/{LOCK_FILE}");
+    let last_rule = contents
+        .split(|byte| *byte == b'\n')
+        .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
+        .rfind(|line| !line.is_empty() && !line.starts_with(b"#"));
+    if last_rule == Some(expected.as_bytes()) {
+        return Ok(());
+    }
+
+    if !contents.is_empty() && !contents.ends_with(b"\n") {
+        contents.push(b'\n');
+    }
+    contents.extend_from_slice(expected.as_bytes());
+    contents.push(b'\n');
+    write_atomic(&path, contents)
 }
 
 /// Run git at the corpus root. The process not starting at all is the one

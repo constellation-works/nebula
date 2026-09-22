@@ -96,7 +96,7 @@ then either run any verb (its commit sweeps up the earlier write) or catch
 up by hand:
 
 ```sh
-git -C "$NEBULA_ROOT" add nodes inbox config.yaml
+git -C "$NEBULA_ROOT" add nodes inbox config.yaml .gitignore
 git -C "$NEBULA_ROOT" commit -m "neb"
 ```
 

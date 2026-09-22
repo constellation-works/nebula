@@ -613,10 +613,10 @@ pub fn set_commit(corpus: &mut Corpus, enabled: bool) -> Result<CommitSetting> {
 ///
 /// Does nothing, and says so with `None`, unless `commit: true` is set in
 /// `config.yaml` and the root is inside a git work tree. Stages only
-/// `nodes/`, `inbox/` and `config.yaml` under the root, never pushes, and
-/// refuses with [`Error::StagedElsewhere`] rather than sweep up something
-/// staged outside the corpus. Called after the write it records, which
-/// stays on disk whatever happens here.
+/// `nodes/`, `inbox/`, `config.yaml` and the generated `.gitignore` under the
+/// root, never pushes, and refuses with [`Error::StagedElsewhere`] rather than
+/// sweep up something staged outside the corpus. Called after the write it
+/// records, which stays on disk whatever happens here.
 pub fn commit(corpus: &Corpus, verb: &str, ids: &[&str]) -> Result<Option<Committed>> {
     // Two commits racing would race on git's index. Taking the lock here
     // covers a caller that commits on its own; a caller that already holds it

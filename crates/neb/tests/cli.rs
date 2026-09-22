@@ -844,6 +844,25 @@ fn repeated_init_and_set_root_preserve_the_existing_corpus_byte_for_byte() {
 }
 
 #[test]
+fn repeated_init_adds_the_lock_ignore_without_replacing_existing_rules() {
+    let c = Corpus::new();
+    write(&c.root.join(".gitignore"), "private-notes/\n");
+
+    c.run(&["init"]).assert_ok();
+    assert_eq!(
+        std::fs::read_to_string(c.root.join(".gitignore")).unwrap(),
+        "private-notes/\n/.lock\n"
+    );
+
+    c.run(&["init"]).assert_ok();
+    assert_eq!(
+        std::fs::read_to_string(c.root.join(".gitignore")).unwrap(),
+        "private-notes/\n/.lock\n",
+        "the setup repair is idempotent"
+    );
+}
+
+#[test]
 fn init_refuses_invalid_existing_configs_without_mutation() {
     for config in [
         "schema_version: 1\ncorpus_id: neb-old\n",
@@ -4676,12 +4695,8 @@ fn git_commit_at(dir: &Path, date: &str, message: &str) {
     );
 }
 
-/// `git status --porcelain`, minus the corpus write lock.
-///
-/// `.lock` is runtime state rather than corpus content: `neb` never stages
-/// it and `check` never reads it, so a corpus that is its own repository
-/// carries it untracked from the first write on. Every assertion below about
-/// a clean tree means clean apart from that one line.
+/// `git status --porcelain`, ignoring the lock left by legacy-corpus fixtures
+/// that deliberately exercise behavior without re-running `neb init`.
 fn dirt(dir: &Path) -> String {
     git(dir, &["status", "--porcelain"])
         .lines()
@@ -4711,6 +4726,20 @@ fn head_paths(dir: &Path) -> Vec<String> {
         .collect();
     paths.sort();
     paths
+}
+
+fn assert_only_corpus_paths_in_log(dir: &Path) {
+    for line in git(dir, &["log", "--name-only", "--format="])
+        .lines()
+        .filter(|line| !line.is_empty())
+    {
+        assert!(
+            matches!(line, ".gitignore" | "config.yaml")
+                || line.starts_with("nodes/")
+                || line.starts_with("inbox/"),
+            "a commit touched {line}"
+        );
+    }
 }
 
 /// The recommended setup: a repository at the corpus root, with a remote it
@@ -4853,7 +4882,8 @@ fn commit_is_off_by_default_and_the_setting_reads_and_writes() {
         .says("on")
         .says("committed ");
     assert_eq!(log(&c.root), ["neb config commit"]);
-    assert_eq!(head_paths(&c.root).len(), 2, "{:?}", head_paths(&c.root));
+    assert_eq!(head_paths(&c.root).len(), 3, "{:?}", head_paths(&c.root));
+    assert!(head_paths(&c.root).contains(&".gitignore".to_string()));
     assert!(head_paths(&c.root).contains(&"config.yaml".to_string()));
     let raw = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
     assert!(raw.contains("commit: true"), "{raw}");
@@ -4990,15 +5020,7 @@ fn commit_on_records_each_mutating_verb_and_never_pushes() {
         git(&remote, &["rev-list", "--all"]).is_empty(),
         "the remote should be empty"
     );
-    for line in git(&c.root, &["log", "--name-only", "--format="]).lines() {
-        if line.is_empty() {
-            continue;
-        }
-        assert!(
-            line == "config.yaml" || line.starts_with("nodes/") || line.starts_with("inbox/"),
-            "a commit touched {line}"
-        );
-    }
+    assert_only_corpus_paths_in_log(&c.root);
 }
 
 #[test]
@@ -5289,9 +5311,10 @@ fn the_lock_file_is_never_staged_and_never_checked() {
         "the lock file is not tracked"
     );
     assert!(
-        git(&c.root, &["status", "--porcelain"]).contains("?? .lock"),
-        "it is left untracked rather than swept into a commit"
+        !git(&c.root, &["status", "--porcelain"]).contains(".lock"),
+        "the ignored lock is absent from repository status"
     );
+    assert_eq!(git(&c.root, &["check-ignore", ".lock"]), ".lock\n");
     assert!(dirt(&c.root).is_empty(), "{}", dirt(&c.root));
     let paths = head_paths(&c.root);
     assert!(
@@ -5304,6 +5327,38 @@ fn the_lock_file_is_never_staged_and_never_checked() {
     let report: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(report["nodes"], 1, "the lock file is not read as a node");
     assert_eq!(report["findings"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn git_add_all_cannot_stage_the_lock_or_block_later_neb_commits() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("corpus");
+    std::fs::create_dir_all(&root).unwrap();
+    git_init(&root);
+    let c = Corpus { dir, root };
+
+    c.run(&["init"]).assert_ok();
+    assert!(c.root.join(".lock").exists());
+    assert_eq!(git(&c.root, &["check-ignore", ".lock"]), ".lock\n");
+    assert!(
+        !git(&c.root, &["status", "--porcelain"]).contains(".lock"),
+        "init must not leave the runtime lock visible to git"
+    );
+
+    c.run(&["config", "commit", "on"])
+        .assert_ok()
+        .says("committed ");
+    git(&c.root, &["add", "-A"]);
+    assert!(
+        !git(&c.root, &["diff", "--cached", "--name-only"]).contains(".lock"),
+        "git add -A must not stage the runtime lock"
+    );
+
+    c.run(&["new", "Still commits", "--id", "still-commits"])
+        .assert_ok()
+        .says("committed ");
+    assert_eq!(log(&c.root)[0], "neb new still-commits");
+    assert!(dirt(&c.root).is_empty(), "{}", dirt(&c.root));
 }
 
 // ------------------------------------------------------------- node ids --

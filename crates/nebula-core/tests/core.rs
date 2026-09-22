@@ -1029,7 +1029,10 @@ fn commit_on_records_each_write_as_one_commit_of_corpus_paths_only() {
         .unwrap()
         .expect("turning it on is itself recorded");
     assert_eq!(start.message, "neb config commit");
-    assert_eq!(committed_paths(&root, "HEAD"), ["config.yaml"]);
+    assert_eq!(
+        committed_paths(&root, "HEAD"),
+        [".gitignore", "config.yaml"]
+    );
 
     // A capture creates inbox/, a promote writes a node and settles the
     // capture: one commit each, naming what the verb touched.
@@ -1422,9 +1425,10 @@ fn the_lock_file_is_neither_committed_nor_checked() {
         "the lock file is not tracked"
     );
     assert!(
-        git(&root, &["status", "--porcelain"]).contains("?? .lock"),
-        "it is left untracked rather than swept into the commit"
+        !git(&root, &["status", "--porcelain"]).contains(".lock"),
+        "the ignored lock is absent from repository status"
     );
+    assert_eq!(git(&root, &["check-ignore", ".lock"]), ".lock\n");
 
     let docs = corpus.load_all().unwrap();
     let report = nebula_core::check::run(&Graph::build(&docs).unwrap(), &corpus).unwrap();
