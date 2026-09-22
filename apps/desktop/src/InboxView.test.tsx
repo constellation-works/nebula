@@ -176,9 +176,17 @@ describe("CaptureBox", () => {
 
 describe("App", () => {
   it("shows the count in the Inbox tab", async () => {
+    const inbox = deferred<InboxEntry[]>();
+    mocked.inbox.mockReturnValueOnce(inbox.promise);
     render(<App />);
-    const tab = await screen.findByRole("tab", { name: /Inbox/ });
-    expect(tab).toHaveTextContent("Inbox2");
+
+    await waitFor(() => expect(mocked.inbox).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      inbox.resolve(entries);
+      await inbox.promise;
+    });
+
+    expect(await screen.findByRole("tab", { name: "Inbox2" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Graph" })).toBeInTheDocument();
   });
 
