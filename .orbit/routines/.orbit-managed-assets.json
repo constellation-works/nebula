@@ -2,32 +2,23 @@
   "schemaVersion": 2,
   "assetKind": "routine",
   "assets": {
-    "auto_task_scheduler": "510a7e56263d2c27cd63194ba0db340d56753f46ec24bf762e41270cebc59012",
-    "ci_failure_sweep": "82c03f3e4d554e1ec6c133fea50bd201f2603e2e80164bcb71873f973e3344ed",
-    "dependabot_alert_sweep": "41c698900f0d5443a8cdc95c963f3f5c76c1ce01ce507de5197244fa86069835",
+    "ci_failure_sweep": "0a371d86e8dfa534322c5a19a406522c5dac4b3ec1ed650f90b4c74891be70ee",
+    "dependabot_alert_sweep": "60e1ed61af70e4d56a946b7504b12689b44cf9dbab071d056b9dc3688e8afcc7",
     "ship_sweep": "73d2382c3ce3aef7eac62af2679aefb31455ea95b6a0cf85e8e06c2f3186f9b4",
-    "task_pilot": "9bda04dfc6eeca6337dfba230c0008a56779f02dbfbdf800443105144d76d3ff",
-    "task_triage": "218f8b7d159e00661ed7efe0ad17921866000f64b03dedb3bd6852b216b488bf",
-    "worktree_gc": "d6ea33f6f40f1fba591061bcbacb79590127abdd07035031161aab0fcc8ee10b"
+    "task_pilot": "d57e766ac74993f7b10314bdc2cb4bcf4134b27e0aba7892914a4f192097fc26",
+    "worktree_gc": "3f03591b706c2e26f3cb2e2efb83bc6dba8760fd4d957afc0d74ceb179de9abe"
   },
   "routineProvenance": {
-    "auto_task_scheduler": {
-      "templateDigest": "7f3b1a41dfe43b5445b47450f21d8e424fcdeeaa977a6f09d4ded03fc7ed16be",
-      "renderedDigest": "510a7e56263d2c27cd63194ba0db340d56753f46ec24bf762e41270cebc59012",
-      "binding": {
-        "name": "auto-task-scheduler-nebula"
-      }
-    },
     "ci_failure_sweep": {
-      "templateDigest": "a1b01d81293cbddb16f636aaf1d097a1ef7c1a90f88046a0b9223bc1a6158825",
-      "renderedDigest": "82c03f3e4d554e1ec6c133fea50bd201f2603e2e80164bcb71873f973e3344ed",
+      "templateDigest": "6df59a489a126748609f96594ddf9d9c0a2ce57862c7ee4b70a715137155a421",
+      "renderedDigest": "0a371d86e8dfa534322c5a19a406522c5dac4b3ec1ed650f90b4c74891be70ee",
       "binding": {
         "name": "ci-failure-sweep-nebula"
       }
     },
     "dependabot_alert_sweep": {
-      "templateDigest": "e66de2d11cf610f8bb9100845aafe8a85a33bc5678a10e30bd062d6894ad0d0f",
-      "renderedDigest": "41c698900f0d5443a8cdc95c963f3f5c76c1ce01ce507de5197244fa86069835",
+      "templateDigest": "da691ec375f100347b657c0221c2b55c35eafbe498a247676743e9e30650a716",
+      "renderedDigest": "60e1ed61af70e4d56a946b7504b12689b44cf9dbab071d056b9dc3688e8afcc7",
       "binding": {
         "name": "dependabot-alert-sweep-nebula"
       }
@@ -40,22 +31,17 @@
       }
     },
     "task_pilot": {
-      "templateDigest": "0abd33a5901e5b71d01f54dd545b256631b4b59396cd0ee788817ea5b6189701",
-      "renderedDigest": "9bda04dfc6eeca6337dfba230c0008a56779f02dbfbdf800443105144d76d3ff",
+      "templateDigest": "d62349c4e7719f861a5695f1f5e6c466289ebc5ff606bf6c2db88b6dcd00baac",
+      "renderedDigest": "d57e766ac74993f7b10314bdc2cb4bcf4134b27e0aba7892914a4f192097fc26",
       "binding": {
-        "name": "task-pilot-nebula"
-      }
-    },
-    "task_triage": {
-      "templateDigest": "eeecdfa493fdcddd62a0b923fdfca64b1c27bfd996a96761776d8657fa18e2c7",
-      "renderedDigest": "218f8b7d159e00661ed7efe0ad17921866000f64b03dedb3bd6852b216b488bf",
-      "binding": {
-        "name": "task-triage-nebula"
+        "name": "task-pilot-nebula",
+        "ownerMachine": "hm_ba054a1a8fbfb914",
+        "branch": "main"
       }
     },
     "worktree_gc": {
-      "templateDigest": "b03d4f900f0746dd317d82fc11b6cd81a398edee18519e3f650d37ed9195a70d",
-      "renderedDigest": "d6ea33f6f40f1fba591061bcbacb79590127abdd07035031161aab0fcc8ee10b",
+      "templateDigest": "17a1fe2182a607f6391c5d73b958c3a1cfb83288811a199702da110b5b32fb0c",
+      "renderedDigest": "3f03591b706c2e26f3cb2e2efb83bc6dba8760fd4d957afc0d74ceb179de9abe",
       "binding": {
         "name": "worktree-gc-nebula"
       }
