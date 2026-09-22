@@ -1,8 +1,8 @@
 ---
 title: Invariants
 owner: claude
-last_updated: 2026-09-21
-last_validated: 2026-09-21
+last_updated: 2026-09-22
+last_validated: 2026-09-22
 status: Accepted
 feature: lineage-graph
 doc_role: spec
@@ -18,7 +18,9 @@ related_artifacts: []
 
 `neb check` is the lock, the same role `check-theory.py` plays in principia. A
 schema is a suggestion until something refuses a corpus that violates it.
-These are the ten rules as of the 2026-09-12 reduction; see
+Ten of these are the rules as of the 2026-09-12 reduction; rules 11 and 12
+were added afterward to catch a hand edit that leaves a node's lifecycle
+fields or dates inconsistent with each other. See
 [docs/design/v0.2/1_spec.md](../../v0.2/1_spec.md) for the model they apply to
 and its "What is removed" table for the rules this replaced.
 
@@ -35,6 +37,9 @@ and its "What is removed" table for the rules this replaced.
 | 8 | An `observatory` record resolves under the configured root — the same rule, softer, because it judges the machine rather than the corpus | warn | `check` (shape at `cite`) |
 | 9 | Every reference has a note | warn | `check` |
 | 10 | No two tags differ only by case or a trailing `s` | warn | `check` |
+| 11 | `closed` is set only on a `refuted` or `abandoned` node, never an open one | error | `check` |
+| 11 | A `seed` does not carry a `kill` condition — a sign status changed by hand | warn | `check` |
+| 12 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
 
 ## Where a rule lives matters
 
@@ -69,6 +74,21 @@ corpus's business at all: an unset root or a checkout without the record says
 the machine is missing something, not that the citation is wrong, so `check`
 warns. Erroring would make one portable corpus fail on every machine that
 does not happen to have Observatory checked out.
+
+## Rules 11 and 12: nothing a verb writes, only what a hand edit leaves
+
+Every other checker rule backstops something a verb also refuses at the
+point of action. Rules 11 and 12 do not: no verb takes `closed`, `created`,
+`updated` or a reference's `added` as free-form input, so there is no place
+for a matching refusal to live. `ops.rs` only ever produces a `closed` block
+on `refuted`/`abandoned`, a `kill` together with a move to `hypothesis`, and
+a date from `store::today()`. Any other value has to have gotten there by
+hand — `check` is the only place these are ever seen, and it never repairs
+them, only reports.
+
+The seed-with-kill case is a warning rather than an error: it is not wrong by
+itself, only unusual, since the node has not yet been sharpened through the
+guard that would move its status too.
 
 ## Errors and warnings
 

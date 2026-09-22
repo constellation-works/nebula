@@ -563,7 +563,7 @@ fn parse_note_line(line: &str) -> Option<Note> {
     })
 }
 
-fn is_iso_date(s: &str) -> bool {
+pub(crate) fn is_iso_date(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 10
         && b[4] == b'-'

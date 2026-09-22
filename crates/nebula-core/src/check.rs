@@ -11,7 +11,7 @@
 
 use crate::error::Result;
 use crate::graph::Graph;
-use crate::model::{Doc, EdgeType, Status};
+use crate::model::{Doc, EdgeType, Status, is_iso_date};
 use crate::store::Corpus;
 use serde::Serialize;
 use std::collections::{BTreeSet, HashSet};
@@ -254,6 +254,8 @@ fn check_node(
     r: &mut Report,
 ) {
     status_rules(doc, r);
+    lifecycle_rules(doc, r);
+    date_rules(doc, r);
     edge_rules(doc, ids, r);
     reference_rules(doc, corpus, observatory, r);
 }
@@ -282,6 +284,98 @@ fn status_rules(doc: &Doc, r: &mut Report) {
             id,
             "status is refuted but closed.why is empty; say what fired the kill condition",
         );
+    }
+}
+
+/// Rules about whether the stored lifecycle fields still agree with
+/// `status`, the shape every verb leaves them in but a hand edit can pull
+/// apart.
+fn lifecycle_rules(doc: &Doc, r: &mut Report) {
+    let n = &doc.node;
+    let id = Some(n.id.as_str());
+    // 11. `set_status` clears `closed` the moment a node leaves refuted or
+    //     abandoned, and no verb ever sets it any other way, so a `closed`
+    //     block on a seed or hypothesis is not a state any verb produces —
+    //     it is what an earlier abandonment or refutation left behind after
+    //     a hand edit reopened the node without going through `status`.
+    if n.status.is_open() && n.closed.is_some() {
+        r.push(
+            Severity::Error,
+            11,
+            id,
+            format!(
+                "status is `{}` but a `closed` block is still set; leftover from an earlier close?",
+                n.status
+            ),
+        );
+    }
+    // 11. `new --kill` and `sharpen` only ever write a kill condition
+    //     together with a move to `hypothesis`, so a `seed` carrying one was
+    //     set by hand without the guard that would have moved the status
+    //     too. Not wrong by itself — the node has not yet been re-sharpened
+    //     — so this is a warning rather than an error.
+    if n.status == Status::Seed && n.kill.is_some() {
+        r.push(
+            Severity::Warn,
+            11,
+            id,
+            "status is seed but a kill condition is set; `new --kill`/`sharpen` always move \
+             status to hypothesis, so this looks like a hand edit",
+        );
+    }
+}
+
+/// Rules about whether the stored dates parse and, where order matters,
+/// agree with each other.
+fn date_rules(doc: &Doc, r: &mut Report) {
+    let n = &doc.node;
+    let id = Some(n.id.as_str());
+    // 12. Every date `ops.rs` writes comes from `store::today()`, so
+    //     `created`/`updated` are always `YYYY-MM-DD` and never move
+    //     backwards. A hand edit is the only way either goes wrong, and
+    //     `review`/`open` then silently treat the node as never stale,
+    //     since `days_since` returns `None` for a date it cannot parse.
+    let created_ok = is_iso_date(&n.created);
+    if !created_ok {
+        r.push(
+            Severity::Error,
+            12,
+            id,
+            format!("created `{}` is not a YYYY-MM-DD date", n.created),
+        );
+    }
+    let updated_ok = is_iso_date(&n.updated);
+    if !updated_ok {
+        r.push(
+            Severity::Error,
+            12,
+            id,
+            format!("updated `{}` is not a YYYY-MM-DD date", n.updated),
+        );
+    }
+    if created_ok && updated_ok && n.updated < n.created {
+        r.push(
+            Severity::Error,
+            12,
+            id,
+            format!(
+                "updated `{}` is earlier than created `{}`",
+                n.updated, n.created
+            ),
+        );
+    }
+    for f in &n.references {
+        if !is_iso_date(&f.added) {
+            r.push(
+                Severity::Error,
+                12,
+                id,
+                format!(
+                    "reference `{}` has an added date `{}` that does not parse",
+                    f.id, f.added
+                ),
+            );
+        }
     }
 }
 
