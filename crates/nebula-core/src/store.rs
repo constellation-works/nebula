@@ -595,7 +595,7 @@ impl Corpus {
         }
         let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)?
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|e| e == "md"))
+            .filter(|p| is_node_file_name(p))
             .collect();
         paths.sort();
         for p in paths {
@@ -615,32 +615,52 @@ impl Corpus {
     /// reading as the node it claims — or, through [`Self::save`], from
     /// becoming a write over that node.
     ///
-    /// The names are compared by asking the filesystem which file each one
-    /// opens. A volume may store a name in a different Unicode normalization
-    /// than the id it was written from — `título` is two spellings of the
-    /// same word — and a byte comparison would call a perfectly ordinary
-    /// node a mismatch. What the fallback asks is [`is_same_file`]: whether
-    /// the path the id names *is* this file. Nothing is canonicalized; both
-    /// paths are used as given, which is what keeps a symlinked root
-    /// answering the same way on either platform.
+    /// A node has one directory entry, and the names are compared by asking
+    /// the filesystem whether they open that one entry. A volume may store a
+    /// name in a different Unicode normalization than the id it was written
+    /// from — `título` is two spellings of the same word — and a byte
+    /// comparison would call a perfectly ordinary node a mismatch. What the
+    /// fallback asks is [`is_same_entry`]: whether the path the id names *is*
+    /// this entry. Nothing is canonicalized; both paths are used as given,
+    /// which is what keeps a symlinked root answering the same way on either
+    /// platform.
     ///
     /// Equal *text* is not that question and never was. Two distinct files
     /// hold equal text the moment one is copied over the other, so a
     /// comparison of contents let `nodes/safe.md` — a byte-for-byte copy of
     /// `nodes/victim.md` — authorize `victim` as the id `safe` had asked
     /// for, and the write that followed landed on the other node.
+    ///
+    /// Nor is one *file* under two entries. `nodes/safe.md` hard-linked to,
+    /// or a symlink at, `nodes/victim.md` opens the same bytes, but it is a
+    /// second name for the node, and neither door can keep it coherent: a
+    /// scan reads the node twice, and [`write_atomic`] replaces the entry the
+    /// id names with a new file, so a hard link keeps the old bytes under the
+    /// other name and the next load refuses. So an alias is refused wherever
+    /// it is met, and it is the alias that is named, since it is what has to
+    /// go. A hard link is met even when the node is loaded through its own
+    /// name, because that is the load whose write would split the pair; a
+    /// symlink is not, because a write leaves it pointing at the new file.
     fn require_file_agrees(&self, path: &Path, doc: &Doc) -> Result<()> {
-        if path.file_stem() == Some(OsStr::new(doc.node.id.as_str())) {
+        let id = OsStr::new(doc.node.id.as_str());
+        let refuse = |path: &Path| {
+            Err(Error::IdMismatch {
+                path: path.to_path_buf(),
+                id: doc.node.id.clone(),
+            })
+        };
+        let links = hard_links_beside(path)?;
+        if links.len() > 1 {
+            let alias = links.iter().find(|link| link.file_stem() != Some(id));
+            return refuse(alias.map_or(path, PathBuf::as_path));
+        }
+        if path.file_stem() == Some(id) {
             return Ok(());
         }
-        let declared = self.node_path(&doc.node.id)?;
-        if is_same_file(path, &declared) {
+        if is_same_entry(path, &self.node_path(&doc.node.id)?) {
             return Ok(());
         }
-        Err(Error::IdMismatch {
-            path: path.to_path_buf(),
-            id: doc.node.id.clone(),
-        })
+        refuse(path)
     }
 
     /// Append a capture to the current month's inbox file.
@@ -1185,24 +1205,33 @@ pub(crate) fn is_path_safe_id(id: &str) -> bool {
     single && components.next().is_none()
 }
 
-/// Whether two paths name the same file on disk.
+/// Whether a name in `nodes/` is one a scan reads as a node.
+fn is_node_file_name(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "md")
+}
+
+/// Whether two paths name the same directory entry.
 ///
 /// Identity, because that is the only reason two different spellings may name
 /// one node: a volume may store a file name in a different Unicode
 /// normalization than the id it was written from, and the filesystem is the
-/// one that knows the two are one file. A device and inode pair is that
-/// answer. Both paths are used as given — nothing is resolved or
-/// canonicalized — so a corpus reached through a symlinked root, which is
-/// every corpus under a macOS temporary directory, answers this the same way
-/// a corpus reached directly does.
+/// one that knows the two are one entry. A device and inode pair is that
+/// answer, read without following the last component, so a symlink is its
+/// own entry rather than the file it points at. Both paths are otherwise used
+/// as given — nothing is resolved or canonicalized — so a corpus reached
+/// through a symlinked root, which is every corpus under a macOS temporary
+/// directory, answers this the same way a corpus reached directly does.
 ///
-/// A path that cannot be read is not the same file as anything, including
+/// A hard link is the one case the pair cannot tell apart from a respelling,
+/// which is why [`hard_links_beside`] is asked first.
+///
+/// A path that cannot be read is not the same entry as anything, including
 /// itself: the caller is deciding whether to trust a mismatched name, and an
 /// unanswered question is not a yes.
 #[cfg(unix)]
-fn is_same_file(a: &Path, b: &Path) -> bool {
+fn is_same_entry(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
-    match (std::fs::metadata(a), std::fs::metadata(b)) {
+    match (std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)) {
         (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
         _ => false,
     }
@@ -1213,8 +1242,55 @@ fn is_same_file(a: &Path, b: &Path) -> bool {
 /// that differs from the id it stores differs for some other reason, and the
 /// byte comparison the caller already made is the whole answer.
 #[cfg(not(unix))]
-fn is_same_file(_a: &Path, _b: &Path) -> bool {
+fn is_same_entry(_a: &Path, _b: &Path) -> bool {
     false
+}
+
+/// The node file names in `path`'s directory that are hard links to it,
+/// itself included, sorted.
+///
+/// Empty for the ordinary file with one link, which is answered from its own
+/// metadata without listing the directory. A link count above one sends the
+/// question to the directory, because only links a scan would read as nodes
+/// are aliases: a backup hard-linked from outside the corpus is not a second
+/// name for the node, and one Unicode respelling of a name is one entry
+/// however it is typed.
+#[cfg(unix)]
+fn hard_links_beside(path: &Path) -> Result<Vec<PathBuf>> {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(file) = std::fs::symlink_metadata(path) else {
+        return Ok(Vec::new());
+    };
+    if file.nlink() <= 1 {
+        return Ok(Vec::new());
+    }
+    let Some(dir) = path.parent() else {
+        return Ok(Vec::new());
+    };
+    let entries = std::fs::read_dir(dir).map_err(|error| Error::io_at("reading", dir, error))?;
+    let mut links = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| Error::io_at("reading", dir, error))?;
+        let link = entry.path();
+        if !is_node_file_name(&link) {
+            continue;
+        }
+        if let Ok(metadata) = std::fs::symlink_metadata(&link)
+            && metadata.dev() == file.dev()
+            && metadata.ino() == file.ino()
+        {
+            links.push(link);
+        }
+    }
+    links.sort();
+    Ok(links)
+}
+
+/// Elsewhere a hard link is not an alias this module can see, and the byte
+/// comparison stands alone.
+#[cfg(not(unix))]
+fn hard_links_beside(_path: &Path) -> Result<Vec<PathBuf>> {
+    Ok(Vec::new())
 }
 
 #[cfg(test)]

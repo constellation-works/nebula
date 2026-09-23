@@ -1593,6 +1593,95 @@ fn a_copy_of_another_node_file_does_not_authorize_the_id_it_stores() {
     );
 }
 
+/// One file under two names in `nodes/`. The names once opened the same inode
+/// and so agreed, but the write that followed replaced `victim.md` through a
+/// rename: `safe.md` kept the old bytes under a name that no longer matched
+/// anything, and the next load of either refused. The alias is refused before
+/// the write, whichever name the node is reached through.
+#[cfg(unix)]
+#[test]
+fn a_hard_linked_alias_is_refused_before_a_write_can_split_it() {
+    use std::os::unix::fs::MetadataExt;
+    let identity = |path: &std::path::Path| {
+        let metadata = std::fs::metadata(path).unwrap();
+        (metadata.dev(), metadata.ino())
+    };
+    let (_dir, corpus) = corpus();
+    let victim = seed(&corpus, "Victim", &[]);
+    let victim_path = corpus.node_path(&victim).unwrap();
+    let safe_path = corpus.node_path("safe").unwrap();
+    std::fs::hard_link(&victim_path, &safe_path).expect("hard link");
+    let before = std::fs::read_to_string(&victim_path).unwrap();
+    let linked = identity(&victim_path);
+
+    let names_the_alias = |refused: &nebula_core::Result<_>| matches!(refused, Err(Error::IdMismatch { path, id }) if path == &safe_path && id == &victim);
+    let through_alias = ops::note(&corpus, "safe", "ALIAS-NOTE", None);
+    assert!(names_the_alias(&through_alias), "got {through_alias:?}");
+    let through_own_name = ops::note(&corpus, &victim, "OWN-NAME-NOTE", None);
+    assert!(
+        names_the_alias(&through_own_name),
+        "got {through_own_name:?}"
+    );
+    let scanned = corpus.load_all();
+    assert!(
+        matches!(&scanned, Err(Error::IdMismatch { path, id }) if path == &safe_path && id == &victim),
+        "got {scanned:?}"
+    );
+    assert!(matches!(corpus.load("safe"), Err(Error::IdMismatch { .. })));
+    assert!(matches!(
+        corpus.load(&victim),
+        Err(Error::IdMismatch { .. })
+    ));
+
+    assert_eq!(identity(&victim_path), linked, "no write replaced the node");
+    assert_eq!(identity(&safe_path), linked, "the pair was not split");
+    assert_eq!(std::fs::read_to_string(&victim_path).unwrap(), before);
+}
+
+/// A symlink alias stays linked across a write, but a scan read the node
+/// twice and refused a duplicate id while `load` through the alias succeeded.
+/// Both doors now refuse the alias itself, as a mismatch, before any write.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_alias_is_refused_by_load_and_by_a_scan_alike() {
+    let (_dir, corpus) = corpus();
+    let victim = seed(&corpus, "Victim", &[]);
+    let victim_path = corpus.node_path(&victim).unwrap();
+    let alias_path = corpus.node_path("alias").unwrap();
+    std::os::unix::fs::symlink(format!("{victim}.md"), &alias_path).expect("symlink");
+    let before = std::fs::read_to_string(&victim_path).unwrap();
+
+    let refused = ops::note(&corpus, "alias", "SYM-NOTE", None);
+    assert!(
+        matches!(&refused, Err(Error::IdMismatch { path, id }) if path == &alias_path && id == &victim),
+        "got {refused:?}"
+    );
+    let scanned = corpus.load_all();
+    assert!(
+        matches!(&scanned, Err(Error::IdMismatch { path, id }) if path == &alias_path && id == &victim),
+        "a scan refused something other than the alias: {scanned:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&victim_path).unwrap(), before);
+    assert_eq!(corpus.load(&victim).unwrap().node.id, victim);
+}
+
+/// Only a name a scan would read is an alias. A hard link from outside
+/// `nodes/`, as a `cp -al` backup makes, leaves the node one entry there.
+#[cfg(unix)]
+#[test]
+fn a_hard_link_outside_the_nodes_directory_does_not_refuse_the_node() {
+    let (dir, corpus) = corpus();
+    let victim = seed(&corpus, "Victim", &[]);
+    std::fs::hard_link(
+        corpus.node_path(&victim).unwrap(),
+        dir.path().join("backup.md"),
+    )
+    .expect("hard link");
+
+    ops::note(&corpus, &victim, "a fixture note", None).expect("note");
+    assert_eq!(corpus.load_all().expect("scan").len(), 1);
+}
+
 /// The one reason two spellings may name one node, pinned to the case it was
 /// written for. A volume may store a file name in a different Unicode
 /// normalization than the id the file stores, and a scan reading that name
