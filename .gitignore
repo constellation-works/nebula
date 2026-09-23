@@ -9,3 +9,4 @@ apps/desktop/dist
 /corpus
 # Orbit per-user state — not a repository artifact.
 .orbit/
+.mcp.json
