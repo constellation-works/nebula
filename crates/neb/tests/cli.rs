@@ -5714,6 +5714,106 @@ fn a_copied_node_file_refuses_rather_than_redirecting_the_write() {
     }
 }
 
+/// The same file under two names: `ln nodes/victim.md nodes/safe.md`. The
+/// two names once opened one inode, so `note safe` was accepted and printed
+/// `safe`, but the atomic rename gave `victim.md` a new file and left
+/// `safe.md` holding the old bytes, and the next `note`, `list` and `check`
+/// all refused. An alias is refused before the write, from either name.
+#[cfg(unix)]
+#[test]
+fn a_hard_linked_alias_refuses_before_a_write_can_split_it() {
+    use std::os::unix::fs::MetadataExt;
+    let identity = |path: &Path| {
+        let metadata = std::fs::metadata(path).unwrap();
+        (metadata.dev(), metadata.ino())
+    };
+    let c = Corpus::new();
+    c.run(&["new", "Victim", "--id", "victim"]).assert_ok();
+    let victim = c.node_file("victim");
+    let safe = c.node_file("safe");
+    std::fs::hard_link(&victim, &safe).expect("hard link");
+    let before = std::fs::read_to_string(&victim).unwrap();
+    let linked = identity(&victim);
+    assert_eq!(identity(&safe), linked, "the fixture is one file");
+
+    for args in [
+        vec!["note", "safe", "ALIAS-NOTE"],
+        vec!["note", "victim", "OWN-NAME-NOTE"],
+        vec!["tag", "safe", "--add", "fixture"],
+        vec!["show", "safe"],
+        vec!["show", "victim"],
+        vec!["list"],
+        vec!["check"],
+    ] {
+        c.run(&args)
+            .assert_fails()
+            .says("safe.md stores the id `victim`, which is not the node its file name names");
+    }
+    assert_eq!(identity(&victim), linked, "no write replaced victim.md");
+    assert_eq!(
+        identity(&safe),
+        linked,
+        "and the two names are still one file"
+    );
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), before);
+
+    // Removing the alias is the repair, and the node is whole again.
+    std::fs::remove_file(&safe).unwrap();
+    c.run(&["note", "victim", "AFTER-REPAIR"]).assert_ok();
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+/// `ln -s victim.md nodes/alias.md`. A write through the alias stayed linked,
+/// but a scan read the node twice and refused a duplicate id, so the single
+/// node door and the whole-corpus door disagreed. Both now refuse the alias
+/// by name, before anything is written.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_alias_is_refused_at_every_door_that_meets_it() {
+    let c = Corpus::new();
+    c.run(&["new", "Victim", "--id", "victim"]).assert_ok();
+    let victim = c.node_file("victim");
+    let alias = c.node_file("alias");
+    std::os::unix::fs::symlink("victim.md", &alias).expect("symlink");
+    let before = std::fs::read_to_string(&victim).unwrap();
+
+    for args in [
+        vec!["note", "alias", "SYM-NOTE"],
+        vec!["show", "alias"],
+        vec!["list"],
+        vec!["check"],
+    ] {
+        c.run(&args)
+            .assert_fails()
+            .says("alias.md stores the id `victim`, which is not the node its file name names");
+    }
+    assert_eq!(
+        std::fs::read_to_string(&victim).unwrap(),
+        before,
+        "nothing was written through the alias"
+    );
+
+    std::fs::remove_file(&alias).unwrap();
+    c.run(&["note", "victim", "AFTER-REPAIR"]).assert_ok();
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+/// A hard link from outside `nodes/` is not a second name the corpus sees —
+/// a backup made with `cp -al` is the ordinary case — so the node still
+/// reads, writes and checks.
+#[cfg(unix)]
+#[test]
+fn a_hard_link_outside_the_nodes_directory_is_not_an_alias() {
+    let c = Corpus::new();
+    c.run(&["new", "Victim", "--id", "victim"]).assert_ok();
+    let backup = c.workdir().join("backup.md");
+    std::fs::hard_link(c.node_file("victim"), &backup).expect("hard link");
+
+    c.run(&["note", "victim", "a fixture note"]).assert_ok();
+    c.run(&["list"]).assert_ok().says("victim");
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
 /// A caller-supplied id is a path the moment a verb uses it, and a real file
 /// outside the corpus is exactly what it used to reach.
 #[test]

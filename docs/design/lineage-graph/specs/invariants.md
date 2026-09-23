@@ -140,6 +140,21 @@ that matches a file to the id it stores, asks the filesystem rather than
 comparing bytes, because a volume may store a name in a different Unicode
 normalization than the id it was written from.
 
+What it asks is whether the two names open one *directory entry*, not one
+file. A node has exactly one name under `nodes/`; a second name for it is an
+alias, and aliases are refused at both doors, before anything is written. A
+hard link `nodes/safe.md` to `nodes/victim.md` was once accepted by `load`
+and was a split waiting to happen: a write replaces the file the id names
+through a rename, the link keeps the old bytes under the other name, and the
+next load of either refuses. A symlink `nodes/alias.md` stayed linked across
+the write but made a scan read the node twice. Both are now `IdMismatch`,
+naming the alias, when the node is reached through the alias or by a scan. A
+hard link is refused through the node's own name too, since that write would
+split it; a symlink is not, since the write leaves it pointing at the new
+file. Only a link a scan would read counts: a backup
+hard-linked from outside `nodes/` is not a second name the corpus sees. The
+Unicode respelling survives because it is one entry however it is typed.
+
 ## Errors and warnings
 
 Errors mean the corpus is inconsistent and `check` exits non-zero. Warnings mean
