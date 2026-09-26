@@ -868,6 +868,9 @@ fn legacy_inbox_stamp_still_loads() {
     c.run(&["inbox", "--json"]).assert_ok().says("[]");
 }
 
+/// The ids `neb` tries, in order, for `text` captured at `stamp`: a copy of
+/// the hash chain in `store::unique_entry_id`, which the binary cannot be
+/// asked for.
 fn inbox_id_candidates(stamp: &str, text: &str) -> Vec<String> {
     fn fnv(s: &str) -> u64 {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -890,49 +893,86 @@ fn inbox_id_candidates(stamp: &str, text: &str) -> Vec<String> {
     ids
 }
 
+/// The inbox stamp for every second from `stamp` to `seconds` after it, at
+/// `stamp`'s own offset and in its own form, as `neb` would write them.
+fn stamps_from(stamp: &str, seconds: i64) -> Vec<String> {
+    use time::format_description::well_known::Rfc3339;
+    use time::macros::format_description;
+    use time::{Duration, OffsetDateTime, UtcOffset};
+
+    let start = OffsetDateTime::parse(stamp, &Rfc3339).unwrap();
+    (0..=seconds)
+        .map(|s| {
+            let at = start + Duration::seconds(s);
+            if stamp.ends_with('Z') {
+                at.to_offset(UtcOffset::UTC).format(format_description!(
+                    "[year]-[month]-[day]T[hour]:[minute]:[second]Z"
+                ))
+            } else {
+                at.format(format_description!(
+                    "[year]-[month]-[day]T[hour]:[minute]:[second][offset_hour sign:mandatory]:[offset_minute]"
+                ))
+            }
+            .unwrap()
+        })
+        .collect()
+}
+
 #[test]
 fn capture_collision_fallback_promotes_the_new_thought() {
     const TEXT: &str = "the intended new thought";
+    // The binary's clock cannot be set, and its stamp, which seeds the id, is
+    // to the second. So rather than hope the capture lands in the probe's
+    // second, the fixture holds every id it could hash to from that second to
+    // a minute after it, and the capture collides whichever it lands in.
+    const WINDOW_SECS: i64 = 60;
 
-    for _ in 0..3 {
-        let c = Corpus::new();
-        c.run(&["capture", TEXT]).assert_ok();
-        let month = std::fs::read_dir(c.root.join("inbox"))
-            .unwrap()
-            .next()
-            .unwrap()
-            .unwrap()
-            .path();
-        let raw = std::fs::read_to_string(&month).unwrap();
-        let stamp = raw.split_whitespace().nth(2).unwrap();
-        let occupied = inbox_id_candidates(stamp, TEXT);
-        let mut fixture = String::new();
-        for (i, id) in occupied.iter().enumerate() {
-            writeln!(fixture, "- [{id}] {stamp} fixture {i}").unwrap();
+    let c = Corpus::new();
+    // A zone without daylight saving, so no offset change falls inside the window.
+    c.run_with_env(&["capture", TEXT], &[PLUS_TWO]).assert_ok();
+    let month = std::fs::read_dir(c.root.join("inbox"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let raw = std::fs::read_to_string(&month).unwrap();
+    let probe = raw.split_whitespace().nth(2).unwrap().to_string();
+    let window = stamps_from(&probe, WINDOW_SECS);
+    let mut occupied = std::collections::HashSet::new();
+    let mut fixture = String::new();
+    for stamp in &window {
+        for id in inbox_id_candidates(stamp, TEXT) {
+            if occupied.insert(id.clone()) {
+                writeln!(fixture, "- [{id}] {stamp} fixture {}", occupied.len()).unwrap();
+            }
         }
-        std::fs::write(&month, fixture).unwrap();
-
-        let captured = c.run(&["capture", TEXT]).assert_ok().stdout_trim();
-        let listing = c.run(&["inbox", "--json"]).assert_ok().stdout();
-        let entries: serde_json::Value = serde_json::from_str(&listing).unwrap();
-        let new_entry = entries
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["id"] == captured)
-            .unwrap();
-        if new_entry["at"] != stamp {
-            continue;
-        }
-
-        assert!(!occupied.contains(&captured));
-        c.run(&["promote", &captured, "--title", "Intended new thought"])
-            .assert_ok();
-        let node = std::fs::read_to_string(c.node_file("intended-new-thought")).unwrap();
-        assert!(node.ends_with("the intended new thought\n"));
-        return;
     }
-    panic!("the clock crossed a second during all three collision fixtures");
+    std::fs::write(&month, fixture).unwrap();
+
+    let captured = c
+        .run_with_env(&["capture", TEXT], &[PLUS_TWO])
+        .assert_ok()
+        .stdout_trim();
+
+    let listing = c.run(&["inbox", "--json"]).assert_ok().stdout();
+    let entries: serde_json::Value = serde_json::from_str(&listing).unwrap();
+    let new_entry = entries
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == captured)
+        .unwrap();
+    let at = new_entry["at"].as_str().unwrap();
+    assert!(
+        window.iter().any(|stamp| stamp == at),
+        "the capture at {at} fell outside the {WINDOW_SECS}s after {probe} the fixture holds"
+    );
+    assert!(!occupied.contains(&captured), "{captured} is already taken");
+    c.run(&["promote", &captured, "--title", "Intended new thought"])
+        .assert_ok();
+    let node = std::fs::read_to_string(c.node_file("intended-new-thought")).unwrap();
+    assert!(node.ends_with("the intended new thought\n"));
 }
 
 #[test]

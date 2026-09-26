@@ -920,6 +920,17 @@ impl Corpus {
     /// one, is built whole and handed to one append, so a crash can lose the
     /// capture but never leave half of it in the inbox.
     pub fn capture(&self, text: &str) -> Result<InboxEntry> {
+        self.capture_at(text, &stamp())
+    }
+
+    /// [`Corpus::capture`], stamped `stamp` rather than now.
+    ///
+    /// The stamp decides the month file and seeds the entry id, so this is
+    /// the seam a unit test fixes the capture clock at instead of racing the
+    /// wall clock. It is crate-internal: nothing outside nebula can back-date
+    /// a capture. `stamp` is an inbox stamp in either form an inbox line
+    /// holds, and its first seven characters name the month file.
+    pub(crate) fn capture_at(&self, text: &str, stamp: &str) -> Result<InboxEntry> {
         let text = capture_line(text);
         if text.is_empty() {
             return Err(Error::corpus("nothing to capture"));
@@ -928,13 +939,12 @@ impl Corpus {
         refuse_inbox_symlink(&dir)?;
         create_private_dir_all(&dir)?;
         refuse_inbox_symlink(&dir)?;
-        let now = stamp();
-        let month = &now[..7];
+        let month = &stamp[..7];
         let path = dir.join(format!("{month}.md"));
         refuse_inbox_symlink(&path)?;
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
         let inbox = self.inbox()?;
-        let id = unique_entry_id(&format!("{now}{text}"), &inbox)?;
+        let id = unique_entry_id(&format!("{stamp}{text}"), &inbox)?;
         let line = existing.lines().count();
         refuse_inbox_symlink(&dir)?;
         refuse_inbox_symlink(&path)?;
@@ -943,11 +953,14 @@ impl Corpus {
         } else {
             ""
         };
-        append_private(&path, format!("{repair}- [{id}] {now} {text}\n").as_bytes())?;
+        append_private(
+            &path,
+            format!("{repair}- [{id}] {stamp} {text}\n").as_bytes(),
+        )?;
         Ok(InboxEntry {
             id,
-            at: now.clone(),
-            stamp: now,
+            at: rfc3339_stamp(stamp).unwrap_or_else(|| stamp.to_string()),
+            stamp: stamp.to_string(),
             text,
             file: path,
             line,
