@@ -1,10 +1,11 @@
 //! What the app holds between commands.
 
+use crate::error::DesktopError;
 use crate::{session, settings};
 use nebula_core::Corpus;
 use notify::RecommendedWatcher;
-use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 
 /// Managed by Tauri; every command borrows it.
 ///
@@ -12,8 +13,9 @@ use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 /// launch is picked up by the next command (or the "reload" button) without a
 /// restart. The watcher is held here only so it lives as long as the app.
 pub struct AppState {
-    /// Where the corpus was looked for, resolved once at startup.
-    pub corpus_root: PathBuf,
+    /// Where the corpus is looked for, resolved once at startup, or why it
+    /// could not be resolved.
+    corpus_root: Result<PathBuf, Arc<nebula_core::Error>>,
     corpus: Mutex<Option<Corpus>>,
     watcher: Mutex<Option<RecommendedWatcher>>,
     startup_warnings: Mutex<Vec<String>>,
@@ -25,11 +27,20 @@ impl AppState {
     /// Resolve the root the way the CLI does and try to open it. A failure is
     /// not fatal: it is reported by every command until it is fixed.
     pub fn new() -> Self {
-        // `resolve_root` fails only when neither `NEBULA_ROOT` nor `HOME` is
-        // set, which a GUI launched from a login session never sees. Keep the
-        // path the user would expect so the error on screen names it.
-        let corpus_root = session::resolve_root().unwrap_or_else(|_| PathBuf::from("~/.nebula"));
-        let corpus = session::open(&corpus_root).ok();
+        Self::with_root(session::resolve_root())
+    }
+
+    /// Start from a root already resolved, or from the reason it could not
+    /// be. An unresolved root stays unresolved: it is a startup warning and
+    /// every corpus command's error, never a stand-in path (STD-02 §R26,
+    /// §R29). Resolution fails on a missing `HOME` and equally on an empty or
+    /// unreadable `~/.config/nebula/root`, so no single guess would be right.
+    pub fn with_root(root: nebula_core::Result<PathBuf>) -> Self {
+        let corpus_root = root.map_err(Arc::new);
+        let corpus = corpus_root
+            .as_ref()
+            .ok()
+            .and_then(|root| session::open(root).ok());
         Self {
             corpus_root,
             corpus: Mutex::new(corpus),
@@ -49,12 +60,28 @@ impl AppState {
             .unwrap_or_else(PoisonError::into_inner) = warnings;
     }
 
-    /// The startup warnings captured during application setup.
+    /// The startup warnings: an unresolved corpus root first, then those
+    /// captured during application setup.
     pub fn startup_warnings(&self) -> Vec<String> {
-        self.startup_warnings
+        let setup = self
+            .startup_warnings
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .clone();
+        self.corpus_root()
+            .err()
+            .map(|e| e.to_string())
+            .into_iter()
+            .chain(setup)
+            .collect()
+    }
+
+    /// Where the corpus is looked for, or why that is unknown.
+    pub fn corpus_root(&self) -> Result<&Path, DesktopError> {
+        match &self.corpus_root {
+            Ok(root) => Ok(root),
+            Err(e) => Err(DesktopError::RootUnresolved(Arc::clone(e))),
+        }
     }
 
     pub fn set_capture_shortcut(&self, shortcut: String) {
@@ -72,23 +99,25 @@ impl AppState {
     }
 
     /// Only shortcut changes take this gate; readers never wait for the OS or
-    /// filesystem calls needed to apply a change.
-    pub fn begin_shortcut_change(&self) -> Result<MutexGuard<'_, ()>, String> {
+    /// filesystem calls needed to apply a change. `None` while another change
+    /// holds it.
+    pub fn begin_shortcut_change(&self) -> Option<MutexGuard<'_, ()>> {
         match self.shortcut_change.try_lock() {
-            Ok(guard) => Ok(guard),
-            Err(TryLockError::Poisoned(guard)) => Ok(guard.into_inner()),
-            Err(TryLockError::WouldBlock) => Err("Shortcut change already in progress".into()),
+            Ok(guard) => Some(guard),
+            Err(TryLockError::Poisoned(guard)) => Some(guard.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
         }
     }
 
     /// The open corpus, opening it now if the last attempt failed. The error
-    /// is the library's own message, which names the path it tried.
-    pub fn corpus(&self) -> Result<Corpus, String> {
+    /// is the library's own, which names the path it tried, or the reason
+    /// there is no path to try.
+    pub fn corpus(&self) -> Result<Corpus, DesktopError> {
         let mut slot = self.corpus.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(c) = slot.as_ref() {
             return Ok(c.clone());
         }
-        let c = session::open(&self.corpus_root).map_err(|e| e.to_string())?;
+        let c = session::open(self.corpus_root()?)?;
         *slot = Some(c.clone());
         Ok(c)
     }

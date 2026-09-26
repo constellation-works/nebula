@@ -174,6 +174,14 @@ that shows one of two views.
   `capture_shortcut()`, `set_capture_shortcut(shortcut)`,
   `launch_at_login()`, `set_launch_at_login(enabled)`, `node(id)`,
   `open_in_editor(id)`, `corpus_path()`, `startup_warnings()`, `reload()`.
+  A command that fails rejects with one typed error, `{ code, message }`
+  (`IpcError`), translated in one place: a core error keeps the code
+  `neb --json` reports for it (`locked` for a held write lock), and
+  desktop-only failures (worker thread, opener, watcher, shortcut, login
+  registration) have their own snake_case codes. The frontend branches on
+  `code` and shows `message`. A root that cannot be resolved is kept as that
+  error: a startup warning, every corpus command's error, and a `null`
+  `corpus_path()`, never a stand-in path.
   Holds a `notify` watcher on `nodes/` and `inbox/` and emits a
   `corpus-changed` event; the frontend refetches on it. Global shortcut
   (`tauri-plugin-global-shortcut`) toggles a floating capture window; tray icon

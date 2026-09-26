@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The shortcut registered when the settings file names none.
@@ -21,6 +21,49 @@ pub const DEFAULT_CAPTURE_SHORTCUT: &str = "Alt+Space";
 
 /// Filename under the app config directory.
 pub const FILE_NAME: &str = "settings.json";
+
+/// Why the settings file could not be written.
+#[derive(Debug, thiserror::Error)]
+pub enum SettingsError {
+    /// nebula-core's durable write or directory helper failed; its error
+    /// already names the action and the path.
+    #[error(transparent)]
+    Write(#[from] nebula_core::Error),
+
+    /// A filesystem call on the lock file or directory failed.
+    #[error("could not {action} {}: {source}", .path.display())]
+    Io {
+        /// What was attempted.
+        action: &'static str,
+        /// The path it was attempted on.
+        path: PathBuf,
+        /// The operating system's reason.
+        source: std::io::Error,
+    },
+
+    /// The settings would not serialize.
+    #[error("could not serialize settings: {0}")]
+    Serialize(#[source] serde_json::Error),
+
+    /// Another app instance held the settings lock for the whole wait.
+    #[error("settings busy ({}; holder: {holder})", .lock.display())]
+    Busy {
+        /// The lock file.
+        lock: PathBuf,
+        /// What the holder recorded in it.
+        holder: String,
+    },
+}
+
+/// A failed filesystem call on `path`.
+fn io(action: &'static str, path: &Path) -> impl FnOnce(std::io::Error) -> SettingsError {
+    let path = path.to_path_buf();
+    move |source| SettingsError::Io {
+        action,
+        path,
+        source,
+    }
+}
 
 /// Everything the user can change without a rebuild.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,24 +137,27 @@ fn write_defaults(dir: &Path, path: &Path) -> (Settings, Option<String>) {
 }
 
 /// Replace the settings file atomically so a crash cannot leave partial JSON.
-pub fn save(dir: &Path, settings: &Settings) -> Result<(), String> {
+pub fn save(dir: &Path, settings: &Settings) -> Result<(), SettingsError> {
     with_lock(dir, || write_file(dir, settings))
 }
 
-fn write_file(dir: &Path, settings: &Settings) -> Result<(), String> {
-    create_private_dir_all(dir).map_err(|e| e.to_string())?;
-    let mut json = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
+fn write_file(dir: &Path, settings: &Settings) -> Result<(), SettingsError> {
+    create_private_dir_all(dir)?;
+    let mut json = serde_json::to_vec_pretty(settings).map_err(SettingsError::Serialize)?;
     json.push(b'\n');
-    write_private_atomic(&dir.join(FILE_NAME), json).map_err(|e| e.to_string())
+    Ok(write_private_atomic(&dir.join(FILE_NAME), json)?)
 }
 
 /// A process-level lock keeps separate app instances from writing settings at
 /// once. Its persistent holder text makes a bounded wait actionable.
-fn with_lock<T>(dir: &Path, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
-    create_private_dir_all(dir).map_err(|e| e.to_string())?;
+fn with_lock<T>(
+    dir: &Path,
+    f: impl FnOnce() -> Result<T, SettingsError>,
+) -> Result<T, SettingsError> {
+    create_private_dir_all(dir)?;
     #[cfg(unix)]
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| e.to_string())?;
+        .map_err(io("restrict", dir))?;
     let lock_path = dir.join("settings.lock");
     let mut file = private_open_options()
         .read(true)
@@ -119,7 +165,7 @@ fn with_lock<T>(dir: &Path, f: impl FnOnce() -> Result<T, String>) -> Result<T, 
         .create(true)
         .truncate(false)
         .open(&lock_path)
-        .map_err(|e| e.to_string())?;
+        .map_err(io("open", &lock_path))?;
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match FileExt::try_lock(&file) {
@@ -132,19 +178,17 @@ fn with_lock<T>(dir: &Path, f: impl FnOnce() -> Result<T, String>) -> Result<T, 
                 let _ = file
                     .seek(SeekFrom::Start(0))
                     .and_then(|_| file.read_to_string(&mut holder));
-                return Err(format!(
-                    "settings busy ({}; holder: {})",
-                    lock_path.display(),
-                    holder.trim()
-                ));
+                return Err(SettingsError::Busy {
+                    lock: lock_path,
+                    holder: holder.trim().to_string(),
+                });
             }
-            Err(TryLockError::Error(e)) => {
-                return Err(format!("could not lock {}: {e}", lock_path.display()));
-            }
+            Err(TryLockError::Error(e)) => return Err(io("lock", &lock_path)(e)),
         }
     }
-    file.set_len(0).map_err(|e| e.to_string())?;
-    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    file.set_len(0)
+        .and_then(|()| file.seek(SeekFrom::Start(0)).map(drop))
+        .map_err(io("reset", &lock_path))?;
     let since_epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |value| value.as_secs());
@@ -154,8 +198,8 @@ fn with_lock<T>(dir: &Path, f: impl FnOnce() -> Result<T, String>) -> Result<T, 
         std::process::id(),
         since_epoch
     )
-    .map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())?;
+    .and_then(|()| file.sync_all())
+    .map_err(io("write", &lock_path))?;
     // Closing the handle releases the advisory lock on every return path.
     f()
 }

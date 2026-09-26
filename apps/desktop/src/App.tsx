@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import * as api from "./api";
+import { errorMessage } from "./ipcError";
 import { GraphView } from "./GraphView";
 import { InboxView } from "./InboxView";
 import { useInbox } from "./useInbox";
@@ -22,11 +23,11 @@ function SettingsPanel() {
     void Promise.allSettled([api.captureShortcut(), api.launchAtLogin()]).then(([shortcutResult, loginResult]) => {
       if (!active) return;
       if (shortcutResult.status === "fulfilled") setShortcut(shortcutResult.value);
-      else setShortcutMessage(`Could not load capture shortcut: ${String(shortcutResult.reason)}`);
+      else setShortcutMessage(`Could not load capture shortcut: ${errorMessage(shortcutResult.reason)}`);
       if (loginResult.status === "fulfilled") {
         setLogin(loginResult.value);
         setLoginAvailable(true);
-      } else setLoginMessage(`Could not load launch at login: ${String(loginResult.reason)}`);
+      } else setLoginMessage(`Could not load launch at login: ${errorMessage(loginResult.reason)}`);
       setLoading(false);
     });
     return () => { active = false; };
@@ -41,7 +42,7 @@ function SettingsPanel() {
       setShortcut(saved);
       setShortcutMessage("Capture shortcut saved and active.");
     } catch (error) {
-      setShortcutMessage(`Shortcut not changed: ${String(error)}`);
+      setShortcutMessage(`Shortcut not changed: ${errorMessage(error)}`);
     } finally {
       setSavingShortcut(false);
     }
@@ -54,7 +55,7 @@ function SettingsPanel() {
       setLogin(await api.setLaunchAtLogin(enabled));
       setLoginMessage(enabled ? "Launch at login enabled." : "Launch at login disabled.");
     } catch (error) {
-      setLoginMessage(`Launch at login not changed: ${String(error)}`);
+      setLoginMessage(`Launch at login not changed: ${errorMessage(error)}`);
     } finally {
       setSavingLogin(false);
     }
@@ -129,7 +130,7 @@ export function App() {
         if (active) setStartupWarnings(warnings);
       })
       .catch((error: unknown) => {
-        if (active) setStartupWarnings([`Could not load startup warnings: ${String(error)}`]);
+        if (active) setStartupWarnings([`Could not load startup warnings: ${errorMessage(error)}`]);
       });
     return () => {
       active = false;
@@ -147,7 +148,7 @@ export function App() {
       if (active) dispose = off;
       else off();
     }).catch((error: unknown) => {
-      if (active) setStartupWarnings((warnings) => [...warnings, `Could not open Settings from the tray: ${String(error)}`]);
+      if (active) setStartupWarnings((warnings) => [...warnings, `Could not open Settings from the tray: ${errorMessage(error)}`]);
     });
     return () => { active = false; dispose?.(); };
   }, []);

@@ -11,7 +11,7 @@ use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 
 /// How long the corpus has to be quiet before a burst counts as one change.
 pub const DEBOUNCE: Duration = Duration::from_millis(300);
@@ -25,7 +25,7 @@ pub const EVENT: &str = "corpus-changed";
 
 /// Watch `root/nodes` and `root/inbox`. The returned watcher stops when
 /// dropped, so the caller keeps it for the life of the app.
-pub fn start(app: AppHandle, root: &Path) -> notify::Result<RecommendedWatcher> {
+pub fn start<R: Runtime>(app: AppHandle<R>, root: &Path) -> notify::Result<RecommendedWatcher> {
     let (tx, rx) = channel::<()>();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
         if let Ok(event) = res {

@@ -162,7 +162,7 @@ describe("GraphView", () => {
 
   it("shows a dismissible error when double-click cannot open the file", async () => {
     mocked.graph.mockResolvedValue(synthetic(1));
-    mocked.openInEditor.mockRejectedValueOnce("no .md handler");
+    mocked.openInEditor.mockRejectedValueOnce({ code: "open_failed", message: "no .md handler" });
     render(<GraphView />);
     await waitFor(() => expect(drawnNodes()).toHaveLength(1));
     fireEvent.doubleClick(canvas().querySelector('g.node[data-id="n0"]')!);
@@ -176,7 +176,7 @@ describe("GraphView", () => {
     mocked.graph.mockReturnValueOnce(request.promise).mockResolvedValueOnce(synthetic(2));
     render(<GraphView />);
     expect(screen.getByRole("status")).toHaveTextContent("Loading graph");
-    await act(async () => request.reject("bad node frontmatter"));
+    await act(async () => request.reject({ code: "yaml", message: "bad node frontmatter" }));
     expect(screen.getByRole("alert")).toHaveTextContent("bad node frontmatter");
     expect(screen.getByRole("alert")).toHaveTextContent("neb check");
     fireEvent.click(screen.getByRole("button", { name: "Reload" }));

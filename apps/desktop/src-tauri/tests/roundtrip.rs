@@ -4,10 +4,7 @@
 
 use nebula_core::{Corpus, Error, ops};
 use nebula_desktop::session;
-use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::Stdio;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 // This process runs with a temporary `HOME` and git environment, set before
@@ -15,7 +12,9 @@ use std::time::{Duration, Instant};
 #[path = "../../../../crates/nebula-core/tests/support/mod.rs"]
 mod support;
 
-use support::ChildGuard;
+mod lock_holder;
+
+use lock_holder::LockHolder;
 
 /// Run git in `root`, asserting it succeeded; stdout as text.
 fn git_in(root: &Path, args: &[&str]) -> String {
@@ -168,40 +167,7 @@ fn capture_refuses_a_busy_writer_quickly_and_can_be_retried() {
     let root = dir.path().join("corpus");
     let corpus = Corpus::init(&root).unwrap();
     let pending = session::capture(&corpus, "settle me").unwrap();
-    let mut holder = ChildGuard::spawn(
-        support::command(std::env::current_exe().unwrap(), support::home())
-            .args(["--exact", "hold_capture_lock_in_child", "--nocapture"])
-            .env("NEBULA_TEST_CAPTURE_LOCK_ROOT", &root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped()),
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
-    // Lines are read on a thread so the wait for the holder's signal has a
-    // deadline; the guard kills the holder if it never comes.
-    let (send, lines) = mpsc::channel();
-    let stdout = BufReader::new(holder.take_stdout());
-    std::thread::spawn(move || {
-        for line in stdout.lines().map_while(Result::ok) {
-            if send.send(line).is_err() {
-                break;
-            }
-        }
-    });
-    let until = Instant::now() + support::DEADLINE;
-    loop {
-        let left = until.saturating_duration_since(Instant::now());
-        match lines.recv_timeout(left) {
-            Ok(line) if line.contains("CAPTURE_LOCK_HELD") => break,
-            Ok(_) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => panic!("lock holder exited early"),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!(
-                    "lock holder did not take the lock within {:?}",
-                    support::DEADLINE
-                )
-            }
-        }
-    }
+    let holder = LockHolder::start(&root);
 
     let start = Instant::now();
     let result = session::capture(&corpus, "retry me");
@@ -221,13 +187,7 @@ fn capture_refuses_a_busy_writer_quickly_and_can_be_retried() {
     ));
     assert!(start.elapsed() < Duration::from_secs(1));
 
-    drop(holder.take_stdin());
-    assert!(
-        holder
-            .wait(support::DEADLINE)
-            .unwrap_or_else(|e| panic!("{e}"))
-            .success()
-    );
+    holder.release();
     let corpus = session::open(&root).unwrap();
     assert_eq!(session::inbox(&corpus).unwrap()[0].id, pending.id);
     session::drop_entry(&corpus, &pending.id).unwrap();
@@ -246,19 +206,4 @@ fn every_child_command_comes_from_the_isolating_builder() {
         "roundtrip.rs creates a child outside `support::command`:\n{}",
         strays.join("\n")
     );
-}
-
-// This helper is a no-op in the regular test run. The contention test starts
-// this test binary as a child so the lock is held by a different process.
-#[test]
-fn hold_capture_lock_in_child() {
-    let Ok(root) = std::env::var("NEBULA_TEST_CAPTURE_LOCK_ROOT") else {
-        return;
-    };
-    let corpus = session::open(std::path::Path::new(&root)).unwrap();
-    let _lock = corpus.lock().unwrap();
-    println!("CAPTURE_LOCK_HELD");
-    std::io::stdout().flush().unwrap();
-    let mut ignored = String::new();
-    std::io::stdin().read_to_string(&mut ignored).unwrap();
 }

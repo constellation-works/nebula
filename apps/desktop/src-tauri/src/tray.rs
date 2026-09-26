@@ -1,16 +1,17 @@
 //! The menu-bar item: the unsettled inbox count and app actions.
 
+use crate::error::DesktopError;
 use crate::state::AppState;
 use crate::{session, shortcut};
 use tauri::menu::{IsMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, Wry};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// The tray's id, for finding it again from the watcher.
 pub const ID: &str = "nebula";
 
 /// Build the tray. Called once, from setup.
-pub fn build(app: &AppHandle, warnings: &[String]) -> tauri::Result<()> {
+pub fn build<R: Runtime>(app: &AppHandle<R>, warnings: &[String]) -> tauri::Result<()> {
     let capture = MenuItem::with_id(app, "capture", "Capture", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open Nebula", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
@@ -28,12 +29,8 @@ pub fn build(app: &AppHandle, warnings: &[String]) -> tauri::Result<()> {
             )
         })
         .collect::<tauri::Result<Vec<_>>>()?;
-    let mut menu_items: Vec<&dyn IsMenuItem<Wry>> = vec![&capture, &open, &settings];
-    menu_items.extend(
-        warning_items
-            .iter()
-            .map(|item| item as &dyn IsMenuItem<Wry>),
-    );
+    let mut menu_items: Vec<&dyn IsMenuItem<R>> = vec![&capture, &open, &settings];
+    menu_items.extend(warning_items.iter().map(|item| item as &dyn IsMenuItem<R>));
     menu_items.push(&quit);
     let menu = Menu::with_items(app, &menu_items)?;
 
@@ -60,7 +57,7 @@ pub fn build(app: &AppHandle, warnings: &[String]) -> tauri::Result<()> {
 
 /// Recompute the count. Cheap enough to do on every corpus change: the inbox
 /// is a handful of small files.
-pub fn refresh(app: &AppHandle) {
+pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
     if let Some(tray) = app.tray_by_id(ID) {
         let _ = tray.set_title(Some(title(app)));
     }
@@ -68,7 +65,7 @@ pub fn refresh(app: &AppHandle) {
 
 /// Bring the main window forward, creating focus even though the app has no
 /// dock icon to click.
-pub fn show_main(app: &AppHandle) {
+pub fn show_main<R: Runtime>(app: &AppHandle<R>) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.set_focus();
@@ -77,11 +74,11 @@ pub fn show_main(app: &AppHandle) {
 
 /// The unsettled count, or `!` when the corpus cannot be read so the error is
 /// visible from the menu bar too.
-fn title(app: &AppHandle) -> String {
+fn title<R: Runtime>(app: &AppHandle<R>) -> String {
     let state = app.state::<AppState>();
     match state
         .corpus()
-        .and_then(|c| session::inbox(&c).map_err(|e| e.to_string()))
+        .and_then(|c| session::inbox(&c).map_err(DesktopError::from))
     {
         Ok(entries) => entries.len().to_string(),
         Err(_) => "!".to_string(),

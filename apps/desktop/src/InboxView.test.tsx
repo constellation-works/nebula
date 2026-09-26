@@ -5,6 +5,7 @@ import { App } from "./App";
 import { CaptureBox, CONFIRM_MS } from "./CaptureBox";
 import { CaptureWindow } from "./CaptureWindow";
 import { InboxView } from "./InboxView";
+import { LOCKED, type IpcError } from "./ipcError";
 import * as layoutClient from "./layoutClient";
 import { useInbox } from "./useInbox";
 import type { InboxEntry } from "./types/InboxEntry";
@@ -15,6 +16,9 @@ const windowMock = vi.hoisted(() => ({ onFocusChanged: vi.fn(), hide: vi.fn() })
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => windowMock }));
 
 const mocked = vi.mocked(api);
+
+/** What a settle or capture rejects with while another writer holds the lock. */
+const busy: IpcError = { code: LOCKED, message: "another nebula writer is holding /corpus; nothing was written" };
 
 const entries: InboxEntry[] = [
   { id: "a1b2", at: "2026-09-13T09:00", text: "capture must stay under five seconds" },
@@ -163,19 +167,50 @@ describe("InboxView", () => {
   });
 
   it("keeps a failed entry in place with its error and allows a retry", async () => {
-    mocked.dropEntry.mockRejectedValueOnce("corpus busy").mockRejectedValueOnce("already dropped");
+    mocked.dropEntry
+      .mockRejectedValueOnce({ code: "no_such_inbox_entry", message: "no open inbox entry `a1b2`" })
+      .mockRejectedValueOnce({ code: "inbox_entry_settled", message: "`a1b2` was already dropped" });
     render(<Harness />);
     await screen.findByText("a1b2");
     const first = screen.getAllByRole("listitem")[0];
 
     fireEvent.click(within(first).getByRole("button", { name: "Drop" }));
-    expect(await within(first).findByRole("alert")).toHaveTextContent("corpus busy");
+    const alert = await within(first).findByRole("alert");
+    expect(alert).toHaveTextContent("no open inbox entry `a1b2`");
+    expect(alert).not.toHaveTextContent("[object Object]");
     expect(mocked.inbox).toHaveBeenCalledTimes(1);
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
 
     fireEvent.click(within(first).getByRole("button", { name: "Drop" }));
-    expect(await within(first).findByRole("alert")).toHaveTextContent("already dropped");
+    expect(await within(first).findByRole("alert")).toHaveTextContent("`a1b2` was already dropped");
     expect(mocked.inbox).toHaveBeenCalledTimes(1);
+  });
+
+  it("a busy settle says the corpus is busy", async () => {
+    mocked.dropEntry.mockRejectedValueOnce(busy);
+    mocked.promoteRoot.mockRejectedValueOnce(busy);
+    render(<Harness />);
+    await screen.findByText("a1b2");
+    const [first, second] = screen.getAllByRole("listitem");
+
+    fireEvent.click(within(first).getByRole("button", { name: "Drop" }));
+    expect(await within(first).findByRole("alert")).toHaveTextContent("Corpus busy; nothing was changed. Try again.");
+    fireEvent.click(within(second).getByRole("button", { name: "Promote as root" }));
+    expect(await within(second).findByRole("alert")).toHaveTextContent("Corpus busy; nothing was changed. Try again.");
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(mocked.inbox).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unresolved root shows its cause and no path to initialise", async () => {
+    mocked.inbox.mockRejectedValue({ code: "empty_root", message: "could not resolve the corpus root: configured nebula root is empty" });
+    mocked.corpusPath.mockResolvedValue(null);
+    render(<Harness />);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("could not resolve the corpus root: configured nebula root is empty");
+    await waitFor(() => expect(mocked.corpusPath).toHaveBeenCalledTimes(1));
+    expect(alert).not.toHaveTextContent("Looked in");
+    expect(alert).not.toHaveTextContent("neb init");
+    expect(alert).toHaveTextContent("NEBULA_ROOT");
   });
 
   it("shows the stale marker at fourteen calendar days", async () => {
@@ -294,7 +329,7 @@ describe("CaptureBox", () => {
 
   it("shows a busy retry and keeps the thought for a manual retry", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    mocked.capture.mockRejectedValue("corpus busy");
+    mocked.capture.mockRejectedValue(busy);
     render(<CaptureBox />);
     const input = screen.getByLabelText("Capture");
 
@@ -315,6 +350,19 @@ describe("CaptureBox", () => {
     expect(await screen.findByText("captured")).toBeInTheDocument();
     expect(mocked.capture).toHaveBeenLastCalledWith("keep this thought!");
     vi.useRealTimers();
+  });
+
+  it("does not retry a capture that failed with another code", async () => {
+    mocked.capture.mockRejectedValue({ code: "io_at", message: "append /corpus/inbox/2026-09.md: permission denied" });
+    render(<CaptureBox />);
+    const input = screen.getByLabelText("Capture");
+
+    fireEvent.change(input, { target: { value: "keep this thought" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("append /corpus/inbox/2026-09.md: permission denied"));
+    expect(mocked.capture).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).not.toHaveTextContent("[object Object]");
+    expect(input).toHaveValue("keep this thought");
   });
 
   it("keeps a new thought typed while capture is pending and does not dismiss it", async () => {
@@ -528,7 +576,7 @@ describe("App", () => {
   });
 
   it("keeps the Graph tab available when Inbox fails, and reloads Inbox in place", async () => {
-    mocked.inbox.mockRejectedValueOnce("no corpus at /tmp/nowhere/.nebula");
+    mocked.inbox.mockRejectedValueOnce({ code: "no_corpus", message: "no corpus at /tmp/nowhere/.nebula" });
     mocked.graph.mockResolvedValue({ nodes: [], edges: [] });
     render(<App />);
     expect(await screen.findByRole("alert")).toHaveTextContent("no corpus at /tmp/nowhere/.nebula");

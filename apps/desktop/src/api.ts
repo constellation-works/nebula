@@ -1,6 +1,8 @@
 // The IPC surface, one function per `#[tauri::command]` in
 // `src-tauri/src/commands.rs`. Every payload type comes from `./types`, which
-// is generated from nebula-core: nothing here restates a shape.
+// is generated from nebula-core: nothing here restates a shape. A failed
+// command rejects with an `IpcError` (`./ipcError`): branch on its `code`,
+// show it with `errorMessage`.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -54,8 +56,11 @@ export const node = (id: string): Promise<NodeView> => invoke<NodeView>("node", 
 /** Hand the node's file to the OS default handler. */
 export const openInEditor = (id: string): Promise<void> => invoke<void>("open_in_editor", { id });
 
-/** Where the corpus was looked for, found or not. */
-export const corpusPath = (): Promise<string> => invoke<string>("corpus_path");
+/**
+ * Where the corpus was looked for, found or not; null when the root could not
+ * be resolved, which the corpus commands' error and the startup warnings say.
+ */
+export const corpusPath = (): Promise<string | null> => invoke<string | null>("corpus_path");
 
 /** Settings and shortcut failures captured during app startup. */
 export const startupWarnings = (): Promise<string[]> => invoke<string[]>("startup_warnings");

@@ -3,6 +3,7 @@ import * as api from "./api";
 import { CaptureBox } from "./CaptureBox";
 import { CorpusError } from "./CorpusError";
 import { formatAge, isStale } from "./age";
+import { errorMessage, isIpcError, LOCKED } from "./ipcError";
 import type { InboxEntry } from "./types/InboxEntry";
 import type { InboxState } from "./useInbox";
 
@@ -50,7 +51,7 @@ function InboxItem({ entry, refresh }: { entry: InboxEntry; refresh: () => Promi
       await action(entry.id);
       await refresh();
     } catch (cause) {
-      setError(String(cause));
+      setError(isIpcError(cause) && cause.code === LOCKED ? "Corpus busy; nothing was changed. Try again." : errorMessage(cause));
     } finally {
       setBusy(false);
     }

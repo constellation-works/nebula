@@ -1,5 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, useState, type ClipboardEvent, type KeyboardEvent, type Ref } from "react";
 import * as api from "./api";
+import { errorMessage, isIpcError, LOCKED } from "./ipcError";
 import type { InboxEntry } from "./types/InboxEntry";
 
 /** How long the "captured" confirmation stays up. */
@@ -67,7 +68,7 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape, 
           entry = await api.capture(trimmed);
           break;
         } catch (e) {
-          if (e !== "corpus busy") throw e;
+          if (!isIpcError(e) || e.code !== LOCKED) throw e;
           if (attempt === 2) {
             setStatus("error");
             setMessage("Corpus busy. Press Enter to retry.");
@@ -89,7 +90,7 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape, 
       }, CONFIRM_MS);
     } catch (e) {
       setStatus("error");
-      setMessage(String(e));
+      setMessage(errorMessage(e));
     }
     input.current?.focus();
   }

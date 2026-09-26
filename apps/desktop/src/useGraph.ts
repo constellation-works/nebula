@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
+import { errorMessage } from "./ipcError";
 import type { GraphExport } from "./types/GraphExport";
 
 /** The one store the graph view keys on: the export, and how to ask again. */
@@ -34,7 +35,7 @@ export function useGraph(): GraphState {
       setError(null);
     } catch (e) {
       if (!mounted.current || request !== latestRequest.current) return;
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       if (mounted.current && request === latestRequest.current) setLoaded(true);
     }
