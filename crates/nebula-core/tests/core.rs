@@ -7,7 +7,7 @@
 
 use nebula_core::{
     Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, HUMAN, NEAR_DEFAULT, NewNode,
-    Promotion, ReviewRule, Status, TraceHop, Via, graph, ops, store,
+    Promotion, ReviewRule, Settlement, Status, TraceHop, Via, graph, ops, store,
 };
 use std::fmt::Write as _;
 
@@ -470,6 +470,7 @@ fn a_reference_kind_outside_the_vocabulary_is_refused_by_name() {
 /// name: a consumer reading the variant in Rust and one reading the kind in
 /// JSON should be matching the same word.
 #[test]
+#[allow(clippy::too_many_lines)] // One value per variant, and the enum grows.
 fn every_error_kind_is_its_variant_name() {
     use std::path::PathBuf;
 
@@ -479,6 +480,10 @@ fn every_error_kind_is_its_variant_name() {
     let errors = [
         Error::NoSuchNode("x".into()),
         Error::NoSuchInboxEntry("x".into()),
+        Error::InboxEntrySettled {
+            id: "x".into(),
+            settlement: Settlement::Dropped,
+        },
         Error::NoCorpus(path.clone()),
         Error::NotGitWorkTree(path.clone()),
         Error::NoNodeAtRevision {
@@ -745,7 +750,7 @@ fn an_interrupted_settlement_copy_does_not_resurrect_an_entry() {
     assert!(corpus.inbox().unwrap().0.is_empty());
     assert!(matches!(
         corpus.inbox_entry(&entry.id),
-        Err(Error::NoSuchInboxEntry(id)) if id == entry.id
+        Err(Error::InboxEntrySettled { id, settlement: Settlement::Dropped }) if id == entry.id
     ));
 }
 
@@ -1134,6 +1139,146 @@ fn capture_ids_are_unique_across_month_files_and_older_entries_still_resolve() {
         return;
     }
     panic!("the clock crossed a minute during all three fixture attempts");
+}
+
+#[test]
+fn a_repeated_capture_names_the_earliest_entry_still_waiting() {
+    let (_dir, corpus) = corpus();
+    let first = ops::capture(&corpus, "Tags beat  domains").unwrap();
+    let unrelated = ops::capture(&corpus, "tags beat a domain").unwrap();
+    let second = ops::capture(&corpus, "tags BEAT domains").unwrap();
+    let third = ops::capture(&corpus, "  TAGS\tbeat domains ").unwrap();
+
+    let inbox = corpus.inbox().unwrap();
+    assert_eq!(inbox.0.len(), 4, "a duplicate is still captured");
+    let same = |entry| inbox.same_as(entry).map(|e| e.id.clone());
+    assert_eq!(same(&second), Some(first.id.clone()), "case is folded");
+    assert_eq!(same(&third), Some(first.id.clone()), "whitespace is folded");
+    assert_eq!(
+        same(&unrelated),
+        None,
+        "a different word is a different thought"
+    );
+}
+
+#[test]
+fn a_settled_capture_is_not_a_duplicate() {
+    let (_dir, corpus) = corpus();
+    let dropped = ops::capture(&corpus, "a thought once dropped").unwrap();
+    ops::drop(&corpus, &dropped.id).unwrap();
+    let promoted = ops::capture(&corpus, "a thought once promoted").unwrap();
+    ops::promote(&corpus, &promoted.id, &Promotion::default(), 0).unwrap();
+
+    let again = [
+        ops::capture(&corpus, "a thought once dropped").unwrap(),
+        ops::capture(&corpus, "A thought once promoted").unwrap(),
+    ];
+
+    let inbox = corpus.inbox().unwrap();
+    for entry in &again {
+        assert!(
+            inbox.same_as(entry).is_none(),
+            "only waiting entries count: {entry:?}"
+        );
+    }
+}
+
+#[test]
+fn promote_and_drop_on_a_settled_entry_say_how_it_was_settled() {
+    let (dir, corpus) = corpus();
+    let kept = ops::capture(&corpus, "worth keeping").unwrap();
+    let node = ops::promote(&corpus, &kept.id, &Promotion::default(), 0)
+        .unwrap()
+        .doc
+        .node
+        .id;
+    let tossed = ops::capture(&corpus, "not worth keeping").unwrap();
+    ops::drop(&corpus, &tossed.id).unwrap();
+    let inbox_before = std::fs::read_to_string(&kept.file).unwrap();
+    let nodes_before = corpus.load_all().unwrap().len();
+
+    for error in [
+        ops::promote(&corpus, &kept.id, &Promotion::default(), 0).unwrap_err(),
+        ops::drop(&corpus, &kept.id).unwrap_err(),
+    ] {
+        assert_eq!(
+            error.to_string(),
+            format!("`{}` was already promoted to `{node}`", kept.id)
+        );
+        assert!(matches!(
+            error,
+            Error::InboxEntrySettled { id, settlement: Settlement::Promoted(to) }
+                if id == kept.id && to == node
+        ));
+    }
+    for error in [
+        ops::promote(&corpus, &tossed.id, &Promotion::default(), 0).unwrap_err(),
+        ops::drop(&corpus, &tossed.id).unwrap_err(),
+    ] {
+        assert_eq!(
+            error.to_string(),
+            format!("`{}` was already dropped", tossed.id)
+        );
+        assert!(matches!(
+            error,
+            Error::InboxEntrySettled { id, settlement: Settlement::Dropped } if id == tossed.id
+        ));
+    }
+    assert!(matches!(
+        ops::drop(&corpus, "zzzz"),
+        Err(Error::NoSuchInboxEntry(id)) if id == "zzzz"
+    ));
+
+    assert_eq!(
+        std::fs::read_to_string(&kept.file).unwrap(),
+        inbox_before,
+        "a refusal writes nothing to the inbox"
+    );
+    assert_eq!(corpus.load_all().unwrap().len(), nodes_before);
+    assert!(
+        dir.path()
+            .join("corpus/nodes")
+            .join(format!("{node}.md"))
+            .is_file()
+    );
+}
+
+/// Ids are unique among waiting entries only, so a struck-through line can
+/// share its id with a later one, and a hand edit can leave an outcome that
+/// no verb wrote.
+#[test]
+fn a_settled_id_resolves_to_its_latest_recorded_outcome() {
+    let (_dir, corpus) = corpus();
+    let live = ops::capture(&corpus, "waiting").unwrap();
+    std::fs::write(
+        live.file.with_file_name("2000-01.md"),
+        format!(
+            "- ~~[abcd] 2000-01-01T00:00 first~~ dropped\n\
+             - ~~[abcd] 2000-01-02T00:00 a ~~struck~~ word~~ -> second-node\n\
+             - ~~[beef] 2000-01-03T00:00 edited~~ merged elsewhere\n\
+             - ~~[f00d] 2000-01-04T00:00 empty~~ ->\n\
+             - ~~[{}] 2000-01-05T00:00 older~~ dropped\n",
+            live.id
+        ),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        corpus.inbox_entry("abcd"),
+        Err(Error::InboxEntrySettled { settlement: Settlement::Promoted(node), .. })
+            if node == "second-node"
+    ));
+    for unrecognised in ["beef", "f00d"] {
+        assert!(matches!(
+            corpus.inbox_entry(unrecognised),
+            Err(Error::NoSuchInboxEntry(id)) if id == unrecognised
+        ));
+    }
+    assert_eq!(
+        corpus.inbox_entry(&live.id).unwrap().text,
+        "waiting",
+        "a waiting entry wins over a settled one with its id"
+    );
 }
 
 // -------------------------------------------------------------------- near --

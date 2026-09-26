@@ -11,6 +11,7 @@
 //! that has commands to suggest.
 
 use crate::model::Status;
+use crate::store::Settlement;
 use std::path::PathBuf;
 
 /// The library's result type.
@@ -23,9 +24,19 @@ pub enum Error {
     #[error("no node `{0}`")]
     NoSuchNode(String),
 
-    /// No live inbox entry with that id: never captured, or already settled.
+    /// No inbox entry with that id, waiting or settled.
     #[error("no open inbox entry `{0}`")]
     NoSuchInboxEntry(String),
+
+    /// The inbox entry was promoted or dropped already, and its
+    /// struck-through line says which.
+    #[error("`{id}` was already {settlement}")]
+    InboxEntrySettled {
+        /// The entry asked for.
+        id: String,
+        /// What became of it.
+        settlement: Settlement,
+    },
 
     /// There is no corpus where one was expected.
     #[error("no corpus at {}", .0.display())]
@@ -323,6 +334,7 @@ impl Error {
         match self {
             Self::NoSuchNode(_) => "NoSuchNode",
             Self::NoSuchInboxEntry(_) => "NoSuchInboxEntry",
+            Self::InboxEntrySettled { .. } => "InboxEntrySettled",
             Self::NoCorpus(_) => "NoCorpus",
             Self::NotGitWorkTree(_) => "NotGitWorkTree",
             Self::NoNodeAtRevision { .. } => "NoNodeAtRevision",

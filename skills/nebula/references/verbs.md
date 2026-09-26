@@ -113,7 +113,7 @@ for one invocation.
 
 | verb | does | flags |
 |---|---|---|
-| `neb capture <TEXT\|->...` | append a thought as one inbox line; prints the entry id, then the three nearest nodes; works on a corpus that does not exist yet, and then says so on stderr (`note: created a new corpus at <absolute path>`) | `--quiet`/`-q` (before or after the text) |
+| `neb capture <TEXT\|->...` | append a thought as one inbox line; prints the entry id, then the three nearest nodes; works on a corpus that does not exist yet, and then says so on stderr (`note: created a new corpus at <absolute path>`); a thought already waiting in the inbox is still captured, and stderr says `note: same as <id>, still waiting` | `--quiet`/`-q` (before or after the text) |
 | `neb inbox` | live entries (not promoted, not dropped) | — |
 | `neb promote <ENTRY>` | inbox entry → seed node; without `--parent`, prints the three nearest nodes and proceeds as a root | `--title`, `--body <TEXT\|->`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run`, `--quiet`/`-q` |
 | `neb drop <ENTRY>` | strike an entry through; never deleted | — |
@@ -147,6 +147,16 @@ shares a word with it — promote as a root or drop. The id is printed before
 `nodes/` is read, so a node file that will not parse fails the suggestions
 (non-zero, after the id, like a refused commit) and never the capture;
 `--quiet` does not read `nodes/` at all.
+
+The duplicate check compares the text with every entry still waiting, after
+folding case and collapsing whitespace, and names the earliest match. Settled
+entries do not count, and a reworded thought is not caught. The notice
+is on stderr in both modes, so the id, or the `--json` payload, is unchanged.
+
+`promote` and `drop` on an entry that was already settled say how it was,
+from its struck-through line: `` `<id>` was already promoted to `<node>` ``
+or `` `<id>` was already dropped `` (`InboxEntrySettled`). An id nothing
+recorded is still `no open inbox entry` (`NoSuchInboxEntry`).
 
 `promote --body <TEXT>` keeps the captured line as the first paragraph and
 appends `TEXT` after it. With `--body -`, the appended prose is read from
