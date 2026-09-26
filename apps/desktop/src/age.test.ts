@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatAge, parseStamp } from "./age";
+import { formatAge, isStale, parseStamp } from "./age";
 
 describe("formatAge", () => {
   const now = new Date(2026, 8, 13, 12, 0).getTime();
@@ -20,5 +20,15 @@ describe("formatAge", () => {
 
   it("falls back to the raw text when the stamp is odd", () => {
     expect(formatAge("soon", now)).toBe("soon");
+  });
+});
+
+describe("isStale", () => {
+  const now = new Date(2026, 8, 27, 0, 1).getTime();
+
+  it("marks captures from fourteen calendar dates ago, even before their capture time", () => {
+    expect(isStale("2026-09-13T23:59", now)).toBe(true);
+    expect(isStale("2026-09-14T00:00", now)).toBe(false);
+    expect(isStale("invalid", now)).toBe(false);
   });
 });

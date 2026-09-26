@@ -44,6 +44,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::capture,
             commands::inbox,
+            commands::drop_entry,
+            commands::promote_root,
             commands::graph,
             commands::node,
             commands::open_in_editor,

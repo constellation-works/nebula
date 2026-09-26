@@ -82,6 +82,71 @@ fn capture_commits_each_entry_when_enabled() {
 }
 
 #[test]
+fn drop_and_promote_use_core_settlement_and_cli_commit_messages() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("corpus");
+    let mut corpus = Corpus::init(&root).unwrap();
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.name", "neb-test"]);
+    git(&["config", "user.email", "neb-test@example.invalid"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    ops::set_commit(&mut corpus, true).unwrap();
+    ops::commit(&corpus, "config", &["commit"]).unwrap();
+
+    let dropped = session::capture(&corpus, "discard this").unwrap();
+    assert_eq!(
+        session::drop_entry(&corpus, &dropped.id).unwrap().id,
+        dropped.id
+    );
+    assert_eq!(
+        git(&["log", "-1", "--format=%s"]).trim(),
+        format!("neb drop {}", dropped.id)
+    );
+    assert!(session::inbox(&corpus).unwrap().is_empty());
+
+    let promoted = session::capture(&corpus, "keep this thought").unwrap();
+    let created = session::promote_root(&corpus, &promoted.id).unwrap();
+    assert!(created.doc.node.parents().next().is_none());
+    assert_eq!(created.doc.node.title, promoted.text);
+    assert_eq!(created.doc.body.trim(), promoted.text);
+    assert_eq!(
+        git(&["log", "-1", "--format=%s"]).trim(),
+        format!("neb promote {} {}", promoted.id, created.doc.node.id)
+    );
+    assert!(session::inbox(&corpus).unwrap().is_empty());
+    assert!(git(&["status", "--porcelain"]).is_empty());
+}
+
+#[test]
+fn a_refused_settlement_leaves_the_inbox_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("corpus");
+    let corpus = Corpus::init(&root).unwrap();
+    let entry = session::capture(&corpus, "keep this thought").unwrap();
+    let before = session::inbox(&corpus).unwrap();
+    assert!(session::drop_entry(&corpus, "missing").is_err());
+    assert!(session::promote_root(&corpus, "missing").is_err());
+    let after = session::inbox(&corpus).unwrap();
+    assert_eq!(after.len(), before.len());
+    assert_eq!(after[0].id, entry.id);
+    assert_eq!(after[0].text, before[0].text);
+}
+
+#[test]
 fn a_missing_root_is_an_error_naming_the_path() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("nowhere");
@@ -104,6 +169,7 @@ fn capture_refuses_a_busy_writer_quickly_and_can_be_retried() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
     let corpus = Corpus::init(&root).unwrap();
+    let pending = session::capture(&corpus, "settle me").unwrap();
     let mut holder = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "hold_capture_lock_in_child", "--nocapture"])
         .env("NEBULA_TEST_CAPTURE_LOCK_ROOT", &root)
@@ -132,10 +198,22 @@ fn capture_refuses_a_busy_writer_quickly_and_can_be_retried() {
         start.elapsed() < Duration::from_secs(1),
         "capture waited as long as the CLI's five-second lock timeout"
     );
+    let start = Instant::now();
+    assert!(matches!(
+        session::drop_entry(&corpus, &pending.id),
+        Err(Error::Locked { .. })
+    ));
+    assert!(matches!(
+        session::promote_root(&corpus, &pending.id),
+        Err(Error::Locked { .. })
+    ));
+    assert!(start.elapsed() < Duration::from_secs(1));
 
     drop(holder.stdin.take());
     assert!(holder.wait().unwrap().success());
     let corpus = session::open(&root).unwrap();
+    assert_eq!(session::inbox(&corpus).unwrap()[0].id, pending.id);
+    session::drop_entry(&corpus, &pending.id).unwrap();
     assert!(session::inbox(&corpus).unwrap().is_empty());
     let entry = session::capture(&corpus, "retry me").unwrap();
     assert_eq!(session::inbox(&corpus).unwrap()[0].id, entry.id);
