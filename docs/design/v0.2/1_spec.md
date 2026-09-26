@@ -154,7 +154,7 @@ return type serialised; see [2_architecture.md](2_architecture.md).
 | 5 | `refuted` carries `closed.why` | error | `status`, `check` |
 | 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status` |
 | 7 | A reference carries no `verdict`/`strength` | error | parse |
-| 8 | Non-discussion references have a URI; local URIs resolve relative to `nodes/` | error | `cite`, `check` |
+| 8 | Non-discussion references have a URI; local URIs resolve relative to `nodes/` and are never absolute | error; warn for an absolute path already in the corpus | `cite` refuses both; `check` reports both |
 | 9 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`) |
 | 10 | Every reference has a note | warn | `check` |
 | 11 | No two tags differ only by case or a trailing `s` | warn | `check` |

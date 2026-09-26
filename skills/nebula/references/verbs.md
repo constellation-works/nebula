@@ -270,7 +270,9 @@ changes both nodes.
 
 `--uri` may be omitted only with `--kind discussion`; every other kind requires
 it. A local URI is resolved relative to `nodes/` and refused if it does not
-exist. Always pass `--note`: it is the only field that matters in a year.
+exist; an absolute path or `file:` URI is refused even when it does, because
+it resolves on this machine only. Always pass `--note`: it is the only field
+that matters in a year.
 
 `cite --json` returns the changed `doc` and the newly allocated reference id:
 

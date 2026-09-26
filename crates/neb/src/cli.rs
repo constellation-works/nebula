@@ -398,7 +398,8 @@ enum Command {
     Cite {
         /// Node id.
         node: String,
-        /// Where it lives. A URL, DOI, path, or almanac wikilink.
+        /// Where it lives. A URL, DOI, path relative to `nodes/`, or
+        /// almanac wikilink; never an absolute path.
         #[arg(long)]
         uri: Option<String>,
         /// paper, study, article, note, discussion, book, dataset, thread,
@@ -1270,7 +1271,8 @@ fn run(cli: Cli) -> Outcome {
                     by,
                     origin: Origin::of(task, run),
                 },
-            )?;
+            )
+            .map_err(|e| Failure::about(&e, &node))?;
             if json {
                 out_json(&cited)?;
             } else {

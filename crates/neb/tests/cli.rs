@@ -2520,6 +2520,118 @@ fn a_local_uri_must_resolve_and_external_urls_never_trip_it() {
         .says("0 errors, 0 warnings");
 }
 
+/// Rule 8 at `cite`: a path that is absolute here names nothing on the other
+/// machines the corpus is synced to, so it is refused even when it exists,
+/// and the refusal says what to write instead. The relative spelling of the
+/// same file is accepted.
+#[test]
+fn cite_refuses_an_absolute_local_path_even_when_it_exists() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let beside = c.root.join("studies").join("x.md");
+    std::fs::create_dir_all(beside.parent().unwrap()).unwrap();
+    write(&beside, "a study");
+    let absolute = beside.to_str().unwrap().to_string();
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+
+    for uri in [
+        absolute.clone(),
+        format!("file://{absolute}"),
+        format!("FILE://{absolute}"),
+        format!("file:{absolute}"),
+        "/nonexistent/x.md".to_string(),
+        "C:/studies/x.md".to_string(),
+    ] {
+        c.run(&["cite", &id, "--kind", "study", "--uri", &uri, "--note", "n"])
+            .assert_fails()
+            .says(&format!(
+                "`{uri}` is an absolute local path; local references are relative to nodes/"
+            ))
+            .says("Cite it by a path relative to nodes/")
+            .says(&format!("neb cite {id} --kind observatory --uri Q002"));
+    }
+    assert_eq!(
+        before,
+        std::fs::read_to_string(c.node_file(&id)).unwrap(),
+        "a refused citation must not change the node"
+    );
+
+    c.run(&[
+        "cite",
+        &id,
+        "--kind",
+        "study",
+        "--uri",
+        "../studies/x.md",
+        "--note",
+        "n",
+    ])
+    .assert_ok();
+    c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
+}
+
+/// Rule 8 in `check`: an absolute path already in the corpus — hand written,
+/// or carried over from a v1 `evidence` source — still loads, and is a
+/// warning whether or not it resolves on this machine, since resolving here
+/// is what cannot be judged. URLs and scheme handles never trip it.
+#[test]
+fn check_warns_about_an_absolute_local_path_already_in_the_corpus() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    for uri in [
+        "https://example.org/a",
+        "http://example.org/b",
+        "mailto:someone@example.org",
+        "orbit:ORB-13049",
+        "neb:another-idea",
+    ] {
+        c.run(&["cite", &id, "--uri", uri, "--note", "n"])
+            .assert_ok();
+    }
+    c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
+
+    let existing = c.root.join("config.yaml");
+    let existing = existing.to_str().unwrap();
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    write(
+        &c.node_file(&id),
+        &raw.replace(
+            "  uri: https://example.org/a\n",
+            &format!("  uri: {existing}\n"),
+        )
+        .replace(
+            "  uri: http://example.org/b\n",
+            "  uri: file:///nonexistent/x.md\n",
+        ),
+    );
+
+    let shown = c.run(&["show", "--json", &id]).assert_ok().stdout();
+    let node: serde_json::Value = serde_json::from_str(&shown).expect("show --json is valid JSON");
+    assert_eq!(node["node"]["references"][0]["uri"], existing);
+    c.run(&["check"])
+        .assert_ok()
+        .says("[8]")
+        .says(&format!(
+            "reference `r1` uses an absolute local path, which resolves on this machine only: \
+             {existing}"
+        ))
+        .says(
+            "reference `r2` uses an absolute local path, which resolves on this machine only: \
+             file:///nonexistent/x.md",
+        )
+        .says("0 errors, 2 warnings");
+
+    let out = c.run(&["--json", "check"]).assert_ok().stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).expect("check --json is valid JSON");
+    let findings = v["findings"].as_array().expect("findings array");
+    assert_eq!(findings.len(), 2, "{findings:?}");
+    for f in findings {
+        assert_eq!(f["rule"], 8);
+        assert_eq!(f["level"], "warn");
+        assert_eq!(f["node"], id);
+    }
+}
+
 #[test]
 fn check_json_exposes_rule_and_level() {
     let c = Corpus::new();

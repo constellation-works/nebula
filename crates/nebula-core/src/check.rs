@@ -210,6 +210,23 @@ fn has_scheme(uri: &str) -> bool {
     })
 }
 
+/// Whether a URI names a place on one machine's filesystem rather than a
+/// path relative to `nodes/`: a `file:` URI, a path from the root (`/etc/x`,
+/// `\\server\share\x`), or a drive-letter path (`C:/x`, `C:\x`).
+///
+/// Judged as written and alike on every platform, never through
+/// [`Path::is_absolute`], which answers differently on each: the corpus is
+/// synced between machines, so a path that is absolute on any one of them
+/// is machine layout on all of them.
+pub fn is_absolute_local(uri: &str) -> bool {
+    let file_uri = uri
+        .get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"));
+    let rooted = uri.starts_with(['/', '\\']);
+    let drive = matches!(uri.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic());
+    file_uri || rooted || drive
+}
+
 /// Where a local reference URI lands: relative to the `nodes/` directory,
 /// used as given and never canonicalized (macOS temp dirs sit under a
 /// symlink, and resolving would pass on one platform and fail on the other).
@@ -529,6 +546,25 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
             }
             continue;
         }
+        // 8, for an absolute path or a `file:` URI: it may well resolve on
+        //    this machine, which is exactly why `check` cannot judge it by
+        //    resolving — on every other machine the corpus is synced to, it
+        //    names nothing. `cite` refuses new ones; one already here, hand
+        //    written or carried over from a v1 `evidence` source, is a
+        //    warning, so an older corpus still loads and checks.
+        if let Some(uri) = f.uri.as_deref().filter(|uri| is_absolute_local(uri)) {
+            r.push(
+                Severity::Warn,
+                Rule::LocalReference,
+                id,
+                format!(
+                    "reference `{}` uses an absolute local path, which resolves on this machine \
+                     only: {uri}; local references are relative to nodes/",
+                    f.id
+                ),
+            );
+            continue;
+        }
         // 8. A local path that does not resolve is a citation to nothing.
         //    External URLs are not fetched; `check` stays offline and fast.
         if let Some(uri) = f
@@ -552,7 +588,9 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
 
 #[cfg(test)]
 mod tests {
-    use super::{Rule, is_local_path, is_observatory_id, resolve_observatory, tag_drift};
+    use super::{
+        Rule, is_absolute_local, is_local_path, is_observatory_id, resolve_observatory, tag_drift,
+    };
 
     // The canonical labels and IDs for the published invariant tables. Keep
     // this beside the code that emits findings, so documentation drift fails
@@ -576,7 +614,7 @@ mod tests {
         ),
         (
             Rule::LocalReference,
-            "Non-discussion references have a URI; local URIs resolve relative to `nodes/`",
+            "Non-discussion references have a URI; local URIs resolve relative to `nodes/` and are never absolute",
         ),
         (
             Rule::ObservatoryReference,
@@ -671,6 +709,40 @@ mod tests {
         }
         for uri in ["./notes/x.md", "notes/x.md", "C:/x.md", "x"] {
             assert!(is_local_path(uri), "{uri}");
+        }
+    }
+
+    /// Absolute on any platform is absolute on all of them, and nothing a
+    /// scheme, a URL or a path under `nodes/` looks like is caught with it.
+    #[test]
+    fn absolute_paths_and_file_uris_are_absolute_on_every_platform() {
+        for uri in [
+            "/etc/hostname",
+            "\\\\server\\share\\x.md",
+            "C:/x.md",
+            "c:\\x.md",
+            "C:x.md",
+            "file:///etc/hostname",
+            "FILE://host/x.md",
+            "file:/etc/hostname",
+        ] {
+            assert!(is_absolute_local(uri), "{uri}");
+        }
+        for uri in [
+            "./notes/x.md",
+            "notes/x.md",
+            "../../studies/x.md",
+            "x",
+            "https://example.org",
+            "http://example.org/file:///x",
+            "mailto:someone@example.org",
+            "orbit:DANI-10345",
+            "neb:some-node",
+            "doi:10.1000/x",
+            "[[almanac/page]]",
+            "files/x.md",
+        ] {
+            assert!(!is_absolute_local(uri), "{uri}");
         }
     }
 

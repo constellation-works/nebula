@@ -59,9 +59,10 @@ by a path: `neb cite <node> --kind observatory --uri Q002 --note "why"`.
 Record ids are `Q###` (questions), `H###` (hypotheses), `T###` (theories) and
 `R###` (research). The path is reconstructed per machine from
 `observatory_root` in `config.yaml` (`neb config observatory-root <DIR>`) or
-`$OBSERVATORY_ROOT`, so an absolute path in a reference is a bug: it breaks
-everywhere else and `check` cannot judge it. An unresolved record is a
-warning about this machine, not something to rewrite.
+`$OBSERVATORY_ROOT`, so an absolute path in a reference is a bug: it may
+resolve here and breaks everywhere else. `cite` refuses one, and `check`
+warns about any already in the corpus. An unresolved record is a warning
+about this machine, not something to rewrite.
 
 ## Capture from conversation
 
