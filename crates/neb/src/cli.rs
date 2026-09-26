@@ -668,15 +668,15 @@ impl std::fmt::Display for EditorError {
 }
 
 impl EditorError {
-    /// The refusal's `kind` under `--json`; exhaustive for the same reason
-    /// as [`Error::kind`].
-    fn kind(&self) -> &'static str {
+    /// The refusal's `code` under `--json`; exhaustive for the same reason
+    /// as [`Error::code`].
+    fn code(&self) -> &'static str {
         match self {
-            Self::NotConfigured => "EditorNotConfigured",
-            Self::InvalidCommand(_) => "EditorInvalidCommand",
-            Self::Start { .. } => "EditorStart",
-            Self::Unsuccessful(_) => "EditorUnsuccessful",
-            Self::NotesChanged => "NotesChanged",
+            Self::NotConfigured => "editor_not_configured",
+            Self::InvalidCommand(_) => "editor_invalid_command",
+            Self::Start { .. } => "editor_start",
+            Self::Unsuccessful(_) => "editor_unsuccessful",
+            Self::NotesChanged => "notes_changed",
         }
     }
 }
@@ -689,7 +689,7 @@ impl From<Error> for Failure {
 
 impl From<serde_json::Error> for Failure {
     fn from(e: serde_json::Error) -> Self {
-        Self::of("Json", format!("could not write JSON: {e}"))
+        Self::of("json", format!("could not write JSON: {e}"))
     }
 }
 
@@ -711,23 +711,23 @@ impl std::fmt::Display for KeyError {
 }
 
 impl KeyError {
-    /// The refusal's `kind` under `--json`, exhaustive like [`Error::kind`].
-    fn kind(&self) -> &'static str {
+    /// The refusal's `code` under `--json`, exhaustive like [`Error::code`].
+    fn code(&self) -> &'static str {
         match self {
-            Self::Unknown(_) => "TriageKey",
+            Self::Unknown(_) => "triage_key",
         }
     }
 }
 
 impl From<KeyError> for Failure {
     fn from(e: KeyError) -> Self {
-        Self::of(e.kind(), e.to_string())
+        Self::of(e.code(), e.to_string())
     }
 }
 
 impl From<EditorError> for Failure {
     fn from(e: EditorError) -> Self {
-        Self::of(e.kind(), e.to_string())
+        Self::of(e.code(), e.to_string())
     }
 }
 
@@ -740,12 +740,13 @@ impl Failure {
     /// Arguments that parsed but ask for nothing that can be done. Clap's
     /// own usage errors never get here: they exit 2, in prose, before `run`.
     fn say(message: impl Into<String>) -> Self {
-        Self::of("Usage", message)
+        Self::of("usage", message)
     }
 
-    /// A refusal of the CLI's own, named `kind` under `--json`.
-    fn of(kind: &'static str, message: impl Into<String>) -> Self {
-        Self(render::Refusal::new(kind, message))
+    /// A refusal of the CLI's own, with its `snake_case` `code` under
+    /// `--json`.
+    fn of(code: &'static str, message: impl Into<String>) -> Self {
+        Self(render::Refusal::new(code, message))
     }
 }
 
@@ -1806,7 +1807,7 @@ fn run(cli: Cli) -> Outcome {
                 print!(
                     "{}",
                     render::mermaid(&exported, from.as_deref())
-                        .map_err(|message| Failure::of("NoSuchNode", message))?
+                        .map_err(|message| Failure::of("no_such_node", message))?
                 );
             } else {
                 out_json(&exported)?;
@@ -1879,7 +1880,7 @@ fn out_json<T: serde::Serialize>(v: &T) -> std::result::Result<(), Failure> {
 fn write_report(out: Option<&Path>, text: &str) -> std::result::Result<(), Failure> {
     match out {
         Some(path) => std::fs::write(path, format!("{text}\n"))
-            .map_err(|e| Failure::of("IoAt", format!("writing {}: {e}", path.display())))?,
+            .map_err(|e| Failure::of("io_at", format!("writing {}: {e}", path.display())))?,
         None => println!("{text}"),
     }
     Ok(())

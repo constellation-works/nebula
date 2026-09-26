@@ -369,61 +369,83 @@ fn shown_candidates(shown: usize) -> String {
     }
 }
 
-impl Error {
-    /// The variant's name, as a stable string for a consumer that is not
-    /// Rust: `neb --json` reports it as the refusal's `kind`, so a script
-    /// matches `NoSuchNode` rather than parsing the message.
-    ///
-    /// Spelled out rather than derived, and exhaustive on purpose. A new
-    /// variant does not compile until it names itself here, and renaming a
-    /// variant does not quietly rename a kind that scripts already match.
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Self::NoSuchNode(_) => "NoSuchNode",
-            Self::NoSuchInboxEntry(_) => "NoSuchInboxEntry",
-            Self::InboxEntrySettled { .. } => "InboxEntrySettled",
-            Self::NoCorpus(_) => "NoCorpus",
-            Self::NotGitWorkTree(_) => "NotGitWorkTree",
-            Self::NoNodeAtRevision { .. } => "NoNodeAtRevision",
-            Self::EmptyRoot => "EmptyRoot",
-            Self::RootConfigConflict { .. } => "RootConfigConflict",
-            Self::RelativeObservatoryRoot { .. } => "RelativeObservatoryRoot",
-            Self::SchemaMismatch { .. } => "SchemaMismatch",
-            Self::CurrentSchemaUnreadable { .. } => "CurrentSchemaUnreadable",
-            Self::Cycle { .. } => "Cycle",
-            Self::SelfLoop => "SelfLoop",
-            Self::DuplicateEdge => "DuplicateEdge",
-            Self::ParentAndReopens(_) => "ParentAndReopens",
-            Self::NeedsKill(_) => "NeedsKill",
-            Self::EmptyKill => "EmptyKill",
-            Self::KillAlreadySet(_) => "KillAlreadySet",
-            Self::RefutedNeedsWhy => "RefutedNeedsWhy",
-            Self::RefutedCannotReopen => "RefutedCannotReopen",
-            Self::SeedWithKill => "SeedWithKill",
-            Self::NoSuchCandidate { .. } => "NoSuchCandidate",
-            Self::Interactive(_) => "Interactive",
-            Self::DuplicateId(_) => "DuplicateId",
-            Self::NodeExists(_) => "NodeExists",
-            Self::UnresolvedUri { .. } => "UnresolvedUri",
-            Self::AbsoluteUri(_) => "AbsoluteUri",
-            Self::InvalidTransition { .. } => "InvalidTransition",
-            Self::MissingParent(_) => "MissingParent",
-            Self::UnusableTitle(_) => "UnusableTitle",
-            Self::UnknownReferenceKind(_) => "UnknownReferenceKind",
-            Self::InvalidObservatoryId(_) => "InvalidObservatoryId",
-            Self::InvalidId(_) => "InvalidId",
-            Self::UnsafeId(_) => "UnsafeId",
-            Self::IdMismatch { .. } => "IdMismatch",
-            Self::Locked { .. } => "Locked",
-            Self::StagedElsewhere { .. } => "StagedElsewhere",
-            Self::CorpusIgnored(_) => "CorpusIgnored",
-            Self::Git { .. } => "Git",
-            Self::Corpus(_) => "Corpus",
-            Self::Io(_) => "Io",
-            Self::IoAt { .. } => "IoAt",
-            Self::Yaml { .. } => "Yaml",
-            Self::Json { .. } => "Json",
+/// Writes [`Error::code`] from one `Variant => "code"` line per variant, and,
+/// for the tests, the same lines as data.
+///
+/// The match it expands to is exhaustive, so a new variant does not compile
+/// until it has a line. The table the tests walk is built from those same
+/// lines, so no variant can have a code that the uniqueness and spelling
+/// checks never see. `Self::Variant { .. }` matches a variant of any shape,
+/// which is why a line names the variant alone.
+macro_rules! codes {
+    ($($variant:ident => $code:literal,)*) => {
+        /// The variant's stable machine name: `neb --json` reports it as the
+        /// refusal's `code`, so a script matches `no_such_node` rather than
+        /// parsing the message.
+        ///
+        /// It is the variant's name in `snake_case`, spelled out rather than
+        /// derived, and exhaustive on purpose. A new variant does not compile
+        /// until it names its code, and renaming a variant does not quietly
+        /// rename a code that scripts already match.
+        pub fn code(&self) -> &'static str {
+            match self {
+                $(Self::$variant { .. } => $code,)*
+            }
         }
+
+        /// Every variant's name beside its code, one entry per line of the
+        /// `codes!` invocation.
+        #[cfg(test)]
+        const CODES: &[(&str, &str)] = &[$((stringify!($variant), $code),)*];
+    };
+}
+
+impl Error {
+    codes! {
+        NoSuchNode => "no_such_node",
+        NoSuchInboxEntry => "no_such_inbox_entry",
+        InboxEntrySettled => "inbox_entry_settled",
+        NoCorpus => "no_corpus",
+        NotGitWorkTree => "not_git_work_tree",
+        NoNodeAtRevision => "no_node_at_revision",
+        EmptyRoot => "empty_root",
+        RootConfigConflict => "root_config_conflict",
+        RelativeObservatoryRoot => "relative_observatory_root",
+        SchemaMismatch => "schema_mismatch",
+        CurrentSchemaUnreadable => "current_schema_unreadable",
+        Cycle => "cycle",
+        SelfLoop => "self_loop",
+        DuplicateEdge => "duplicate_edge",
+        ParentAndReopens => "parent_and_reopens",
+        NeedsKill => "needs_kill",
+        EmptyKill => "empty_kill",
+        KillAlreadySet => "kill_already_set",
+        RefutedNeedsWhy => "refuted_needs_why",
+        RefutedCannotReopen => "refuted_cannot_reopen",
+        SeedWithKill => "seed_with_kill",
+        NoSuchCandidate => "no_such_candidate",
+        Interactive => "interactive",
+        DuplicateId => "duplicate_id",
+        NodeExists => "node_exists",
+        UnresolvedUri => "unresolved_uri",
+        AbsoluteUri => "absolute_uri",
+        InvalidTransition => "invalid_transition",
+        MissingParent => "missing_parent",
+        UnusableTitle => "unusable_title",
+        UnknownReferenceKind => "unknown_reference_kind",
+        InvalidObservatoryId => "invalid_observatory_id",
+        InvalidId => "invalid_id",
+        UnsafeId => "unsafe_id",
+        IdMismatch => "id_mismatch",
+        Locked => "locked",
+        StagedElsewhere => "staged_elsewhere",
+        CorpusIgnored => "corpus_ignored",
+        Git => "git",
+        Corpus => "corpus",
+        Io => "io",
+        IoAt => "io_at",
+        Yaml => "yaml",
+        Json => "json",
     }
 
     /// A YAML failure, labelled with what was being read.
@@ -449,6 +471,75 @@ impl Error {
             action,
             path: path.into(),
             source,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+    use std::collections::BTreeSet;
+
+    /// A variant name in `snake_case`: `NoSuchNode` is `no_such_node`.
+    fn snake_case(variant: &str) -> String {
+        let mut out = String::new();
+        for (i, c) in variant.chars().enumerate() {
+            if c.is_ascii_uppercase() && i > 0 {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        }
+        out
+    }
+
+    /// Lowercase words of letters and digits joined by single underscores.
+    fn is_snake_case(code: &str) -> bool {
+        code.split('_').all(|word| {
+            word.starts_with(|c: char| c.is_ascii_lowercase())
+                && word
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        })
+    }
+
+    /// `code()` is what `neb --json` reports, so it must be unique, and it
+    /// must be the variant's own name in `snake_case`: a consumer reading the
+    /// variant in Rust and one reading the code in JSON should be matching
+    /// the same words. [`Error::CODES`] holds every variant by construction,
+    /// so a new one is checked here without anyone listing it.
+    #[test]
+    fn every_code_is_its_variant_name_in_snake_case_and_unique() {
+        let mut seen = BTreeSet::new();
+        for &(variant, code) in Error::CODES {
+            assert!(is_snake_case(code), "`{code}` is not snake_case");
+            assert_eq!(code, snake_case(variant), "the code for `{variant}`");
+            assert!(seen.insert(code), "`{code}` names two variants");
+        }
+    }
+
+    /// One line per variant covers every shape: tuple, struct and unit.
+    #[test]
+    fn the_codes_table_is_what_code_returns() {
+        let io = Error::Io(std::io::Error::other("x"));
+        assert!(Error::CODES.contains(&("Io", io.code())));
+        assert_eq!(Error::NoSuchNode("x".into()).code(), "no_such_node");
+        assert_eq!(
+            Error::NoNodeAtRevision {
+                node: "x".into(),
+                revision: "HEAD".into(),
+            }
+            .code(),
+            "no_node_at_revision"
+        );
+        assert_eq!(Error::EmptyRoot.code(), "empty_root");
+    }
+
+    #[test]
+    fn snake_case_is_checked_word_by_word() {
+        assert_eq!(snake_case("IoAt"), "io_at");
+        assert!(is_snake_case("no_such_node"));
+        for bad in ["NoSuchNode", "no__such", "_no", "no_", "no-such", ""] {
+            assert!(!is_snake_case(bad), "{bad}");
         }
     }
 }

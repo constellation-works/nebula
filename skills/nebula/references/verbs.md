@@ -27,21 +27,21 @@ The `--json` excerpts below are real output from a three-node fixture corpus.
 ## Refusals under `--json`
 
 Under `--json` a refusal is data too: one JSON object on one line, the last
-line on **stderr**. Stdout stays the payload's alone. Match on `kind`, never
-on `message`:
+line on **stderr**. Stdout stays the payload's alone. Match on `code`, never
+on `error`:
 
 ```json
 // neb show nope --json      (stderr; stdout is empty; exit 1)
-{"error":{"hint":"List what exists with:  neb list","kind":"NoSuchNode","message":"no node `nope`"}}
+{"code":"no_such_node","error":"no node `nope`","hint":"List what exists with:  neb list"}
 ```
 
 | field | type | what it is |
 |---|---|---|
-| `error.kind` | string | The refusal's stable name. For a core refusal it is the `nebula-core` variant: `NoSuchNode`, `Cycle`, `SelfLoop`, `NeedsKill`, `RefutedNeedsWhy`, `RefutedCannotReopen`, `UnknownReferenceKind`, `UnresolvedUri`, `SchemaMismatch`, `StagedElsewhere`, `CorpusIgnored`, `Locked`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `Usage` (arguments that parse but ask for nothing, such as an empty `capture`), `EditorNotConfigured`, `EditorInvalidCommand`, `EditorStart`, `EditorUnsuccessful`, `NotesChanged`, `TriageKey` (a `triage` input line that is not a key), `Json` and `IoAt`. |
-| `error.message` | string | What is wrong, in the words the text output uses before its hint. |
-| `error.hint` | string or `null` | What to do about it, as the text output words it: often a command to run, such as `neb sharpen <id> --kill "..."`. `null` when the CLI has nothing to add. |
+| `error` | string | What is wrong, in the words the text output uses before its hint. |
+| `code` | string | The refusal's stable `snake_case` name. For a core refusal it is the `nebula-core` variant's name in `snake_case`: `no_such_node`, `cycle`, `self_loop`, `needs_kill`, `refuted_needs_why`, `refuted_cannot_reopen`, `seed_with_kill`, `unknown_reference_kind`, `unresolved_uri`, `absolute_uri`, `schema_mismatch`, `staged_elsewhere`, `corpus_ignored`, `locked`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `usage` (arguments that parse but ask for nothing, such as an empty `capture`), `editor_not_configured`, `editor_invalid_command`, `editor_start`, `editor_unsuccessful`, `notes_changed`, `triage_key` (a key `triage` does not know), `json` and `io_at`. |
+| `hint` | string or `null` | What to do about it, as the text output words it: often a command to run, such as `neb sharpen <id> --kill "..."`. `null` when the CLI has nothing to add. |
 
-Key order is not significant. A new refusal arrives with its own `kind` and
+Key order is not significant. A new refusal arrives with its own `code` and
 the same three fields; new fields may be added, and existing ones will not
 change meaning. `SchemaMismatch` covers both directions: the hint says
 whether to `neb migrate` (the corpus is older) or upgrade `neb` (newer).
