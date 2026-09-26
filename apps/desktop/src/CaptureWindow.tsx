@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CaptureBox } from "./CaptureBox";
 
@@ -8,8 +8,9 @@ import { CaptureBox } from "./CaptureBox";
  * Hiding is the frontend's job here; showing is the shortcut's, in Rust.
  */
 export function CaptureWindow() {
-  const win = getCurrentWindow();
+  const win = useMemo(getCurrentWindow, []);
   const input = useRef<HTMLInputElement>(null);
+  const [openCount, setOpenCount] = useState(0);
   const hide = () => void win.hide();
 
   // The window is reused, so refocus the input each time it comes back.
@@ -17,7 +18,10 @@ export function CaptureWindow() {
     let off: (() => void) | undefined;
     void win
       .onFocusChanged(({ payload: focused }) => {
-        if (focused) input.current?.focus();
+        if (focused) {
+          setOpenCount((count) => count + 1);
+          input.current?.focus();
+        }
       })
       .then((unlisten) => {
         off = unlisten;
@@ -30,6 +34,7 @@ export function CaptureWindow() {
       <CaptureBox
         ref={input}
         autoFocus
+        resetErrorKey={openCount}
         placeholder="Capture… (Enter to save, Esc to close)"
         onCaptured={(_, hasActiveDraft) => {
           if (!hasActiveDraft) hide();

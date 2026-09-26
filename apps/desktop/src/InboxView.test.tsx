@@ -3,11 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { App } from "./App";
 import { CaptureBox, CONFIRM_MS } from "./CaptureBox";
+import { CaptureWindow } from "./CaptureWindow";
 import { InboxView } from "./InboxView";
 import { useInbox } from "./useInbox";
 import type { InboxEntry } from "./types/InboxEntry";
 
 vi.mock("./api");
+
+const windowMock = vi.hoisted(() => ({ onFocusChanged: vi.fn(), hide: vi.fn() }));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => windowMock }));
 
 const mocked = vi.mocked(api);
 
@@ -186,6 +190,18 @@ describe("useInbox", () => {
 });
 
 describe("CaptureBox", () => {
+  it("pastes line breaks as spaces at the cursor and submits the normalized line", async () => {
+    mocked.capture.mockResolvedValue({ id: "9999", at: "2026-09-13T12:00", text: "before a b c after" });
+    render(<CaptureBox />);
+    const input = screen.getByLabelText("Capture") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "before after" } });
+    input.setSelectionRange(7, 7);
+    fireEvent.paste(input, { clipboardData: { getData: () => "a\r\nb\nc " } });
+    expect(input).toHaveValue("before a b c after");
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(mocked.capture).toHaveBeenCalledWith("before a b c after"));
+  });
+
   it("shows a busy retry and keeps the thought for a manual retry", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     mocked.capture.mockRejectedValue("corpus busy");
@@ -287,6 +303,29 @@ describe("CaptureBox", () => {
 
     expect(input).toHaveValue("new draft");
     expect(screen.getByRole("status")).toHaveTextContent("Error: offline");
+  });
+});
+
+describe("CaptureWindow", () => {
+  it("clears a previous error on reopening while keeping the draft", async () => {
+    let focusChanged: (event: { payload: boolean }) => void = () => {};
+    windowMock.onFocusChanged.mockImplementation((handler) => {
+      focusChanged = handler;
+      return Promise.resolve(() => {});
+    });
+    const longError = "cannot write to corpus: " + "permission denied ".repeat(30);
+    mocked.capture.mockRejectedValueOnce(new Error(longError));
+    render(<CaptureWindow />);
+    const input = screen.getByLabelText("Capture");
+    fireEvent.change(input, { target: { value: "keep this draft" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const status = await screen.findByRole("status");
+    await waitFor(() => expect(status).toHaveTextContent("Error: cannot write to corpus:"));
+    expect(status).toHaveAttribute("title", `Error: ${longError}`);
+    act(() => focusChanged({ payload: false }));
+    act(() => focusChanged({ payload: true }));
+    expect(status).toBeEmptyDOMElement();
+    expect(input).toHaveValue("keep this draft");
   });
 });
 

@@ -26,12 +26,14 @@ pub fn open(root: &Path) -> Result<Corpus> {
     Corpus::open(Some(root.to_path_buf()))
 }
 
-/// Append one line to this month's inbox, exactly as `neb capture` does.
+/// Append and, when configured, commit one line just as `neb capture` does.
 pub fn capture(corpus: &Corpus, text: &str) -> Result<InboxEntry> {
-    // The core operation takes the same lock again on this thread. Holding
-    // this guard makes its normal five-second wait an immediate re-entry.
+    // Hold the lock across the write and commit, just as the CLI does. Both
+    // core operations re-enter it on this thread without waiting again.
     let _lock = corpus.lock_within(CAPTURE_LOCK_WAIT)?;
-    ops::capture(corpus, text)
+    let entry = ops::capture(corpus, text)?;
+    ops::commit(corpus, "capture", &[&entry.id])?;
+    Ok(entry)
 }
 
 /// Every capture not yet promoted or dropped.

@@ -1,4 +1,4 @@
-import { useEffect, useImperativeHandle, useRef, useState, type KeyboardEvent, type Ref } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, type ClipboardEvent, type KeyboardEvent, type Ref } from "react";
 import * as api from "./api";
 import type { InboxEntry } from "./types/InboxEntry";
 
@@ -14,6 +14,8 @@ interface Props {
   /** After a successful capture, once the confirmation has been shown. */
   onCaptured?: (entry: InboxEntry, hasActiveDraft: boolean) => void;
   onEscape?: () => void;
+  /** Changes when the floating window opens again. */
+  resetErrorKey?: number;
 }
 
 /**
@@ -21,7 +23,7 @@ interface Props {
  * text, says "captured" for a second, and is ready for the next thought. The
  * same box sits at the top of the inbox and alone in the floating window.
  */
-export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape }: Props) {
+export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape, resetErrorKey }: Props) {
   const [text, setText] = useState("");
   const [status, setStatus] = useState<"idle" | "busy" | "retrying" | "captured" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
@@ -31,6 +33,25 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape }
   useImperativeHandle(ref, () => input.current!);
 
   useEffect(() => () => clearTimeout(timer.current), []);
+
+  useEffect(() => {
+    setStatus((current) => current === "error" ? "idle" : current);
+    setMessage(null);
+  }, [resetErrorKey]);
+
+  function onPaste(e: ClipboardEvent<HTMLInputElement>) {
+    const pasted = e.clipboardData.getData("text");
+    if (!/[\r\n]/.test(pasted)) return;
+    e.preventDefault();
+    const target = e.currentTarget;
+    const start = target.selectionStart ?? textRef.current.length;
+    const end = target.selectionEnd ?? start;
+    const inserted = pasted.replace(/\r\n|\r|\n/g, " ");
+    const next = textRef.current.slice(0, start) + inserted + textRef.current.slice(end);
+    textRef.current = next;
+    setText(next);
+    queueMicrotask(() => target.setSelectionRange(start + inserted.length, start + inserted.length));
+  }
 
   async function submit() {
     const trimmed = text.trim();
@@ -100,8 +121,9 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape }
           setText(e.target.value);
         }}
         onKeyDown={onKeyDown}
+        onPaste={onPaste}
       />
-      <span className={`capture__status capture__status--${status}`} role="status">
+      <span className={`capture__status capture__status--${status}`} role="status" title={status === "error" ? message ?? undefined : undefined}>
         {status === "captured" ? "captured" : status === "retrying" ? "busy, retrying…" : status === "busy" ? "saving…" : status === "error" ? message : ""}
       </span>
     </div>
