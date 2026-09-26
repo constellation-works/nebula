@@ -1,4 +1,4 @@
-.PHONY: help build release run dev check test types fmt fmt-check release-check standards-check clippy audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
+.PHONY: help build release run dev check test types fmt fmt-check release-check standards-check clippy ci-lint audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
 
 # ------------------------------------------------------------
 # Config
@@ -50,6 +50,7 @@ help:
 	@echo "  make release-check Verify Cargo/CHANGELOG version lockstep"
 	@echo "  make standards-check Verify the vendored constellation standards are unedited"
 	@echo "  make clippy        Lint with clippy (deny warnings)"
+	@echo "  make ci-lint       Run the clippy CI gate"
 	@echo "  make audit         Supply-chain audit (cargo-deny)"
 	@echo "  make tree          Print dependency tree"
 	@echo "  make ci            Full CI pass (fmt-check, release-check, standards-check,"
@@ -114,6 +115,8 @@ standards-check:
 
 clippy:
 	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings
+
+ci-lint: clippy
 
 # Supply-chain audit: advisories + licenses via cargo-deny.
 audit:

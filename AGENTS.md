@@ -3,6 +3,22 @@
 nebula captures half-formed ideas and traces their lineage. It is a Rust CLI
 (`neb`) over a corpus of markdown files.
 
+<!-- constellation-standards:begin -->
+<!-- Managed by the constellation's operations/scripts/sync-standards.sh; edits inside this block are overwritten. -->
+## Constellation standards
+
+This repository adopts these constellation standards, vendored read-only in `docs/standards/`:
+
+- `STD-01@2` — [docs/standards/STD-01-cli-surface.md](docs/standards/STD-01-cli-surface.md)
+- `STD-02@2` — [docs/standards/STD-02-rust-architecture-and-errors.md](docs/standards/STD-02-rust-architecture-and-errors.md)
+- `STD-03@2` — [docs/standards/STD-03-concurrency-and-process-safety.md](docs/standards/STD-03-concurrency-and-process-safety.md)
+- `STD-04@1` — [docs/standards/STD-04-testing-and-verification.md](docs/standards/STD-04-testing-and-verification.md)
+- `STD-05@1` — [docs/standards/STD-05-security-boundaries.md](docs/standards/STD-05-security-boundaries.md)
+
+Follow them; they are normative. To deviate from a rule, record a decision in `docs/design/<feature>/4_decisions.md` citing `STD-nn@<version> §Rn`; never edit `docs/standards/` (`sh docs/standards/check.sh` enforces this).
+Reviewers check every change against the adopted standards and report violations as `STD-nn §Rn` with file:line evidence.
+<!-- constellation-standards:end -->
+
 ## The one rule that matters
 
 **This repository holds the tool. It never holds the corpus.**
@@ -33,6 +49,11 @@ stale. Both matter: the checker walks paths, and
 macOS temporary directories sit under a symlink, so path handling that resolves
 or canonicalizes will pass on one platform and fail on the other. Use paths as
 given.
+
+In `crates/nebula-core/src/{model,ops,check}.rs`, invariants live in three
+places by design: deserialization, the point of action, and the checker.
+Moving a rule between them changes its strength. See
+[docs/design/lineage-graph/specs/invariants.md](docs/design/lineage-graph/specs/invariants.md).
 
 ## Before changing the schema
 
