@@ -7,7 +7,10 @@
 //! - `out!` and `outln!` write to stdout, as `print!` and `println!` did;
 //! - `errln!` writes a line to stderr, as `eprintln!` did;
 //! - [`stdout`] is a [`Write`] handle on stdout, for code that takes one,
-//!   such as `triage` and the completion script.
+//!   such as `triage` and the completion script;
+//! - [`paint`] and [`bold`] colour text for the stream it is bound for, and
+//!   [`stdout_on_terminal`] and [`stdin_on_terminal`] say what the streams
+//!   are attached to. [`terminal`] decides all of that, once.
 //!
 //! The streams are explicit in the names, so moving a line from one stream to
 //! the other is a one-word change.
@@ -26,10 +29,14 @@
 //! Writes to stderr are best effort: when stderr is gone there is nowhere to
 //! say so, and a warning must never cost the command.
 
+mod terminal;
+
 use crate::render::Refusal;
 use std::fmt;
-use std::io::{self, ErrorKind, IsTerminal, Write};
+use std::io::{self, ErrorKind, Write};
 use std::sync::{Mutex, PoisonError};
+
+pub use terminal::{Role, Stream, bold, paint, stdin_on_terminal, stdout_on_terminal};
 
 /// Write to stdout, formatted as `print!` formats.
 macro_rules! out {
@@ -97,11 +104,6 @@ impl Closable for Vec<u8> {
     fn is_closed(&self) -> bool {
         false
     }
-}
-
-/// Whether stdout is a terminal, for `render`'s colour decision.
-pub fn stdout_is_terminal() -> bool {
-    io::stdout().is_terminal()
 }
 
 /// Flush stdout, and hand back a write to it that failed for any reason but

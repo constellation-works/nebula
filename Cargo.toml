@@ -18,7 +18,16 @@ repository = "https://github.com/constellation-works/nebula"
 
 [workspace.dependencies]
 nebula-core = { path = "crates/nebula-core" }
-clap = { version = "4", features = ["derive", "wrap_help"] }
+# No `color` and no `wrap_help`: either makes clap query the terminal on its
+# own, and help must read the same on every machine (STD-01 §R17).
+clap = { version = "4", default-features = false, features = [
+  "std",
+  "derive",
+  "help",
+  "usage",
+  "error-context",
+  "suggestions",
+] }
 clap_complete = "4"
 # Test-only: isolates each test process's environment before any test thread
 # starts (crates/nebula-core/tests/support). Already in the tree through Tauri.

@@ -110,7 +110,8 @@ the file until turned on). From then on every mutating verb — `capture`,
 `promote`, `drop`, `new`, `sharpen`, `status`, `link`, `tag`, `cite`,
 `handoff`, `note`, `migrate`, `config` — ends with one commit of the corpus
 paths (`triage` makes one per promote or drop it carries out), and prints
-`committed <hash>` under its usual output:
+`committed <hash>` on stderr under its usual output, so `E=$(neb capture -q …)`
+still holds the id alone:
 
 ```
 $ neb capture "tags beat domains"
