@@ -557,20 +557,22 @@ impl Corpus {
         ))
     }
 
-    /// Remove the legacy `observatory_root` key from `config.yaml`. When the
-    /// file on disk no longer carries it, nothing is written.
+    /// Remove the legacy `observatory_root` key from `config.yaml`, returning
+    /// the path it held. When the file on disk no longer carries it, nothing
+    /// is written and this returns `None`.
     ///
     /// The file stays machine-written: this rewrites it whole, header and
     /// all, rather than editing a line — which is why the reload comes
     /// first: this removes one key and must carry every other key across as
     /// it stands under the caller's lock, not as it stood when the corpus was
     /// opened.
-    pub(crate) fn drop_legacy_observatory_root(&mut self) -> Result<()> {
+    pub(crate) fn drop_legacy_observatory_root(&mut self) -> Result<Option<PathBuf>> {
         self.reload_config()?;
-        match self.config.observatory_root.take() {
-            Some(_) => self.config.save(&self.root),
-            None => Ok(()),
+        let removed = self.config.observatory_root.take();
+        if removed.is_some() {
+            self.config.save(&self.root)?;
         }
+        Ok(removed)
     }
 
     /// Whether a write is followed by a commit, per `config.yaml`.

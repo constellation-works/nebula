@@ -242,6 +242,7 @@ pub fn refusal_about(e: &Error, node: &str) -> Refusal {
 fn exit(e: &Error) -> Exit {
     match e {
         Error::EmptyRoot
+        | Error::RootAndPathDiffer { .. }
         | Error::RelativeObservatoryRoot { setting: None, .. }
         | Error::SelfLoop
         | Error::ParentAndReopens(_)
@@ -310,6 +311,10 @@ fn exit(e: &Error) -> Exit {
 }
 
 /// The advice for an error, where the CLI has any.
+#[allow(
+    clippy::too_many_lines,
+    reason = "a lookup table: one arm per refusal with advice"
+)]
 fn hint(e: &Error) -> Option<String> {
     if let Some(hint) = schema_hint(e).or_else(|| interrupted_write_hint(e)) {
         return Some(hint);
@@ -382,6 +387,10 @@ fn hint(e: &Error) -> Option<String> {
              `neb config observatory-root` shows which root is in effect."
                 .to_owned()
         }
+        Error::RootAndPathDiffer { path, .. } => format!(
+            "Name the corpus once, as the path:  neb init {}",
+            path.display()
+        ),
         Error::ParentAndReopens(id) => {
             format!("`--reopens {id}` already records the descent, so drop `--parent {id}`.")
         }
@@ -501,6 +510,10 @@ mod tests {
     fn the_exit_is_usage_only_for_what_no_corpus_could_accept() {
         for usage in [
             Error::EmptyRoot,
+            Error::RootAndPathDiffer {
+                root: PathBuf::from("a"),
+                path: PathBuf::from("b"),
+            },
             Error::RelativeObservatoryRoot {
                 root: PathBuf::from("rel"),
                 setting: None,

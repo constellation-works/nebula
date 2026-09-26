@@ -30,6 +30,8 @@ habit. This cut keeps what a person actually uses.
 - `new --status`. `new --kill "..."` starts a hypothesis; without it, a seed.
 - The quick glance (`open` in v0.1, now `review --short`) no longer reports
   references without a note; that is `check` rule 10.
+- `neb edit --by`. It was validated and then dropped, because a body has no
+  author field, so `edit --by x` is now refused as an unexpected argument.
 
 ### Added
 

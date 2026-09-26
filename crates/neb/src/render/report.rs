@@ -4,11 +4,13 @@ use super::table::{Cell, Column, Table, Target};
 use super::{Notice, bold, count, dim, paint, status_badge, status_cell};
 use crate::output::Role;
 use nebula_core::{
-    Band, CommitSetting, EdgeType, HUMAN, INBOX_DAYS, Impact, Inbox, MigrationReport, Near,
-    Neighbour, NodeView, OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, OpenReport,
-    Report, ReviewItem, ReviewReport, ReviewRule, Severity, TagCounts, Via,
+    Band, CommitSetting, DroppedLegacy, EdgeType, HUMAN, INBOX_DAYS, Impact, Inbox,
+    MigrationReport, Near, Neighbour, NodeView, OBSERVATORY_ROOT_ENV, ObservatoryRoot,
+    ObservatorySource, OpenReport, Report, Retagged, ReviewItem, ReviewReport, ReviewRule,
+    Severity, TagCounts, Via,
 };
 use std::fmt::Write as _;
+use std::path::Path;
 
 /// Who wrote something, as a dimmed ` (label)` suffix, or nothing for the
 /// human: the view states `human` outright, and saying so on every line
@@ -157,6 +159,46 @@ pub fn observatory_root_notes(setting: &ObservatoryRoot, saved: bool) -> Vec<Not
         )));
     }
     notes
+}
+
+/// What `--drop-legacy` did to `config`, in every mode: the key it removed,
+/// or that there was none and the file was left alone.
+pub fn dropped_legacy(dropped: &DroppedLegacy, config: &Path) -> Notice {
+    Notice::always(match &dropped.removed {
+        Some(path) => format!(
+            "removed the legacy observatory_root ({}) from {}",
+            path.display(),
+            config.display()
+        ),
+        None => format!(
+            "no legacy observatory_root key in {}; nothing removed",
+            config.display()
+        ),
+    })
+}
+
+/// The part of a `tag` request that changed nothing, in every mode: each tag
+/// that was not on `node` to remove or was on it to add, then, when the tags
+/// came out as they were, that the node was not written.
+pub fn retag_notes(node: &str, done: &Retagged) -> Vec<Notice> {
+    let absent = done
+        .absent
+        .iter()
+        .map(|tag| format!("`{tag}` is not a tag of {node}; nothing to remove"));
+    let already = done
+        .already
+        .iter()
+        .map(|tag| format!("`{tag}` is already a tag of {node}; nothing to add"));
+    absent
+        .chain(already)
+        .map(Notice::always)
+        .chain((!done.written).then(|| unchanged(node)))
+        .collect()
+}
+
+/// A write that would change nothing, so did not happen, in every mode.
+pub fn unchanged(node: &str) -> Notice {
+    Notice::always(format!("no change; {node} not written"))
 }
 
 /// Whether writes are committed, as `neb config commit` reports it.

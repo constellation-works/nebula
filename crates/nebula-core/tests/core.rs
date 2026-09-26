@@ -15,8 +15,8 @@ use nebula_core::InboxEntry;
 use nebula_core::triage::{Action, Step, Tally};
 use nebula_core::{
     Band, Citation, CommitOutcome, Committed, Corpus, CorpusLock, Direction, EdgeType, Error,
-    Graph, HUMAN, Handoff, NEAR_DEFAULT, NewNode, Promotion, ReviewItem, ReviewReport, ReviewRule,
-    Settlement, Status, TraceHop, Triage, Via, graph, ops, store,
+    Graph, HUMAN, Handoff, NEAR_DEFAULT, NewNode, ObservatoryLink, Promotion, ReviewItem,
+    ReviewReport, ReviewRule, Settlement, Status, TraceHop, Triage, Via, graph, ops, store,
 };
 use std::fmt::Write as _;
 use std::path::Path;
@@ -944,6 +944,15 @@ fn a_handoff_cites_the_record_and_closes_the_node_in_one_write() {
     assert_eq!(done.from, Status::Seed);
     assert_eq!(done.record, "H012", "case is normalised up, as cite does");
     assert_eq!(done.reference, "r1");
+    assert_eq!(
+        done.observatory,
+        ObservatoryLink {
+            reference: "r1".into(),
+            record: "H012".into(),
+            path: Some(root.join("hypotheses").join("H012-wake.md")),
+        },
+        "where the record is, as `show` would say"
+    );
 
     let node = corpus.load(&id).unwrap().node;
     assert_eq!(node.status, Status::Abandoned);
@@ -988,6 +997,53 @@ fn a_handoff_with_no_observatory_root_accepts_the_record_id() {
     let id = seed(&corpus, "An idea", &[]);
     let done = ops::handoff(&corpus, &id, &handing("H404"), None).unwrap();
     assert_eq!(done.doc.node.handed_off_to(), Some("H404"));
+    assert_eq!(
+        (done.observatory.record.as_str(), done.observatory.path),
+        ("H404", None)
+    );
+}
+
+/// A citation of an Observatory record says where the record is once the
+/// caller asks with a root, as `show` does; other kinds carry no link.
+#[test]
+fn a_cited_observatory_record_is_located_under_the_root_given() {
+    let (dir, corpus) = corpus();
+    let id = seed(&corpus, "An idea", &[]);
+    let root = observatory_with_h012(dir.path());
+    let args = Citation {
+        kind: "observatory".into(),
+        uri: Some("H012".into()),
+        ..Citation::default()
+    };
+
+    let located = ops::cite(&corpus, &id, &args)
+        .unwrap()
+        .with_observatory(Some(&root));
+    assert_eq!(
+        located.observatory,
+        Some(ObservatoryLink {
+            reference: "r1".into(),
+            record: "H012".into(),
+            path: Some(root.join("hypotheses").join("H012-wake.md")),
+        })
+    );
+    let missing = Citation {
+        uri: Some("H404".into()),
+        ..args.clone()
+    };
+    let unresolved = ops::cite(&corpus, &id, &missing)
+        .unwrap()
+        .with_observatory(Some(&root));
+    assert_eq!(unresolved.observatory.map(|l| l.path), Some(None));
+    let paper = Citation {
+        kind: "paper".into(),
+        uri: Some("https://example.org".into()),
+        ..Citation::default()
+    };
+    let cited = ops::cite(&corpus, &id, &paper)
+        .unwrap()
+        .with_observatory(Some(&root));
+    assert_eq!(cited.observatory, None);
 }
 
 /// Every refusal comes before the write: the node file is byte for byte
@@ -2979,6 +3035,31 @@ fn a_corpus_that_cannot_be_created_names_the_root_it_aimed_at() {
     assert!(!root.exists());
 }
 
+/// `init` given a root and a path that name different directories refuses
+/// before creating either (STD-01 §R28). One directory spelled two ways, with
+/// a `.` segment or a trailing slash, is one corpus.
+#[test]
+fn init_refuses_a_root_and_a_path_that_name_different_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+
+    let refused = ops::init(Some(a.clone()), Some(b.clone()), false, false).map(|_| ());
+    assert!(
+        matches!(&refused, Err(Error::RootAndPathDiffer { root, path }) if *root == a && *path == b),
+        "{refused:?}"
+    );
+    assert_eq!(refused.unwrap_err().code(), "root_and_path_differ");
+    assert!(!a.exists() && !b.exists(), "neither is created");
+
+    let spelled = dir.path().join(".").join("a").join("");
+    assert_eq!(
+        ops::init_target(Some(a.clone()), Some(spelled.clone())).unwrap(),
+        spelled
+    );
+    ops::init(Some(a.clone()), Some(spelled), false, false).unwrap();
+    assert!(a.join("nodes").is_dir());
+}
+
 /// Set in a child copy of this test binary that [`in_own_process`] started.
 const IN_OWN_PROCESS: &str = "NEBULA_CORE_TEST_IN_OWN_PROCESS";
 
@@ -3852,17 +3933,14 @@ fn dropping_the_legacy_observatory_root_keeps_every_other_setting() {
     let config = root.join("config.yaml");
     let pristine = std::fs::read(&config).unwrap();
 
-    assert_eq!(
-        ops::drop_legacy_observatory_root(&mut corpus)
-            .unwrap()
-            .legacy,
-        None
-    );
+    let dropped = ops::drop_legacy_observatory_root(&mut corpus).unwrap();
+    assert_eq!((dropped.removed, dropped.setting.legacy), (None, None));
     assert_eq!(pristine, std::fs::read(&config).unwrap(), "a no-op wrote");
 
-    with_legacy_observatory_root(&root);
+    let foreign = with_legacy_observatory_root(&root);
     let mut corpus = Corpus::open(Some(root)).unwrap();
-    ops::drop_legacy_observatory_root(&mut corpus).unwrap();
+    let dropped = ops::drop_legacy_observatory_root(&mut corpus).unwrap();
+    assert_eq!(dropped.removed, Some(foreign), "it names what it removed");
     assert_eq!(pristine, std::fs::read(&config).unwrap());
 }
 
@@ -3915,7 +3993,9 @@ fn a_setting_landed_since_open_survives_the_next_writers_rewrite() {
     assert!(ops::set_commit(&mut ahead, true).unwrap().enabled);
 
     // The waiter gets in and removes a different key.
-    let setting = ops::drop_legacy_observatory_root(&mut waiting).unwrap();
+    let setting = ops::drop_legacy_observatory_root(&mut waiting)
+        .unwrap()
+        .setting;
     assert_eq!(setting.legacy, None);
 
     let reopened = Corpus::open(Some(root.clone())).unwrap();
@@ -4129,6 +4209,14 @@ fn cite_lowercases_the_kind_and_still_refuses_one_outside_the_vocabulary() {
         (observatory.kind.as_str(), observatory.uri.as_deref()),
         ("observatory", Some("Q002"))
     );
+    assert_eq!(
+        cited
+            .observatory
+            .as_ref()
+            .map(|l| (l.record.as_str(), &l.path)),
+        Some(("Q002", &None)),
+        "unlocated until a caller asks"
+    );
     assert!(matches!(
         ops::cite(&corpus, &id, &citation("OBSERVATORY", "not-an-id")),
         Err(Error::InvalidObservatoryId(record)) if record == "NOT-AN-ID"
@@ -4195,6 +4283,31 @@ fn two_concurrent_tag_adds_on_one_node_both_survive() {
     assert_eq!(tags, ["alpha", "beta"], "one writer's tag was lost");
 }
 
+/// A tag not there to remove, or already there to add, is named in the
+/// result; when the tags come out as they were stored, nothing is written
+/// (STD-01 §R30). A request with one real change in it is written.
+#[test]
+fn a_retag_that_changes_nothing_writes_nothing_and_names_each_tag() {
+    let (_dir, corpus) = corpus();
+    let id = seed(&corpus, "Tagged", &[]);
+    ops::tag_add(&corpus, &id, &["physics".to_string()]).unwrap();
+    let path = corpus.node_path(&id).unwrap();
+    let before = std::fs::read_to_string(&path).unwrap();
+    let tags = |t: &[&str]| t.iter().map(ToString::to_string).collect::<Vec<_>>();
+
+    let done = ops::retag(&corpus, &id, &tags(&["Physics"]), &tags(&["absent"])).unwrap();
+    assert!(!done.written);
+    assert_eq!(done.already, ["physics"], "normalised as stored");
+    assert_eq!(done.absent, ["absent"]);
+    assert_eq!(done.doc.node.tags, ["physics"]);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+    let done = ops::retag(&corpus, &id, &tags(&["new"]), &tags(&["absent"])).unwrap();
+    assert!(done.written);
+    assert_eq!((done.already.len(), done.absent), (0, tags(&["absent"])));
+    assert_eq!(corpus.load(&id).unwrap().node.tags, ["physics", "new"]);
+}
+
 /// `neb edit` saves a body it read before the editor opened, with no lock
 /// held while the person typed. The compare-and-set under the lock is what
 /// stops that save erasing a note another writer appended meanwhile; a
@@ -4208,7 +4321,9 @@ fn set_body_if_refuses_a_changed_body_and_keeps_a_changed_frontmatter() {
     // A tag lands while the editor is open: the edit still goes through,
     // and keeps it.
     ops::tag_add(&corpus, &id, &["x".to_string()]).unwrap();
-    let saved = ops::set_body_if(&corpus, &id, &read, "the new body\n", None).unwrap();
+    let saved = ops::set_body_if(&corpus, &id, &read, "the new body\n")
+        .unwrap()
+        .expect("a changed body is written");
     assert_eq!(saved.body, "the new body");
     let on_disk = corpus.load(&id).unwrap();
     assert_eq!(on_disk.body.trim(), "the new body");
@@ -4219,7 +4334,7 @@ fn set_body_if_refuses_a_changed_body_and_keeps_a_changed_frontmatter() {
     let read = on_disk.body;
     ops::note(&corpus, &id, "a concurrent note", None).unwrap();
     let before = std::fs::read_to_string(corpus.node_path(&id).unwrap()).unwrap();
-    let refused = ops::set_body_if(&corpus, &id, &read, "an edit made blind", None);
+    let refused = ops::set_body_if(&corpus, &id, &read, "an edit made blind");
     assert!(
         matches!(&refused, Err(Error::EditConflict(node)) if *node == id),
         "got {refused:?}"
@@ -4230,6 +4345,51 @@ fn set_body_if_refuses_a_changed_body_and_keeps_a_changed_frontmatter() {
         before,
         "the concurrent note survives"
     );
+}
+
+/// A body saved as it already is changes nothing, so nothing is written and
+/// `updated` stays put (STD-01 §R30): not with the compare-and-set, even when
+/// another writer changed the body meanwhile, and not without it.
+#[test]
+fn a_body_set_to_what_it_already_is_writes_nothing() {
+    let (_dir, corpus) = corpus();
+    let id = seed(&corpus, "Left alone", &[]);
+    ops::set_body(&corpus, &id, "the body")
+        .unwrap()
+        .expect("a new body is written");
+    // Back-dated, so a save would show in `updated` as well as in the bytes.
+    let path = corpus.node_path(&id).unwrap();
+    let updated = corpus.load(&id).unwrap().node.updated;
+    let pristine = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace(&format!("updated: {updated}"), "updated: 2020-01-01");
+    std::fs::write(&path, &pristine).unwrap();
+    let read = corpus.load(&id).unwrap().body;
+
+    assert!(ops::body_unchanged(&read, "the body"));
+    assert!(
+        ops::body_unchanged(&read, "\n the body \n\n"),
+        "stored trimmed"
+    );
+    assert!(!ops::body_unchanged(&read, "the body, changed"));
+    assert!(ops::set_body(&corpus, &id, "the body\n").unwrap().is_none());
+    assert!(
+        ops::set_body_if(&corpus, &id, &read, &read)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), pristine);
+
+    // An edit that changed nothing has nothing to write over a note that
+    // landed meanwhile, so it is not a conflict either.
+    ops::note(&corpus, &id, "a concurrent note", None).unwrap();
+    let noted = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        ops::set_body_if(&corpus, &id, &read, &read)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), noted);
 }
 
 /// What a refused edit is kept as: a new owner-only file outside the corpus,

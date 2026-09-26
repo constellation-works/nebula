@@ -1689,6 +1689,43 @@ fn relative_machine_root_is_refused_naming_the_file() {
     }
 }
 
+/// `--root` and `init`'s path name the corpus twice, so two different
+/// directories are refused before either is created: exit 2, naming both
+/// (STD-01 §R28). The same directory given both ways is one corpus.
+#[test]
+fn init_refuses_conflicting_root_and_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+
+    let run = run_from_home(&home, Some(&a), &["init", b.to_str().unwrap()], None);
+    assert_eq!(run.out.status.code(), Some(2), "{}", run.stderr());
+    assert_eq!(run.stdout(), "");
+    for named in [&a, &b] {
+        assert!(
+            run.stderr().contains(named.to_str().unwrap()),
+            "{}",
+            run.stderr()
+        );
+    }
+    assert!(!a.exists() && !b.exists(), "neither directory is created");
+    let refused = run_from_home(
+        &home,
+        Some(&a),
+        &["--json", "init", b.to_str().unwrap()],
+        None,
+    )
+    .usage_refusal();
+    assert_eq!(refused["code"], "root_and_path_differ");
+    assert!(!a.exists() && !b.exists());
+
+    run_from_home(&home, Some(&a), &["init", a.to_str().unwrap()], None)
+        .assert_ok()
+        .says(&format!("corpus ready at {}", a.display()));
+    assert!(a.join("nodes").is_dir());
+    assert!(!b.exists());
+}
+
 #[test]
 fn plain_init_never_changes_the_machine_root_setting() {
     let dir = tempfile::tempdir().unwrap();
@@ -2440,11 +2477,55 @@ fn init_shadowing_warning_names_the_set_root_command() {
 
 #[test]
 fn zsh_completions_include_the_cli_commands() {
-    let c = Corpus::new();
-    c.run(&["completions", "zsh"])
+    let dir = tempfile::tempdir().unwrap();
+    run_from_home(
+        &dir.path().join("home"),
+        None,
+        &["completions", "zsh"],
+        None,
+    )
+    .assert_ok()
+    .says("#compdef neb")
+    .says("capture");
+}
+
+/// The script is the same for every corpus and never JSON, so `--root` and
+/// `--json` would be ignored: each is refused as a usage error, on either
+/// side of the verb, with nothing on stdout (STD-01 §R28, §R36). The ambient
+/// `$NEBULA_ROOT` is not a flag the caller typed, and is not read.
+#[test]
+fn completions_refuses_json_and_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let nowhere = dir.path().join("nowhere");
+    let after = ["completions", "bash", "--root", nowhere.to_str().unwrap()];
+    for (root, args) in [
+        (None, ["--json", "completions", "bash"].as_slice()),
+        (None, &["completions", "bash", "--json"]),
+        (Some(nowhere.as_path()), &["completions", "bash"]),
+        (None, &after),
+    ] {
+        let run = run_from_home(&home, root, args, None);
+        assert_eq!(
+            run.out.status.code(),
+            Some(2),
+            "{}: {}",
+            run.args,
+            run.stderr()
+        );
+        assert_eq!(run.stdout(), "", "{}", run.args);
+        assert!(
+            run.stderr().contains("cannot be used with"),
+            "{}",
+            run.stderr()
+        );
+    }
+    assert!(!nowhere.exists());
+
+    run_from_home(&home, None, &["completions", "bash"], Some(&nowhere))
         .assert_ok()
-        .says("#compdef neb")
-        .says("capture");
+        .says("neb");
+    assert!(!nowhere.exists());
 }
 
 // -------------------------------------------------------------------- help --
@@ -6486,6 +6567,59 @@ fn edit_exposes_only_body_saves_it_stamps_updated_and_commits() {
     assert_eq!(log(&c.root)[0], format!("neb edit {id}"));
 }
 
+/// An editor that leaves the body as it was changes nothing, so nothing is
+/// written: `updated` stays, no commit lands, and stderr says so (STD-01
+/// §R30). `--json` still answers with the node.
+#[cfg(unix)]
+#[test]
+fn edit_with_an_unchanged_body_writes_nothing() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let id = c
+        .run(&["new", "Left alone", "--body", "the body"])
+        .assert_ok()
+        .stdout_trim();
+    set_updated(&c.node_file(&id), &date_days_ago(7));
+    git(&c.root, &["commit", "-qam", "back-dated"]);
+    let before = std::fs::read(c.node_file(&id)).unwrap();
+    let commits = log(&c.root);
+
+    let run = c
+        .run_with_env(&["edit", &id], &[("EDITOR", "true")])
+        .assert_ok();
+    assert_eq!(run.stdout(), "");
+    assert!(run.stderr().contains("no change"), "{}", run.stderr());
+    assert!(run.stderr().contains(&id), "{}", run.stderr());
+    let run = c
+        .run_with_env(&["--json", "edit", &id], &[("EDITOR", "true")])
+        .assert_ok();
+    let v: serde_json::Value = serde_json::from_str(&run.stdout()).unwrap();
+    assert_eq!(v["node"]["id"], id.as_str());
+    assert!(run.stderr().contains("no change"), "{}", run.stderr());
+
+    assert_eq!(std::fs::read(c.node_file(&id)).unwrap(), before);
+    assert_eq!(log(&c.root), commits, "no commit");
+}
+
+/// `edit --by` was validated and then dropped, since a body has no author
+/// field, so it is gone rather than advertised (STD-01 §R29, §R36).
+#[test]
+fn edit_by_is_not_accepted() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let before = std::fs::read(c.node_file(&id)).unwrap();
+    let run = c.run_with_env(&["edit", &id, "--by", "x"], &[("EDITOR", "true")]);
+    assert_eq!(run.out.status.code(), Some(2), "{}", run.stderr());
+    assert!(
+        run.stderr().contains("unexpected argument '--by'"),
+        "{}",
+        run.stderr()
+    );
+    assert_eq!(std::fs::read(c.node_file(&id)).unwrap(), before);
+    let help = c.run(&["edit", "--help"]).assert_ok().stdout();
+    assert!(!help.contains("--by"), "{help}");
+}
+
 #[cfg(unix)]
 #[test]
 fn edit_passes_editor_arguments_before_the_temp_file() {
@@ -7496,6 +7630,55 @@ fn tags_are_normalised_on_every_write_path() {
     c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
 }
 
+/// A tag not there to remove, or already there to add, is noted on stderr
+/// naming the tag and the node; when that leaves the tags as they were,
+/// the node is not written and nothing is committed (STD-01 §R30). A call
+/// with one real change in it writes that change and notes the rest.
+#[test]
+fn tag_noop_changes_nothing_and_says_so() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let id = c
+        .run(&["new", "Tagged", "--tag", "physics"])
+        .assert_ok()
+        .stdout_trim();
+    set_updated(&c.node_file(&id), &date_days_ago(7));
+    git(&c.root, &["commit", "-qam", "back-dated"]);
+    let before = std::fs::read(c.node_file(&id)).unwrap();
+    let commits = log(&c.root);
+
+    for (flag, tag, says) in [
+        ("--remove", "absent", "nothing to remove"),
+        ("--add", "physics", "nothing to add"),
+    ] {
+        let run = c.run(&["tag", &id, flag, tag]).assert_ok();
+        let stderr = run.stderr();
+        assert!(stderr.contains(&format!("`{tag}`")), "{stderr}");
+        assert!(stderr.contains(&id) && stderr.contains(says), "{stderr}");
+        assert!(stderr.contains("no change"), "{stderr}");
+        assert!(!stderr.contains("committed"), "{stderr}");
+        assert_eq!(std::fs::read(c.node_file(&id)).unwrap(), before, "{flag}");
+        assert_eq!(log(&c.root), commits, "{flag}: no commit");
+    }
+
+    let run = c
+        .run(&["tag", &id, "--add", "new", "--remove", "absent"])
+        .assert_ok();
+    let stderr = run.stderr();
+    assert!(
+        stderr.contains("`absent`") && stderr.contains(&id),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("no change"), "{stderr}");
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(raw.contains("- new"), "{raw}");
+    assert!(
+        raw.contains(&format!("updated: {}", date_days_ago(0))),
+        "{raw}"
+    );
+    assert_eq!(log(&c.root)[0], format!("neb tag {id}"));
+}
+
 #[test]
 fn tag_drift_by_case_or_plural_is_a_warning() {
     let c = Corpus::new();
@@ -7748,8 +7931,11 @@ fn review_json_emits_all_four_rule_names() {
     }
 }
 
+/// `--out` writes the report to the file and names it on stderr, in both
+/// modes, so stdout stays empty and the write says what it wrote (STD-01
+/// §R30).
 #[test]
-fn review_out_writes_the_report_and_prints_nothing_else() {
+fn review_out_names_the_file() {
     let c = Corpus::new();
     let bare = c.seed("a hypothesis needing a look", "A hypothesis needing a look");
     c.run(&["sharpen", &bare, "--kill", "if X"]).assert_ok();
@@ -7763,9 +7949,23 @@ fn review_out_writes_the_report_and_prints_nothing_else() {
         "",
         "stdout must stay empty when writing to a file"
     );
+    assert_eq!(run.stderr(), format!("wrote {}\n", out_path.display()));
     let report = std::fs::read_to_string(&out_path).unwrap();
     assert!(report.contains(&format!("`{bare}`")));
     assert!(report.contains("## Nodes with no references"));
+
+    let json_path = c.workdir().join("review.json");
+    let run = c
+        .run(&["--json", "review", "--out", json_path.to_str().unwrap()])
+        .assert_ok();
+    assert_eq!(run.stdout(), "");
+    assert_eq!(run.stderr(), format!("wrote {}\n", json_path.display()));
+    let report: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
+    assert!(
+        report.as_array().is_some_and(|items| !items.is_empty()),
+        "{report}"
+    );
 }
 
 /// Piped, a listing is one tab-separated line per node with no header, and
@@ -8733,6 +8933,52 @@ fn a_foreign_legacy_observatory_root_yields_to_this_machines_setting() {
     c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
 }
 
+/// `--drop-legacy` says what it did to `config.yaml`, in every mode: without
+/// the key there is nothing to remove, so the file is left byte for byte and
+/// nothing is committed; with it, stderr names the key's path and the file
+/// (STD-01 §R30).
+#[test]
+fn drop_legacy_without_a_key_says_so() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let config = c.root.join("config.yaml");
+    let before = std::fs::read(&config).unwrap();
+    let commits = log(&c.root);
+
+    for args in [
+        ["config", "observatory-root", "--drop-legacy"].as_slice(),
+        &["--json", "config", "observatory-root", "--drop-legacy"],
+    ] {
+        let run = c.run(args).assert_ok();
+        assert!(
+            run.stderr().contains(&format!(
+                "no legacy observatory_root key in {}; nothing removed",
+                config.display()
+            )),
+            "{}",
+            run.stderr()
+        );
+        assert_eq!(std::fs::read(&config).unwrap(), before, "{args:?}");
+        assert_eq!(log(&c.root), commits, "{args:?}: no commit");
+    }
+
+    let foreign = with_legacy_observatory_root(&c);
+    git(&c.root, &["commit", "-qam", "an older neb"]);
+    let run = c
+        .run(&["config", "observatory-root", "--drop-legacy"])
+        .assert_ok();
+    assert!(
+        run.stderr().contains(&format!(
+            "removed the legacy observatory_root ({foreign}) from {}",
+            config.display()
+        )),
+        "{}",
+        run.stderr()
+    );
+    assert_eq!(std::fs::read(&config).unwrap(), before);
+    assert_eq!(log(&c.root)[0], "neb config observatory-root");
+}
+
 /// The legacy key still answers when nothing else does, and every verb that
 /// resolves a record through it says so on stderr, in every mode, naming the
 /// key and its replacement (STD-01 §R35). What it resolves, on stdout, is
@@ -8966,6 +9212,100 @@ fn handoff_json_is_the_node_the_reference_the_record_and_the_old_status() {
     assert!(
         !out.contains("committed") && !out.contains("resolve"),
         "the payload is all stdout holds:\n{out}"
+    );
+}
+
+/// `cite --json` carries where an `observatory` reference's record is, as
+/// its prose does (STD-01 §R6): `path` is the resolved file under the root,
+/// `null` with no root, and the whole `observatory` is `null` for any other
+/// kind.
+#[test]
+fn cite_json_carries_observatory_resolution() {
+    let c = Corpus::new();
+    let (obs, record) = observatory_with_h012(c.workdir());
+    let id = c.seed("an idea", "An idea");
+    let cite = |root: Option<&Path>| {
+        let mut env = Vec::new();
+        if let Some(root) = root {
+            env.push(("OBSERVATORY_ROOT", root.to_str().unwrap()));
+        }
+        let out = c
+            .run_with_env(
+                &[
+                    "--json",
+                    "cite",
+                    &id,
+                    "--kind",
+                    "observatory",
+                    "--uri",
+                    "H012",
+                    "--note",
+                    "n",
+                ],
+                &env,
+            )
+            .assert_ok()
+            .stdout();
+        serde_json::from_str::<serde_json::Value>(&out).unwrap()
+    };
+
+    let v = cite(Some(&obs));
+    assert_eq!(v["observatory"]["reference"], v["reference"]);
+    assert_eq!(v["observatory"]["record"], "H012");
+    assert_eq!(v["observatory"]["path"], record.to_str().unwrap());
+    let v = cite(None);
+    assert_eq!(v["observatory"]["record"], "H012");
+    assert!(v["observatory"]["path"].is_null(), "{v}");
+
+    let out = c
+        .run(&[
+            "--json",
+            "cite",
+            &id,
+            "--kind",
+            "paper",
+            "--uri",
+            "https://example.org",
+            "--note",
+            "n",
+        ])
+        .assert_ok()
+        .stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(v.as_object().unwrap().contains_key("observatory"), "{v}");
+    assert!(v["observatory"].is_null(), "{v}");
+}
+
+/// `handoff --json` carries where the record is, as its prose does
+/// (STD-01 §R6), and `path` is `null` with no root.
+#[test]
+fn handoff_json_carries_observatory_resolution() {
+    let c = Corpus::new();
+    let (obs, record) = observatory_with_h012(c.workdir());
+    let located = c.seed("an idea", "An idea");
+    let out = c
+        .run_with_env(
+            &["--json", "handoff", &located, "H012", "--note", "n"],
+            &[("OBSERVATORY_ROOT", obs.to_str().unwrap())],
+        )
+        .assert_ok()
+        .stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["observatory"]["reference"], "r1");
+    assert_eq!(v["observatory"]["record"], "H012");
+    assert_eq!(v["observatory"]["path"], record.to_str().unwrap());
+
+    let unlocated = c.seed("another idea", "Another idea");
+    let out = c
+        .run(&["--json", "handoff", &unlocated, "H012", "--note", "n"])
+        .assert_ok()
+        .stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["observatory"]["record"], "H012");
+    assert!(
+        v["observatory"].as_object().unwrap().contains_key("path")
+            && v["observatory"]["path"].is_null(),
+        "{v}"
     );
 }
 
@@ -10604,7 +10944,6 @@ fn pre_verb_no_commit_is_refused_before_a_verb_that_does_not_commit() {
         (vec!["list"], "list"),
         (vec!["show", &id], "show"),
         (vec!["review"], "review"),
-        (vec!["completions", "bash"], "completions"),
         (vec!["init", fresh_arg], "init"),
     ] {
         let mut argv = vec!["--no-commit"];
@@ -10618,6 +10957,21 @@ fn pre_verb_no_commit_is_refused_before_a_verb_that_does_not_commit() {
         );
     }
     assert!(!fresh.exists(), "the refused init created nothing");
+    // `completions` refuses `--root` itself, so it goes without one.
+    let run = run_from_home(
+        c.workdir(),
+        None,
+        &["--no-commit", "completions", "bash"],
+        None,
+    );
+    assert_eq!(run.out.status.code(), Some(2), "{}", run.stderr());
+    assert_eq!(run.stdout(), "");
+    assert!(
+        run.stderr()
+            .contains("`completions` never commits, so `--no-commit` before it"),
+        "{}",
+        run.stderr()
+    );
 }
 
 #[test]
@@ -10968,11 +11322,18 @@ fn closed_stdout_exits_zero_silently_for_reads() {
         vec!["tag", "list"],
         vec!["near", "child"],
         vec!["log", &id],
-        vec!["completions", "bash"],
     ] {
         let open = c.run(&args).assert_ok().stderr();
         assert_closed_quietly(&c.run_closed_stdout(&args, &[], ""), &open);
     }
+    // `completions` refuses `--root`, which every command above is given.
+    let mut cmd = neb_command(c.workdir());
+    cmd.args(["completions", "bash"]).env("NO_COLOR", "1");
+    let run = Run {
+        args: "completions bash".to_owned(),
+        out: closed_stdout(&mut cmd, ""),
+    };
+    assert_closed_quietly(&run, "");
 }
 
 /// A triage whose screen has gone ends as `q` ends it, with exit 0 and no

@@ -40,7 +40,7 @@ use crate::check::{
 use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
 use crate::fs::create_private_dir_all;
-use crate::graph::{self, Graph, Neighbour};
+use crate::graph::{self, Graph, Neighbour, ObservatoryLink};
 use crate::lock::{self, CorpusLock};
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
 use crate::pending::{Pending, PendingWrite};
@@ -94,6 +94,25 @@ pub struct Cited {
     pub doc: Doc,
     /// The id of the reference that was added.
     pub reference: String,
+    /// Where the reference's record is on this machine, for an `observatory`
+    /// reference, and absent for every other kind. Its `path` is filled in by
+    /// [`Cited::with_observatory`], and is absent until a caller asks, as on
+    /// [`crate::graph::NodeView`], or when the record does not resolve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observatory: Option<ObservatoryLink>,
+}
+
+impl Cited {
+    /// Locate the cited record under `root`, when this is an `observatory`
+    /// citation: the step [`crate::graph::NodeView::with_observatory`] is
+    /// for `show`, and a caller takes it for the same reason.
+    #[must_use]
+    pub fn with_observatory(mut self, root: Option<&Path>) -> Self {
+        if let Some(link) = &mut self.observatory {
+            link.path = root.and_then(|root| resolve_observatory(root, &link.record));
+        }
+        self
+    }
 }
 
 /// A tag a write has just introduced that reads as a variant of one already
@@ -131,6 +150,9 @@ pub struct HandedOff {
     pub record: String,
     /// Where the node was before.
     pub from: Status,
+    /// Where the record is on this machine: its `path` is absent when no
+    /// observatory root was given.
+    pub observatory: ObservatoryLink,
 }
 
 /// Everything that goes into a hand-off.
@@ -220,9 +242,34 @@ pub struct Citation {
     pub origin: Option<Origin>,
 }
 
-/// Create an empty corpus, at `path` if given and the resolved root otherwise.
-/// Optionally make it the machine-local default, refusing to replace a
-/// different setting unless `force` is set.
+/// Where [`init`] creates a corpus: `path` if given, else the resolved root.
+///
+/// `root` is an explicit `--root`, and given alongside `path` it has to name
+/// the same directory, compared once both are made absolute (lexically, never
+/// canonicalized); otherwise this refuses with [`Error::RootAndPathDiffer`]
+/// rather than let one of them go unused (STD-01 §R28). A caller asks here
+/// before any work, so a refusal has created neither.
+pub fn init_target(root: Option<PathBuf>, path: Option<PathBuf>) -> Result<PathBuf> {
+    if let (Some(root), Some(path)) = (&root, &path) {
+        if root.as_os_str().is_empty() || path.as_os_str().is_empty() {
+            return Err(Error::EmptyRoot);
+        }
+        // Only an empty path fails to be made absolute on Unix, and that is
+        // refused above; elsewhere a path that cannot be is compared as given.
+        let absolute = |p: &PathBuf| std::path::absolute(p).unwrap_or_else(|_| p.clone());
+        if absolute(root) != absolute(path) {
+            return Err(Error::RootAndPathDiffer {
+                root: root.clone(),
+                path: path.clone(),
+            });
+        }
+    }
+    Corpus::resolve_root(path.or(root))
+}
+
+/// Create an empty corpus where [`init_target`] says, which refuses a `root`
+/// and a `path` that differ. Optionally make it the machine-local default,
+/// refusing to replace a different setting unless `force` is set.
 ///
 /// With `set_root`, the machine-setting lock is held from before the check
 /// until after the write, so two of these cannot both find the setting free
@@ -234,7 +281,7 @@ pub fn init(
     set_root: bool,
     force: bool,
 ) -> Result<Initialized> {
-    let target = Corpus::resolve_root(path.or(root))?;
+    let target = init_target(root, path)?;
     let _settings = set_root.then(Corpus::lock_machine_settings).transpose()?;
     if set_root {
         Corpus::check_root_config(&target, force)?;
@@ -825,12 +872,14 @@ pub fn note(corpus: &Corpus, id: &str, text: &str, by: Option<&str>) -> Result<D
 
 /// Replace a node's prose body, leaving its structured fields alone.
 ///
-/// `by` is validated for consistency with other authored writes, but is not
-/// stored: bodies do not yet carry per-field authorship. `updated` is stamped
-/// by [`Corpus::save`]. Callers that expose free-form editing must preserve
-/// append-only sections before calling this operation.
-pub fn set_body(corpus: &Corpus, id: &str, body: &str, by: Option<&str>) -> Result<Doc> {
-    replace_body(corpus, id, None, body, by)
+/// `updated` is stamped by [`Corpus::save`]. Callers that expose free-form
+/// editing must preserve append-only sections before calling this operation.
+///
+/// Returns `None`, having written nothing and left `updated` alone, when the
+/// body is already `body` as [`body_unchanged`] compares them: a write that
+/// changes nothing is not a write (STD-01 §R30).
+pub fn set_body(corpus: &Corpus, id: &str, body: &str) -> Result<Option<Doc>> {
+    replace_body(corpus, id, None, body)
 }
 
 /// [`set_body`], only if the node's body is still `expected`: the
@@ -844,14 +893,18 @@ pub fn set_body(corpus: &Corpus, id: &str, body: &str, by: Option<&str>) -> Resu
 /// [`Error::EditConflict`] before writing anything. Only the body is
 /// compared: a tag, status or edge changed meanwhile is kept, and the new
 /// body lands on top of it.
-pub fn set_body_if(
-    corpus: &Corpus,
-    id: &str,
-    expected: &str,
-    body: &str,
-    by: Option<&str>,
-) -> Result<Doc> {
-    replace_body(corpus, id, Some(expected), body, by)
+///
+/// A `body` that is still `expected` asks for no change, so it returns
+/// `None` and writes nothing, whatever another writer did meanwhile.
+pub fn set_body_if(corpus: &Corpus, id: &str, expected: &str, body: &str) -> Result<Option<Doc>> {
+    replace_body(corpus, id, Some(expected), body)
+}
+
+/// Whether `edited` would store as the body `before` already is: bodies are
+/// stored trimmed, so only the text between the outer whitespace counts.
+#[must_use]
+pub fn body_unchanged(before: &str, edited: &str) -> bool {
+    before.trim() == edited.trim()
 }
 
 fn replace_body(
@@ -859,17 +912,18 @@ fn replace_body(
     id: &str,
     expected: Option<&str>,
     body: &str,
-    by: Option<&str>,
-) -> Result<Doc> {
+) -> Result<Option<Doc>> {
     let _lock = corpus.lock()?;
-    model::author(by)?;
     let mut doc = corpus.load(id)?;
+    if body_unchanged(expected.unwrap_or(&doc.body), body) {
+        return Ok(None);
+    }
     if expected.is_some_and(|expected| doc.body != expected) {
         return Err(Error::EditConflict(id.to_string()));
     }
     doc.body = body.trim().to_string();
     corpus.save(&mut doc)?;
-    Ok(doc)
+    Ok(Some(doc))
 }
 
 /// Attach context to a node. The note is the field that matters.
@@ -890,7 +944,22 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     let mut doc = corpus.load(id)?;
     let reference = attach(corpus, &mut doc.node, args, by)?;
     corpus.save(&mut doc)?;
-    Ok(Cited { doc, reference })
+    let observatory = doc
+        .node
+        .references
+        .iter()
+        .find(|r| r.id == reference && r.kind == OBSERVATORY)
+        .and_then(|r| r.uri.clone())
+        .map(|record| ObservatoryLink {
+            reference: reference.clone(),
+            record,
+            path: None,
+        });
+    Ok(Cited {
+        doc,
+        reference,
+        observatory,
+    })
 }
 
 /// Validate a citation and add it to `node` as its next reference, without
@@ -1031,11 +1100,17 @@ pub fn handoff(
         at: store::today(),
     });
     corpus.save(&mut doc)?;
+    let observatory = ObservatoryLink {
+        reference: reference.clone(),
+        record: record.clone(),
+        path: observatory.and_then(|root| resolve_observatory(root, &record)),
+    };
     Ok(HandedOff {
         doc,
         reference,
         record,
         from,
+        observatory,
     })
 }
 
@@ -1053,15 +1128,27 @@ pub fn set_observatory_root(corpus: &Corpus, dir: &Path) -> Result<ObservatoryRo
     corpus.observatory_root()
 }
 
+/// What [`drop_legacy_observatory_root`] did.
+#[derive(Debug, Clone)]
+pub struct DroppedLegacy {
+    /// The path the key held, now gone from `config.yaml`; `None` when the
+    /// file carried no key, and so was not written.
+    pub removed: Option<PathBuf>,
+    /// The setting as it now resolves, without the key.
+    pub setting: ObservatoryRoot,
+}
+
 /// Remove the legacy `observatory_root` key from the corpus's `config.yaml`,
-/// the one place a machine path was ever stored in the corpus. A no-op when
-/// the file does not carry it.
-///
-/// Returns the setting as it now resolves, without the key.
-pub fn drop_legacy_observatory_root(corpus: &mut Corpus) -> Result<ObservatoryRoot> {
+/// the one place a machine path was ever stored in the corpus. When the file
+/// does not carry it, nothing is written, and the result says so: the caller
+/// must not report a removal that did not happen (STD-01 §R30).
+pub fn drop_legacy_observatory_root(corpus: &mut Corpus) -> Result<DroppedLegacy> {
     let _lock = corpus.lock()?;
-    corpus.drop_legacy_observatory_root()?;
-    corpus.observatory_root()
+    let removed = corpus.drop_legacy_observatory_root()?;
+    Ok(DroppedLegacy {
+        removed,
+        setting: corpus.observatory_root()?,
+    })
 }
 
 /// Record in the corpus's `config.yaml` whether each write is committed.
@@ -1157,13 +1244,69 @@ pub fn set_status(
 
 /// Add tags to a node, normalised to lowercase kebab-case on the way in.
 pub fn tag_add(corpus: &Corpus, id: &str, tags: &[String]) -> Result<Doc> {
-    edit_tags(corpus, id, &model::normalize_tags(tags), &[])
+    retag(corpus, id, tags, &[]).map(|done| done.doc)
 }
 
 /// Remove tags from a node. `--remove Physics` and `--remove physics` name
 /// the same label, because both are normalised first.
 pub fn tag_remove(corpus: &Corpus, id: &str, tags: &[String]) -> Result<Doc> {
-    edit_tags(corpus, id, &[], &model::normalize_tags(tags))
+    retag(corpus, id, &[], tags).map(|done| done.doc)
+}
+
+/// A node's tags after [`retag`], and the part of the request that changed
+/// nothing.
+#[derive(Debug, Clone)]
+pub struct Retagged {
+    /// The node as it now stands, written or not.
+    pub doc: Doc,
+    /// Tags asked for that the node already carried, normalised.
+    pub already: Vec<String>,
+    /// Tags asked to be removed that the node did not carry, normalised.
+    pub absent: Vec<String>,
+    /// Whether the node was written. `false` when its tags came out exactly
+    /// as they were stored: then `updated` is untouched too.
+    pub written: bool,
+}
+
+/// Remove `remove` from a node's tags and then add `add`, in one write under
+/// one lock. Both are normalised first, and so are the tags the node carries.
+///
+/// When the result is the list the node already stores, nothing is saved
+/// (STD-01 §R30): a tag that was not there to remove, or was there to add,
+/// is not an edit. Each such tag is named in the result, so the caller can
+/// say which part of the request did nothing.
+pub fn retag(corpus: &Corpus, id: &str, add: &[String], remove: &[String]) -> Result<Retagged> {
+    let (add, remove) = (model::normalize_tags(add), model::normalize_tags(remove));
+    // Both edits happen under the lock. Without it the load and the save are
+    // two moments, and a second process editing the same node between them
+    // loses one edit entirely.
+    let _lock = corpus.lock()?;
+    let mut doc = corpus.load(id)?;
+    let before = model::normalize_tags(&doc.node.tags);
+    let absent = remove
+        .iter()
+        .filter(|t| !before.contains(t))
+        .cloned()
+        .collect();
+    let already = add.iter().filter(|t| before.contains(t)).cloned().collect();
+    let mut tags = before;
+    tags.retain(|t| !remove.contains(t));
+    for t in add {
+        if !tags.contains(&t) {
+            tags.push(t);
+        }
+    }
+    let written = tags != doc.node.tags;
+    if written {
+        doc.node.tags = tags;
+        corpus.save(&mut doc)?;
+    }
+    Ok(Retagged {
+        doc,
+        already,
+        absent,
+        written,
+    })
 }
 
 /// Which of `tags` on node `id` read as a variant of a tag already in use.
@@ -1210,22 +1353,4 @@ pub fn close_tags(corpus: &Corpus, id: &str, tags: &[String]) -> Result<Vec<Clos
         }
     }
     Ok(close)
-}
-
-fn edit_tags(corpus: &Corpus, id: &str, add: &[String], remove: &[String]) -> Result<Doc> {
-    // Both [`tag_add`] and [`tag_remove`] come through here, so the lock does
-    // too. Without it the load and the save are two moments, and a second
-    // process editing the same node between them loses one edit entirely.
-    let _lock = corpus.lock()?;
-    let mut doc = corpus.load(id)?;
-    let mut tags = model::normalize_tags(&doc.node.tags);
-    tags.retain(|t| !remove.contains(t));
-    for t in add {
-        if !tags.contains(t) {
-            tags.push(t.clone());
-        }
-    }
-    doc.node.tags = tags;
-    corpus.save(&mut doc)?;
-    Ok(doc)
 }
