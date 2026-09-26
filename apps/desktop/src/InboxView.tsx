@@ -4,7 +4,7 @@ import type { Written } from "./api";
 import { CaptureBox } from "./CaptureBox";
 import { CorpusError } from "./CorpusError";
 import { formatAge, isStale } from "./age";
-import { errorMessage, isIpcError, LOCKED } from "./ipcError";
+import { errorMessage, isIpcError, lockHolderName, LOCKED } from "./ipcError";
 import type { InboxEntry } from "./types/InboxEntry";
 import type { InboxState } from "./useInbox";
 
@@ -15,8 +15,8 @@ interface Props {
 /**
  * The capture box, then every unsettled entry oldest first: id, age, text,
  * and the two decisions the desktop can make without further details. A
- * settle whose commit was refused still settled: the entry leaves the list,
- * and a note above it says the change is not committed.
+ * settle whose commit was refused or had no repository still settled: the
+ * entry leaves the list, and a note above it says the change is not committed.
  */
 export function InboxView({ inbox }: Props) {
   const { entries, error, loaded, refresh } = inbox;
@@ -63,12 +63,19 @@ function InboxItem({ entry, refresh, onWarning }: ItemProps) {
     try {
       const written = await action(entry.id);
       // Settled either way; only the commit is missing, so no retry.
-      if (written.commit.status === "refused") {
-        onWarning(`${done} ${entry.id} (not committed: ${errorMessage(written.commit.error)})`);
+      if (written.commit.status === "refused" || written.commit.status === "not_a_repository") {
+        const reason = written.commit.status === "refused" ? errorMessage(written.commit.error) : "not a git repository";
+        onWarning(`${done} ${entry.id} (not committed: ${reason})`);
       }
       await refresh();
     } catch (cause) {
-      setError(isIpcError(cause) && cause.code === LOCKED ? "Corpus busy; nothing was changed. Try again." : errorMessage(cause));
+      const locked = isIpcError(cause) && cause.code === LOCKED;
+      if (locked) {
+        const holder = lockHolderName(cause);
+        setError(holder ? `Corpus busy: ${holder} is writing. Try again.` : "Corpus busy; nothing was changed. Try again.");
+      } else {
+        setError(errorMessage(cause));
+      }
     } finally {
       setBusy(false);
     }

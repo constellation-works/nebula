@@ -12,6 +12,8 @@ export interface IpcError {
   code: string;
   /** The error's own message, which names what went wrong. */
   message: string;
+  /** Structured lock details, when the lock record identified its holder. */
+  lockHolder?: { label: string; pid: number };
 }
 
 /** Another writer held the corpus lock past the desktop's short wait; nothing was written. */
@@ -33,4 +35,20 @@ export function isIpcError(reason: unknown): reason is IpcError {
  */
 export function errorMessage(reason: unknown): string {
   return isIpcError(reason) ? reason.message : String(reason);
+}
+
+/** A readable holder name, without interpreting the error's message text. */
+export function lockHolderName(reason: unknown): string | null {
+  if (!isIpcError(reason)) return null;
+  const holder = reason.lockHolder;
+  if (
+    holder === undefined ||
+    holder === null ||
+    typeof holder !== "object" ||
+    typeof holder.label !== "string" ||
+    typeof holder.pid !== "number"
+  ) {
+    return null;
+  }
+  return `\`${holder.label}\` (pid ${holder.pid})`;
 }
