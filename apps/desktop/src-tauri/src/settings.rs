@@ -34,17 +34,34 @@ impl Default for Settings {
 /// Read `settings.json` from `dir`, writing the defaults there when it is
 /// missing. A file that will not parse falls back to the defaults rather than
 /// taking the shortcut away; the error is returned alongside so the caller
-/// can log it.
+/// can show it in the tray and main window.
 pub fn load(dir: &Path) -> (Settings, Option<String>) {
     let path = dir.join(FILE_NAME);
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return write_defaults(dir, &path);
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return write_defaults(dir, &path);
+        }
+        Err(e) => {
+            return (
+                Settings::default(),
+                Some(format!(
+                    "could not read {}: {e}; using default capture shortcut `{}`",
+                    path.display(),
+                    DEFAULT_CAPTURE_SHORTCUT
+                )),
+            );
+        }
     };
     match serde_json::from_str(&raw) {
         Ok(s) => (s, None),
         Err(e) => (
             Settings::default(),
-            Some(format!("{}: {e}; using defaults", path.display())),
+            Some(format!(
+                "invalid {}: {e}; using default capture shortcut `{}`",
+                path.display(),
+                DEFAULT_CAPTURE_SHORTCUT
+            )),
         ),
     }
 }
@@ -94,6 +111,22 @@ mod tests {
         std::fs::write(dir.path().join(FILE_NAME), "{ not json").unwrap();
         let (s, warn) = load(dir.path());
         assert_eq!(s.capture_shortcut, DEFAULT_CAPTURE_SHORTCUT);
-        assert!(warn.is_some());
+        let warn = warn.unwrap();
+        assert!(warn.contains(&dir.path().join(FILE_NAME).display().to_string()));
+        assert!(warn.contains(DEFAULT_CAPTURE_SHORTCUT));
+    }
+
+    #[test]
+    fn an_unreadable_settings_file_keeps_the_default_shortcut_and_reports_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_file = dir.path().join(FILE_NAME);
+        std::fs::create_dir(&settings_file).unwrap();
+
+        let (s, warn) = load(dir.path());
+
+        assert_eq!(s.capture_shortcut, DEFAULT_CAPTURE_SHORTCUT);
+        let warn = warn.unwrap();
+        assert!(warn.contains(&settings_file.display().to_string()));
+        assert!(warn.contains(DEFAULT_CAPTURE_SHORTCUT));
     }
 }

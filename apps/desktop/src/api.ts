@@ -29,6 +29,9 @@ export const openInEditor = (id: string): Promise<void> => invoke<void>("open_in
 /** Where the corpus was looked for, found or not. */
 export const corpusPath = (): Promise<string> => invoke<string>("corpus_path");
 
+/** Settings and shortcut failures captured during app startup. */
+export const startupWarnings = (): Promise<string[]> => invoke<string[]>("startup_warnings");
+
 /** Try the corpus again after the path has been fixed. */
 export const reload = (): Promise<void> => invoke<void>("reload");
 

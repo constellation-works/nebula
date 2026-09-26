@@ -87,6 +87,13 @@ pub async fn corpus_path(app: AppHandle) -> String {
     app.state::<AppState>().corpus_root.display().to_string()
 }
 
+/// Startup issues captured before the webview opened, such as settings or
+/// global-shortcut failures.
+#[tauri::command]
+pub async fn startup_warnings(app: AppHandle) -> Vec<String> {
+    app.state::<AppState>().startup_warnings()
+}
+
 /// Try the corpus again after the user has fixed the path. Starts the watcher
 /// if this is the first time the corpus could be opened.
 #[tauri::command]

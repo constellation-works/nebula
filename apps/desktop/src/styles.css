@@ -73,6 +73,24 @@ code {
   height: 100%;
 }
 
+.startup-warning {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-raised);
+  color: var(--danger);
+}
+
+.startup-warning h2 {
+  margin: 0 0 4px;
+  font-size: 1em;
+}
+
+.startup-warning ul {
+  margin: 0;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+
 .tabs {
   display: flex;
   gap: 4px;

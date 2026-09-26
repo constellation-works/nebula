@@ -21,6 +21,7 @@ pub mod tray;
 pub mod watcher;
 
 use state::AppState;
+use std::path::Path;
 use tauri::{Manager, WindowEvent};
 
 /// Build and run the app. Returns when the user quits.
@@ -47,6 +48,7 @@ pub fn run() {
             commands::node,
             commands::open_in_editor,
             commands::corpus_path,
+            commands::startup_warnings,
             commands::reload,
         ])
         .setup(|app| {
@@ -55,22 +57,27 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let handle = app.handle();
-            tray::build(handle)?;
-
-            let (settings, warning) = settings::load(&app.path().app_config_dir()?);
-            if let Some(w) = warning {
-                eprintln!("settings: {w}");
-            }
+            let config_dir = app.path().app_config_dir()?;
+            let settings_path = config_dir.join(settings::FILE_NAME);
+            let (settings, warning) = settings::load(&config_dir);
+            let mut startup_warnings = warning.into_iter().collect::<Vec<_>>();
             if let Err(e) = shortcut::register(handle, &settings.capture_shortcut) {
-                eprintln!(
-                    "could not register `{}` as the capture shortcut: {e}",
-                    settings.capture_shortcut
-                );
+                startup_warnings.push(shortcut_warning(
+                    &settings_path,
+                    &settings.capture_shortcut,
+                    e,
+                ));
             }
+            for warning in &startup_warnings {
+                eprintln!("startup: {warning}");
+            }
+
+            let state = app.state::<AppState>();
+            state.set_startup_warnings(startup_warnings.clone());
+            tray::build(handle, &startup_warnings)?;
 
             // A missing corpus is reported by every command; the watcher
             // starts from `reload` once the user has put one there.
-            let state = app.state::<AppState>();
             if let Err(e) = commands::ensure_watching(handle, &state) {
                 eprintln!("not watching: {e}");
             }
@@ -91,4 +98,27 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("failed to start the Nebula desktop app");
+}
+
+fn shortcut_warning(settings_path: &Path, shortcut: &str, error: impl std::fmt::Display) -> String {
+    format!(
+        "could not register capture shortcut `{shortcut}` (settings: {}): {error}",
+        settings_path.display()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shortcut_warning;
+    use std::path::Path;
+
+    #[test]
+    fn shortcut_registration_warning_names_shortcut_and_settings_path() {
+        let path = Path::new("/user/config/settings.json");
+        let warning = shortcut_warning(path, "CmdOrCtrl+Shift+N", "already registered");
+
+        assert!(warning.contains("CmdOrCtrl+Shift+N"));
+        assert!(warning.contains("/user/config/settings.json"));
+        assert!(warning.contains("already registered"));
+    }
 }
