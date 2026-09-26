@@ -499,9 +499,12 @@ pub struct Doc {
 }
 
 /// Parse a node file.
+///
+/// Only a regular file is read: a symlink, a FIFO, a device or a directory at
+/// `path` is [`Error::NotRegularFile`] before a byte is read from it.
 pub(crate) fn read(path: &Path) -> Result<Doc> {
-    let raw =
-        std::fs::read_to_string(path).map_err(|error| Error::io_at("reading", path, error))?;
+    let raw = crate::fs::read_regular_text(path)?
+        .ok_or_else(|| Error::io_at("reading", path, std::io::ErrorKind::NotFound.into()))?;
     parse(&raw, path).map_err(|e| match e {
         Error::Yaml { context, source } => Error::Yaml {
             context: format!("in {}: {context}", path.display()),

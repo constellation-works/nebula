@@ -22,9 +22,13 @@
 //! - **A replace never writes through a symlink.** The temporary file is
 //!   created with `O_EXCL`, and `rename` replaces a symlink at the target
 //!   rather than following it, so a replace always leaves a regular file
-//!   where the caller pointed and nothing outside it changes. An append opens
-//!   its file by name, so its caller refuses a symlink there first, as the
-//!   inbox does.
+//!   where the caller pointed and nothing outside it changes.
+//! - **A file opened by name is a regular file.** An append, the lock and
+//!   every read of a corpus file go through [`open_regular`]: the entry is
+//!   judged with `lstat` before it is opened, opened `O_NOFOLLOW` and
+//!   `O_NONBLOCK`, and judged again on the descriptor, so a symlink, a FIFO,
+//!   a device or a directory is refused as [`Error::NotRegularFile`] and
+//!   nothing is read from or written through it (STD-05 §R7).
 //!
 //! On platforms without Unix modes the modes are not set and directories are
 //! not flushed; the rename is still atomic.
@@ -148,12 +152,215 @@ pub fn private_open_options() -> OpenOptions {
     options
 }
 
+/// What an entry turned out to be when a regular file was required.
+///
+/// [`Error::NotRegularFile`] carries it, so the refusal says what is in the
+/// way rather than the errno the open would have given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EntryKind {
+    /// A symbolic link, whether or not it leads anywhere.
+    Symlink,
+    /// A directory.
+    Directory,
+    /// A named pipe: a read would wait for a writer that may never come.
+    Fifo,
+    /// A Unix domain socket.
+    Socket,
+    /// A block or character device, such as `/dev/zero`, which a read would
+    /// never finish.
+    Device,
+    /// Something else the platform has.
+    Other,
+}
+
+impl EntryKind {
+    /// What `file_type` is, or `None` when it is a regular file.
+    fn of(file_type: std::fs::FileType) -> Option<Self> {
+        if file_type.is_file() {
+            return None;
+        }
+        if file_type.is_symlink() {
+            return Some(Self::Symlink);
+        }
+        if file_type.is_dir() {
+            return Some(Self::Directory);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileTypeExt as _;
+            if file_type.is_fifo() {
+                return Some(Self::Fifo);
+            }
+            if file_type.is_socket() {
+                return Some(Self::Socket);
+            }
+            if file_type.is_block_device() || file_type.is_char_device() {
+                return Some(Self::Device);
+            }
+        }
+        Some(Self::Other)
+    }
+}
+
+impl std::fmt::Display for EntryKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Symlink => "a symlink",
+            Self::Directory => "a directory",
+            Self::Fifo => "a FIFO",
+            Self::Socket => "a socket",
+            Self::Device => "a device",
+            Self::Other => "a special file",
+        })
+    }
+}
+
+/// How [`open_regular`] treats a symlink in the last component of its path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Links {
+    /// Refuse it. Every entry below the corpus root is judged this way.
+    Refuse,
+    /// Follow it and judge what it names. For `.gitignore` alone, whose
+    /// symlink `init` deliberately replaces with a copy of its target.
+    Follow,
+}
+
+/// Refuse `path` as [`Error::NotRegularFile`] unless `file_type` is a
+/// regular file.
+fn require_regular(path: &Path, file_type: std::fs::FileType) -> Result<()> {
+    match EntryKind::of(file_type) {
+        None => Ok(()),
+        Some(found) => Err(Error::NotRegularFile {
+            path: path.to_path_buf(),
+            found,
+        }),
+    }
+}
+
+/// Open `path` with `options`, provided it is a regular file, or one
+/// `options` creates.
+///
+/// The entry is judged three times, and each closes a gap the others leave
+/// (STD-05 §R7):
+///
+/// - **Before the open**, on its own metadata, so a device or a FIFO is
+///   refused without being opened at all: opening one can block, or have
+///   effects of its own.
+/// - **By the open**, which on Unix carries `O_NOFOLLOW` (under
+///   [`Links::Refuse`]) and `O_NONBLOCK`, so an entry swapped in after that
+///   look cannot redirect it: the kernel refuses a symlink with `ELOOP`, and
+///   a FIFO without a reader cannot hold the open. Either failure is reported
+///   as what is there now, not as the errno. `O_NONBLOCK` changes nothing for
+///   a regular file.
+/// - **On the descriptor**, which is the one resolution every later read,
+///   write or lock uses.
+///
+/// Nothing is resolved or canonicalized: `path` is used as given, so a corpus
+/// reached through a symlinked root opens its files beneath it as usual; only
+/// the last component is judged. An entry that is not there is left to the
+/// open, which creates it or fails with [`std::io::ErrorKind::NotFound`] as
+/// [`Error::IoAt`] labelled `action`.
+pub(crate) fn open_regular(
+    path: &Path,
+    options: &mut OpenOptions,
+    links: Links,
+    action: &'static str,
+) -> Result<File> {
+    let judge = |path: &Path| match links {
+        Links::Refuse => std::fs::symlink_metadata(path),
+        Links::Follow => std::fs::metadata(path),
+    };
+    match judge(path) {
+        Ok(metadata) => require_regular(path, metadata.file_type())?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(Error::io_at("inspecting", path, error)),
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let no_follow = match links {
+            Links::Refuse => libc::O_NOFOLLOW,
+            Links::Follow => 0,
+        };
+        options.custom_flags(no_follow | libc::O_NONBLOCK);
+    }
+    let file = options.open(path).map_err(|error| {
+        judge(path)
+            .ok()
+            .and_then(|metadata| require_regular(path, metadata.file_type()).err())
+            .unwrap_or_else(|| Error::io_at(action, path, error))
+    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| Error::io_at("inspecting", path, error))?;
+    require_regular(path, metadata.file_type())?;
+    Ok(file)
+}
+
+/// The regular file at `path`, opened to read, or `None` when there is none.
+fn open_to_read(path: &Path, links: Links) -> Result<Option<File>> {
+    match open_regular(path, OpenOptions::new().read(true), links, "reading") {
+        Ok(file) => Ok(Some(file)),
+        Err(Error::IoAt { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// The text of the regular file at `path`, or `None` when nothing is there.
+///
+/// Every read of a file below the corpus root comes through here, so a
+/// symlink, a FIFO, a device or a directory at `path` is
+/// [`Error::NotRegularFile`] and nothing is read from it. See
+/// [`open_regular`].
+pub(crate) fn read_regular_text(path: &Path) -> Result<Option<String>> {
+    use std::io::Read as _;
+    let Some(mut file) = open_to_read(path, Links::Refuse)? else {
+        return Ok(None);
+    };
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .map_err(|error| Error::io_at("reading", path, error))?;
+    Ok(Some(text))
+}
+
+/// The bytes of the regular file at `path`, or `None` when nothing is there;
+/// a symlink is followed or refused as `links` says.
+pub(crate) fn read_regular_bytes(path: &Path, links: Links) -> Result<Option<Vec<u8>>> {
+    use std::io::Read as _;
+    let Some(mut file) = open_to_read(path, links)? else {
+        return Ok(None);
+    };
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .map_err(|error| Error::io_at("reading", path, error))?;
+    Ok(Some(bytes))
+}
+
+/// Whether a regular file is at `path`: `false` when nothing is, and
+/// [`Error::NotRegularFile`] when something else is. Judged without following
+/// a symlink, and without opening anything.
+pub(crate) fn regular_file_at(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => require_regular(path, metadata.file_type()).map(|()| true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(Error::io_at("inspecting", path, error)),
+    }
+}
+
 /// Append `bytes` to `path` in one write, then flush the data.
 ///
 /// The whole record goes to a single `write_all` on an `O_APPEND` descriptor,
 /// so two appenders cannot interleave inside it and a crash cannot leave the
 /// first half of it without the second. A file this call creates is `0600`,
 /// and its directory is flushed as well so the new name survives a crash.
+///
+/// A file that is already there is opened through [`open_regular`], so the
+/// append never lands on the far side of a symlink, and a FIFO or a device
+/// there is refused rather than written to. Creating one is `O_EXCL`, which
+/// refuses a name that is taken, a symlink included.
 pub(crate) fn append_private(path: &Path, bytes: &[u8]) -> Result<()> {
     let at = |error| Error::io_at("writing", path, error);
     let (mut file, created) = match private_open_options()
@@ -163,7 +370,12 @@ pub(crate) fn append_private(path: &Path, bytes: &[u8]) -> Result<()> {
     {
         Ok(file) => (file, true),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (
-            private_open_options().append(true).open(path).map_err(at)?,
+            open_regular(
+                path,
+                private_open_options().append(true),
+                Links::Refuse,
+                "writing",
+            )?,
             false,
         ),
         Err(error) => return Err(at(error)),
@@ -199,18 +411,6 @@ pub(crate) fn remove_private(path: &Path) -> Result<()> {
     sync_parent(path)
 }
 
-/// Make `options` refuse a symlink at the last component of the path it
-/// opens, where the platform can say so (`O_NOFOLLOW`): the open fails
-/// instead of reaching whatever the link names.
-pub(crate) fn no_follow(options: &mut OpenOptions) -> &mut OpenOptions {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    options
-}
-
 /// Replace an open file's contents in place: truncate it, then write `bytes`
 /// from the start in one write, with no flush.
 ///
@@ -236,7 +436,7 @@ pub(crate) fn overwrite_in_place(file: &File, bytes: &[u8]) -> std::io::Result<(
 /// Read `path` whole if it is a regular file of at most `cap` bytes.
 ///
 /// For a small record another process may be rewriting, like the lock's
-/// holder record. It never follows a symlink at `path` ([`no_follow`]), never
+/// holder record. It never follows a symlink at `path` (`O_NOFOLLOW`), never
 /// blocks opening something that is not a regular file (a FIFO planted at
 /// the name), and never reads more than `cap` bytes plus one, however large
 /// the file has grown. `Ok(None)` when the file is not a regular file or is

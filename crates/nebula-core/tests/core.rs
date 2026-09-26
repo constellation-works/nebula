@@ -1424,6 +1424,59 @@ fn capture_refuses_a_symlinked_active_month_without_changing_its_target() {
     );
 }
 
+/// Capture reads the month file before it appends, and a FIFO there held
+/// that read until something wrote to it. It is refused instead.
+#[cfg(unix)]
+#[test]
+fn capture_refuses_a_fifo_month_file_without_blocking() {
+    let (_dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "existing thought").unwrap();
+    std::fs::remove_file(&entry.file).unwrap();
+    mkfifo(&entry.file);
+
+    let refused = within_two_seconds(move || ops::capture(&corpus, "must not block"));
+    assert!(
+        not_regular(&refused, &entry.file, nebula_core::fs::EntryKind::Fifo),
+        "{refused:?}"
+    );
+}
+
+/// `init` copies a symlinked `.gitignore`'s target on purpose, but only a
+/// regular file's: a FIFO at `.gitignore`, or at the end of its link, is
+/// refused rather than read.
+#[cfg(unix)]
+#[test]
+fn init_refuses_a_fifo_gitignore_without_blocking() {
+    let (dir, _corpus) = corpus();
+    let root = dir.path().join("corpus");
+    let gitignore = root.join(".gitignore");
+    std::fs::remove_file(&gitignore).unwrap();
+    mkfifo(&gitignore);
+    let refused = within_two_seconds({
+        let root = root.clone();
+        move || Corpus::init(&root)
+    });
+    assert!(
+        not_regular(&refused, &gitignore, nebula_core::fs::EntryKind::Fifo),
+        "{refused:?}"
+    );
+
+    let fifo = dir.path().join("outside-fifo");
+    std::fs::rename(&gitignore, &fifo).unwrap();
+    std::os::unix::fs::symlink(&fifo, &gitignore).unwrap();
+    let refused = within_two_seconds(move || Corpus::init(&root));
+    assert!(
+        not_regular(&refused, &gitignore, nebula_core::fs::EntryKind::Fifo),
+        "{refused:?}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&gitignore)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn inbox_writes_refuse_a_symlinked_directory_without_changing_its_target() {
@@ -3354,6 +3407,60 @@ fn a_dangling_config_symlink_is_not_a_missing_config() {
     assert!(!dir.path().join("gone.yaml").exists());
 }
 
+/// A symlinked `config.yaml` handed the corpus another file's settings, and
+/// the next config write replaced the link; a FIFO there hung every verb.
+/// Both are refused by name, before anything is read, and a config write
+/// that re-reads under the lock refuses the same way.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_or_fifo_config_yaml_is_refused() {
+    use nebula_core::fs::EntryKind;
+    let (dir, mut corpus) = corpus();
+    let root = dir.path().join("corpus");
+    let config = root.join("config.yaml");
+    let outside = dir.path().join("outside.yaml");
+    std::fs::rename(&config, &outside).unwrap();
+    std::os::unix::fs::symlink(&outside, &config).unwrap();
+    let before = std::fs::read(&outside).unwrap();
+
+    let opened = Corpus::open(Some(root.clone()));
+    assert!(
+        not_regular(&opened, &config, EntryKind::Symlink),
+        "{opened:?}"
+    );
+    let set = ops::set_commit(&mut corpus, true);
+    assert!(not_regular(&set, &config, EntryKind::Symlink), "{set:?}");
+    let initialized = Corpus::init(&root);
+    assert!(
+        not_regular(&initialized, &config, EntryKind::Symlink),
+        "{initialized:?}"
+    );
+    // Found, not walked past: opening from inside refuses it by name rather
+    // than opening some other corpus further up.
+    assert_eq!(Corpus::discover(&root.join("nodes")), Some(root.clone()));
+    assert_eq!(std::fs::read(&outside).unwrap(), before);
+    assert!(
+        std::fs::symlink_metadata(&config)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the link was replaced"
+    );
+
+    std::fs::remove_file(&config).unwrap();
+    mkfifo(&config);
+    let opened = within_two_seconds({
+        let root = root.clone();
+        move || Corpus::open(Some(root))
+    });
+    assert!(not_regular(&opened, &config, EntryKind::Fifo), "{opened:?}");
+    let discovered = within_two_seconds({
+        let nodes = root.join("nodes");
+        move || Corpus::discover(&nodes)
+    });
+    assert_eq!(discovered, Some(root));
+}
+
 /// `init` finishes a root it was interrupted in, where nothing has been
 /// written yet, and refuses one that already holds content: minting a
 /// config there is the same fabrication `open` no longer does.
@@ -4618,6 +4725,51 @@ fn a_write_against_a_held_lock_refuses_and_changes_nothing() {
     drop(held);
 }
 
+/// `.lock` planted as a symlink to nowhere: the lock's open followed it,
+/// created the file at the far end and took the `flock` there. The open is
+/// `O_NOFOLLOW` now, so the writer refuses, naming `.lock`, and creates
+/// nothing anywhere.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_lock_file_is_refused_and_creates_nothing_outside() {
+    let (dir, corpus) = corpus();
+    ops::capture(&corpus, "an earlier thought").unwrap();
+    let root = dir.path().join("corpus");
+    let lock = root.join(nebula_core::LOCK_FILE);
+    let outside = dir.path().join("outside").join("created-by-lock");
+    std::fs::create_dir(outside.parent().unwrap()).unwrap();
+    std::fs::remove_file(&lock).unwrap();
+    std::os::unix::fs::symlink(&outside, &lock).unwrap();
+    let inbox = every_file(&root.join("inbox"));
+
+    let refused = ops::capture(&corpus, "must not land");
+    assert!(
+        not_regular(&refused, &lock, nebula_core::fs::EntryKind::Symlink),
+        "{refused:?}"
+    );
+    assert!(
+        !outside.exists(),
+        "the lock created a file outside the root"
+    );
+    assert_eq!(every_file(&root.join("inbox")), inbox);
+    assert!(
+        std::fs::symlink_metadata(&lock)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+
+    // A FIFO there would have held the open forever.
+    std::fs::remove_file(&lock).unwrap();
+    mkfifo(&lock);
+    let refused = within_two_seconds(move || ops::capture(&corpus, "must not land either"));
+    assert!(
+        not_regular(&refused, &lock, nebula_core::fs::EntryKind::Fifo),
+        "{refused:?}"
+    );
+    assert_eq!(every_file(&root.join("inbox")), inbox);
+}
+
 /// The lock file is the one thing under the root that is not the corpus, so
 /// nothing that reads or records the corpus may see it.
 #[test]
@@ -4872,6 +5024,142 @@ fn a_symlinked_alias_is_refused_by_load_and_by_a_scan_alike() {
     );
     assert_eq!(std::fs::read_to_string(&victim_path).unwrap(), before);
     assert_eq!(corpus.load(&victim).unwrap().node.id, victim);
+}
+
+/// Whether `result` is the refusal of `path` as `found`.
+fn not_regular<T>(
+    result: &nebula_core::Result<T>,
+    path: &Path,
+    found: nebula_core::fs::EntryKind,
+) -> bool {
+    matches!(result, Err(Error::NotRegularFile { path: p, found: f }) if p == path && *f == found)
+}
+
+/// Make a FIFO at `path` with `mkfifo`, through the isolating builder.
+#[cfg(unix)]
+fn mkfifo(path: &Path) {
+    let output = support::output(
+        support::command("mkfifo", support::home()).arg(path),
+        support::DEADLINE,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert!(output.status.success(), "mkfifo {}", path.display());
+}
+
+/// Run `f` on a thread and return what it returned, failing the test if it
+/// has not returned within two seconds: a read that blocks on a FIFO or
+/// never finishes on a device fails here instead of hanging the suite.
+fn within_two_seconds<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(2))
+        .expect("the call did not return within 2 s")
+}
+
+/// A node file that is a symlink to a valid node outside the root was read
+/// as a node, and a write through it replaced the link. Every door now
+/// refuses it by name, and the file outside is never read or changed.
+#[cfg(unix)]
+#[test]
+fn a_node_file_symlinked_outside_the_corpus_is_refused_by_load_scan_and_check() {
+    use nebula_core::fs::EntryKind;
+    let (dir, corpus) = corpus();
+    let id = seed(&corpus, "Outside node", &[]);
+    let node = corpus.node_path(&id).unwrap();
+    let outside = dir.path().join("outside.md");
+    std::fs::rename(&node, &outside).unwrap();
+    std::os::unix::fs::symlink(&outside, &node).unwrap();
+    let before = std::fs::read(&outside).unwrap();
+
+    assert!(not_regular(&corpus.load(&id), &node, EntryKind::Symlink));
+    assert!(not_regular(&corpus.load_all(), &node, EntryKind::Symlink));
+    let checked = corpus.load_all().and_then(|docs| {
+        let graph = Graph::build(&docs)?;
+        nebula_core::check::run(&graph, &corpus)
+    });
+    assert!(
+        not_regular(&checked, &node, EntryKind::Symlink),
+        "{checked:?}"
+    );
+    let noted = ops::note(&corpus, &id, "a fixture note", None);
+    assert!(not_regular(&noted, &node, EntryKind::Symlink), "{noted:?}");
+
+    assert_eq!(std::fs::read(&outside).unwrap(), before);
+    assert!(
+        std::fs::symlink_metadata(&node)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the link was replaced"
+    );
+
+    // A link to nowhere is a symlink too, not a missing node, and creating
+    // a node over it refuses rather than replacing it.
+    std::fs::remove_file(&outside).unwrap();
+    assert!(not_regular(&corpus.load(&id), &node, EntryKind::Symlink));
+    let created = ops::new_node(
+        &corpus,
+        &NewNode {
+            title: "Outside node".into(),
+            ..NewNode::default()
+        },
+    );
+    assert!(
+        not_regular(&created, &node, EntryKind::Symlink),
+        "{created:?}"
+    );
+    assert!(!outside.exists(), "nothing was created through the link");
+}
+
+/// A FIFO named like a node hung every scan: a read of it waits for a
+/// writer that never comes. It is refused without being opened.
+#[cfg(unix)]
+#[test]
+fn a_fifo_under_nodes_is_refused_without_blocking() {
+    let (_dir, corpus) = corpus();
+    seed(&corpus, "Healthy", &[]);
+    let fifo = corpus.node_path("fifo").unwrap();
+    mkfifo(&fifo);
+
+    let scanned = within_two_seconds({
+        let corpus = corpus.clone();
+        move || corpus.load_all()
+    });
+    assert!(
+        not_regular(&scanned, &fifo, nebula_core::fs::EntryKind::Fifo),
+        "{scanned:?}"
+    );
+    let loaded = within_two_seconds(move || corpus.load("fifo"));
+    assert!(
+        not_regular(&loaded, &fifo, nebula_core::fs::EntryKind::Fifo),
+        "{loaded:?}"
+    );
+}
+
+/// `nodes/zero.md -> /dev/zero` read until memory ran out. The link is
+/// refused before anything is read through it.
+#[cfg(unix)]
+#[test]
+fn a_device_symlink_under_nodes_is_refused_without_reading() {
+    let (_dir, corpus) = corpus();
+    let zero = corpus.node_path("zero").unwrap();
+    std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+
+    let scanned = within_two_seconds({
+        let corpus = corpus.clone();
+        move || corpus.load_all()
+    });
+    assert!(
+        not_regular(&scanned, &zero, nebula_core::fs::EntryKind::Symlink),
+        "{scanned:?}"
+    );
+    let loaded = within_two_seconds(move || corpus.load("zero"));
+    assert!(
+        not_regular(&loaded, &zero, nebula_core::fs::EntryKind::Symlink),
+        "{loaded:?}"
+    );
 }
 
 /// Only a name a scan would read is an alias. A hard link from outside

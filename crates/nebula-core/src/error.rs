@@ -10,6 +10,7 @@
 //! you which command to run next is presentation, so it lives in the consumer
 //! that has commands to suggest.
 
+use crate::fs::EntryKind;
 use crate::lock::LockHolder;
 use crate::model::{EdgeType, FrontmatterProblem, Status};
 use crate::store::Settlement;
@@ -168,8 +169,10 @@ pub enum Error {
     /// may predate it, mint an id the corpus never had, and read a deleted
     /// `commit: true` as off. `migrate` reads the absence as a corpus from
     /// before the file existed, and `init` completes a root that holds no
-    /// content yet. Absent means absent: a `config.yaml` that exists but
-    /// cannot be followed or read is [`Error::IoAt`] instead.
+    /// content yet. Absent means absent: a `config.yaml` that is a symlink,
+    /// dangling or not, or any other entry but a regular file, is
+    /// [`Error::NotRegularFile`], and one that cannot be read is
+    /// [`Error::IoAt`].
     #[error("{} does not exist, so the corpus's schema and settings are unknown; nothing was read or written", .path.display())]
     MissingConfig {
         /// Where the config was expected.
@@ -534,6 +537,24 @@ pub enum Error {
         id: String,
     },
 
+    /// An entry below the corpus root that nebula reads or writes by name —
+    /// a node file, `config.yaml`, `.lock`, the pending-write record, an
+    /// inbox month file, `.gitignore` — is not a regular file.
+    ///
+    /// Judged on the entry itself, never on what it points at, so a symlink
+    /// is refused whether or not it leads anywhere and nothing at its far end
+    /// is read, written or created. A FIFO or a device is refused before it
+    /// is opened, so it can neither hang the reader nor feed it without end.
+    /// The corpus root may itself be reached through a symlink; the entries
+    /// beneath it may not (STD-05 §R6, §R7; see `4_decisions.md`).
+    #[error("{} is {found}, not a regular file; nothing was read or written through it", .path.display())]
+    NotRegularFile {
+        /// The entry, as the corpus names it.
+        path: PathBuf,
+        /// What it is instead.
+        found: EntryKind,
+    },
+
     /// Another writer holds the corpus lock, or the machine-setting lock, and
     /// did not release it within the bounded wait. Nothing was written: the
     /// refusal comes before the op reads anything, so there is no
@@ -889,6 +910,7 @@ impl Error {
         InvalidId => "invalid_id", Argument,
         UnsafeId => "unsafe_id", State,
         IdMismatch => "id_mismatch", State,
+        NotRegularFile => "not_regular_file", State,
         Locked => "locked", State,
         EditConflict => "edit_conflict", State,
         InputTooLarge => "input_too_large", State,
@@ -933,7 +955,7 @@ impl Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, ErrorClass};
+    use super::{EntryKind, Error, ErrorClass};
     use crate::model::{FrontmatterProblem, Status};
     use std::collections::BTreeMap;
     use std::ffi::OsString;
@@ -1141,6 +1163,31 @@ mod tests {
                 &["/c/nodes/a.md", "8 tries"],
             ),
         ]);
+    }
+
+    /// An entry that is not a regular file is named, with what it is instead.
+    #[test]
+    fn a_non_regular_entry_is_named_with_what_it_is() {
+        for (found, what) in [
+            (EntryKind::Symlink, "a symlink"),
+            (EntryKind::Directory, "a directory"),
+            (EntryKind::Fifo, "a FIFO"),
+            (EntryKind::Socket, "a socket"),
+            (EntryKind::Device, "a device"),
+            (EntryKind::Other, "a special file"),
+        ] {
+            let error = Error::NotRegularFile {
+                path: PathBuf::from("/c/nodes/a.md"),
+                found,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .starts_with(&format!("/c/nodes/a.md is {what}, not a regular file")),
+                "{error}"
+            );
+            assert_eq!(error.class(), ErrorClass::State);
+        }
     }
 
     /// A refusal about the arguments alone is `Argument`; one about what they

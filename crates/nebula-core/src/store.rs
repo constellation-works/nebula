@@ -16,7 +16,10 @@
 
 use crate::config::{self, CommitSetting, Config, Declared, ObservatoryRoot};
 use crate::error::{Error, Result};
-use crate::fs::{append_private, create_private_dir_all, create_private_new, write_private_atomic};
+use crate::fs::{
+    EntryKind, Links, append_private, create_private_dir_all, create_private_new,
+    read_regular_bytes, read_regular_text, regular_file_at, write_private_atomic,
+};
 use crate::git::{self, GitOutput};
 use crate::lock::{CorpusLock, LOCK_FILE};
 use crate::model::{self, Doc};
@@ -694,14 +697,21 @@ impl Corpus {
     /// one file that claims to be another would be written to that other
     /// one. Refusing here is what keeps a hand edit from turning a later
     /// verb into an overwrite.
+    ///
+    /// Only a regular file is a node. Whether one is there is asked of the
+    /// entry itself, so a symlink to nowhere is refused as a symlink rather
+    /// than reported as no node, and a symlink to anything is refused before
+    /// a byte is read through it (see [`Self::read_node_file`]).
     pub fn load(&self, id: &str) -> Result<Doc> {
         let path = self.node_path(id)?;
-        if !path.exists() {
-            return Err(Error::NoSuchNode(id.to_string()));
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(Error::NoSuchNode(id.to_string()));
+            }
+            Err(error) => return Err(Error::io_at("inspecting", &path, error)),
         }
-        let doc = self.read_node(&path)?;
-        self.require_file_agrees(&path, &doc)?;
-        Ok(doc)
+        self.read_node_file(&path)
     }
 
     /// Commits that changed one node, newest first.
@@ -873,9 +883,12 @@ impl Corpus {
     }
 
     /// Write a node that must not already exist.
+    ///
+    /// Judged on the entry itself: a symlink or anything else that is not a
+    /// regular file is [`Error::NotRegularFile`], never replaced.
     pub fn create(&self, doc: &Doc) -> Result<()> {
         let path = self.node_path(&doc.node.id)?;
-        if path.exists() {
+        if regular_file_at(&path)? {
             return Err(Error::NodeExists(doc.node.id.clone()));
         }
         model::write(&path, doc)
@@ -899,11 +912,37 @@ impl Corpus {
             .collect();
         paths.sort();
         for p in paths {
-            let doc = self.read_node(&p)?;
-            self.require_file_agrees(&p, &doc)?;
-            out.push(doc);
+            out.push(self.read_node_file(&p)?);
         }
         Ok(out)
+    }
+
+    /// Read the node file at `path` and refuse it unless it is the node its
+    /// name names. Both doors, [`Self::load`] and [`Self::load_all`], read
+    /// through here.
+    ///
+    /// Only a regular file is read (STD-05 §R7). A symlink is judged before
+    /// anything is opened: one that opens another node's file beside it is
+    /// an alias of that node, refused as [`Error::IdMismatch`] the way a hard
+    /// link is, and any other is [`Error::NotRegularFile`]. A FIFO, a device
+    /// or a directory is refused by the read itself, before it can block or
+    /// feed it without end.
+    fn read_node_file(&self, path: &Path) -> Result<Doc> {
+        if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            return Err(match node_behind(path) {
+                Some(id) => Error::IdMismatch {
+                    path: path.to_path_buf(),
+                    id,
+                },
+                None => Error::NotRegularFile {
+                    path: path.to_path_buf(),
+                    found: EntryKind::Symlink,
+                },
+            });
+        }
+        let doc = self.read_node(path)?;
+        self.require_file_agrees(path, &doc)?;
+        Ok(doc)
     }
 
     /// Read one node file with the current model.
@@ -950,16 +989,20 @@ impl Corpus {
     /// `nodes/victim.md` — authorize `victim` as the id `safe` had asked
     /// for, and the write that followed landed on the other node.
     ///
-    /// Nor is one *file* under two entries. `nodes/safe.md` hard-linked to,
-    /// or a symlink at, `nodes/victim.md` opens the same bytes, but it is a
-    /// second name for the node, and neither door can keep it coherent: a
-    /// scan reads the node twice, and [`write_private_atomic`] replaces the
-    /// entry the id names with a new file, so a hard link keeps the old bytes
-    /// under the other name and the next load refuses. So an alias is refused wherever
-    /// it is met, and it is the alias that is named, since it is what has to
-    /// go. A hard link is met even when the node is loaded through its own
-    /// name, because that is the load whose write would split the pair; a
-    /// symlink is not, because a write leaves it pointing at the new file.
+    /// Nor is one *file* under two entries. `nodes/safe.md` hard-linked to
+    /// `nodes/victim.md` opens the same bytes, but it is a second name for
+    /// the node, and neither door can keep it coherent: a scan reads the node
+    /// twice, and [`write_private_atomic`] replaces the entry the id names
+    /// with a new file, so a hard link keeps the old bytes under the other
+    /// name and the next load refuses. So an alias is refused wherever it is
+    /// met, and it is the alias that is named, since it is what has to go. A
+    /// hard link is met even when the node is loaded through its own name,
+    /// because that is the load whose write would split the pair.
+    ///
+    /// A symlink never reaches here. A write would not follow it but replace
+    /// it with a regular file, leaving whatever it pointed at behind, so
+    /// every door refuses it before reading through it
+    /// ([`Self::read_node_file`]).
     fn require_file_agrees(&self, path: &Path, doc: &Doc) -> Result<()> {
         let id = OsStr::new(doc.node.id.as_str());
         let refuse = |path: &Path| {
@@ -1012,7 +1055,11 @@ impl Corpus {
         let month = &stamp[..7];
         let path = dir.join(format!("{month}.md"));
         refuse_inbox_symlink(&path)?;
-        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        // Read, and appended to below, only as a regular file: the append
+        // opens `O_NOFOLLOW` (`append_private`), so the lstat above and the
+        // open share one resolution, and a FIFO or a device here is refused
+        // rather than waited on (STD-05 §R7).
+        let existing = read_regular_text(&path)?.unwrap_or_default();
         let inbox = self.inbox()?;
         let id = unique_entry_id(&format!("{stamp}{text}"), &inbox)?;
         let line = existing.lines().count();
@@ -1217,9 +1264,11 @@ pub fn validate_capture(text: &str) -> Result<String> {
     Ok(line)
 }
 
-/// One inbox month file's text, or a refusal naming the file.
+/// One inbox month file's text, or a refusal naming the file. It was listed
+/// as a regular file, and is read only as one.
 fn read_inbox_file(path: &Path) -> Result<String> {
-    std::fs::read_to_string(path).map_err(|error| Error::io_at("reading", path, error))
+    read_regular_text(path)?
+        .ok_or_else(|| Error::io_at("reading", path, std::io::ErrorKind::NotFound.into()))
 }
 
 /// Whether `root` holds anything a corpus is made of: a node file under
@@ -1250,10 +1299,16 @@ fn holds_content(root: &Path) -> Result<bool> {
 }
 
 /// Whether `dir` is a corpus root: [`Corpus::discover`]'s marker.
+///
+/// A `config.yaml` that is not a regular file is not read, and it marks the
+/// corpus rather than letting the walk pass it by: opening it then refuses it
+/// by name, where walking on would quietly open some other corpus.
 fn holds_corpus(dir: &Path) -> bool {
     dir.join("nodes").is_dir()
-        && std::fs::read_to_string(dir.join(config::FILE))
-            .is_ok_and(|raw| config::names_a_corpus(&raw))
+        && match read_regular_text(&dir.join(config::FILE)) {
+            Ok(raw) => raw.is_some_and(|raw| config::names_a_corpus(&raw)),
+            Err(error) => matches!(error, Error::NotRegularFile { .. }),
+        }
 }
 
 /// The working directory as the shell names it.
@@ -1451,7 +1506,10 @@ fn ignore_rules() -> [String; 3] {
 /// the rest appended, so an upgrade does not repeat it. Git does not follow a
 /// `.gitignore` symlink, so even a symlink whose target already ends in our
 /// rules is replaced atomically with a regular file containing the same
-/// bytes. The target itself is never changed.
+/// bytes. The target itself is never changed. That copy is the one read
+/// below the root that follows a symlink, and it follows it only to a regular
+/// file: a FIFO or a device at `.gitignore`, or at the end of its link, is
+/// [`Error::NotRegularFile`] rather than read.
 fn ensure_lock_ignored(root: &Path) -> Result<()> {
     let path = root.join(GITIGNORE_FILE);
     let is_symlink = match std::fs::symlink_metadata(&path) {
@@ -1459,11 +1517,7 @@ fn ensure_lock_ignored(root: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Err(error) => return Err(Error::io_at("inspecting", &path, error)),
     };
-    let mut contents = match std::fs::read(&path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => return Err(Error::io_at("reading", &path, error)),
-    };
+    let mut contents = read_regular_bytes(&path, Links::Follow)?.unwrap_or_default();
     let ours = ignore_rules();
     let rules: Vec<&[u8]> = contents
         .split(|byte| *byte == b'\n')
@@ -1934,6 +1988,41 @@ pub(crate) fn is_path_safe_id(id: &str) -> bool {
     let single =
         matches!(components.next(), Some(Component::Normal(name)) if name == OsStr::new(id));
     single && components.next().is_none()
+}
+
+/// The node a symlink in `nodes/` is an alias of: the id of the regular node
+/// file beside it that it resolves to. `None` for a link that leads anywhere
+/// else, or nowhere.
+///
+/// Asked with `stat`, which follows the link but opens nothing, so a device
+/// or a FIFO at its far end answers without being read; the node's own file
+/// is found by identity among the node files beside the link. The id is that
+/// file's name, which a node that loads at all agrees with.
+#[cfg(unix)]
+fn node_behind(link: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let target = std::fs::metadata(link)
+        .ok()
+        .filter(std::fs::Metadata::is_file)?;
+    let dir = link.parent()?;
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|entry| Some(entry.ok()?.path()))
+        .filter(|path| path != link && is_node_file_name(path))
+        .find(|path| {
+            std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+                metadata.is_file()
+                    && metadata.dev() == target.dev()
+                    && metadata.ino() == target.ino()
+            })
+        })
+        .and_then(|node| Some(node.file_stem()?.to_str()?.to_owned()))
+}
+
+/// Elsewhere a symlink is refused as one, whatever it names.
+#[cfg(not(unix))]
+fn node_behind(_link: &Path) -> Option<String> {
+    None
 }
 
 /// Whether a name in `nodes/` is one a scan reads as a node.

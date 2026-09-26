@@ -50,8 +50,10 @@
 //! The lock file is created once, `0600`, and never removed. Unlinking it
 //! would race: a second process can hold `flock` on an unlinked inode while a
 //! third creates a fresh file at the same path and locks that instead, and the
-//! two would not see each other. It is opened without following a symlink, so
-//! a link planted at `.lock` is refused rather than written through.
+//! two would not see each other. It is opened without following a symlink,
+//! and only as a regular file, so a link, a FIFO or a device planted at
+//! `.lock` is refused as [`Error::NotRegularFile`] rather than written
+//! through or waited on.
 //!
 //! **Who holds it** (STD-03 §R7). Just after `flock` succeeds, the holder
 //! writes one short record into the lock file itself — its PID, when it took
@@ -82,7 +84,7 @@
 //! cannot break the order.
 
 use crate::error::{Error, Result};
-use crate::fs::{no_follow, overwrite_in_place, private_open_options, read_capped};
+use crate::fs::{Links, open_regular, overwrite_in_place, private_open_options, read_capped};
 use fs4::{FileExt, TryLockError};
 use std::collections::HashMap;
 use std::fs::File;
@@ -346,17 +348,22 @@ fn try_enter(gate: &Arc<Gate>, root: &Path, label: &str) -> Result<Option<Corpus
         None => {
             // `truncate(false)`: another process may hold the lock and have
             // its record in the file, and only a holder writes it. Created
-            // `0600`, and never through a symlink: the record written below
-            // would otherwise empty whatever the link names.
+            // `0600`, and opened `O_NOFOLLOW | O_NONBLOCK` through
+            // `open_regular`: a symlink planted at `.lock` would otherwise
+            // create its target outside the root, take the `flock` there, and
+            // have the record written below empty whatever the link names, and
+            // a FIFO would hold the open forever. Either is `NotRegularFile`
+            // (STD-05 §R7).
             let path = root.join(LOCK_FILE);
-            let file = no_follow(
+            let file = open_regular(
+                &path,
                 private_open_options()
                     .create(true)
                     .write(true)
                     .truncate(false),
-            )
-            .open(&path)
-            .map_err(|error| Error::io_at("opening", &path, error))?;
+                Links::Refuse,
+                "opening",
+            )?;
             match FileExt::try_lock(&file) {
                 Ok(()) => {
                     record_holder(&file, label);
@@ -686,10 +693,10 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                Error::IoAt {
-                    action: "opening",
-                    ..
-                }
+                Error::NotRegularFile {
+                    path,
+                    found: crate::fs::EntryKind::Symlink,
+                } if *path == dir.path().join(LOCK_FILE)
             ),
             "{error:?}"
         );

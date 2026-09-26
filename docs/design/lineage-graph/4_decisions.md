@@ -722,3 +722,47 @@ What is given up: every write, and every inbox read, opens one more file, and
 a garbled record stops writes until someone deals with it. Reverses if a verb
 ever writes more than two files, or a second verb needs a record; the record
 then becomes a journal of steps rather than one fact per op.
+
+## The root as spelled, every entry below it judged physically
+
+STD-05@1 §R6 asks that path containment be decided on the physical path,
+canonicalized and checked against an allowlist of roots, and never on the
+spelled path alone. nebula reads it this way. The allowlisted root is the
+corpus root exactly as `--root`, `$NEBULA_ROOT`, discovery or the machine
+setting spelled it, and it is never canonicalized. Containment below it is
+decided physically, one entry at a time, by `lstat` rather than by resolving
+a whole path:
+
+- ids are single path components (`is_path_safe_id`), so a node path is
+  `<root>/nodes/<one name>.md` and nothing else;
+- `nodes/` and `inbox/` must be real directories (`refuse_nodes_symlink`,
+  `refuse_inbox_symlink`);
+- every node file, `config.yaml`, `.lock`, `.pending`, an inbox month file
+  and `.gitignore` must be a regular file. The entry is judged with `lstat`
+  before it is opened, opened `O_NOFOLLOW | O_NONBLOCK`, and judged again on
+  the descriptor (`fs::open_regular`, §R7). A symlink, dangling or not, a
+  FIFO, a device, a socket or a directory is `NotRegularFile`, naming the
+  entry, and nothing is read from it, written through it or created at its
+  far end. A symlink in `nodes/` that opens another node's file there is
+  named as that node's alias (`IdMismatch`) instead.
+
+The one symlink followed is `.gitignore`'s, which `init` replaces with a
+regular copy of its target because git does not follow it; a target that is
+not a regular file is refused rather than read.
+
+Canonicalizing the root is what §R6 would have, and it is ruled out twice.
+`AGENTS.md` says to use paths as given, and a corpus reached through a
+symlinked root is the normal case rather than an exotic one: every macOS
+temporary directory sits under `/var -> /private/var`, so a resolved root
+would pass on one platform and fail on the other, change the spelling
+discovery reports, and key the lock gate and the root setting by a path the
+user never typed. Nothing else is gained by it: nebula never opens a path a
+user supplies under the root, only the fixed layout above, so there is no
+spelled path whose resolution could leave the tree once each entry in that
+layout is judged by `lstat`.
+
+Reverses if nebula gains a feature that opens user-supplied paths under the
+root (a local reference it reads, an attachment directory, a path argument to
+a verb). Such a path can hold several components, any of which can be a
+symlink, and has to be canonicalized, or its nearest existing ancestor with
+the missing names appended, and checked against the root, as §R6 says.

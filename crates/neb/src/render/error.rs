@@ -275,7 +275,7 @@ fn exit(e: &Error) -> Exit {
     reason = "a lookup table: one arm per refusal with advice"
 )]
 fn hint(e: &Error) -> Option<String> {
-    if let Some(hint) = schema_hint(e).or_else(|| interrupted_write_hint(e)) {
+    if let Some(hint) = repair_hint(e) {
         return Some(hint);
     }
     Some(match e {
@@ -403,6 +403,14 @@ fn flag_hint(e: &Error) -> Option<String> {
     })
 }
 
+/// The advice that names a repair to something on disk, where a helper
+/// below has it. Kept out of [`hint`] so that one stays a single table.
+fn repair_hint(e: &Error) -> Option<String> {
+    schema_hint(e)
+        .or_else(|| interrupted_write_hint(e))
+        .or_else(|| entry_hint(e))
+}
+
 /// The advice for a corpus this build cannot read as it stands: its config
 /// is missing or at another schema, or a node is not at the schema the
 /// config declares, or `neb migrate` cannot run yet. Each names `neb migrate`
@@ -489,6 +497,31 @@ fn age(held: Duration) -> String {
         s if s < 48 * 3600 => format!("{}h", s / 3600),
         s => format!("{}d", s / 86400),
     }
+}
+
+/// The advice for an entry below the root that is not a regular file. The
+/// lock file is nebula's own and is simply made again; anything else is the
+/// owner's to put right, by replacing it with the file itself or moving it
+/// out of the corpus.
+fn entry_hint(e: &Error) -> Option<String> {
+    let Error::NotRegularFile { path, .. } = e else {
+        return None;
+    };
+    Some(
+        if path.file_name() == Some(std::ffi::OsStr::new(nebula_core::LOCK_FILE)) {
+            format!(
+                "The next writer makes a fresh lock file. Remove this one:  rm {}",
+                path.display()
+            )
+        } else {
+            format!(
+                "nebula reads and writes only regular files inside the corpus, never \
+                 through a symlink, a pipe or a device. Put the file itself at {}, \
+                 or move the entry out of the corpus.",
+                path.display()
+            )
+        },
+    )
 }
 
 /// A byte count as a person reads it: `64 KiB`, `1 MiB`.

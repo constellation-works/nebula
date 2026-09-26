@@ -228,6 +228,39 @@ fn node_file_refuses_an_unknown_id() {
     assert!(session::graph(&corpus).unwrap().nodes.is_empty());
 }
 
+/// "Open in editor" hands the node's path to the OS, so a node file that is
+/// a symlink is refused before the path is handed out: the editor would
+/// otherwise open whatever the link points at.
+#[cfg(unix)]
+#[test]
+fn node_file_refuses_a_symlinked_node() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("corpus");
+    Corpus::init(&root).unwrap();
+    let corpus = session::open(&root).unwrap();
+    let id = ops::new_node(
+        &corpus,
+        &ops::NewNode {
+            title: "Outside".into(),
+            ..ops::NewNode::default()
+        },
+    )
+    .unwrap()
+    .doc
+    .node
+    .id;
+    let node = corpus.node_path(&id).unwrap();
+    let outside = dir.path().join("outside.md");
+    std::fs::rename(&node, &outside).unwrap();
+    std::os::unix::fs::symlink(&outside, &node).unwrap();
+
+    let refused = session::node_file(&corpus, &id);
+    assert!(
+        matches!(&refused, Err(Error::NotRegularFile { path, .. }) if *path == node),
+        "{refused:?}"
+    );
+}
+
 #[test]
 fn capture_refuses_a_busy_writer_quickly_and_can_be_retried() {
     let dir = tempfile::tempdir().unwrap();

@@ -3280,14 +3280,15 @@ fn every_graph_reader_names_a_node_with_structurally_invalid_frontmatter() {
     }
 }
 
+/// A directory where a node file belongs is refused by name as what it is,
+/// by every reader, rather than surfacing as the OS's `Is a directory`.
 #[test]
-fn every_corpus_reader_names_a_non_regular_node_and_preserves_the_os_cause() {
+fn every_corpus_reader_names_a_non_regular_node_as_what_it_is() {
     let c = Corpus::new();
     let healthy = c.seed("a healthy node", "Healthy");
     let broken = c.node_file("broken");
     std::fs::create_dir(&broken).unwrap();
     let path = broken.display().to_string();
-    let cause = std::fs::read_to_string(&broken).unwrap_err().to_string();
 
     for args in [
         vec!["check"],
@@ -3302,26 +3303,25 @@ fn every_corpus_reader_names_a_non_regular_node_and_preserves_the_os_cause() {
     ] {
         c.run(&args)
             .assert_fails()
-            .says("reading")
-            .says(&path)
-            .says(&cause);
+            .says(&format!("{path} is a directory, not a regular file"));
     }
+    assert_eq!(
+        c.run(&["--json", "list"]).refusal()["code"],
+        "not_regular_file"
+    );
 }
 
 #[test]
-fn opening_a_non_regular_config_names_it_and_preserves_the_os_cause() {
+fn opening_a_non_regular_config_names_it_as_what_it_is() {
     let c = Corpus::new();
     let config = c.root.join("config.yaml");
     std::fs::remove_file(&config).unwrap();
     std::fs::create_dir(&config).unwrap();
     let path = config.display().to_string();
-    let cause = std::fs::read_to_string(&config).unwrap_err().to_string();
 
     c.run(&["list"])
         .assert_fails()
-        .says("reading")
-        .says(&path)
-        .says(&cause);
+        .says(&format!("{path} is a directory, not a regular file"));
 }
 
 #[cfg(unix)]
@@ -12681,6 +12681,44 @@ fn a_symlinked_alias_is_refused_at_every_door_that_meets_it() {
     std::fs::remove_file(&alias).unwrap();
     c.run(&["note", "victim", "AFTER-REPAIR"]).assert_ok();
     c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+/// `nodes/outside.md` symlinked to a valid node outside the root: `neb note`
+/// once replaced the link with a regular file and never touched the file
+/// outside. The write is refused by name, the link stays a link and the file
+/// outside is unchanged; the other doors refuse it the same way.
+#[cfg(unix)]
+#[test]
+fn a_write_to_a_symlinked_node_is_refused_and_leaves_link_and_target_alone() {
+    let c = Corpus::new();
+    c.run(&["new", "Outside", "--id", "outside"]).assert_ok();
+    let node = c.node_file("outside");
+    let target = c.workdir().join("outside.md");
+    std::fs::rename(&node, &target).unwrap();
+    std::os::unix::fs::symlink(&target, &node).expect("symlink");
+    let before = std::fs::read(&target).unwrap();
+
+    let refused = c.run(&["--json", "note", "outside", "a fixture note"]);
+    assert_eq!(refused.refusal()["code"], "not_regular_file");
+    for args in [
+        vec!["note", "outside", "a fixture note"],
+        vec!["show", "outside"],
+        vec!["list"],
+        vec!["check"],
+    ] {
+        c.run(&args).assert_fails().says(&format!(
+            "{} is a symlink, not a regular file",
+            node.display()
+        ));
+    }
+    assert!(
+        std::fs::symlink_metadata(&node)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the link was replaced"
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), before);
 }
 
 /// A hard link from outside `nodes/` is not a second name the corpus sees —
