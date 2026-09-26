@@ -115,6 +115,11 @@ code {
   border-bottom-color: var(--accent);
 }
 
+.tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .tab__count {
   margin-left: 6px;
   padding: 0 6px;
@@ -629,6 +634,15 @@ code {
   stroke: var(--node);
 }
 
+.node:focus-visible {
+  outline: none;
+}
+
+.node:focus-visible .node__card {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
 .node--selected .node__card {
   stroke: var(--accent);
   stroke-width: 2;
@@ -701,6 +715,11 @@ code {
   bottom: 0;
   width: 6px;
   cursor: col-resize;
+}
+
+.panel__handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .panel__body {

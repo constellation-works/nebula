@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import * as api from "./api";
 import { GraphView } from "./GraphView";
 import { InboxView } from "./InboxView";
 import { useInbox } from "./useInbox";
 
 type Tab = "inbox" | "graph" | "settings";
+const tabOrder: Tab[] = ["inbox", "graph", "settings"];
 
 function SettingsPanel() {
   const [shortcut, setShortcut] = useState("");
@@ -98,6 +99,28 @@ export function App() {
   const [settingsVisited, setSettingsVisited] = useState(false);
   const [startupWarnings, setStartupWarnings] = useState<string[]>([]);
   const inbox = useInbox();
+  const tabRefs = useRef<Record<Tab, HTMLButtonElement | null>>({ inbox: null, graph: null, settings: null });
+
+  const selectTab = (next: Tab) => {
+    if (next === "graph") setGraphVisited(true);
+    if (next === "settings") setSettingsVisited(true);
+    setTab(next);
+  };
+
+  const onTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, current: Tab) => {
+    const index = tabOrder.indexOf(current);
+    let next: Tab;
+    switch (event.key) {
+      case "ArrowRight": next = tabOrder[(index + 1) % tabOrder.length]!; break;
+      case "ArrowLeft": next = tabOrder[(index - 1 + tabOrder.length) % tabOrder.length]!; break;
+      case "Home": next = tabOrder[0]!; break;
+      case "End": next = tabOrder[tabOrder.length - 1]!; break;
+      default: return;
+    }
+    event.preventDefault();
+    selectTab(next);
+    tabRefs.current[next]?.focus();
+  };
 
   useEffect(() => {
     let active = true;
@@ -141,55 +164,60 @@ export function App() {
           </ul>
         </section>
       )}
-      <nav className="tabs" role="tablist">
+      <nav className="tabs" role="tablist" aria-label="Views">
         <button
+          ref={(element) => { tabRefs.current.inbox = element; }}
+          id="tab-inbox"
           role="tab"
           type="button"
           className="tab"
           aria-selected={tab === "inbox"}
-          onClick={() => setTab("inbox")}
+          aria-controls="panel-inbox"
+          tabIndex={tab === "inbox" ? 0 : -1}
+          onClick={() => selectTab("inbox")}
+          onKeyDown={(event) => onTabKeyDown(event, "inbox")}
         >
           Inbox
           {inbox.entries.length > 0 && <span className="tab__count">{inbox.entries.length}</span>}
         </button>
         <button
+          ref={(element) => { tabRefs.current.graph = element; }}
+          id="tab-graph"
           role="tab"
           type="button"
           className="tab"
           aria-selected={tab === "graph"}
-          onClick={() => {
-            setGraphVisited(true);
-            setTab("graph");
-          }}
+          aria-controls="panel-graph"
+          tabIndex={tab === "graph" ? 0 : -1}
+          onClick={() => selectTab("graph")}
+          onKeyDown={(event) => onTabKeyDown(event, "graph")}
         >
           Graph
         </button>
         <button
+          ref={(element) => { tabRefs.current.settings = element; }}
+          id="tab-settings"
           role="tab"
           type="button"
           className="tab"
           aria-selected={tab === "settings"}
-          onClick={() => {
-            setSettingsVisited(true);
-            setTab("settings");
-          }}
+          aria-controls="panel-settings"
+          tabIndex={tab === "settings" ? 0 : -1}
+          onClick={() => selectTab("settings")}
+          onKeyDown={(event) => onTabKeyDown(event, "settings")}
         >
           Settings
         </button>
       </nav>
-      <main className="view" hidden={tab !== "inbox"}>
+      <main id="panel-inbox" className="view" role="tabpanel" aria-labelledby="tab-inbox" hidden={tab !== "inbox"}>
         <InboxView inbox={inbox} />
       </main>
-      {graphVisited && (
-        <main className="view" hidden={tab !== "graph"}>
-          <GraphView active={tab === "graph"} />
-        </main>
-      )}
-      {settingsVisited && (
-        <main className="view" hidden={tab !== "settings"}>
-          <SettingsPanel />
-        </main>
-      )}
+      <main id="panel-graph" className="view" role="tabpanel" aria-labelledby="tab-graph" tabIndex={0} hidden={tab !== "graph"}>
+        {graphVisited && <GraphView active={tab === "graph"} />}
+      </main>
+      <main id="panel-settings" className="view" role="tabpanel" aria-labelledby="tab-settings" tabIndex={0} hidden={tab !== "settings"}>
+        {settingsVisited && <SettingsPanel />}
+      </main>
     </div>
   );
 }

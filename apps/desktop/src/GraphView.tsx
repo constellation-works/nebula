@@ -284,7 +284,7 @@ export function GraphView({ active = true }: { active?: boolean }) {
           {laying ? " · laying out…" : timing !== null && ` · ${Math.round(timing.paint || timing.layout)} ms`}
         </span>
       </div>
-      <div className="graph__hint">Drag or scroll to pan · Ctrl+scroll to zoom · Double-click a node to open · Orange ancestors · Green descendants · Capture: {shortcut ?? "…"}</div>
+      <div className="graph__hint">Drag or scroll to pan · Ctrl+scroll to zoom · Double-click a node to open · Tab to cards, arrow keys follow edges, Enter selects · Orange ancestors · Green descendants · Capture: {shortcut ?? "…"}</div>
       <div className="graph__body">
         {searchError !== null && <div className="graph__error" role="alert">{searchError}</div>}
         <GraphCanvas
