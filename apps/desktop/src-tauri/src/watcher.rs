@@ -3,18 +3,21 @@
 //! The CLI and the agent write to the same files this app reads, so a
 //! `notify` watcher sits on `nodes/` and `inbox/` and the frontend refetches
 //! on `corpus-changed`. Editors and `neb` alike produce a burst of events per
-//! save (create, write, rename), so bursts are collapsed: one event, once the
-//! directory has been quiet for [`DEBOUNCE`].
+//! save (create, write, rename), so bursts are collapsed: one event after the
+//! directory has been quiet for [`DEBOUNCE`], capped at [`MAX_LATENCY`].
 
 use crate::tray;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 /// How long the corpus has to be quiet before a burst counts as one change.
 pub const DEBOUNCE: Duration = Duration::from_millis(300);
+
+/// Longest time a continuous run of events can wait before a refresh.
+pub const MAX_LATENCY: Duration = Duration::from_secs(1);
 
 /// The event every window listens for. Carries no payload: the frontend
 /// refetches what it shows rather than reasoning about which file moved.
@@ -24,8 +27,11 @@ pub const EVENT: &str = "corpus-changed";
 /// dropped, so the caller keeps it for the life of the app.
 pub fn start(app: AppHandle, root: &Path) -> notify::Result<RecommendedWatcher> {
     let (tx, rx) = channel::<()>();
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if res.is_ok() {
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
+        if let Ok(event) = res {
+            if !is_change_event(&event) {
+                return;
+            }
             // A closed receiver means the app is gone; nothing to do.
             let _ = tx.send(());
         }
@@ -41,7 +47,7 @@ pub fn start(app: AppHandle, root: &Path) -> notify::Result<RecommendedWatcher> 
     std::thread::Builder::new()
         .name("corpus-watcher".into())
         .spawn(move || {
-            for () in debounced(&rx, DEBOUNCE) {
+            for () in debounced(&rx, DEBOUNCE, MAX_LATENCY) {
                 let _ = app.emit(EVENT, ());
                 tray::refresh(&app);
             }
@@ -49,13 +55,30 @@ pub fn start(app: AppHandle, root: &Path) -> notify::Result<RecommendedWatcher> 
     Ok(watcher)
 }
 
-/// Collapse bursts: yield once per run of events, after `window` of quiet.
-/// Ends when every sender is gone, flushing a burst in progress first.
-pub fn debounced(rx: &Receiver<()>, window: Duration) -> impl Iterator<Item = ()> + '_ {
+fn is_change_event(event: &Event) -> bool {
+    matches!(
+        &event.kind,
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+    )
+}
+
+/// Collapse bursts after `window` of quiet, but never wait longer than
+/// `max_latency` from the first event in a burst. Ends when every sender is
+/// gone, flushing a burst in progress first.
+pub fn debounced(
+    rx: &Receiver<()>,
+    window: Duration,
+    max_latency: Duration,
+) -> impl Iterator<Item = ()> + '_ {
     std::iter::from_fn(move || {
         rx.recv().ok()?;
+        let started = Instant::now();
         loop {
-            match rx.recv_timeout(window) {
+            let remaining = max_latency.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Some(());
+            }
+            match rx.recv_timeout(window.min(remaining)) {
                 Ok(()) => {}
                 Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
                     return Some(());
@@ -71,6 +94,28 @@ mod tests {
     use std::sync::mpsc::channel;
 
     const WINDOW: Duration = Duration::from_millis(40);
+    const MAX_LATENCY: Duration = Duration::from_millis(120);
+
+    #[test]
+    fn filters_access_events_and_forwards_mutations() {
+        let access = Event::new(EventKind::Access(notify::event::AccessKind::Open(
+            notify::event::AccessMode::Read,
+        )));
+        let read = Event::new(EventKind::Access(notify::event::AccessKind::Read));
+        let create = Event::new(EventKind::Create(notify::event::CreateKind::File));
+        let modify = Event::new(EventKind::Modify(notify::event::ModifyKind::Any));
+        let rename = Event::new(EventKind::Modify(notify::event::ModifyKind::Name(
+            notify::event::RenameMode::Both,
+        )));
+        let remove = Event::new(EventKind::Remove(notify::event::RemoveKind::File));
+
+        assert!(!is_change_event(&access));
+        assert!(!is_change_event(&read));
+        assert!(is_change_event(&create));
+        assert!(is_change_event(&modify));
+        assert!(is_change_event(&rename));
+        assert!(is_change_event(&remove));
+    }
 
     #[test]
     fn a_burst_is_one_change() {
@@ -79,7 +124,7 @@ mod tests {
             tx.send(()).unwrap();
         }
         drop(tx);
-        assert_eq!(debounced(&rx, WINDOW).count(), 1);
+        assert_eq!(debounced(&rx, WINDOW, MAX_LATENCY).count(), 1);
     }
 
     #[test]
@@ -91,7 +136,24 @@ mod tests {
             std::thread::sleep(WINDOW * 3);
             tx.send(()).unwrap();
         });
-        assert_eq!(debounced(&rx, WINDOW).count(), 2);
+        assert_eq!(debounced(&rx, WINDOW, MAX_LATENCY).count(), 2);
+        producer.join().unwrap();
+    }
+
+    #[test]
+    fn continuous_events_yield_by_the_maximum_latency() {
+        let (tx, rx) = channel();
+        let producer = std::thread::spawn(move || {
+            let end = Instant::now() + Duration::from_millis(400);
+            while Instant::now() < end {
+                tx.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+
+        let started = Instant::now();
+        assert!(debounced(&rx, WINDOW, MAX_LATENCY).next().is_some());
+        assert!(started.elapsed() < Duration::from_millis(250));
         producer.join().unwrap();
     }
 
@@ -99,6 +161,6 @@ mod tests {
     fn nothing_in_means_nothing_out() {
         let (tx, rx) = channel::<()>();
         drop(tx);
-        assert_eq!(debounced(&rx, WINDOW).count(), 0);
+        assert_eq!(debounced(&rx, WINDOW, MAX_LATENCY).count(), 0);
     }
 }
