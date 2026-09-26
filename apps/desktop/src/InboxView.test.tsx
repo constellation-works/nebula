@@ -281,11 +281,16 @@ describe("App", () => {
     expect(screen.getByRole("tab", { name: "Graph" })).toBeInTheDocument();
   });
 
-  it("shows the path and a reload button when the corpus cannot be read", async () => {
+  it("keeps the Graph tab available when Inbox fails, and reloads Inbox in place", async () => {
     mocked.inbox.mockRejectedValueOnce("no corpus at /tmp/nowhere/.nebula");
+    mocked.graph.mockResolvedValue({ nodes: [], edges: [] });
     render(<App />);
     expect(await screen.findByRole("alert")).toHaveTextContent("no corpus at /tmp/nowhere/.nebula");
     expect(await screen.findByText("/tmp/nowhere/.nebula")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Inbox" })).toContainElement(screen.getByRole("alert"));
+    fireEvent.click(screen.getByRole("tab", { name: "Graph" }));
+    expect(await screen.findByText(/Capture something, then promote it/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /Inbox/ }));
     // After the fix, reload re-asks and the views come back.
     fireEvent.click(screen.getByRole("button", { name: "Reload" }));
     await waitFor(() => expect(mocked.reload).toHaveBeenCalledTimes(1));

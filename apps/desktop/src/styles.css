@@ -222,6 +222,11 @@ code {
   color: var(--fg);
 }
 
+.inbox .error {
+  margin: 14px 0;
+  padding: 0;
+}
+
 /* Capture window --------------------------------------------------------- */
 
 .capture-window {
@@ -258,6 +263,34 @@ code {
 
 .graph__error {
   color: var(--danger);
+}
+
+.graph__error p {
+  margin: 0 0 8px;
+}
+
+.graph__open-error,
+.panel__open-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  color: var(--danger);
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--line);
+}
+
+.graph__open-error button,
+.panel__open-error button,
+.graph__error button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
 }
 
 .graph__body {
@@ -621,6 +654,10 @@ code {
 
 .panel__error {
   color: var(--danger);
+}
+
+.panel__open-error {
+  padding: 8px 0;
 }
 
 .panel__edges {

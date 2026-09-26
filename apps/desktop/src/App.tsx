@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { CorpusError } from "./CorpusError";
 import { GraphView } from "./GraphView";
 import { InboxView } from "./InboxView";
 import { useInbox } from "./useInbox";
@@ -10,10 +9,6 @@ type Tab = "inbox" | "graph";
 export function App() {
   const [tab, setTab] = useState<Tab>("inbox");
   const inbox = useInbox();
-
-  if (inbox.error !== null) {
-    return <CorpusError message={inbox.error} onReloaded={() => void inbox.refresh()} />;
-  }
 
   return (
     <div className="app">

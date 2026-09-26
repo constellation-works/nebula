@@ -15,7 +15,7 @@ const PANEL_DEFAULT = 380;
  * selection and the viewport live here and outlast a refetch.
  */
 export function GraphView() {
-  const { graph, error, loaded } = useGraph();
+  const { graph, error, loaded, refresh } = useGraph();
   const [query, setQuery] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -23,6 +23,8 @@ export function GraphView() {
   const [layout, setLayout] = useState<Layout>(EMPTY);
   const [laying, setLaying] = useState(false);
   const [layoutError, setLayoutError] = useState<string | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
+  const [reloading, setReloading] = useState(false);
   const [timing, setTiming] = useState<{ layout: number; paint: number } | null>(null);
   const [fitRequest, setFitRequest] = useState(0);
   const started = useRef(0);
@@ -93,21 +95,48 @@ export function GraphView() {
     [filtered, selected],
   );
 
-  const open = useCallback((id: string) => void api.openInEditor(id), []);
+  const open = useCallback((id: string) => {
+    setOpenError(null);
+    void api.openInEditor(id).catch((e: unknown) => setOpenError(`Could not open file: ${String(e)}`));
+  }, []);
+  const reload = async () => {
+    setReloading(true);
+    try {
+      await api.reload();
+    } catch {
+      // The refetch below reports the current graph error.
+    } finally {
+      await refresh();
+      setReloading(false);
+    }
+  };
+  const graphError = (message: string) => (
+    <div className="graph__error" role="alert">
+      <p>{message}</p>
+      <p>
+        Run <code>neb check</code> to find problems in the corpus, then reload.
+      </p>
+      <button type="button" onClick={() => void reload()} disabled={reloading}>
+        Reload
+      </button>
+    </div>
+  );
   const toggleTag = (t: string) =>
     setTags((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
 
   if (error !== null) {
     return (
       <section className="graph" aria-label="Graph">
-        <p className="graph__error" role="alert">
-          {error}
-        </p>
+        {graphError(error)}
       </section>
     );
   }
   if (!loaded || graph === null) {
-    return <section className="graph" aria-label="Graph" />;
+    return (
+      <section className="graph" aria-label="Graph">
+        <p className="graph__empty" role="status">Loading graph…</p>
+      </section>
+    );
   }
   if (graph.nodes.length === 0) {
     return (
@@ -124,6 +153,14 @@ export function GraphView() {
 
   return (
     <section className="graph" aria-label="Graph">
+      {openError !== null && (
+        <div className="graph__open-error" role="alert">
+          <span>{openError}</span>
+          <button type="button" onClick={() => setOpenError(null)} aria-label="Dismiss open error">
+            Dismiss
+          </button>
+        </div>
+      )}
       <div className="toolbar" role="toolbar" aria-label="Graph filters">
         <input
           className="toolbar__search"
@@ -190,11 +227,7 @@ export function GraphView() {
             fitRequest={fitRequest}
           />
         )}
-        {layoutError !== null && (
-          <p className="graph__error" role="alert">
-            {layoutError}
-          </p>
-        )}
+        {layoutError !== null && graphError(layoutError)}
         {selected !== null && (
           <NodePanel
             id={selected}
