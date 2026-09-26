@@ -737,6 +737,11 @@ a whole path:
   `<root>/nodes/<one name>.md` and nothing else;
 - `nodes/` and `inbox/` must be real directories (`refuse_nodes_symlink`,
   `refuse_inbox_symlink`);
+- the one path a caller hands back, an `InboxEntry`'s `file`, which
+  `settle_inbox` rewrites, is taken only when it is exactly
+  `<root>/inbox/<YYYY-MM>.md`. The earlier check was a prefix match on the
+  spelled path, which also took `inbox/../<anything>` and a month file under
+  a symlinked subdirectory of the inbox, and wrote there (ORB-13152);
 - every node file, `config.yaml`, `.lock`, `.pending`, an inbox month file
   and `.gitignore` must be a regular file. The entry is judged with `lstat`
   before it is opened, opened `O_NOFOLLOW | O_NONBLOCK`, and judged again on
@@ -756,10 +761,15 @@ symlinked root is the normal case rather than an exotic one: every macOS
 temporary directory sits under `/var -> /private/var`, so a resolved root
 would pass on one platform and fail on the other, change the spelling
 discovery reports, and key the lock gate and the root setting by a path the
-user never typed. Nothing else is gained by it: nebula never opens a path a
-user supplies under the root, only the fixed layout above, so there is no
-spelled path whose resolution could leave the tree once each entry in that
-layout is judged by `lstat`.
+user never typed. Nothing else is gained by it: nebula opens only the fixed
+layout above, and refuses a caller-supplied inbox file that is not in it, so
+there is no spelled path whose resolution could leave the tree once each
+entry in that layout is judged by `lstat`. What an escape would cost is
+bounded too: the corpus belongs to the user running `neb`, the desktop app or
+the agent skill, and so does every file an escape could reach; the rule keeps
+a link planted in the corpus, or pulled into it with its git history, or a
+malformed entry from striking or replacing a file that is not the corpus's,
+not one user from another.
 
 Reverses if nebula gains a feature that opens user-supplied paths under the
 root (a local reference it reads, an attachment directory, a path argument to

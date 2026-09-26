@@ -1175,9 +1175,16 @@ impl Corpus {
     /// taken rather than a mistake to erase.
     pub fn settle_inbox(&self, entry: &InboxEntry, outcome: &str) -> Result<()> {
         // Guard against settling an entry that belongs to a different corpus,
-        // which would silently strike a line in someone else's inbox.
+        // which would silently strike a line in someone else's inbox. The
+        // file is the caller's to set, so it must be exactly
+        // `<root>/inbox/<month>.md`, the one layout whose two entries below
+        // the root are judged by `lstat` next. A prefix match would also take
+        // `inbox/../config.yaml`, or a month file under a symlinked
+        // subdirectory of the inbox, and write outside it (STD-05 §R6).
         let inbox = self.root.join("inbox");
-        if !entry.file.starts_with(&inbox) {
+        let in_layout = entry.file.parent() == Some(inbox.as_path())
+            && entry.file.file_name().is_some_and(is_inbox_month_filename);
+        if !in_layout {
             return Err(Error::InboxEntryForeign {
                 id: entry.id.clone(),
                 file: entry.file.clone(),
