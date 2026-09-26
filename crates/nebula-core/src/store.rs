@@ -674,14 +674,19 @@ impl Corpus {
             return Err(Error::corpus("nothing to capture"));
         }
         let dir = self.root.join("inbox");
+        refuse_inbox_symlink(&dir)?;
         std::fs::create_dir_all(&dir).map_err(|error| Error::io_at("writing", &dir, error))?;
+        refuse_inbox_symlink(&dir)?;
         let now = stamp();
         let month = &now[..7];
         let path = dir.join(format!("{month}.md"));
+        refuse_inbox_symlink(&path)?;
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
         let inbox = self.inbox()?;
         let id = unique_entry_id(&format!("{now}{text}"), &inbox)?;
         let line = existing.lines().count();
+        refuse_inbox_symlink(&dir)?;
+        refuse_inbox_symlink(&path)?;
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -705,6 +710,7 @@ impl Corpus {
     pub fn inbox(&self) -> Result<Inbox> {
         let dir = self.root.join("inbox");
         let mut out = Vec::new();
+        refuse_inbox_symlink(&dir)?;
         if !dir.is_dir() {
             return Ok(Inbox(out));
         }
@@ -753,6 +759,8 @@ impl Corpus {
                 entry.id
             )));
         }
+        refuse_inbox_symlink(&self.root.join("inbox"))?;
+        refuse_inbox_symlink(&entry.file)?;
         let content = std::fs::read_to_string(&entry.file)?;
         let mut lines: Vec<String> = content.lines().map(String::from).collect();
         let Some(slot) = lines.get_mut(entry.line) else {
@@ -766,8 +774,25 @@ impl Corpus {
             ));
         }
         *slot = format!("- ~~[{}] {} {}~~ {outcome}", entry.id, entry.at, entry.text);
+        refuse_inbox_symlink(&self.root.join("inbox"))?;
+        refuse_inbox_symlink(&entry.file)?;
         write_atomic(&entry.file, lines.join("\n") + "\n")?;
         Ok(())
+    }
+}
+
+/// Check the named inbox entry itself, without resolving the corpus root. A
+/// symlinked root is a supported way to reach a corpus, but a symlink planted
+/// at `inbox/` or a month file must not redirect an inbox write.
+fn refuse_inbox_symlink(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::corpus(format!(
+            "{} is a symlink; inbox operations require real paths",
+            path.display()
+        ))),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(Error::io_at("inspecting", path, error)),
     }
 }
 
