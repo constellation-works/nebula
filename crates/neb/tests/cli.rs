@@ -14,6 +14,12 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+// The isolation every test here runs under, this process's and each child's.
+#[path = "../../nebula-core/tests/support/mod.rs"]
+mod support;
+
+use support::ChildGuard;
+
 fn bin() -> PathBuf {
     let mut p = std::env::current_exe().expect("test binary path");
     p.pop();
@@ -21,6 +27,36 @@ fn bin() -> PathBuf {
         p.pop();
     }
     p.join("neb")
+}
+
+// ---------------------------------------------- the child-command builder --
+
+/// A `neb` isolated from the host with `home` as its home: the only place a
+/// test here creates one. See [`support::isolate`] for what it clears and
+/// sets; a test that needs a variable back sets it after this.
+fn neb_command(home: &Path) -> Command {
+    let mut cmd = Command::new(bin());
+    support::isolate(&mut cmd, home);
+    cmd
+}
+
+/// `git -C dir`, isolated with `home` as its home.
+fn git_command(dir: &Path, home: &Path) -> Command {
+    support::git_command(dir, home)
+}
+
+/// Run `cmd` to completion under a guard and the deadline, failing the test
+/// if it outlives it.
+fn output(cmd: &mut Command) -> Output {
+    support::output(cmd, support::DEADLINE).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// [`output`] as a [`Run`] reported as `neb {args}`.
+fn run_command(cmd: &mut Command, args: String) -> Run {
+    Run {
+        args,
+        out: output(cmd),
+    }
 }
 
 struct Corpus {
@@ -42,52 +78,26 @@ impl Corpus {
     }
 
     fn run_with_env(&self, args: &[&str], extra: &[(&str, &str)]) -> Run {
-        let mut cmd = Command::new(bin());
-        cmd.arg("--root")
-            .arg(&self.root)
-            .args(args)
-            .env("NO_COLOR", "1")
-            .env("HOME", self.workdir())
-            .env_remove("NEBULA_ROOT")
-            .env_remove("VISUAL")
-            .env_remove("EDITOR")
-            // Removed rather than trusted: a developer with a real
-            // Observatory checkout exported would otherwise resolve records
-            // these tests expect to go missing.
-            .env_remove("OBSERVATORY_ROOT");
+        let mut cmd = self.command(args);
         for (key, value) in extra {
             cmd.env(key, value);
         }
-        let out = cmd.output().expect("running neb");
-        Run {
-            args: args.join(" "),
-            out,
-        }
+        run_command(&mut cmd, args.join(" "))
     }
 
     fn run_with_stdin(&self, args: &[&str], input: &str) -> Run {
-        let mut child = Command::new(bin())
-            .arg("--root")
-            .arg(&self.root)
-            .args(args)
-            .env("NO_COLOR", "1")
-            .env("HOME", self.workdir())
-            .env_remove("NEBULA_ROOT")
-            .env_remove("OBSERVATORY_ROOT")
-            .env_remove("VISUAL")
-            .env_remove("EDITOR")
-            .stdin(Stdio::piped())
+        let mut cmd = self.command(args);
+        cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("running neb with stdin");
+            .stderr(Stdio::piped());
+        let mut child = ChildGuard::spawn(&mut cmd).unwrap_or_else(|e| panic!("{e}"));
         child
-            .stdin
-            .take()
-            .expect("piped stdin")
+            .take_stdin()
             .write_all(input.as_bytes())
             .expect("writing stdin");
-        let out = child.wait_with_output().expect("waiting for neb");
+        let out = child
+            .wait_with_output(support::DEADLINE)
+            .unwrap_or_else(|e| panic!("{e}"));
         Run {
             args: args.join(" "),
             out,
@@ -97,16 +107,7 @@ impl Corpus {
     /// [`Corpus::run_with_env`] with stdout closed before `neb` writes a
     /// byte, and `input` on stdin.
     fn run_closed_stdout(&self, args: &[&str], extra: &[(&str, &str)], input: &str) -> Run {
-        let mut cmd = Command::new(bin());
-        cmd.arg("--root")
-            .arg(&self.root)
-            .args(args)
-            .env("NO_COLOR", "1")
-            .env("HOME", self.workdir())
-            .env_remove("NEBULA_ROOT")
-            .env_remove("OBSERVATORY_ROOT")
-            .env_remove("VISUAL")
-            .env_remove("EDITOR");
+        let mut cmd = self.command(args);
         for (key, value) in extra {
             cmd.env(key, value);
         }
@@ -120,22 +121,22 @@ impl Corpus {
     /// flight at once. The returned handle is finished with
     /// [`Spawned::wait`].
     fn spawn(&self, args: &[&str]) -> Spawned {
-        let child = Command::new(bin())
-            .arg("--root")
-            .arg(&self.root)
-            .args(args)
-            .env("NO_COLOR", "1")
-            .env("HOME", self.workdir())
-            .env_remove("NEBULA_ROOT")
-            .env_remove("OBSERVATORY_ROOT")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("spawning neb");
+        let mut cmd = self.command(args);
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         Spawned {
             args: args.join(" "),
-            child,
+            child: ChildGuard::spawn(&mut cmd).unwrap_or_else(|e| panic!("{e}")),
         }
+    }
+
+    /// `neb --root <root> <args>` with the fixture's directory as its home.
+    fn command(&self, args: &[&str]) -> Command {
+        let mut cmd = neb_command(self.workdir());
+        cmd.arg("--root")
+            .arg(&self.root)
+            .args(args)
+            .env("NO_COLOR", "1");
+        cmd
     }
 
     fn workdir(&self) -> &Path {
@@ -178,26 +179,18 @@ fn run_in(
     args: &[&str],
     nebula_root: Option<&Path>,
 ) -> Run {
-    let mut cmd = Command::new(bin());
+    let mut cmd = neb_command(home);
     if let Some(root) = root {
         cmd.arg("--root").arg(root);
     }
     cmd.args(args)
         .current_dir(cwd)
         .env("PWD", cwd)
-        .env("HOME", home)
-        .env("NO_COLOR", "1")
-        .env_remove("OBSERVATORY_ROOT");
+        .env("NO_COLOR", "1");
     if let Some(nebula_root) = nebula_root {
         cmd.env("NEBULA_ROOT", nebula_root);
-    } else {
-        cmd.env_remove("NEBULA_ROOT");
     }
-    let out = cmd.output().expect("running neb");
-    Run {
-        args: args.join(" "),
-        out,
-    }
+    run_command(&mut cmd, args.join(" "))
 }
 
 /// Run `cmd` with stdout on a pipe whose read end is already closed, as
@@ -206,28 +199,33 @@ fn run_in(
 fn closed_stdout(cmd: &mut Command, input: &str) -> Output {
     let (reader, writer) = std::io::pipe().expect("a pipe");
     drop(reader);
-    let mut child = cmd
-        .stdin(Stdio::piped())
+    cmd.stdin(Stdio::piped())
         .stdout(writer)
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("running neb with a closed stdout");
-    let mut stdin = child.stdin.take().expect("piped stdin");
+        .stderr(Stdio::piped());
+    let mut child = ChildGuard::spawn(cmd).unwrap_or_else(|e| panic!("{e}"));
+    let mut stdin = child.take_stdin();
     // A verb that never reads stdin may be gone before this lands.
     let _ = stdin.write_all(input.as_bytes());
     drop(stdin);
-    child.wait_with_output().expect("waiting for neb")
+    child
+        .wait_with_output(support::DEADLINE)
+        .unwrap_or_else(|e| panic!("{e}"))
 }
 
-/// A `neb` still running, so a test can have two of them racing.
+/// A `neb` still running, so a test can have two of them racing. Dropped
+/// unfinished, as by a failed assertion, it is killed and reaped.
 struct Spawned {
     args: String,
-    child: std::process::Child,
+    child: ChildGuard,
 }
 
 impl Spawned {
+    /// Wait for it to finish, failing the test past the deadline.
     fn wait(self) -> Run {
-        let out = self.child.wait_with_output().expect("waiting for neb");
+        let out = self
+            .child
+            .wait_with_output(support::DEADLINE)
+            .unwrap_or_else(|e| panic!("{e}"));
         Run {
             args: self.args,
             out,
@@ -400,6 +398,171 @@ fn set_inbox_stamp_for(root: &Path, capture_text: &str, stamp: &str) {
         return;
     }
     panic!("no inbox entry contains `{capture_text}`");
+}
+
+// -------------------------------------------------------------- containment --
+
+/// Whether process `pid` still exists, reaped or not: a zombie still has its
+/// `/proc` entry and still answers `kill -0`.
+fn process_exists(pid: u32) -> bool {
+    if cfg!(target_os = "linux") {
+        Path::new(&format!("/proc/{pid}")).exists()
+    } else {
+        output(support::command("kill", support::home()).args(["-0", &pid.to_string()]))
+            .status
+            .success()
+    }
+}
+
+/// Every name the builder must not let a child inherit, spelled out here
+/// rather than read from the builder, plus whatever the installed git says
+/// points it at one repository.
+#[test]
+fn the_child_command_builder_isolates_home_and_git_env() {
+    use std::collections::HashMap;
+    use std::ffi::{OsStr, OsString};
+
+    let fixture = tempfile::tempdir().unwrap();
+    let home = fixture.path();
+    let local = output(git_command(home, support::home()).args(["rev-parse", "--local-env-vars"]));
+    assert!(local.status.success(), "{local:?}");
+    let local = String::from_utf8(local.stdout).unwrap();
+    assert!(local.lines().any(|name| name == "GIT_DIR"), "{local}");
+    let removed = [
+        "NEBULA_ROOT",
+        "OBSERVATORY_ROOT",
+        "VISUAL",
+        "EDITOR",
+        "XDG_CONFIG_HOME",
+        "ORBIT_RUN_ID",
+        "ORBIT_TASK_ID",
+        "NEBULA_READ_ONLY",
+        "NO_COLOR",
+        "CLICOLOR_FORCE",
+        "TERM",
+        "COLUMNS",
+    ]
+    .into_iter()
+    .chain(local.lines());
+
+    for cmd in [neb_command(home), git_command(home, home)] {
+        let what = support::describe(&cmd);
+        let envs: HashMap<&OsStr, Option<&OsStr>> = cmd.get_envs().collect();
+        let set = |name: &str| envs.get(OsStr::new(name)).copied().flatten();
+        for name in removed.clone() {
+            assert_eq!(
+                envs.get(OsStr::new(name)),
+                Some(&None),
+                "`{what}` would inherit {name}"
+            );
+        }
+        assert_eq!(set("HOME"), Some(home.as_os_str()), "{what}");
+        assert_eq!(set("GIT_CONFIG_NOSYSTEM"), Some(OsStr::new("1")), "{what}");
+        let global = PathBuf::from(set("GIT_CONFIG_GLOBAL").expect("GIT_CONFIG_GLOBAL"));
+        let global = std::fs::read_to_string(&global).expect("the test gitconfig exists");
+        assert!(
+            global.contains("email = neb-test@example.invalid"),
+            "{global}"
+        );
+        assert!(global.contains("gpgsign = false"), "{global}");
+        let ceilings: Vec<PathBuf> =
+            std::env::split_paths(set("GIT_CEILING_DIRECTORIES").expect("ceilings")).collect();
+        assert!(
+            ceilings
+                .iter()
+                .any(|dir| Some(dir.as_path()) == home.parent()),
+            "`{what}` may climb above its fixture: {ceilings:?}"
+        );
+    }
+
+    // The same isolation holds in this process, which is what the git that
+    // production code starts in-process inherits.
+    assert_eq!(
+        std::env::var_os("HOME"),
+        Some(OsString::from(support::home()))
+    );
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "NEBULA_ROOT",
+        "OBSERVATORY_ROOT",
+    ] {
+        assert_eq!(std::env::var_os(name), None, "{name}");
+    }
+}
+
+/// The check that every child comes from the builder reads this file, and
+/// it catches a command created anywhere else.
+#[test]
+fn every_child_command_comes_from_the_isolating_builder() {
+    let strays = support::commands_outside(include_str!("cli.rs"), &["neb_command"]);
+    assert!(
+        strays.is_empty(),
+        "crates/neb/tests/cli.rs creates a child outside `neb_command`/`git_command`:\n{}",
+        strays.join("\n")
+    );
+
+    let stray = format!(
+        "fn neb_command() {{\n    {}bin());\n}}\n\n#[test]\nfn a_test() {{\n    let git = std::process::{}\"git\");\n}}\n",
+        concat!("Command", "::new("),
+        concat!("Command", "::new("),
+    );
+    assert_eq!(
+        support::commands_outside(&stray, &["neb_command"]),
+        [format!(
+            "7: in `a_test`: let git = std::process::{}\"git\");",
+            concat!("Command", "::new(")
+        )]
+    );
+}
+
+/// A failed assertion between spawn and wait drops the guard, and that must
+/// not leave the child running (STD-03 §R18).
+#[test]
+fn a_guarded_child_is_killed_and_reaped_when_dropped() {
+    let c = Corpus::new();
+    let mut cmd = c.command(&["capture", "-"]);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = ChildGuard::spawn(&mut cmd).unwrap();
+    // Held open, so `capture -` blocks reading it.
+    let stdin = child.take_stdin();
+    let pid = child.id();
+    assert!(process_exists(pid), "the child is running");
+
+    drop(child);
+    assert!(!process_exists(pid), "process {pid} outlived its guard");
+    drop(stdin);
+}
+
+/// A child that never finishes fails the wait at its deadline, naming the
+/// command, rather than hanging the suite (STD-03 §R17).
+#[test]
+fn a_guarded_wait_fails_at_its_deadline_instead_of_hanging() {
+    use std::time::{Duration, Instant};
+
+    let c = Corpus::new();
+    let mut cmd = c.command(&["capture", "-"]);
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = ChildGuard::spawn(&mut cmd).unwrap();
+    let _stdin = child.take_stdin();
+    let pid = child.id();
+
+    let deadline = Duration::from_millis(500);
+    let started = Instant::now();
+    let err = child.wait_with_output(deadline).unwrap_err();
+    let waited = started.elapsed();
+    assert!(
+        waited < deadline + Duration::from_secs(2),
+        "waited {waited:?} for a {deadline:?} deadline"
+    );
+    assert!(err.contains("neb --root"), "{err}");
+    assert!(err.contains("capture -"), "{err}");
+    assert!(err.contains("still running"), "{err}");
+    assert!(!process_exists(pid), "process {pid} was not reaped");
 }
 
 // ------------------------------------------------------------------ capture --
@@ -809,13 +972,12 @@ fn promote_and_drop_on_a_settled_entry_say_how_it_was_settled() {
 fn capture_works_before_a_corpus_exists() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("fresh");
-    let out = Command::new(bin())
-        .arg("--root")
-        .arg(&root)
-        .args(["capture", "the thought arrives before the setup"])
-        .env_remove("NEBULA_ROOT")
-        .output()
-        .unwrap();
+    let out = output(
+        neb_command(dir.path())
+            .arg("--root")
+            .arg(&root)
+            .args(["capture", "the thought arrives before the setup"]),
+    );
     assert!(
         out.status.success(),
         "capture must never be blocked by missing setup"
@@ -894,15 +1056,12 @@ fn capture_json_names_the_corpus_it_creates_on_stderr_and_keeps_the_payload() {
 #[test]
 fn capture_shows_a_relative_root_it_creates_as_an_absolute_path() {
     let dir = tempfile::tempdir().unwrap();
-    let out = Command::new(bin())
-        .current_dir(dir.path())
-        .args(["--root", "typo", "capture", "x"])
-        .env("HOME", dir.path().join("home"))
-        .env("NO_COLOR", "1")
-        .env_remove("NEBULA_ROOT")
-        .env_remove("OBSERVATORY_ROOT")
-        .output()
-        .unwrap();
+    let out = output(
+        neb_command(&dir.path().join("home"))
+            .current_dir(dir.path())
+            .args(["--root", "typo", "capture", "x"])
+            .env("NO_COLOR", "1"),
+    );
     assert!(out.status.success());
     let stderr = String::from_utf8(out.stderr).unwrap();
     let shown = stderr
@@ -1189,16 +1348,13 @@ fn a_corpus_found_through_a_symlink_keeps_the_spelling_of_the_working_directory(
     assert_eq!(value["root"], spelled.to_str().unwrap());
 
     // A stale `$PWD`: the OS's own answer stands, which is still this corpus.
-    let out = Command::new(bin())
-        .args(["init", "--json"])
-        .current_dir(spelled.join("nodes"))
-        .env("PWD", dir.path())
-        .env("HOME", &home)
-        .env("NO_COLOR", "1")
-        .env_remove("NEBULA_ROOT")
-        .env_remove("OBSERVATORY_ROOT")
-        .output()
-        .unwrap();
+    let out = output(
+        neb_command(&home)
+            .args(["init", "--json"])
+            .current_dir(spelled.join("nodes"))
+            .env("PWD", dir.path())
+            .env("NO_COLOR", "1"),
+    );
     let run = Run {
         args: "init --json under a stale PWD".into(),
         out,
@@ -1220,14 +1376,12 @@ fn empty_nebula_root_env_falls_through_to_configured_then_default() {
 
     run_from_home(&home, Some(&configured), &["init", "--set-root"], None).assert_ok();
 
-    let out = Command::new(bin())
-        .args(["check"])
-        .env("HOME", &home)
-        .env("NO_COLOR", "1")
-        .env("NEBULA_ROOT", "")
-        .env_remove("OBSERVATORY_ROOT")
-        .output()
-        .unwrap();
+    let out = output(
+        neb_command(&home)
+            .args(["check"])
+            .env("NO_COLOR", "1")
+            .env("NEBULA_ROOT", ""),
+    );
     Run {
         args: "check".into(),
         out,
@@ -1239,14 +1393,12 @@ fn empty_nebula_root_env_falls_through_to_configured_then_default() {
     let default = default_home.join(".nebula");
     run_from_home(&default_home, Some(&default), &["init"], None).assert_ok();
 
-    let out = Command::new(bin())
-        .args(["check"])
-        .env("HOME", &default_home)
-        .env("NO_COLOR", "1")
-        .env("NEBULA_ROOT", "")
-        .env_remove("OBSERVATORY_ROOT")
-        .output()
-        .unwrap();
+    let out = output(
+        neb_command(&default_home)
+            .args(["check"])
+            .env("NO_COLOR", "1")
+            .env("NEBULA_ROOT", ""),
+    );
     Run {
         args: "check".into(),
         out,
@@ -1258,14 +1410,11 @@ fn empty_nebula_root_env_falls_through_to_configured_then_default() {
 #[test]
 fn empty_root_flag_is_refused_by_name() {
     let dir = tempfile::tempdir().unwrap();
-    let out = Command::new(bin())
-        .args(["--root", "", "inbox"])
-        .env("HOME", dir.path())
-        .env("NO_COLOR", "1")
-        .env_remove("NEBULA_ROOT")
-        .env_remove("OBSERVATORY_ROOT")
-        .output()
-        .unwrap();
+    let out = output(
+        neb_command(dir.path())
+            .args(["--root", "", "inbox"])
+            .env("NO_COLOR", "1"),
+    );
     Run {
         args: "--root \"\" inbox".into(),
         out,
@@ -1365,15 +1514,12 @@ fn set_root_refuses_a_relative_path_before_mutating_anything() {
     let from = dir.path().join("from");
     std::fs::create_dir_all(&from).unwrap();
 
-    let out = Command::new(bin())
-        .args(["--root", "relative", "init", "--set-root"])
-        .current_dir(&from)
-        .env("HOME", &home)
-        .env("NO_COLOR", "1")
-        .env_remove("NEBULA_ROOT")
-        .env_remove("OBSERVATORY_ROOT")
-        .output()
-        .unwrap();
+    let out = output(
+        neb_command(&home)
+            .args(["--root", "relative", "init", "--set-root"])
+            .current_dir(&from)
+            .env("NO_COLOR", "1"),
+    );
     Run {
         args: "--root relative init --set-root".into(),
         out,
@@ -1409,17 +1555,14 @@ fn set_root_preserves_an_absolute_symlink_spelling_across_working_directories() 
     symlink(&real_parent, &alias_parent).unwrap();
     let root = alias_parent.join("corpus");
 
-    let init = Command::new(bin())
-        .arg("--root")
-        .arg(&root)
-        .args(["init", "--set-root"])
-        .current_dir(&from)
-        .env("HOME", &home)
-        .env("NO_COLOR", "1")
-        .env_remove("NEBULA_ROOT")
-        .env_remove("OBSERVATORY_ROOT")
-        .output()
-        .unwrap();
+    let init = output(
+        neb_command(&home)
+            .arg("--root")
+            .arg(&root)
+            .args(["init", "--set-root"])
+            .current_dir(&from)
+            .env("NO_COLOR", "1"),
+    );
     Run {
         args: format!("--root {} init --set-root", root.display()),
         out: init,
@@ -1432,15 +1575,12 @@ fn set_root_preserves_an_absolute_symlink_spelling_across_working_directories() 
         "the configured root must preserve the caller's symlink spelling"
     );
 
-    let inbox = Command::new(bin())
-        .arg("inbox")
-        .current_dir(&elsewhere)
-        .env("HOME", &home)
-        .env("NO_COLOR", "1")
-        .env_remove("NEBULA_ROOT")
-        .env_remove("OBSERVATORY_ROOT")
-        .output()
-        .unwrap();
+    let inbox = output(
+        neb_command(&home)
+            .arg("inbox")
+            .current_dir(&elsewhere)
+            .env("NO_COLOR", "1"),
+    );
     Run {
         args: "inbox from a different working directory".into(),
         out: inbox,
@@ -7121,21 +7261,10 @@ fn migrate_refuses_a_future_schema_without_changing_any_corpus_file() {
         &config,
         &raw.replacen("schema_version: 1", "schema_version: 3", 1),
     );
-    let git = Command::new("git")
-        .arg("-C")
-        .arg(&c.root)
-        .args(["init", "-q"])
-        .output()
-        .expect("running git init");
-    assert!(
-        git.status.success(),
-        "{}",
-        String::from_utf8_lossy(&git.stderr)
-    );
-    let git = Command::new("git")
-        .arg("-C")
-        .arg(&c.root)
-        .args([
+    git(&c.root, &["init", "-q"]);
+    git(
+        &c.root,
+        &[
             "-c",
             "user.name=neb-test",
             "-c",
@@ -7144,18 +7273,11 @@ fn migrate_refuses_a_future_schema_without_changing_any_corpus_file() {
             "commit.gpgsign=false",
             "add",
             "-A",
-        ])
-        .output()
-        .expect("running git add");
-    assert!(
-        git.status.success(),
-        "{}",
-        String::from_utf8_lossy(&git.stderr)
+        ],
     );
-    let git = Command::new("git")
-        .arg("-C")
-        .arg(&c.root)
-        .args([
+    git(
+        &c.root,
+        &[
             "-c",
             "user.name=neb-test",
             "-c",
@@ -7166,13 +7288,7 @@ fn migrate_refuses_a_future_schema_without_changing_any_corpus_file() {
             "-q",
             "-m",
             "future corpus",
-        ])
-        .output()
-        .expect("running git commit");
-    assert!(
-        git.status.success(),
-        "{}",
-        String::from_utf8_lossy(&git.stderr)
+        ],
     );
 
     let before = snapshot_corpus_files(&c.root);
@@ -7477,20 +7593,7 @@ fn migrate_refuses_a_malformed_config_before_changing_any_corpus_file() {
 #[test]
 fn migrate_refuses_a_dirty_git_tree() {
     let c = v1_corpus();
-    let git = |args: &[&str]| {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(&c.root)
-            .args(args)
-            .output()
-            .expect("running git");
-        assert!(
-            out.status.success(),
-            "git {args:?} failed:\n{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    };
-    git(&["init", "-q"]);
+    git(&c.root, &["init", "-q"]);
     c.run(&["migrate"])
         .assert_fails()
         .says("uncommitted changes");
@@ -7498,19 +7601,22 @@ fn migrate_refuses_a_dirty_git_tree() {
     let config = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
     assert!(config.contains("schema_version: 1"), "{config}");
 
-    git(&["add", "-A"]);
-    git(&[
-        "-c",
-        "user.name=neb-test",
-        "-c",
-        "user.email=neb-test@example.invalid",
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "-q",
-        "-m",
-        "v1 corpus",
-    ]);
+    git(&c.root, &["add", "-A"]);
+    git(
+        &c.root,
+        &[
+            "-c",
+            "user.name=neb-test",
+            "-c",
+            "user.email=neb-test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "v1 corpus",
+        ],
+    );
     c.run(&["migrate"])
         .assert_ok()
         .says("4 of 4 nodes rewritten");
@@ -7521,12 +7627,7 @@ fn migrate_refuses_a_dirty_git_tree() {
 
 /// Run git in `dir`, asserting it succeeded; stdout as text.
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("running git");
+    let out = output(git_command(dir, support::home()).args(args));
     assert!(
         out.status.success(),
         "git {args:?} failed in {}:\n{}",
@@ -7549,14 +7650,12 @@ fn git_init(dir: &Path) {
 /// and wall-clock time, so date-based history assertions are deterministic.
 fn git_commit_at(dir: &Path, date: &str, message: &str) {
     git(dir, &["add", "-A"]);
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["commit", "-q", "-m", message])
-        .env("GIT_AUTHOR_DATE", format!("{date}T12:00:00Z"))
-        .env("GIT_COMMITTER_DATE", format!("{date}T12:00:00Z"))
-        .output()
-        .expect("running git commit");
+    let out = output(
+        git_command(dir, support::home())
+            .args(["commit", "-q", "-m", message])
+            .env("GIT_AUTHOR_DATE", format!("{date}T12:00:00Z"))
+            .env("GIT_COMMITTER_DATE", format!("{date}T12:00:00Z")),
+    );
     assert!(
         out.status.success(),
         "git commit failed in {}:\n{}",
@@ -7714,6 +7813,30 @@ fn log_reports_when_an_uncommitted_node_has_no_history() {
         .assert_ok()
         .says("no commits touched this node");
     assert_eq!(c.run(&["--json", "log", &id]).assert_ok().stdout(), "[]\n");
+}
+
+/// A fixture whose temporary root sits inside someone's repository never
+/// finds it: not to stage into it, and not to read history from it
+/// (STD-04 §R7). Before the builder set `GIT_CEILING_DIRECTORIES`, running
+/// the suite with `TMPDIR` in a work tree staged fixture files into it.
+#[test]
+fn fixtures_never_discover_an_enclosing_repository() {
+    let outer = tempfile::tempdir().expect("tempdir");
+    git_init(outer.path());
+    let dir = tempfile::tempdir_in(outer.path()).expect("tempdir");
+    let root = dir.path().join("corpus");
+    let c = Corpus { dir, root };
+    c.run(&["init"]).assert_ok();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let id = c.seed("an idea inside someone else's repository", "Not theirs");
+    c.run(&["log", &id])
+        .assert_fails()
+        .says("is not inside a git work tree");
+
+    // With the fixture gone, anything it staged shows as added and deleted.
+    drop(c);
+    assert_eq!(git(outer.path(), &["status", "--porcelain"]), "");
+    assert_eq!(git(outer.path(), &["ls-files"]), "");
 }
 
 #[test]

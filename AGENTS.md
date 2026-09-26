@@ -31,10 +31,22 @@ gitignored as a backstop. Fixtures for tests belong in a
 temporary directory, which is what
 `crates/neb/tests/cli.rs` and `crates/nebula-core/tests/core.rs` do.
 
+Tests never touch the host either. `crates/nebula-core/tests/support` gives
+each test process a temporary `HOME` and git environment before any test
+thread starts, and is the one place a test creates a child: through the
+fixture helpers, `neb_command`/`git_command` in `cli.rs`, or
+`support::command`. They clear `NEBULA_ROOT`, `OBSERVATORY_ROOT`, the editor,
+the Orbit run context, the terminal settings and every `GIT_*`, and stop git
+discovery at the fixture's temporary root; a test that needs one of those
+sets it on its command after the builder. Each suite fails if a `Command` is
+created anywhere else, and every child is owned by a guard that kills it on
+drop and waits only up to a deadline. `make hostile-env-test` proves it.
+
 ## Working here
 
 ```sh
 make test             # every crate: core unit tests + end-to-end CLI tests
+make hostile-env-test # the suites under a hostile HOME, TMPDIR and GIT_DIR
 make clippy           # --workspace --all-targets --all-features -D warnings
 make fmt-check
 make types            # regenerate apps/desktop/src/types from nebula-core

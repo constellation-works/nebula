@@ -1,4 +1,4 @@
-.PHONY: help build release run dev check test types fmt fmt-check release-check standards-check terminal-guard clippy ci-lint audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
+.PHONY: help build release run dev check test hostile-env-test types fmt fmt-check release-check standards-check terminal-guard clippy ci-lint audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
 
 # ------------------------------------------------------------
 # Config
@@ -44,6 +44,7 @@ help:
 	@echo "  make dev ARGS=...  Run the built binary directly"
 	@echo "  make check         Type-check every crate"
 	@echo "  make test          Run all tests, every crate"
+	@echo "  make hostile-env-test  Run the suites under a hostile HOME, TMPDIR and GIT_DIR"
 	@echo "  make types         Regenerate apps/desktop/src/types from nebula-core"
 	@echo "  make fmt           Format code"
 	@echo "  make fmt-check     Check formatting"
@@ -95,6 +96,11 @@ check:
 
 test:
 	$(CARGO) test --workspace --all-targets
+
+# The suites under a hostile HOME, TMPDIR inside a git repository, and
+# GIT_DIR exported, checking that no test touched the host.
+hostile-env-test:
+	CARGO="$(CARGO)" ./scripts/hostile-env-test.sh
 
 # The TypeScript bindings are generated, never edited: this is the only way
 # they change. Destination is TS_RS_EXPORT_DIR in .cargo/config.toml.

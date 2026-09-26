@@ -2408,6 +2408,7 @@ version = "0.2.0"
 dependencies = [
  "clap",
  "clap_complete",
+ "ctor",
  "nebula-core",
  "serde",
  "serde_json",
@@ -2420,6 +2421,7 @@ dependencies = [
 name = "nebula-core"
 version = "0.2.0"
 dependencies = [
+ "ctor",
  "fs4",
  "serde",
  "serde_json",
@@ -2434,6 +2436,7 @@ dependencies = [
 name = "nebula-desktop"
 version = "0.2.0"
 dependencies = [
+ "ctor",
  "fs4",
  "nebula-core",
  "notify",

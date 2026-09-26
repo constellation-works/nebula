@@ -21,6 +21,7 @@ time = { workspace = true }
 ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
+ctor = { workspace = true }
 tempfile = { workspace = true }
 
 [features]

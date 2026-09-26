@@ -20,6 +20,9 @@ repository = "https://github.com/constellation-works/nebula"
 nebula-core = { path = "crates/nebula-core" }
 clap = { version = "4", features = ["derive", "wrap_help"] }
 clap_complete = "4"
+# Test-only: isolates each test process's environment before any test thread
+# starts (crates/nebula-core/tests/support). Already in the tree through Tauri.
+ctor = "0.8"
 # `flock` for the corpus write lock: std has no portable file lock, and this
 # is the thin cross-platform wrapper. Its own dependencies (rustix, windows-sys)
 # already arrive with the desktop's Tauri tree.
