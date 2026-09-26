@@ -56,7 +56,7 @@ help:
 	@echo "  make corpus-check  Run the invariant checker over your corpus"
 	@echo "                     (ROOT=/path optional; defaults to \$$NEBULA_ROOT or ~/.nebula)"
 	@echo "  make desktop-dev   Run the desktop app with live reload (pnpm tauri dev)"
-	@echo "  make desktop       Build the desktop .app, unsigned (pnpm tauri build)"
+	@echo "  make desktop       Build the unsigned desktop .app and .dmg on macOS"
 	@echo "  make desktop-check Type-check and unit-test the desktop frontend"
 	@echo "  make install       Install the binary (INSTALL_PROFILE=debug optional)"
 	@echo "  make uninstall     Remove the installed binary"
@@ -142,7 +142,7 @@ desktop-deps:
 desktop-dev: desktop-deps
 	$(PNPM) --dir $(DESKTOP) tauri dev --config src-tauri/tauri.conf.dev.json
 
-# A local .app under target/release/bundle/macos; not signed or notarised.
+# Local .app and .dmg bundles under target/release/bundle/macos; not signed or notarised.
 desktop: desktop-deps
 	$(PNPM) --dir $(DESKTOP) tauri build
 

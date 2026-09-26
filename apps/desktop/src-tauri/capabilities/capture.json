@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "capture",
+  "description": "Permissions used by the capture window: listen for focus changes, hide itself, and drag its frameless window.",
+  "windows": ["capture"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-hide",
+    "core:window:allow-start-dragging"
+  ]
+}

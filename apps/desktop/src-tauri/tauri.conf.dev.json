@@ -6,7 +6,7 @@
         "default-src": "'self'",
         "script-src": "'self' 'unsafe-eval'",
         "style-src": "'self' 'unsafe-inline'",
-        "img-src": "'self'",
+        "img-src": "'self' https:",
         "font-src": "'self'",
         "connect-src": "ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420",
         "worker-src": "'self' blob:",
