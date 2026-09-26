@@ -7,6 +7,10 @@
 
 use nebula_core::{Corpus, Graph, GraphExport, InboxEntry, NodeView, Result, graph, ops};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// A capture should tell the UI promptly when another writer is busy.
+pub const CAPTURE_LOCK_WAIT: Duration = Duration::from_millis(150);
 
 /// Where the corpus is expected: `--root`, else `$NEBULA_ROOT`, else
 /// `~/.config/nebula/root`, else `~/.nebula`. The CLI's rule, so the app and
@@ -24,6 +28,9 @@ pub fn open(root: &Path) -> Result<Corpus> {
 
 /// Append one line to this month's inbox, exactly as `neb capture` does.
 pub fn capture(corpus: &Corpus, text: &str) -> Result<InboxEntry> {
+    // The core operation takes the same lock again on this thread. Holding
+    // this guard makes its normal five-second wait an immediate re-entry.
+    let _lock = corpus.lock_within(CAPTURE_LOCK_WAIT)?;
     ops::capture(corpus, text)
 }
 
