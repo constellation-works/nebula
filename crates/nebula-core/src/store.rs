@@ -270,6 +270,7 @@ impl Corpus {
     /// one; see the lock order in `lock.rs`.
     #[must_use = "the machine-setting lock is released when this guard drops"]
     pub fn lock_machine_settings(locations: &Locations) -> Result<CorpusLock> {
+        locations.write_gate(crate::locations::WriteIntent::Ordinary)?;
         let dir = Self::machine_settings_dir(locations)?;
         create_private_dir_all(&dir)?;
         CorpusLock::acquire(&dir)
@@ -364,6 +365,7 @@ impl Corpus {
         locations: &Locations,
         dir: &Path,
     ) -> Result<PathBuf> {
+        locations.write_gate(crate::locations::WriteIntent::Ordinary)?;
         if !dir.is_absolute() {
             return Err(Error::RelativeObservatoryRoot {
                 root: dir.to_path_buf(),
@@ -501,6 +503,7 @@ impl Corpus {
     /// no two initializers write `config.yaml` at once and every path that
     /// creates one holds the lock (STD-03 §R6).
     pub fn init(locations: &Locations, root: &Path) -> Result<Self> {
+        locations.write_gate(crate::locations::WriteIntent::Ordinary)?;
         refuse_nodes_symlink(root)?;
         // Decided before anything is created, not even the lock file, so a
         // refusal leaves the root exactly as it was.
@@ -624,6 +627,8 @@ impl Corpus {
     /// can refuse a busy writer sooner while keeping the same critical section.
     #[must_use = "the corpus lock is released when this guard drops"]
     pub fn lock_within(&self, wait: std::time::Duration) -> Result<CorpusLock> {
+        self.locations
+            .write_gate(crate::locations::WriteIntent::Ordinary)?;
         self.settled(CorpusLock::acquire_within(&self.root, wait)?)
     }
 
@@ -634,6 +639,8 @@ impl Corpus {
     /// Otherwise [`Self::lock_within`], pending write and all.
     #[must_use = "the corpus lock is released when this guard drops"]
     pub fn lock_as(&self, wait: std::time::Duration, label: &str) -> Result<CorpusLock> {
+        self.locations
+            .write_gate(crate::locations::WriteIntent::Ordinary)?;
         self.settled(CorpusLock::acquire_as(&self.root, wait, label)?)
     }
 
@@ -738,6 +745,8 @@ impl Corpus {
     /// file whole, like every other setting, and so reloads first for the
     /// same reason [`Self::drop_legacy_observatory_root`] does.
     pub(crate) fn set_commit(&mut self, enabled: bool) -> Result<()> {
+        self.locations
+            .write_gate(crate::locations::WriteIntent::Ordinary)?;
         self.reload_config()?;
         self.config.commit = enabled;
         self.config.save(&self.root)
@@ -760,6 +769,8 @@ impl Corpus {
     /// configuration in force, and a writer that waited its turn opened before
     /// the writer ahead of it had finished saying what that configuration is.
     pub(crate) fn commit(&self, verb: &str, ids: &[&str]) -> Result<CommitOutcome> {
+        self.locations
+            .write_gate(crate::locations::WriteIntent::Ordinary)?;
         if !self.current_config()?.commit {
             return Ok(CommitOutcome::Disabled);
         }
@@ -1008,6 +1019,8 @@ impl Corpus {
     /// ([`Self::load`]), and this is the last of the three places that has to
     /// hold for a write to land where the node already lives.
     pub fn save(&self, doc: &mut Doc) -> Result<()> {
+        self.locations
+            .write_gate(crate::locations::WriteIntent::Ordinary)?;
         let path = self.node_path(&doc.node.id)?;
         doc.node.updated = today();
         model::write(&path, doc)
@@ -1018,6 +1031,8 @@ impl Corpus {
     /// Judged on the entry itself: a symlink or anything else that is not a
     /// regular file is [`Error::NotRegularFile`], never replaced.
     pub fn create(&self, doc: &Doc) -> Result<()> {
+        self.locations
+            .write_gate(crate::locations::WriteIntent::Ordinary)?;
         let path = self.node_path(&doc.node.id)?;
         if regular_file_at(&path)? {
             return Err(Error::NodeExists(doc.node.id.clone()));
@@ -1229,6 +1244,8 @@ impl Corpus {
     /// a capture. `stamp` is an inbox stamp in either form an inbox line
     /// holds, and its first seven characters name the month file.
     pub(crate) fn capture_at(&self, text: &str, stamp: &str) -> Result<InboxEntry> {
+        self.locations
+            .write_gate(crate::locations::WriteIntent::Ordinary)?;
         let text = validate_capture(text)?;
         let dir = self.root.join("inbox");
         refuse_inbox_symlink(&dir)?;
@@ -1357,6 +1374,8 @@ impl Corpus {
     /// is part of its history, and a dropped capture is a record of a road not
     /// taken rather than a mistake to erase.
     pub fn settle_inbox(&self, entry: &InboxEntry, outcome: &str) -> Result<()> {
+        self.locations
+            .write_gate(crate::locations::WriteIntent::Ordinary)?;
         // Guard against settling an entry that belongs to a different corpus,
         // which would silently strike a line in someone else's inbox. The
         // file is the caller's to set, so it must be exactly

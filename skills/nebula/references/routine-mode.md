@@ -5,6 +5,9 @@ runs without a human in the loop is routine mode, and so is any session where
 you are not sure. The rule is absolute: **read the corpus, then propose; never
 mutate the corpus.**
 
+Set `NEBULA_READ_ONLY=1` for the routine. The core enforces the rule with
+`read_only` on every write, and rejects invalid values of that variable.
+
 Allowed read-only corpus commands: `check`, `inbox`, `show`, `log`, `list`,
 `near`, `trace`, `impact`, `graph`, `open`, `review` (with or without
 `--short`), and `tag list`. Do not use corpus-mutating commands, including
@@ -85,6 +88,7 @@ Rules for the lines:
   is an observation the human makes. Propose `abandoned` and say why.
 - Never run `sharpen --confirm` yourself, in either mode: confirming a kill
   condition is the human saying they stand behind it.
+  Under an Orbit run the core refuses it with `human_only`.
 - Never propose a new tag without saying `(new tag)` after the reason.
 - Never propose `migrate`, `init`, `config` or anything else touching
   `config.yaml`; if `check` fails to open the corpus, that failure is the

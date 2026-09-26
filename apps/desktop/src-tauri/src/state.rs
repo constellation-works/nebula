@@ -44,7 +44,7 @@ impl AppState {
     /// relative or unreadable `~/.config/nebula/root`, so no single guess
     /// would be right.
     pub fn with_root(locations: Locations, root: nebula_core::Result<PathBuf>) -> Self {
-        let corpus_root = root.map_err(Arc::new);
+        let corpus_root = locations.validate().and(root).map_err(Arc::new);
         // Deliberately dropped: a corpus that will not open now is opened
         // again by the next command, which reports why it cannot be. Logged
         // at `debug` only, since that report is the one the user sees.

@@ -28,6 +28,20 @@ const PWD_ENV: &str = "PWD";
 const NEBULA_ROOT_ENV: &str = "NEBULA_ROOT";
 /// Where the XDG base-directory rules put state: kept edits go under it.
 const XDG_STATE_HOME_ENV: &str = "XDG_STATE_HOME";
+const ORBIT_RUN_ID_ENV: &str = "ORBIT_RUN_ID";
+const ORBIT_TASK_ID_ENV: &str = "ORBIT_TASK_ID";
+const NEBULA_READ_ONLY_ENV: &str = "NEBULA_READ_ONLY";
+
+/// The kind of write being checked at the one resolved-environment gate.
+#[derive(Debug, Clone, Copy)]
+pub enum WriteIntent<'a> {
+    /// A write with no new authored words.
+    Ordinary,
+    /// A write of words attributed to the supplied author.
+    Authored(Option<&'a str>),
+    /// Adoption of a kill condition as the human's own.
+    ConfirmKill,
+}
 
 /// The resolved environment core works from: what the process environment
 /// held, and where the process was, when a surface started.
@@ -57,6 +71,12 @@ pub struct Locations {
     /// Core decides whether a corpus has a repository the way git would, and
     /// hands every git child this same value, so the two always agree.
     pub git_ceiling_directories: Option<OsString>,
+    /// Orbit run associated with this invocation.
+    pub orbit_run_id: Option<OsString>,
+    /// Orbit task associated with this invocation.
+    pub orbit_task_id: Option<OsString>,
+    /// The optional, validated read-only switch.
+    pub nebula_read_only: Option<OsString>,
 }
 
 impl Locations {
@@ -79,7 +99,69 @@ impl Locations {
             observatory_root: read(OBSERVATORY_ROOT_ENV),
             xdg_state_home: read(XDG_STATE_HOME_ENV),
             git_ceiling_directories: read(CEILING_ENV),
+            orbit_run_id: read(ORBIT_RUN_ID_ENV),
+            orbit_task_id: read(ORBIT_TASK_ID_ENV),
+            nebula_read_only: read(NEBULA_READ_ONLY_ENV),
         }
+    }
+
+    /// Validate process policy before dispatch, including read-only commands.
+    pub fn validate(&self) -> Result<()> {
+        match self.nebula_read_only.as_deref() {
+            None => Ok(()),
+            Some(v) if v.is_empty() => Ok(()),
+            Some(v) if v == "1" => Ok(()),
+            Some(_) => Err(Error::InvalidReadOnlyEnvironment {
+                name: NEBULA_READ_ONLY_ENV,
+            }),
+        }
+    }
+
+    /// Check a write before its first side effect. Every writer uses this
+    /// gate, either directly or through the corpus lock.
+    pub fn write_gate(&self, intent: WriteIntent<'_>) -> Result<()> {
+        self.validate()?;
+        if self.nebula_read_only.as_deref() == Some(std::ffi::OsStr::new("1")) {
+            return Err(Error::ReadOnly);
+        }
+        if self.orbit_run_id.as_ref().is_some_and(|v| !v.is_empty()) {
+            match intent {
+                WriteIntent::Authored(None) => return Err(Error::ByRequired),
+                WriteIntent::Authored(Some(by)) if by.trim().is_empty() => {
+                    return Err(Error::ByRequired);
+                }
+                WriteIntent::Ordinary | WriteIntent::Authored(Some(_)) => {}
+                WriteIntent::ConfirmKill => return Err(Error::HumanOnly),
+            }
+        }
+        Ok(())
+    }
+
+    /// Fill the absent halves of provenance from this invocation's snapshot.
+    pub fn origin(
+        &self,
+        task: Option<String>,
+        run: Option<String>,
+    ) -> Result<Option<crate::Origin>> {
+        let value = |v: &Option<OsString>, name| {
+            v.as_ref()
+                .filter(|v| !v.is_empty())
+                .map(|v| {
+                    v.clone()
+                        .into_string()
+                        .map_err(|_| Error::InvalidOriginEnvironment { name })
+                })
+                .transpose()
+        };
+        let task = match task {
+            Some(task) => Some(task),
+            None => value(&self.orbit_task_id, ORBIT_TASK_ID_ENV)?,
+        };
+        let run = match run {
+            Some(run) => Some(run),
+            None => value(&self.orbit_run_id, ORBIT_RUN_ID_ENV)?,
+        };
+        Ok(crate::Origin::of(task, run))
     }
 
     /// `$HOME`, refused by what is actually wrong with it: unset, or set to

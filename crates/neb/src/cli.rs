@@ -31,7 +31,7 @@ use nebula_core::verb::{self, CiteReport, CommitPolicy, RootWarning, WriteOption
 use nebula_core::{
     Citation, CloseTag, CommitOutcome, Corpus, CorpusLock, Direction, EdgeType, Error, Handoff,
     Locations, NEAR_DEFAULT, NewNode, OBSERVATORY_ROOT_ENV, ObservatoryLink, ObservatoryRoot,
-    ObservatorySource, Origin, Promotion, Severity, Status, Triage, graph, ops,
+    ObservatorySource, Promotion, Severity, Status, Triage, graph, ops,
 };
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -430,6 +430,9 @@ enum Command {
     Edit {
         /// Node id.
         node: String,
+        /// Who authored the edited prose. Required under an Orbit run.
+        #[arg(long, value_name = "LABEL")]
+        by: Option<String>,
         #[command(flatten)]
         commit: CommitArg,
     },
@@ -1152,7 +1155,10 @@ pub fn main() -> ExitCode {
     #[cfg(debug_assertions)]
     let _deadline = test_git_deadline();
     let json = cli.json;
-    let outcome = run(cli, &locations);
+    let outcome = locations
+        .validate()
+        .map_err(Failure::from)
+        .and_then(|()| run(cli, &locations));
     let flushed = output::finish();
     match outcome.and_then(|code| flushed.map(|()| code).map_err(Failure::from)) {
         Ok(code) => code,
@@ -1849,13 +1855,15 @@ fn run(cli: Cli, locations: &Locations) -> Outcome {
             run,
             ..
         } => {
+            let body_supplied = body.is_some();
             let body = body_value(body)?;
             let promotion = Promotion {
                 title,
                 body,
+                body_supplied,
                 parents,
                 tags,
-                origin: Origin::of(task, run),
+                origin: locations.origin(task, run)?,
                 id,
                 by,
             };
@@ -1894,6 +1902,7 @@ fn run(cli: Cli, locations: &Locations) -> Outcome {
         }
 
         Command::Triage { by, .. } => {
+            locations.write_gate(nebula_core::WriteIntent::Ordinary)?;
             // Refused before anything is read: there is no one payload a
             // session of keyed decisions could honestly be.
             if json {
@@ -1938,7 +1947,7 @@ fn run(cli: Cli, locations: &Locations) -> Outcome {
                     contradicts,
                     kill,
                     tags,
-                    origin: Origin::of(task, run),
+                    origin: locations.origin(task, run)?,
                     id,
                     by,
                 },
@@ -1961,7 +1970,8 @@ fn run(cli: Cli, locations: &Locations) -> Outcome {
             Ok(ok)
         }
 
-        Command::Edit { node, .. } => {
+        Command::Edit { node, by, .. } => {
+            locations.write_gate(nebula_core::WriteIntent::Authored(by.as_deref()))?;
             // No lock while the person types (STD-03 §R1). The body is
             // loaded now, edited for as long as it takes, and saved under
             // the lock only if nobody changed it meanwhile.
@@ -1973,6 +1983,7 @@ fn run(cli: Cli, locations: &Locations) -> Outcome {
                 &node,
                 &before.body,
                 &edited.text,
+                by.as_deref(),
                 json,
                 &commits.options(),
             ) {
@@ -2199,7 +2210,7 @@ fn run(cli: Cli, locations: &Locations) -> Outcome {
                     title,
                     note,
                     by,
-                    origin: Origin::of(task, run),
+                    origin: locations.origin(task, run)?,
                 },
                 &commits.options(),
             )
@@ -2243,7 +2254,7 @@ fn run(cli: Cli, locations: &Locations) -> Outcome {
                     record,
                     note,
                     by,
-                    origin: Origin::of(task, run),
+                    origin: locations.origin(task, run)?,
                 },
                 &commits.options(),
             )

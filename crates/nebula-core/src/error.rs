@@ -129,6 +129,32 @@ pub enum Error {
     #[error("HOME is not valid UTF-8: `{}`", .0.to_string_lossy())]
     HomeNotUnicode(OsString),
 
+    /// A read-only environment switch had a value other than empty or one.
+    #[error("{name} must be empty or `1`")]
+    InvalidReadOnlyEnvironment {
+        /// The rejected environment variable.
+        name: &'static str,
+    },
+
+    /// An Orbit provenance value could not be stored without changing it.
+    #[error("{name} is not valid UTF-8; provenance was not written")]
+    InvalidOriginEnvironment {
+        /// The rejected environment variable.
+        name: &'static str,
+    },
+
+    /// This invocation is configured to refuse all corpus writes.
+    #[error("this invocation is read-only; nothing was written")]
+    ReadOnly,
+
+    /// An Orbit run must identify the author of newly supplied words.
+    #[error("an Orbit run requires an explicit author for these words; nothing was written")]
+    ByRequired,
+
+    /// Only the human may adopt an agent's proposed kill condition.
+    #[error("only a human outside an Orbit run may confirm a kill condition; nothing was written")]
+    HumanOnly,
+
     /// A machine-local root setting already names a different corpus. The
     /// caller must opt in to replacing it rather than redirecting commands
     /// silently.
@@ -876,6 +902,11 @@ impl Error {
         RelativeRootSetting => "relative_root_setting", State,
         HomeUnset => "home_unset", State,
         HomeNotUnicode => "home_not_unicode", State,
+        InvalidReadOnlyEnvironment => "invalid_read_only_environment", State,
+        InvalidOriginEnvironment => "invalid_origin_environment", State,
+        ReadOnly => "read_only", State,
+        ByRequired => "by_required", State,
+        HumanOnly => "human_only", State,
         RootConfigConflict => "root_config_conflict", State,
         RootAndPathDiffer => "root_and_path_differ", Argument,
         RelativeObservatoryRoot { setting: None, } => "relative_observatory_root", Argument,

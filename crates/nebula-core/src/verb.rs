@@ -28,7 +28,7 @@ use crate::check::{self, OBSERVATORY, Report};
 use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
 use crate::graph::{self, Graph, Neighbour, NodeView};
-use crate::locations::Locations;
+use crate::locations::{Locations, WriteIntent};
 use crate::lock::{CorpusLock, LOCK_WAIT};
 use crate::model::{Doc, EdgeType, Status};
 use crate::ops::{
@@ -75,6 +75,12 @@ impl Default for WriteOptions {
 }
 
 impl WriteOptions {
+    /// Apply the policy before taking a lock, whose pending-write recovery
+    /// can itself change files.
+    fn lock_for(&self, corpus: &Corpus, intent: WriteIntent<'_>) -> Result<CorpusLock> {
+        corpus.locations().write_gate(intent)?;
+        self.lock(corpus)
+    }
     /// The corpus lock, taken the way these options say.
     pub(crate) fn lock(&self, corpus: &Corpus) -> Result<CorpusLock> {
         match &self.label {
@@ -191,6 +197,7 @@ pub fn init(
     set_root: bool,
     force: bool,
 ) -> Result<InitReport> {
+    locations.write_gate(crate::locations::WriteIntent::Ordinary)?;
     // Before any work: a `--root` that names another directory than the
     // path is refused here, with neither created (STD-01 §R28).
     let target = ops::init_target(locations, root.clone(), path.clone())?;
@@ -284,6 +291,11 @@ pub fn set_observatory_root(
     drop_legacy: bool,
     options: &WriteOptions,
 ) -> Result<Written<ObservatoryUpdate>> {
+    if dir.is_some() || drop_legacy {
+        corpus
+            .locations()
+            .write_gate(crate::locations::WriteIntent::Ordinary)?;
+    }
     let _settings = dir
         .is_some()
         .then(|| Corpus::lock_machine_settings(corpus.locations()))
@@ -365,6 +377,7 @@ pub fn capture_at(
     near_k: usize,
     options: &WriteOptions,
 ) -> Result<Written<CapturedAt>> {
+    locations.write_gate(crate::locations::WriteIntent::Ordinary)?;
     store::validate_capture(text)?;
     let root = Corpus::resolve_root(locations, root)?;
     let warning = default_root_warning(locations, &root)?;
@@ -407,8 +420,17 @@ pub fn promote(
     near_k: usize,
     options: &WriteOptions,
 ) -> Result<Written<Created>> {
+    let intent = if promotion.title.is_some()
+        || promotion.body_supplied
+        || !promotion.body.trim().is_empty()
+    {
+        WriteIntent::Authored(promotion.by.as_deref())
+    } else {
+        WriteIntent::Ordinary
+    };
+    corpus.locations().write_gate(intent)?;
     let near = ops::promotion_near(corpus, entry, promotion, near_k)?;
-    let lock = options.lock(corpus)?;
+    let lock = options.lock_for(corpus, intent)?;
     let created = ops::promote_with(corpus, entry, promotion, near)?;
     let commit = options.commit(corpus, "promote", &[entry, &created.doc.node.id]);
     drop_lock(lock);
@@ -426,7 +448,7 @@ pub fn new_node(
     spec: &NewNode,
     options: &WriteOptions,
 ) -> Result<Written<Created>> {
-    let lock = options.lock(corpus)?;
+    let lock = options.lock_for(corpus, WriteIntent::Authored(spec.by.as_deref()))?;
     let created = ops::new_node(corpus, spec)?;
     let node = &created.doc.node;
     let ids: Vec<&str> = std::iter::once(node.id.as_str())
@@ -463,9 +485,12 @@ pub fn edit(
     id: &str,
     before: &str,
     after: &str,
+    by: Option<&str>,
     view: bool,
     options: &WriteOptions,
 ) -> Result<Written<Saved>> {
+    corpus.locations().write_gate(WriteIntent::Authored(by))?;
+    crate::model::author(by)?;
     if ops::body_unchanged(before, after) {
         let saved = Saved {
             changed: false,
@@ -495,7 +520,7 @@ pub fn note(
     view: bool,
     options: &WriteOptions,
 ) -> Result<Written<Saved>> {
-    let lock = options.lock(corpus)?;
+    let lock = options.lock_for(corpus, WriteIntent::Authored(by))?;
     ops::note(corpus, id, text, by)?;
     let commit = options.commit(corpus, "note", &[id]);
     drop_lock(lock);
@@ -525,7 +550,7 @@ pub fn sharpen(
     by: Option<&str>,
     options: &WriteOptions,
 ) -> Result<Written<Sharpened>> {
-    let _lock = options.lock(corpus)?;
+    let _lock = options.lock_for(corpus, WriteIntent::Authored(by))?;
     let before = corpus.load(id)?;
     let doc = ops::sharpen(corpus, id, kill, by)?;
     let commit = options.commit(corpus, "sharpen", &[id]);
@@ -539,7 +564,7 @@ pub fn sharpen(
 
 /// Confirm an agent's kill condition as the human's.
 pub fn confirm_kill(corpus: &Corpus, id: &str, options: &WriteOptions) -> Result<Written<Doc>> {
-    let _lock = options.lock(corpus)?;
+    let _lock = options.lock_for(corpus, WriteIntent::ConfirmKill)?;
     let doc = ops::confirm_kill(corpus, id)?;
     let commit = options.commit(corpus, "sharpen", &[id]);
     Ok(Written::new(doc, commit))
@@ -568,7 +593,7 @@ pub fn link(
     by: Option<&str>,
     options: &WriteOptions,
 ) -> Result<Written<Vec<Doc>>> {
-    let _lock = options.lock(corpus)?;
+    let _lock = options.lock_for(corpus, WriteIntent::Authored(by))?;
     let changed = ops::link(corpus, from, kind, to, by)?;
     let commit = options.commit(corpus, "link", &[from, to]);
     Ok(Written::new(changed, commit))
@@ -614,7 +639,7 @@ pub fn cite(
     citation: &Citation,
     options: &WriteOptions,
 ) -> Result<Written<CiteReport>> {
-    let _lock = options.lock(corpus)?;
+    let _lock = options.lock_for(corpus, WriteIntent::Authored(citation.by.as_deref()))?;
     let setting = (check::normalize_reference_kind(&citation.kind) == OBSERVATORY)
         .then(|| corpus.observatory_root())
         .transpose()?;
@@ -642,7 +667,7 @@ pub fn handoff(
     handoff: &Handoff,
     options: &WriteOptions,
 ) -> Result<Written<HandoffReport>> {
-    let _lock = options.lock(corpus)?;
+    let _lock = options.lock_for(corpus, WriteIntent::Authored(handoff.by.as_deref()))?;
     let setting = corpus.observatory_root()?;
     let done = ops::handoff(corpus, id, handoff, setting.root.as_deref())?;
     let commit = options.commit(corpus, "handoff", &[id, &done.record]);

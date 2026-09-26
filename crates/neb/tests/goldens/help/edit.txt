@@ -9,14 +9,17 @@ Arguments:
           Node id
 
 Options:
-      --no-commit
-          Skip the commit this once, where `neb config commit on` would make one
+      --by <LABEL>
+          Who authored the edited prose. Required under an Orbit run
 
       --root <DIR>
           Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
 
       --json
           Emit JSON instead of text, for scripts and agents
+
+      --no-commit
+          Skip the commit this once, where `neb config commit on` would make one
 
   -h, --help
           Print help (see a summary with '-h')

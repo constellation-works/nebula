@@ -29,6 +29,14 @@ the path in `~/.config/nebula/root`, else `~/.nebula`. Only an existing corpus
 is found from the current directory, so `neb capture` can create one only at an
 explicit or configured root, and it says so when it does.
 
+`ORBIT_TASK_ID` and `ORBIT_RUN_ID` supply missing provenance for `new`,
+`promote`, `cite` and `handoff`; explicit `--task` and `--run` values win.
+When `ORBIT_RUN_ID` is nonempty, writes of new words require an explicit
+`--by`, and `sharpen --confirm` is reserved for a human outside the run.
+Set `NEBULA_READ_ONLY=1` to refuse all corpus writes while keeping reads
+available. An empty or unset value leaves writes enabled; other values are
+refused.
+
 ```
 nebula   = the CLI, the checker, the index builder   (this repo)
 corpus   = nodes/ and inbox/                          (elsewhere, private)
