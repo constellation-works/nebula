@@ -67,7 +67,7 @@ on `error`:
 | field | type | what it is |
 |---|---|---|
 | `error` | string | What is wrong, in the words the text output uses before its hint. |
-| `code` | string | The refusal's stable `snake_case` name. For a core refusal it is the `nebula-core` variant's name in `snake_case`: `no_such_node`, `cycle`, `self_loop`, `needs_kill`, `refuted_needs_why`, `refuted_cannot_reopen`, `seed_with_kill`, `unknown_reference_kind`, `unresolved_uri`, `absolute_uri`, `schema_mismatch`, `missing_config`, `corpus_ignored`, `git`, `git_timed_out`, `locked`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `usage` (arguments that parse but ask for nothing, such as an empty `capture`), `editor_not_configured`, `editor_invalid_command`, `editor_start`, `editor_unsuccessful`, `notes_changed`, `triage_key` (a key `triage` does not know), `json` and `io_at`. |
+| `code` | string | The refusal's stable `snake_case` name. For a core refusal it is the `nebula-core` variant's name in `snake_case`: `no_such_node`, `cycle`, `self_loop`, `needs_kill`, `refuted_needs_why`, `refuted_cannot_reopen`, `seed_with_kill`, `unknown_reference_kind`, `unresolved_uri`, `absolute_uri`, `schema_mismatch`, `missing_config`, `corpus_ignored`, `git`, `git_timed_out`, `locked`, `edit_conflict`, `input_too_large`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `usage` (arguments that parse but ask for nothing, such as an empty `capture`), `editor_not_configured`, `editor_invalid_command`, `editor_start`, `editor_unsuccessful`, `notes_changed`, `triage_key` (a key `triage` does not know), `json` and `io_at`. |
 | `hint` | string or `null` | What to do about it, as the text output words it: often a command to run, such as `neb sharpen <id> --kill "..."`. `null` when the CLI has nothing to add. |
 
 Key order is not significant. A new refusal arrives with its own `code` and
@@ -206,7 +206,9 @@ and stores `a thought`. A thought that itself contains a token starting with
 `-` is one quoted argument, or sits after `--`
 (`neb capture -- --quiet is the idea`).
 
-A lone `-` reads the thought from standard input. Text over several lines,
+A lone `-` reads the thought from standard input, up to 64 KiB (65536
+bytes); more is refused as `input_too_large` before the corpus is opened for
+writing, so nothing is captured. Text over several lines,
 piped or quoted, is joined onto one line: each line break becomes a single
 space and blank lines vanish, so `printf 'a\nb\n' | neb capture -` stores
 `a b`. Only whitespace-only text is refused (`nothing to capture`).
@@ -219,10 +221,13 @@ are the [`near`](#query) query run for you: a suggestion for the triage
 step, never an edge. `promote` writes the node as a root whatever it lists,
 and with `--parent` lists nothing, since that decision is made. `--quiet`
 prints the id alone; `promote --json` carries the path. No block at all means nothing in the corpus
-shares a word with it — promote as a root or drop. The id is printed before
-`nodes/` is read, so a node file that will not parse fails the suggestions
-(non-zero, after the id, like a refused commit) and never the capture;
-`--quiet` does not read `nodes/` at all.
+shares a word with it — promote as a root or drop. The suggestions are
+read after the capture is written and committed, with the write lock
+released. They are a side channel: a node file that will not parse costs
+the suggestions — `warning: suggestions unavailable: …` on stderr, naming the
+file — and never the capture, which still exits 0 with its id (or, under
+`--json`, its entry with `near: []`) on stdout. `--quiet` does not read
+`nodes/` at all.
 
 The duplicate check compares the text with every entry still waiting, after
 folding case and collapsing whitespace, and names the earliest match. Settled
@@ -236,7 +241,8 @@ recorded is still `no open inbox entry` (`NoSuchInboxEntry`).
 
 `promote --body <TEXT>` keeps the captured line as the first paragraph and
 appends `TEXT` after it. With `--body -`, the appended prose is read from
-standard input.
+standard input, up to 1 MiB (1048576 bytes); more is refused as
+`input_too_large` before anything is written.
 
 ```json
 // neb capture --json "domains drift when a field is required"
@@ -298,7 +304,8 @@ already succeeded. Reuse the existing tag unless the difference is deliberate:
 `neb tag <NODE> --remove physic --add physics`.
 
 `new --body <TEXT>` sets the prose at creation; `--body -` reads it from
-standard input. `new --kill "..."` starts the node as a hypothesis; without
+standard input, up to 1 MiB (1048576 bytes), refusing more as
+`input_too_large` before anything is written. `new --kill "..."` starts the node as a hypothesis; without
 it, a seed.
 `new --reopens <ID>` revives a refuted node as a new one with a single
 `reopens` edge; that edge is genealogy, so naming the same node as `--parent`
@@ -320,6 +327,17 @@ appends `- YYYY-MM-DD: <text>`. Repeated notes accumulate in order; earlier
 body text, status, edges and tags are left as they are. `updated` is bumped.
 `edit` writes only the prose body to a temporary file, preferring `$VISUAL`
 over `$EDITOR`, then saves the result after the editor exits successfully.
+No lock is held while the editor is open, so captures and other writes go
+on meanwhile; the lock is taken only to save. If the body changed in the
+meantime (a `note`, another `edit`), the save is refused as `edit_conflict`
+rather than erase that change; a change to the frontmatter alone (a `tag`, a
+`status`) is kept and the edit lands on top of it. Whenever a save is refused
+after the editor exits — `edit_conflict`, `notes_changed`, `locked`, a failed
+write — the text you typed is kept first, as a new owner-only
+`<id>-<UTC stamp>.md` under `$XDG_STATE_HOME/nebula/edits/` (default
+`~/.local/state/nebula/edits/`), outside the corpus, and the refusal (and its
+`--json` `error`) ends `your edited text is kept at <path>`. Look at the node
+with `neb show <id>`, then `neb edit <id>` again and carry the text over.
 Frontmatter is never exposed. If the node already has a `## Notes` section,
 removing, moving or changing it is refused; append reasoning with `note`
 instead. A body can hold more than one such section, because `note` opens a

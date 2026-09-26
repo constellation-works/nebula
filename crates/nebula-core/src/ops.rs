@@ -23,6 +23,13 @@
 //! through, and that is the trade the lock exists to make — writers wait,
 //! readers never do.
 //!
+//! Nor is the lock held across anything slow (STD-03 §R1). [`suggest`] and
+//! [`close_tags`] scan every node for advice, so they run before a writer
+//! takes the lock or after it drops, and say so in debug builds;
+//! [`promotion_near`] is [`promote`]'s suggestions read ahead of its lock. A
+//! body edited in `$EDITOR` is saved with [`set_body_if`], which re-checks
+//! under the lock that nobody changed it while the person typed.
+//!
 //! Which invariants live here rather than in `check` is a deliberate choice
 //! per rule. See `docs/design/lineage-graph/specs/invariants.md`.
 
@@ -34,7 +41,7 @@ use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
 use crate::fs::create_private_dir_all;
 use crate::graph::{self, Graph, Neighbour};
-use crate::lock::CorpusLock;
+use crate::lock::{self, CorpusLock};
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
 use crate::store::{self, CommitOutcome, Corpus, InboxEntry};
 use serde::{Deserialize, Serialize};
@@ -242,6 +249,36 @@ pub fn init(
     Ok(Initialized { root: target })
 }
 
+/// The most a capture read from standard input may be: 64 KiB.
+///
+/// A capture is one thought on one inbox line, and every later read of the
+/// inbox — the CLI's, the tray's, the desktop's — loads that line whole.
+/// Prose longer than this belongs in a node's body.
+pub const CAPTURE_INPUT_LIMIT: usize = 64 * 1024;
+
+/// The most a node body read from standard input may be: 1 MiB.
+pub const BODY_INPUT_LIMIT: usize = 1024 * 1024;
+
+/// Read `input` to its end as text, refusing it as [`Error::InputTooLarge`]
+/// when it is more than `limit` bytes. `what` names the text in that refusal.
+///
+/// At most `limit + 1` bytes are ever read, so an endless or enormous pipe
+/// costs a bounded read rather than the machine's memory (STD-03 §R22). A
+/// caller reads before it opens the corpus for writing, so a refusal has
+/// written nothing and held no lock while the pipe drained.
+pub fn read_bounded(input: impl std::io::Read, what: &'static str, limit: usize) -> Result<String> {
+    use std::io::Read as _;
+
+    let ceiling = u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1);
+    let mut bytes = Vec::new();
+    input.take(ceiling).read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(Error::InputTooLarge { what, limit });
+    }
+    String::from_utf8(bytes)
+        .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))
+}
+
 /// The five-second path: append a thought to the inbox.
 ///
 /// No parent, no title, no decisions. A capture step that requires decisions
@@ -261,7 +298,9 @@ pub fn capture(corpus: &Corpus, text: &str) -> Result<InboxEntry> {
 /// [`capture`] and then [`suggest`] itself.
 pub fn capture_near(corpus: &Corpus, text: &str, k: usize) -> Result<Captured> {
     // Only the capture is locked. The suggestions are a read, and holding a
-    // writer's lock over one would make every other writer wait on it.
+    // writer's lock over one would make every other writer wait on it; so a
+    // caller holding the lock itself calls `capture`, releases, and then
+    // `suggest`, as `neb capture` does.
     let entry = capture(corpus, text)?;
     let near = suggest(corpus, &entry.text, k)?;
     Ok(Captured { entry, near })
@@ -273,10 +312,18 @@ pub fn capture_near(corpus: &Corpus, text: &str, k: usize) -> Result<Captured> {
 /// is about to write so a promotion is not its own nearest neighbour. It
 /// reads `nodes/`, which a capture never needs, so a node file that will not
 /// parse fails here and not the capture.
+///
+/// A scan of every node, and advice, so never run under the write lock
+/// (STD-03 §R1); a debug build panics if the calling thread holds it. With
+/// `k` of zero nothing is read, so that is free anywhere.
 pub fn suggest(corpus: &Corpus, text: &str, k: usize) -> Result<Vec<Neighbour>> {
     if k == 0 {
         return Ok(Vec::new());
     }
+    debug_assert!(
+        !lock::held_by_this_thread(corpus.root()),
+        "suggest scans nodes/ for advice and must not run under the corpus lock"
+    );
     let docs = corpus.load_all()?;
     Ok(graph::near(&Graph::build(&docs)?, text, k)?.0)
 }
@@ -299,7 +346,45 @@ pub fn drop(corpus: &Corpus, entry: &str) -> Result<InboxEntry> {
 /// a parent was defensible. The node is written as a root either way: the
 /// suggestion never blocks the promotion and never becomes an edge. `near_k`
 /// is how many to look for; zero looks for none.
+///
+/// The suggestions are read first, without the lock, by [`promotion_near`]; a
+/// caller that holds the lock across the promotion and its commit runs that
+/// itself before taking it, and hands the result to [`promote_with`].
 pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion, near_k: usize) -> Result<Created> {
+    let near = promotion_near(corpus, entry, args, near_k)?;
+    promote_with(corpus, entry, args, near)
+}
+
+/// What [`promote`] suggests for `entry`: the `near_k` nodes its title and
+/// captured text read closest to, or none when `args` names a parent or
+/// `near_k` is zero.
+///
+/// Read without the lock (STD-03 §R1), before the node is written, so the new
+/// node is not among its own neighbours. The entry is read here without the
+/// lock too; [`promote_with`] finds it again under the lock, and refuses
+/// there if another writer settled it meanwhile.
+pub fn promotion_near(
+    corpus: &Corpus,
+    entry: &str,
+    args: &Promotion,
+    near_k: usize,
+) -> Result<Vec<Neighbour>> {
+    if near_k == 0 || !args.parents.is_empty() {
+        return Ok(Vec::new());
+    }
+    let e = corpus.inbox_entry(entry)?;
+    let title = args.title.as_deref().unwrap_or(&e.text);
+    suggest(corpus, &format!("{title}\n{}", e.text), near_k)
+}
+
+/// [`promote`], with its suggestions already read by [`promotion_near`]:
+/// `near` is returned on the [`Created`] as it was given.
+pub fn promote_with(
+    corpus: &Corpus,
+    entry: &str,
+    args: &Promotion,
+    near: Vec<Neighbour>,
+) -> Result<Created> {
     // Held across the whole verb: the node is written and *then* the inbox
     // line is struck, and a capture landing between the two would shift the
     // line this entry was found at.
@@ -312,12 +397,6 @@ pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion, near_k: usize) ->
         (Some(id), _) => Some(id.clone()),
         (None, Some(_)) => None,
         (None, None) => free_capture_id(corpus, &e.text)?,
-    };
-    // Read before the write, so the new node is not among its own neighbours.
-    let near = if args.parents.is_empty() {
-        suggest(corpus, &format!("{title}\n{}", e.text), near_k)?
-    } else {
-        Vec::new()
     };
     let body = if args.body.trim().is_empty() {
         e.text.clone()
@@ -691,9 +770,43 @@ pub fn note(corpus: &Corpus, id: &str, text: &str, by: Option<&str>) -> Result<D
 /// by [`Corpus::save`]. Callers that expose free-form editing must preserve
 /// append-only sections before calling this operation.
 pub fn set_body(corpus: &Corpus, id: &str, body: &str, by: Option<&str>) -> Result<Doc> {
+    replace_body(corpus, id, None, body, by)
+}
+
+/// [`set_body`], only if the node's body is still `expected`: the
+/// compare-and-set for a body edited without the lock.
+///
+/// `neb edit` loads a node, hands its body to `$EDITOR` with no lock held
+/// (STD-03 §R1: a person typing is the slowest work there is), and saves
+/// here. Under the lock the node is loaded again, and a body that is no
+/// longer `expected` was changed by another writer meanwhile — a `note`,
+/// say — which saving would erase, so it refuses with
+/// [`Error::EditConflict`] before writing anything. Only the body is
+/// compared: a tag, status or edge changed meanwhile is kept, and the new
+/// body lands on top of it.
+pub fn set_body_if(
+    corpus: &Corpus,
+    id: &str,
+    expected: &str,
+    body: &str,
+    by: Option<&str>,
+) -> Result<Doc> {
+    replace_body(corpus, id, Some(expected), body, by)
+}
+
+fn replace_body(
+    corpus: &Corpus,
+    id: &str,
+    expected: Option<&str>,
+    body: &str,
+    by: Option<&str>,
+) -> Result<Doc> {
     let _lock = corpus.lock()?;
     model::author(by)?;
     let mut doc = corpus.load(id)?;
+    if expected.is_some_and(|expected| doc.body != expected) {
+        return Err(Error::EditConflict(id.to_string()));
+    }
     doc.body = body.trim().to_string();
     corpus.save(&mut doc)?;
     Ok(doc)
@@ -1004,12 +1117,18 @@ pub fn tag_remove(corpus: &Corpus, id: &str, tags: &[String]) -> Result<Doc> {
 ///
 /// Run after the write, over the corpus as it now is. A read, not a guard:
 /// there is no declared list to refuse against, so nothing here stops a
-/// write, and an empty result says only that nothing collided.
+/// write, and an empty result says only that nothing collided. A scan of
+/// every node, so run once the write lock is released (STD-03 §R1); a debug
+/// build panics if the calling thread still holds it.
 pub fn close_tags(corpus: &Corpus, id: &str, tags: &[String]) -> Result<Vec<CloseTag>> {
     let tags = model::normalize_tags(tags);
     if tags.is_empty() {
         return Ok(Vec::new());
     }
+    debug_assert!(
+        !lock::held_by_this_thread(corpus.root()),
+        "close_tags scans nodes/ for advice and must not run under the corpus lock"
+    );
     let docs = corpus.load_all()?;
     let carriers = check::tag_carriers(&docs);
     let mut close = Vec::new();

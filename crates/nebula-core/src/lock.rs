@@ -12,6 +12,14 @@
 //! **Reads never take it.** [`crate::store::Corpus::open`], the queries and
 //! the desktop's file watcher must never wait on a writer.
 //!
+//! **Nor is it held across anything slow** (STD-03 §R1): not while a person
+//! types in `$EDITOR` or standard input is read, and not across the reads
+//! that are only advice — the suggestions after a capture or before a
+//! promotion, the close-tag notes, a `--json` view of what was written.
+//! Those run before the lock is taken or after it drops. `ops::suggest` and
+//! `ops::close_tags` check it in debug builds through
+//! [`held_by_this_thread`].
+//!
 //! That rule has a consequence a writer has to answer for: the config an
 //! `open` reads is a snapshot from before the lock, and a writer that waited
 //! its turn opened while the writer ahead of it was still working. So a
@@ -147,6 +155,26 @@ impl Drop for CorpusLock {
             *held = None;
         }
     }
+}
+
+/// Whether the calling thread holds `root`'s lock, at any depth.
+///
+/// For the reads that must never run under it (STD-03 §R1): a scan of every
+/// node for suggestions or close tags is advice, and a writer holding the
+/// lock across one makes every other writer wait on advice. They
+/// `debug_assert!` on this, so a caller that regresses fails every debug-build
+/// test that goes through it. Another thread's or process's hold is not this
+/// thread's business and reads as `false`.
+///
+/// Keyed by `root` as given, like the gate table, and it never adds a gate.
+pub(crate) fn held_by_this_thread(root: &Path) -> bool {
+    let gate = gates()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(root)
+        .cloned();
+    let me = std::thread::current().id();
+    gate.is_some_and(|gate| held(&gate).as_ref().is_some_and(|h| h.thread == me))
 }
 
 /// One gate per corpus root, for the life of the process.
@@ -300,6 +328,34 @@ mod tests {
         assert_eq!(held(&gate).as_ref().map(|h| h.depth), Some(1));
         drop(outer);
         assert!(held(&gate).is_none());
+    }
+
+    #[test]
+    fn held_by_this_thread_reports_only_the_holding_thread() {
+        let dir = root();
+        assert!(!held_by_this_thread(dir.path()), "nobody holds it yet");
+
+        let outer = CorpusLock::acquire(dir.path()).expect("outer");
+        let inner = CorpusLock::acquire(dir.path()).expect("re-entry");
+        assert!(held_by_this_thread(dir.path()));
+        let path = dir.path().to_path_buf();
+        let elsewhere = std::thread::spawn(move || held_by_this_thread(&path))
+            .join()
+            .expect("the other thread did not panic");
+        assert!(!elsewhere, "another thread does not hold it");
+
+        // Still held until the last guard goes.
+        drop(inner);
+        assert!(held_by_this_thread(dir.path()));
+        drop(outer);
+        assert!(!held_by_this_thread(dir.path()));
+
+        let other = root();
+        let _held = CorpusLock::acquire(dir.path()).expect("again");
+        assert!(
+            !held_by_this_thread(other.path()),
+            "holding one root is not holding another"
+        );
     }
 
     #[test]

@@ -536,6 +536,7 @@ never involves it; a Ctrl-C reaches the editor and `neb` together, which is
 what a person pressing it means.
 
 What is given up: an editor that hangs holds `neb edit` until someone ends
-it. Scope: the editor child of `neb edit`. Reverses if nebula ever opens an
+it — but only `neb edit`: no corpus lock is held while the editor runs, so
+every other writer carries on (STD-03@2 §R1). Scope: the editor child of `neb edit`. Reverses if nebula ever opens an
 editor with no person at the terminal, such as for an agent or a routine,
 which would then need a group and a deadline like git.

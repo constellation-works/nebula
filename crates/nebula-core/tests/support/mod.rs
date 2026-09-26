@@ -29,8 +29,9 @@ use std::sync::OnceLock;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-/// Removed from this process and from every test child. `neb`'s own roots
-/// and editor; the Orbit run context, under which writes refuse; and the
+/// Removed from this process and from every test child. `neb`'s own roots,
+/// editor, and the XDG directories its settings and kept edits go under; the
+/// Orbit run context, under which writes refuse; and the
 /// terminal settings output depends on. A developer with a real Observatory
 /// checkout exported would otherwise resolve records the tests expect to go
 /// missing. Tests that exercise one set it explicitly after the builder.
@@ -40,6 +41,7 @@ pub const CLEARED: &[&str] = &[
     "VISUAL",
     "EDITOR",
     "XDG_CONFIG_HOME",
+    "XDG_STATE_HOME",
     "ORBIT_RUN_ID",
     "ORBIT_TASK_ID",
     "NEBULA_READ_ONLY",

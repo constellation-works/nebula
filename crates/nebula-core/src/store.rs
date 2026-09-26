@@ -16,7 +16,7 @@
 
 use crate::config::{self, CommitSetting, Config, Declared, ObservatoryRoot};
 use crate::error::{Error, Result};
-use crate::fs::{append_private, create_private_dir_all, write_private_atomic};
+use crate::fs::{append_private, create_private_dir_all, create_private_new, write_private_atomic};
 use crate::git::{self, GitOutput};
 use crate::lock::{CorpusLock, LOCK_FILE};
 use crate::model::{self, Doc};
@@ -104,6 +104,65 @@ impl Corpus {
     /// Where this machine's settings live: `~/.config/nebula`.
     pub fn machine_settings_dir() -> Result<PathBuf> {
         Ok(Self::home()?.join(".config").join("nebula"))
+    }
+
+    /// Where an edit that could not be saved is kept:
+    /// `$XDG_STATE_HOME/nebula/edits`, else `~/.local/state/nebula/edits`.
+    ///
+    /// Outside every corpus on purpose. The text is a person's, typed against
+    /// a node the save was refused for, so it belongs to this machine and not
+    /// to the corpus it would sync or commit into. A relative
+    /// `$XDG_STATE_HOME` is ignored, as the XDG base-directory rules ask.
+    pub fn kept_edits_dir() -> Result<PathBuf> {
+        let state = std::env::var_os("XDG_STATE_HOME")
+            .map(PathBuf::from)
+            .filter(|dir| dir.is_absolute());
+        let state = match state {
+            Some(dir) => dir,
+            None => Self::home()?.join(".local").join("state"),
+        };
+        Ok(state.join("nebula").join("edits"))
+    }
+
+    /// Keep `text`, typed for node `id` and refused a save, as a new
+    /// `<id>-<UTC stamp>.md` owner-only under [`Self::kept_edits_dir`], and
+    /// return where it went.
+    ///
+    /// This is how a refused `neb edit` keeps what the person typed before
+    /// its temporary file goes (STD-03 §R30). A file is never replaced: a
+    /// second edit kept in the same second takes the next free `-N` suffix.
+    pub fn keep_edit(id: &str, text: &str) -> Result<PathBuf> {
+        /// Names tried before giving up. Only a second refused edit of the
+        /// same node in the same second takes a suffix at all.
+        const ATTEMPTS: u32 = 16;
+
+        if !is_path_safe_id(id) {
+            return Err(Error::UnsafeId(id.to_string()));
+        }
+        let dir = Self::kept_edits_dir()?;
+        create_private_dir_all(&dir)?;
+        let stamp = OffsetDateTime::now_utc()
+            .format(format_description!(
+                "[year][month][day]T[hour][minute][second]Z"
+            ))
+            .unwrap_or_default();
+        for n in 0..ATTEMPTS {
+            let name = match n {
+                0 => format!("{id}-{stamp}.md"),
+                n => format!("{id}-{stamp}-{n}.md"),
+            };
+            let path = dir.join(name);
+            match create_private_new(&path, text) {
+                Ok(()) => return Ok(path),
+                Err(Error::IoAt { source, .. })
+                    if source.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(Error::corpus(format!(
+            "no free name to keep the edit of `{id}` under in {} after {ATTEMPTS} tries",
+            dir.display()
+        )))
     }
 
     /// Take the lock that serializes writes to this machine's settings,

@@ -127,8 +127,18 @@ impl Corpus {
     /// flight at once. The returned handle is finished with
     /// [`Spawned::wait`].
     fn spawn(&self, args: &[&str]) -> Spawned {
+        self.spawn_with_env(args, &[])
+    }
+
+    /// [`Corpus::spawn`] with extra variables set, and stdin closed.
+    fn spawn_with_env(&self, args: &[&str], extra: &[(&str, &str)]) -> Spawned {
         let mut cmd = self.command(args);
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        for (key, value) in extra {
+            cmd.env(key, value);
+        }
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         Spawned {
             args: args.join(" "),
             child: ChildGuard::spawn(&mut cmd).unwrap_or_else(|e| panic!("{e}")),
@@ -442,6 +452,7 @@ fn the_child_command_builder_isolates_home_and_git_env() {
         "VISUAL",
         "EDITOR",
         "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
         "ORBIT_RUN_ID",
         "ORBIT_TASK_ID",
         "NEBULA_READ_ONLY",
@@ -637,6 +648,74 @@ fn capture_dash_reads_stdin_and_joins_its_lines() {
     let captured: serde_json::Value = serde_json::from_str(&captured).unwrap();
     assert_eq!(captured["entry"]["text"], "one two");
     assert_eq!(inbox_lines(&c).len(), 2);
+}
+
+/// `capture -` reads at most 64 KiB, and one byte more is refused before the
+/// corpus is opened for writing: the lock held here would otherwise turn it
+/// into a five-second wait and a `locked` refusal, and nothing is written.
+#[test]
+fn oversized_stdin_capture_is_refused_before_locking() {
+    let c = Corpus::new();
+    c.run(&["capture", "-q", "already waiting"]).assert_ok();
+    let before = inbox_lines(&c);
+    let held = nebula_core::CorpusLock::acquire(&c.root).expect("holding the lock");
+
+    let over = "a".repeat(nebula_core::ops::CAPTURE_INPUT_LIMIT + 1);
+    let run = c.run_with_stdin(&["--json", "capture", "-"], &over);
+    let refusal = run.refusal();
+    assert_eq!(refusal["code"], "input_too_large", "{refusal}");
+    let error = refusal["error"].as_str().unwrap();
+    assert!(error.contains("65536 bytes"), "names the limit: {error}");
+    assert!(
+        refusal["hint"].as_str().unwrap().contains("64 KiB"),
+        "{refusal}"
+    );
+
+    drop(held);
+    assert_eq!(inbox_lines(&c), before, "nothing was captured");
+}
+
+/// `--body -` reads at most 1 MiB, refused the same way before any lock.
+#[test]
+fn oversized_stdin_body_is_refused_before_locking() {
+    let c = Corpus::new();
+    let held = nebula_core::CorpusLock::acquire(&c.root).expect("holding the lock");
+
+    let over = "b".repeat(nebula_core::ops::BODY_INPUT_LIMIT + 1);
+    let run = c.run_with_stdin(&["--json", "new", "Too long", "--body", "-"], &over);
+    let refusal = run.refusal();
+    assert_eq!(refusal["code"], "input_too_large", "{refusal}");
+    assert!(
+        refusal["error"].as_str().unwrap().contains("1048576 bytes"),
+        "{refusal}"
+    );
+
+    drop(held);
+    assert!(!c.node_file("too-long").exists(), "no node was written");
+}
+
+/// Exactly the limit is not over it: taken whole, for a capture and a body.
+#[test]
+fn stdin_at_the_limit_is_accepted() {
+    let c = Corpus::new();
+    let thought = "a".repeat(nebula_core::ops::CAPTURE_INPUT_LIMIT);
+    let id = c
+        .run_with_stdin(&["capture", "-q", "-"], &thought)
+        .assert_ok()
+        .stdout_trim();
+    let lines = inbox_lines(&c);
+    assert_eq!(lines.len(), 1, "{} lines", lines.len());
+    assert!(lines[0].starts_with(&format!("- [{id}] ")));
+    assert!(
+        lines[0].ends_with(&format!(" {thought}")),
+        "the capture is whole"
+    );
+
+    let body = "b".repeat(nebula_core::ops::BODY_INPUT_LIMIT);
+    c.run_with_stdin(&["new", "At the limit", "--body", "-"], &body)
+        .assert_ok();
+    let node = std::fs::read_to_string(c.node_file("at-the-limit")).unwrap();
+    assert!(node.ends_with(&format!("{body}\n")), "the body is whole");
 }
 
 #[test]
@@ -2502,17 +2581,62 @@ fn capture_prints_its_id_before_a_node_that_will_not_parse_can_get_in_the_way() 
     );
 
     // The write lands and the id is printed; the suggestions are what fail,
-    // after it, the way a refused commit does. Nothing about the capture
-    // depended on `nodes/` parsing, and it must not read as a lost thought.
+    // after it, and they are a side channel: said on stderr, never the
+    // capture's exit status. Nothing about the capture depended on `nodes/`
+    // parsing, and it must not read as a lost thought.
     let run = c.run(&["capture", "another idea"]);
     let out = run.stdout();
     assert_eq!(out.lines().count(), 1, "the id, alone: {out}");
     assert_eq!(out.trim().len(), 4, "{out}");
-    run.assert_fails().says("unknown field `verdict`");
+    run.assert_ok()
+        .says("suggestions unavailable")
+        .says("unknown field `verdict`");
     c.run(&["inbox"]).assert_ok().says("another idea");
 
     // --quiet never reads `nodes/`, so it does not even see the problem.
     c.run(&["capture", "-q", "quietly"]).assert_ok();
+}
+
+/// A malformed node file under `nodes/`, with commits on.
+fn corpus_with_a_broken_node() -> Corpus {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    c.seed("an idea", "An idea");
+    write(&c.node_file("broken"), "this node lost its frontmatter\n");
+    c
+}
+
+/// Suggestions are a declared side channel (STD-02 §R31): a `nodes/` that
+/// cannot be read for them costs the suggestions, said on stderr with the
+/// file, and never the capture. It is committed and exits 0, so nobody
+/// retries it and captures the thought twice.
+#[test]
+fn capture_with_an_unreadable_node_file_still_commits_and_exits_zero() {
+    let c = corpus_with_a_broken_node();
+
+    let run = c.run(&["capture", "x"]).assert_ok();
+    let id = run.stdout_trim();
+    assert_eq!(id.len(), 4, "the id is on stdout: {}", run.stdout());
+    let stderr = run.stderr();
+    assert!(stderr.contains("suggestions unavailable"), "{stderr}");
+    assert!(stderr.contains("broken.md"), "names the file: {stderr}");
+    assert_eq!(log(&c.root)[0], format!("neb capture {id}"));
+}
+
+/// The same under `--json`: the entry is on stdout, so an agent knows the
+/// capture landed.
+#[test]
+fn json_capture_with_an_unreadable_node_file_reports_the_entry() {
+    let c = corpus_with_a_broken_node();
+
+    let run = c.run(&["--json", "capture", "json thought"]).assert_ok();
+    let out: serde_json::Value = serde_json::from_str(&run.stdout())
+        .unwrap_or_else(|e| panic!("stdout is the entry ({e}): {}", run.stdout()));
+    assert_eq!(out["entry"]["text"], "json thought", "{out}");
+    assert_eq!(out["near"], serde_json::json!([]), "{out}");
+    assert!(run.stderr().contains("broken.md"), "{}", run.stderr());
+    let id = out["entry"]["id"].as_str().unwrap();
+    assert_eq!(log(&c.root)[0], format!("neb capture {id}"));
 }
 
 #[test]
@@ -5842,6 +5966,254 @@ fn edit_without_visual_or_editor_is_a_named_refusal() {
     c.run(&["edit", &id])
         .assert_fails()
         .says("neither $VISUAL nor $EDITOR names an editor");
+}
+
+/// An `$EDITOR` that says it has started, then waits for the test to let it
+/// finish before it writes `text` over the body. The wait is bounded, so an
+/// editor nobody releases exits non-zero rather than hanging the suite.
+#[cfg(unix)]
+struct HeldEditor {
+    script: PathBuf,
+    started: PathBuf,
+    release: PathBuf,
+}
+
+#[cfg(unix)]
+impl HeldEditor {
+    fn new(c: &Corpus, name: &str, text: &str) -> Self {
+        let dir = c.workdir();
+        let started = dir.join(format!("{name}.started"));
+        let release = dir.join(format!("{name}.release"));
+        let typed = dir.join(format!("{name}.typed"));
+        write(&typed, text);
+        let script = editor_script(
+            c,
+            &format!("{name}.sh"),
+            &format!(
+                "#!/bin/sh\n: > '{started}'\ni=0\n\
+                 while [ ! -e '{release}' ]; do\n\
+                 i=$((i + 1)); [ \"$i\" -gt 200 ] && exit 75; sleep 0.05\n\
+                 done\ncat '{typed}' > \"$1\"\n",
+                started = started.display(),
+                release = release.display(),
+                typed = typed.display(),
+            ),
+        );
+        Self {
+            script,
+            started,
+            release,
+        }
+    }
+
+    /// `neb <args>` with this editor, started and not yet released.
+    fn open(&self, c: &Corpus, args: &[&str]) -> Spawned {
+        let mut edit = c.spawn_with_env(args, &[("EDITOR", self.script.to_str().unwrap())]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !self.started.exists() {
+            assert!(
+                edit.child.try_wait().is_none(),
+                "`neb {}` exited before its editor started",
+                edit.args
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the editor never started"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        edit
+    }
+
+    fn release(&self) {
+        write(&self.release, "");
+    }
+}
+
+/// Every edit kept after a refused save, under the fixture's home.
+fn kept_edits(c: &Corpus) -> Vec<PathBuf> {
+    let dir = c.workdir().join(".local/state/nebula/edits");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut kept: Vec<PathBuf> = entries.map(|entry| entry.unwrap().path()).collect();
+    kept.sort();
+    kept
+}
+
+/// The one kept edit a refusal names: outside the corpus, owner-only, and
+/// holding exactly `text`.
+#[cfg(unix)]
+fn assert_kept(c: &Corpus, named_in: &str, text: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let kept = kept_edits(c);
+    let [path] = kept.as_slice() else {
+        panic!("expected one kept edit, found {kept:?}");
+    };
+    assert!(
+        named_in.contains(&path.display().to_string()),
+        "the refusal names {}:\n{named_in}",
+        path.display()
+    );
+    assert!(!path.starts_with(&c.root), "kept outside the corpus");
+    assert_eq!(std::fs::read_to_string(path).unwrap(), text);
+    let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "{}", path.display());
+    path.clone()
+}
+
+/// The editor holds no lock (STD-03 §R1): a capture made while a body is
+/// open in `$EDITOR` lands at once, and the edit still saves afterwards.
+#[cfg(unix)]
+#[test]
+fn a_capture_lands_while_neb_edit_is_open() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "Open in an editor", "--body", "the old body"])
+        .assert_ok()
+        .stdout_trim();
+    let editor = HeldEditor::new(&c, "held", "the edited body\n");
+    let edit = editor.open(&c, &["edit", &id]);
+
+    let started = std::time::Instant::now();
+    c.run(&["capture", "x"]).assert_ok();
+    let took = started.elapsed();
+    assert!(
+        took < std::time::Duration::from_secs(1),
+        "the capture waited {took:?} on the editor"
+    );
+
+    editor.release();
+    edit.wait().assert_ok();
+    let node = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(node.ends_with("the edited body\n"), "{node}");
+    c.run(&["inbox"]).assert_ok().says("x");
+}
+
+/// A body changed while the editor was open — here by `note` — would be
+/// erased by the save, so the edit is refused as `edit_conflict`, the
+/// concurrent note survives, and what the person typed is kept in a file the
+/// refusal names, in the prose and in the `--json` envelope.
+#[cfg(unix)]
+#[test]
+fn an_edit_whose_body_changed_meanwhile_is_refused_and_kept() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "Edited twice", "--body", "the old body"])
+        .assert_ok()
+        .stdout_trim();
+    let typed = "Hours of careful new prose\n";
+
+    let editor = HeldEditor::new(&c, "first", typed);
+    let edit = editor.open(&c, &["edit", &id]);
+    c.run(&["note", &id, "a concurrent note"]).assert_ok();
+    editor.release();
+    let run = edit
+        .wait()
+        .assert_fails()
+        .says("body changed while it was being edited");
+    let first = assert_kept(&c, &run.stderr(), typed);
+    let node = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(node.contains("a concurrent note"), "{node}");
+    assert!(!node.contains("careful new prose"), "{node}");
+
+    // The same under `--json`, on a node with no notes yet, so the refusal
+    // is the conflict and not the notes check.
+    std::fs::remove_file(first).unwrap();
+    let id = c
+        .run(&["new", "Edited twice again", "--body", "the old body"])
+        .assert_ok()
+        .stdout_trim();
+    let editor = HeldEditor::new(&c, "second", typed);
+    let edit = editor.open(&c, &["--json", "edit", &id]);
+    c.run(&["note", &id, "another concurrent note"]).assert_ok();
+    editor.release();
+    let run = edit.wait();
+    let refusal = run.refusal();
+    assert_eq!(refusal["code"], "edit_conflict", "{refusal}");
+    assert_kept(&c, refusal["error"].as_str().unwrap(), typed);
+    let node = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(node.contains("another concurrent note"), "{node}");
+}
+
+/// Only the body is compared: a tag added while the editor was open is not
+/// a conflict, and the edit lands on top of it.
+#[cfg(unix)]
+#[test]
+fn an_edit_keeps_a_concurrent_frontmatter_change() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "Tagged meanwhile", "--body", "the old body"])
+        .assert_ok()
+        .stdout_trim();
+    let editor = HeldEditor::new(&c, "held", "the new body\n");
+    let edit = editor.open(&c, &["edit", &id]);
+    c.run(&["tag", &id, "--add", "x"]).assert_ok();
+    editor.release();
+    edit.wait().assert_ok();
+
+    let shown = c.run(&["--json", "show", &id]).assert_ok().stdout();
+    let shown: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    assert_eq!(shown["node"]["tags"], serde_json::json!(["x"]), "{shown}");
+    assert_eq!(shown["body"].as_str().map(str::trim), Some("the new body"));
+    assert!(kept_edits(&c).is_empty(), "a saved edit keeps nothing");
+}
+
+/// The notes refusal comes after the person typed, so it keeps the text too.
+#[cfg(unix)]
+#[test]
+fn a_notes_changing_edit_is_refused_and_the_text_is_kept() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "Protected notes", "--body", "the argument"])
+        .assert_ok()
+        .stdout_trim();
+    c.run(&["note", &id, "an append-only note"]).assert_ok();
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    let script = editor_script(
+        &c,
+        "drop-notes.sh",
+        "#!/bin/sh\nprintf 'Hours of careful new prose\\n' > \"$1\"\n",
+    );
+
+    let run = c
+        .run_with_env(&["edit", &id], &[("EDITOR", script.to_str().unwrap())])
+        .assert_fails()
+        .says("existing ## Notes section was removed, reordered, or changed");
+    assert_kept(&c, &run.stderr(), "Hours of careful new prose\n");
+    assert_eq!(
+        std::fs::read_to_string(c.node_file(&id)).unwrap(),
+        before,
+        "a refused edit must not touch the node"
+    );
+}
+
+/// The lock is taken only to save, after the editor exits. A writer holding
+/// it past the bounded wait refuses the save as `locked`, and the text is
+/// kept.
+#[cfg(unix)]
+#[test]
+fn an_edit_that_waits_out_the_lock_keeps_the_text() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "Locked at save", "--body", "the old body"])
+        .assert_ok()
+        .stdout_trim();
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    let typed = "text typed while somebody held the lock\n";
+    let editor = HeldEditor::new(&c, "held", typed);
+    let edit = editor.open(&c, &["--json", "edit", &id]);
+    let held = nebula_core::CorpusLock::acquire(&c.root).expect("holding the lock");
+    editor.release();
+
+    // It waits the full five seconds before giving up.
+    let run = edit.wait();
+    drop(held);
+    let refusal = run.refusal();
+    assert_eq!(refusal["code"], "locked", "{refusal}");
+    assert_kept(&c, refusal["error"].as_str().unwrap(), typed);
+    assert_eq!(std::fs::read_to_string(c.node_file(&id)).unwrap(), before);
 }
 
 // --------------------------------------------------------------------- note --
