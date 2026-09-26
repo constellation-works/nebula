@@ -25,10 +25,10 @@ use table::{Cell, Column, Table};
 
 pub use error::{Refusal, refusal, refusal_about, refusal_for_new};
 pub use report::{
-    check, check_tally, commit_setting, commit_setting_hint, impact, impact_notice, inbox,
-    inbox_notice, migration, migration_notice, near, near_notice, node, observatory_root,
-    observatory_root_notes, open, open_notice, review, review_notice, suggestions, tags,
-    tags_notice,
+    check, check_tally, commit_setting, commit_setting_hint, dropped_legacy, impact, impact_notice,
+    inbox, inbox_notice, migration, migration_notice, near, near_notice, node, observatory_root,
+    observatory_root_notes, open, open_notice, retag_notes, review, review_notice, suggestions,
+    tags, tags_notice, unchanged,
 };
 pub use table::Target;
 pub use tree::{draw as tree, tabbed as trace_lines, trace_notice};

@@ -9,7 +9,8 @@ verb is deprecated: before a verb that writes it still skips the commit and
 warns on stderr, and before any other verb it is refused (`usage`, exit 2).
 Under `--json`, each emits
 one JSON value on stdout. Two commands are the exceptions: `completions`
-always emits a shell script, and `triage`, which takes its decisions from a
+always emits a shell script, and refuses `--json` and `--root` rather than
+ignore them (exit 2; `$NEBULA_ROOT` is not read), and `triage`, which takes its decisions from a
 person one key at a time, refuses `--json` (`Interactive`) and names the
 scriptable verbs instead. Ids are slugs of the title
 (`"Tags beat domains"` → `tags-beat-domains`); inbox ids are four hex chars. A
@@ -115,7 +116,7 @@ Exit codes, with or without `--json`:
 | 0 | success | the payload | empty, bar a `warning:` or `note:` line (from `init`, `capture`, or a commit that could not happen), or the line saying a query found nothing or a bound cut the result |
 | 1 | a refusal | empty, **except** when the write landed and its commit was refused (`CorpusIgnored`, `Git`, `GitTimedOut`): then it holds the write's payload | the envelope |
 | 1 | `check` found an `error`-level finding | the report | empty |
-| 2 | a usage error `neb` raised: an argument no corpus could accept, whatever it holds (`usage`, `interactive`, `self_loop`, `parent_and_reopens`, `empty_kill`, `refuted_needs_why`, `absolute_uri`, `unusable_title`, `unknown_reference_kind`, `invalid_observatory_id`, `invalid_id`, `empty_root`, and `relative_observatory_root` for a path given on the command line); nothing was written | empty | the envelope |
+| 2 | a usage error `neb` raised: an argument no corpus could accept, whatever it holds (`usage`, `interactive`, `self_loop`, `parent_and_reopens`, `empty_kill`, `refuted_needs_why`, `absolute_uri`, `unusable_title`, `unknown_reference_kind`, `invalid_observatory_id`, `invalid_id`, `empty_root`, `root_and_path_differ`, and `relative_observatory_root` for a path given on the command line); nothing was written | empty | the envelope |
 | 2 | clap rejected the command line: unknown flag, missing argument, bad value | empty | clap's prose, **not** JSON: it is raised before `neb` knows `--json` was asked for |
 
 A refusal of a line read by `triage` from piped input exits 1 whatever its
@@ -146,12 +147,20 @@ through it (`show`, `cite --kind observatory`, `handoff`) warns on stderr,
 naming it and `neb config observatory-root <DIR>`. `legacy` names that key whenever the file still carries it, in
 force or not. `--drop-legacy` removes it from `config.yaml` (a corpus write,
 committed as `neb config observatory-root` when `commit` is on); run it once
-every machine that shares the corpus has its own setting.
+every machine that shares the corpus has its own setting. It says on stderr,
+in every mode, what it did: `removed the legacy observatory_root (<path>) from
+<root>/config.yaml`, or, when there is no key,
+`no legacy observatory_root key in <root>/config.yaml; nothing removed`, and
+then the file is not rewritten and nothing is committed.
 
 ```json
 // neb init /Users/you/.nebula --json
 { "root": "/Users/you/.nebula" }
 ```
+
+`--root` and `PATH` name the same thing, so `neb --root A init B` with two
+different directories is refused before either is created
+(`root_and_path_differ`, exit 2); the same directory given both ways is fine.
 
 Plain `init` never writes `~/.config/nebula/root`. For a primary non-default
 corpus, pass `--set-root`; it refuses to replace a setting that names another
@@ -330,13 +339,20 @@ and a thought unlike anything in the corpus all read the same way:
 | verb | does | flags |
 |---|---|---|
 | `neb new <TITLE>` | create a node directly | `--body <TEXT\|->`, `--parent <ID>`×, `--reopens <ID>`, `--contradicts <ID>`×, `--kill`, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run` |
-| `neb edit <NODE>` | open the body, without frontmatter, in `$VISUAL` or `$EDITOR` | `--by <LABEL>` |
+| `neb edit <NODE>` | open the body, without frontmatter, in `$VISUAL` or `$EDITOR` | — |
 | `neb sharpen <NODE> --kill <KILL>` | seed → hypothesis by naming the falsifier | `--by <LABEL>`, or `--confirm` instead of `--kill` |
 | `neb status <NODE> <STATUS>` | `seed`, `hypothesis`, `refuted`, `abandoned`, with guards | `--why` (required for refuted, optional for abandoned) |
 | `neb link <FROM> <KIND> <TO>` | `derives-from`, `refines`, `generalizes`, `reopens`, `contradicts` | `--by <LABEL>` |
 | `neb tag <NODE>` | edit tags; normalised to lowercase kebab-case | `--add <TAG>`×, `--remove <TAG>`× |
 | `neb tag list` | every tag with its node count | — |
 | `neb note [--by <LABEL>] <NODE> <TEXT>...` | append a dated paragraph of reasoning to the body | `--by <LABEL>` (before or after the text) |
+
+`tag` notes on stderr, in every output mode, each tag that was not on the
+node to `--remove` (`` `absent` is not a tag of <id>; nothing to remove ``) or
+was already on it to `--add` (`` `physics` is already a tag of <id>; nothing to
+add ``). When that leaves the tags as they were, the node is not written:
+`updated` stays, nothing is committed, and stderr ends
+`no change; <id> not written`. The exit code is 0 either way.
 
 `new`, `promote` and `tag --add` print `note: tag physic is close to physics
 (2 nodes)` on stderr, in every output mode, when a tag they introduce to the
@@ -383,9 +399,11 @@ Frontmatter is never exposed. If the node already has a `## Notes` section,
 removing, moving or changing it is refused; append reasoning with `note`
 instead. A body can hold more than one such section, because `note` opens a
 fresh one rather than reach back into a section other prose has closed, and
-every one of them is protected. `--by` is accepted and validated, but records nothing because the
-body has no per-field author in the current schema. With neither environment
-variable set, `edit` refuses and names both variables.
+every one of them is protected. A body left as it was (outer whitespace aside)
+is not written: `updated` stays, nothing is committed, stderr says
+`no change; <id> not written`, and `--json` still prints the node. `edit`
+takes no `--by`: the body has no per-field author in the current schema. With
+neither environment variable set, `edit` refuses and names both variables.
 Unknown nodes are refused (`NoSuchNode`). `--json` is the same `NodeView` as
 `show --json`: `notes` is a list of `{at, text, by}`, oldest first, and `[]`
 when there are none.
@@ -498,7 +516,8 @@ exist; an absolute path or `file:` URI is refused even when it does, because
 it resolves on this machine only. Always pass `--note`: it is the only field
 that matters in a year.
 
-`cite --json` returns the changed `doc` and the newly allocated reference id:
+`cite --json` returns the changed `doc`, the newly allocated reference id, and
+`observatory`, which is `null` for every kind but `observatory` (see below):
 
 ```json
 // neb cite tags-beat-domains --kind article --uri https://example.org/folksonomy --note "the drift argument" --json
@@ -519,7 +538,8 @@ that matters in a year.
     },
     "body": ""
   },
-  "reference": "r1"
+  "reference": "r1",
+  "observatory": null
 }
 ```
 
@@ -545,6 +565,9 @@ resolve: the citation is still true, and the machine is merely missing or
 behind the checkout. `show` prints the resolved path under the reference, and
 `show --json` carries an `observatory` array of
 `{reference, record, path}` (`path` is `null` when it does not resolve).
+`cite --kind observatory` prints the path it resolved to, and `cite --json`
+carries the same `{reference, record, path}` for the new reference as
+`observatory`, `path` `null` with no root or no match.
 
 ```json
 // neb cite proper-time-is-a-count --kind observatory --uri Q<nnn> --note "the question this became"
@@ -590,7 +613,8 @@ scarcity-wake seed -> abandoned, handed off to H<nnn> (r1)
 ```
 
 `--json` returns the node as written, the new reference's id, the record as
-stored, and the status it left:
+stored, the status it left, and where the record is, as `observatory`
+(`{reference, record, path}`, `path` `null` with no root):
 
 ```json
 // neb handoff scarcity-wake H<nnn> --note "the hypothesis this became" --json
@@ -612,7 +636,9 @@ stored, and the status it left:
   },
   "reference": "r1",
   "record": "H<nnn>",
-  "from": "seed"
+  "from": "seed",
+  "observatory": { "reference": "r1", "record": "H<nnn>",
+                   "path": "/Users/you/workspace/observatory/hypotheses/H<nnn>-<slug>.md" }
 }
 ```
 
@@ -931,7 +957,8 @@ reference and does not close the no-references finding after the grace period.
 
 `neb review` without `--json` prints five `##` sections in that order, each
 `_none_` or a `- \`id\` Title — reason` list; `--out review.md` writes it to a
-file. `--limit <N>` keeps the first N findings under each heading, so a
+file (the `--json` report too, under `--json`) and says `wrote review.md` on
+stderr, leaving stdout empty. `--limit <N>` keeps the first N findings under each heading, so a
 crowded section cannot push a short one out, and a cut section ends
 `- _… and K more; raise --limit for more_`, which is part of the report and
 so of the `--out` file; under `--json` it keeps the first N items of each

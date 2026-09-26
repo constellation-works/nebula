@@ -107,6 +107,17 @@ pub enum Error {
         requested: PathBuf,
     },
 
+    /// `init` was given a corpus location twice, as `--root` and as its
+    /// path, and the two name different directories. Either could be meant,
+    /// so neither is created.
+    #[error("--root {} and the path {} name different corpora", .root.display(), .path.display())]
+    RootAndPathDiffer {
+        /// The location `--root` gave.
+        root: PathBuf,
+        /// The location the path argument gave.
+        path: PathBuf,
+    },
+
     /// An observatory root that is not an absolute path, given to be stored
     /// or read back from this machine's setting. A machine-wide setting is
     /// read from whatever directory a command runs in, so a relative one
@@ -551,6 +562,7 @@ impl Error {
         EmptyRootSetting => "empty_root_setting",
         RelativeRootSetting => "relative_root_setting",
         RootConfigConflict => "root_config_conflict",
+        RootAndPathDiffer => "root_and_path_differ",
         RelativeObservatoryRoot => "relative_observatory_root",
         MissingConfig => "missing_config",
         SchemaMismatch => "schema_mismatch",

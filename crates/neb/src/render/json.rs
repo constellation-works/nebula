@@ -220,19 +220,26 @@ impl From<&nebula_core::Captured> for Captured {
     }
 }
 
-/// `cite`. See [`nebula_core::Cited`].
+/// `cite`, `observatory` null for any kind but `observatory`. See
+/// [`nebula_core::Cited`].
 #[derive(Debug, Serialize)]
 pub struct Cited {
     doc: Doc,
     reference: String,
+    observatory: Option<ObservatoryLink>,
 }
 
 impl From<&nebula_core::Cited> for Cited {
     fn from(cited: &nebula_core::Cited) -> Self {
-        let nebula_core::Cited { doc, reference } = cited;
+        let nebula_core::Cited {
+            doc,
+            reference,
+            observatory,
+        } = cited;
         Self {
             doc: Doc::from(doc),
             reference: reference.clone(),
+            observatory: observatory.as_ref().map(ObservatoryLink::from),
         }
     }
 }
@@ -261,6 +268,7 @@ pub struct HandedOff {
     reference: String,
     record: String,
     from: Status,
+    observatory: ObservatoryLink,
 }
 
 impl From<&nebula_core::HandedOff> for HandedOff {
@@ -270,12 +278,14 @@ impl From<&nebula_core::HandedOff> for HandedOff {
             reference,
             record,
             from,
+            observatory,
         } = done;
         Self {
             doc: Doc::from(doc),
             reference: reference.clone(),
             record: record.clone(),
             from: *from,
+            observatory: ObservatoryLink::from(observatory),
         }
     }
 }

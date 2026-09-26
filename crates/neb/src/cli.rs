@@ -24,9 +24,9 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use nebula_core::triage::{Action, Step};
 use nebula_core::{
     Citation, CommitOutcome, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, Handoff,
-    InboxEntry, NEAR_DEFAULT, NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, ObservatoryRoot,
-    ObservatorySource, Origin, Promotion, Severity, Status, Triage, check, graph, migrate, model,
-    ops,
+    InboxEntry, NEAR_DEFAULT, NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, ObservatoryLink,
+    ObservatoryRoot, ObservatorySource, Origin, Promotion, Severity, Status, Triage, check, graph,
+    migrate, model, ops,
 };
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -216,8 +216,13 @@ enum Command {
     },
 
     /// Generate shell completion scripts.
+    ///
+    /// The script is the same for every corpus and is never JSON, so
+    /// `--root` and `--json` are refused here rather than ignored.
+    /// `$NEBULA_ROOT` is not read.
     Completions {
         /// The shell to generate completions for.
+        #[arg(conflicts_with_all = ["root", "json"])]
         shell: clap_complete::Shell,
     },
 
@@ -395,14 +400,11 @@ enum Command {
     /// Edit a node's body in $VISUAL or $EDITOR.
     ///
     /// The editor sees prose only, never YAML frontmatter. Every existing
-    /// `## Notes` section is protected because notes are append-only.
+    /// `## Notes` section is protected because notes are append-only. A body
+    /// left as it was is not written, and stderr says so.
     Edit {
         /// Node id.
         node: String,
-        /// Who edited the body. Accepted for command consistency, but body
-        /// authorship is not represented in the schema and is not recorded.
-        #[arg(long, value_name = "LABEL")]
-        by: Option<String>,
         #[command(flatten)]
         commit: CommitArg,
     },
@@ -471,7 +473,9 @@ enum Command {
     ///
     /// Tags are normalised to lowercase kebab-case on the way in. A tag new
     /// to the corpus that differs from one in use only by case or a trailing
-    /// `s` is written, with a note on stderr naming the existing one.
+    /// `s` is written, with a note on stderr naming the existing one. A tag
+    /// already on the node to add, or not on it to remove, is noted on
+    /// stderr; when that leaves the tags as they were, nothing is written.
     Tag {
         /// Node id, or `list` to show every tag in the corpus with a count.
         target: String,
@@ -1331,8 +1335,11 @@ fn suggestions(corpus: &Corpus, text: &str, k: usize) -> Vec<nebula_core::Neighb
 
 /// Say where an `observatory` reference's record is on this machine: the
 /// path on stdout, as part of what `cite --kind observatory` and `handoff`
-/// report, or why it cannot be located on stderr.
-fn print_record_location(setting: &ObservatoryRoot, record: &str) {
+/// report, or why it cannot be located on stderr. The path is the payload's
+/// own, so the prose shows what `--json` carries (STD-01 §R6); `setting`
+/// only says why there is none.
+fn print_record_location(setting: &ObservatoryRoot, link: &ObservatoryLink) {
+    let record = &link.record;
     match setting.root.as_deref() {
         None => errln!(
             "{}",
@@ -1342,7 +1349,7 @@ fn print_record_location(setting: &ObservatoryRoot, record: &str) {
                  ${OBSERVATORY_ROOT_ENV}."
             ))
         ),
-        Some(dir) => match setting.resolve(record) {
+        Some(dir) => match &link.path {
             Some(path) => outln!("{}", render::dim(&path.display().to_string())),
             None => errln!(
                 "{}",
@@ -1619,7 +1626,9 @@ fn run(cli: Cli) -> Outcome {
             set_root,
             force,
         } => {
-            let target = Corpus::resolve_root(path.clone().or(root.clone()))?;
+            // Before any work: a `--root` that names another directory than
+            // the path is refused here, with neither created (STD-01 §R28).
+            let target = ops::init_target(root.clone(), path.clone())?;
             let root_config_path = Corpus::root_config_path_if_absent(&target)?;
             let default_root_warning = (!set_root)
                 .then(|| Corpus::warning_before_default_init(&target))
@@ -1738,9 +1747,9 @@ fn run(cli: Cli) -> Outcome {
             if let Some(dir) = &dir {
                 ops::set_observatory_root(&corpus, dir)?;
             }
-            if drop_legacy {
-                ops::drop_legacy_observatory_root(&mut corpus)?;
-            }
+            let dropped = drop_legacy
+                .then(|| ops::drop_legacy_observatory_root(&mut corpus))
+                .transpose()?;
             let setting = corpus.observatory_root()?;
             if json {
                 out_json(&setting)?;
@@ -1750,7 +1759,13 @@ fn run(cli: Cli) -> Outcome {
             for note in render::observatory_root_notes(&setting, dir.is_some()) {
                 notify(json, Some(note));
             }
-            if drop_legacy {
+            // Said in every mode, like a commit asked for and not made: the
+            // file it names was rewritten, or was left alone (STD-01 §R30).
+            if let Some(dropped) = &dropped {
+                let config = corpus.root().join("config.yaml");
+                notify(json, Some(render::dropped_legacy(dropped, &config)));
+            }
+            if dropped.is_some_and(|dropped| dropped.removed.is_some()) {
                 commit(&corpus, commits, "config", &["observatory-root"])?;
             }
             Ok(ok)
@@ -1989,21 +2004,27 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Edit { node, by, .. } => {
+        Command::Edit { node, .. } => {
             // No lock while the person types (STD-03 §R1). The body is
             // loaded now, edited for as long as it takes, and saved under
-            // the lock only if nobody changed it meanwhile. `--by` is
-            // checked first, so a bad label is refused before anyone types.
-            model::author(by.as_deref())?;
+            // the lock only if nobody changed it meanwhile.
             let corpus = Corpus::open(root)?;
             let before = corpus.load(&node).map_err(|e| Failure::about(&e, &node))?;
             let edited = edit_body(&before.body)?;
+            // Nothing typed is nothing to write: no lock, no save, no
+            // commit, and `updated` stays as it was (STD-01 §R30).
+            if ops::body_unchanged(&before.body, &edited.text) {
+                notify(json, Some(render::unchanged(&node)));
+                if json {
+                    out_node_view(&corpus, &node)?;
+                }
+                return Ok(ok);
+            }
             if let Err(e) = preserve_notes(&before.body, &edited.text) {
                 return Err(keep_refused(e.into(), &node, edited));
             }
             let saved = corpus.lock().and_then(|lock| {
-                ops::set_body_if(&corpus, &node, &before.body, &edited.text, by.as_deref())
-                    .map(|_| lock)
+                ops::set_body_if(&corpus, &node, &before.body, &edited.text).map(|_| lock)
             });
             let lock = match saved {
                 Ok(lock) => lock,
@@ -2154,15 +2175,13 @@ fn run(cli: Cli) -> Outcome {
                     "nothing to do; pass --add <tag> or --remove <tag>",
                 ));
             }
-            // One lock over both edits: `--remove x --add y` is one change
+            // One write under one lock: `--remove x --add y` is one change
             // to the node's tags, not two a second writer may split.
             let (corpus, lock) = open_locked(root)?;
-            let mut doc = ops::tag_remove(&corpus, &target, &remove)?;
-            if !add.is_empty() {
-                doc = ops::tag_add(&corpus, &target, &add)?;
-            }
+            let done = ops::retag(&corpus, &target, &add, &remove)?;
+            let doc = &done.doc;
             if json {
-                out_json(&json::Doc::from(&doc))?;
+                out_json(&json::Doc::from(doc))?;
             } else {
                 let shown = if doc.node.tags.is_empty() {
                     render::dim("(no tags)")
@@ -2170,6 +2189,15 @@ fn run(cli: Cli) -> Outcome {
                     doc.node.tags.join(", ")
                 };
                 outln!("{} {shown}", render::bold(&target));
+            }
+            // What changed nothing is said in every mode, and a node whose
+            // tags came out as they were is neither written nor committed
+            // (STD-01 §R30).
+            for note in render::retag_notes(&target, &done) {
+                notify(json, Some(note));
+            }
+            if !done.written {
+                return Ok(ok);
             }
             let committed = commit(&corpus, commits, "tag", &[&target]);
             drop(lock);
@@ -2214,11 +2242,12 @@ fn run(cli: Cli) -> Outcome {
         } => {
             let (corpus, _lock) = open_locked(root)?;
             let bare = note.as_ref().is_none_or(|n| n.trim().is_empty());
-            // Read before the write, so a broken machine setting refuses the
-            // cite rather than failing it after the reference has landed. The
-            // kind is compared as the write will store it, so `--kind
-            // Observatory` is read here too.
-            let observatory = (!json && check::normalize_reference_kind(&kind) == OBSERVATORY)
+            // Read before the write, under `--json` too, whose payload says
+            // where the record is: a broken machine setting refuses the cite
+            // rather than failing it after the reference has landed. The kind
+            // is compared as the write will store it, so `--kind Observatory`
+            // is read here too.
+            let observatory = (check::normalize_reference_kind(&kind) == OBSERVATORY)
                 .then(|| corpus.observatory_root())
                 .transpose()?;
             if let Some(setting) = &observatory {
@@ -2236,21 +2265,14 @@ fn run(cli: Cli) -> Outcome {
                     origin: Origin::of(task, run),
                 },
             )
-            .map_err(|e| Failure::about(&e, &node))?;
+            .map_err(|e| Failure::about(&e, &node))?
+            .with_observatory(observatory.as_ref().and_then(|s| s.root.as_deref()));
             if json {
                 out_json(&json::Cited::from(&cited))?;
             } else {
                 outln!("{} {}", render::bold(&node), render::bold(&cited.reference));
-                if let Some(setting) = &observatory {
-                    let record = cited
-                        .doc
-                        .node
-                        .references
-                        .iter()
-                        .find(|r| r.id == cited.reference)
-                        .and_then(|r| r.uri.clone())
-                        .unwrap_or_default();
-                    print_record_location(setting, &record);
+                if let (Some(setting), Some(link)) = (&observatory, &cited.observatory) {
+                    print_record_location(setting, link);
                 }
                 if bare {
                     print_bare_note();
@@ -2299,7 +2321,7 @@ fn run(cli: Cli) -> Outcome {
                     render::bold(&done.record),
                     render::dim(&format!("({})", done.reference))
                 );
-                print_record_location(&setting, &done.record);
+                print_record_location(&setting, &done.observatory);
                 if bare {
                     print_bare_note();
                 }
@@ -2581,8 +2603,13 @@ fn out_node_view(corpus: &Corpus, node: &str) -> std::result::Result<(), Failure
 )]
 fn write_report(out: Option<&Path>, text: &str) -> std::result::Result<(), Failure> {
     match out {
-        Some(path) => std::fs::write(path, format!("{text}\n"))
-            .map_err(|e| Failure::of("io_at", format!("writing {}: {e}", path.display())))?,
+        Some(path) => {
+            std::fs::write(path, format!("{text}\n"))
+                .map_err(|e| Failure::of("io_at", format!("writing {}: {e}", path.display())))?;
+            // stdout stays empty, so the file is named on stderr, in every
+            // mode: a write says what it wrote (STD-01 §R30).
+            errln!("{}", render::notice(&format!("wrote {}", path.display())));
+        }
         None => outln!("{text}"),
     }
     Ok(())
@@ -2958,6 +2985,41 @@ mod tests {
         ));
     }
 
+    /// `completions` refuses `--root` and `--json`, which it would ignore, on
+    /// either side of the verb, with the error clap gives after it.
+    #[test]
+    fn completions_refuse_root_and_json_before_or_after_the_verb() {
+        for (before, after, global) in [
+            (
+                ["--json", "completions", "bash"].as_slice(),
+                ["completions", "bash", "--json"].as_slice(),
+                "--json",
+            ),
+            (
+                &["--root", "x", "completions", "bash"],
+                &["completions", "bash", "--root", "x"],
+                "--root <DIR>",
+            ),
+        ] {
+            let Err(refused) = parse_from(std::iter::once("neb").chain(before.iter().copied()))
+            else {
+                panic!("{before:?} parsed");
+            };
+            assert_eq!(
+                refused.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{before:?}"
+            );
+            let err = refused.render().to_string();
+            assert!(
+                err.contains(&format!("cannot be used with '{global}'")),
+                "{err}"
+            );
+            assert_eq!(Err(err), parse_cli(after).map(|_| ()), "{after:?}");
+        }
+        assert!(parse_cli(&["completions", "bash"]).is_ok());
+    }
+
     /// The declared conflicts between a verb's argument and a global flag.
     /// Clap checks these only when the flag follows the verb and
     /// [`parse_from`] covers the other side; each one here needs a case in
@@ -2982,7 +3044,12 @@ mod tests {
         walk(&cmd, &mut found);
         assert_eq!(
             found,
-            ["graph --mermaid --json", "graph --from <ID> --json"]
+            [
+                "completions <SHELL> --root <DIR>",
+                "completions <SHELL> --json",
+                "graph --mermaid --json",
+                "graph --from <ID> --json"
+            ]
         );
     }
 
