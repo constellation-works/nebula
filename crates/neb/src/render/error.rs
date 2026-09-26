@@ -149,6 +149,10 @@ pub fn refusal(e: &Error) -> Refusal {
 /// What is wrong. Core's message, except where the CLI can say it better
 /// for a person at a prompt: a held lock names how long its holder has had
 /// it rather than the time it took it.
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "the public Error is non-exhaustive and other messages pass through"
+)]
 fn message(e: &Error) -> String {
     match e {
         Error::Locked {
@@ -173,6 +177,10 @@ fn message(e: &Error) -> String {
 /// The refusal for an error from `new`, whose edges all come from its own
 /// flags: a repeated edge there is a flag given twice, not an edge the corpus
 /// already has, so there is no node to show yet.
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "the public Error is non-exhaustive and other refusals use the generic path"
+)]
 pub fn refusal_for_new(e: &Error) -> Refusal {
     match e {
         Error::DuplicateEdge { kind, to, .. } => {
@@ -191,6 +199,10 @@ pub fn refusal_for_new(e: &Error) -> Refusal {
 }
 
 /// The refusal for an error raised about one node, whose id the hint needs.
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "the public Error is non-exhaustive and other refusals use the generic path"
+)]
 pub fn refusal_about(e: &Error, node: &str) -> Refusal {
     match e {
         Error::NeedsKill(_) => {
@@ -270,6 +282,10 @@ fn exit(e: &Error) -> Exit {
 }
 
 /// The advice for an error, where the CLI has any.
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "the public Error is non-exhaustive; unmatched variants continue to flag hints"
+)]
 #[allow(
     clippy::too_many_lines,
     reason = "a lookup table: one arm per refusal with advice"
@@ -380,6 +396,10 @@ fn hint(e: &Error) -> Option<String> {
 
 /// The advice for a refusal whose fix is a flag. Core's message is the
 /// desktop's too, so it states the fact and the flag is named here.
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "the public Error is non-exhaustive and only listed variants have flag hints"
+)]
 fn flag_hint(e: &Error) -> Option<String> {
     Some(match e {
         Error::EmptyRoot => {
@@ -416,6 +436,10 @@ fn repair_hint(e: &Error) -> Option<String> {
 /// is missing or at another schema, or a node is not at the schema the
 /// config declares, or `neb migrate` cannot run yet. Each names `neb migrate`
 /// or the repair that precedes it.
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "the public Error is non-exhaustive and only listed variants have schema hints"
+)]
 fn schema_hint(e: &Error) -> Option<String> {
     Some(match e {
         Error::DirtyTree(_) => "Commit or stash them, then run it again.".to_owned(),
@@ -450,6 +474,10 @@ fn schema_hint(e: &Error) -> Option<String> {
 /// The advice for a write an earlier process left unfinished, which every
 /// writer refuses to finish by guessing: a person reads the record and
 /// removes it.
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "the public Error is non-exhaustive and only the pending-write error has this hint"
+)]
 fn interrupted_write_hint(e: &Error) -> Option<String> {
     Some(match e {
         Error::PendingWriteUnreadable { path, .. } => format!(

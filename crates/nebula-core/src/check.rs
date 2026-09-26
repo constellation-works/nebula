@@ -26,22 +26,39 @@ use std::path::{Path, PathBuf};
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
 pub enum Rule {
+    /// Genealogy edges must form an acyclic graph.
     AcyclicGenealogy = 1,
+    /// Hypotheses must name a kill condition.
     HypothesisKill = 2,
+    /// Every edge must point to a known node.
     EdgeTargets = 3,
+    /// Contradiction edges must be reciprocal.
     MutualContradicts = 4,
+    /// A refuted node must explain why it closed.
     RefutedReason = 5,
+    /// A refuted node can only be revived through a new node.
     RefutedReopens = 6,
+    /// References cannot carry a verdict.
     NoReferenceVerdict = 7,
+    /// Local references must resolve in the corpus.
     LocalReference = 8,
+    /// Observatory references must resolve in Observatory.
     ObservatoryReference = 9,
+    /// References need a note explaining their relevance.
     ReferenceNote = 10,
+    /// Tags should not differ only by case or a trailing `s`.
     TagDrift = 11,
+    /// Open nodes cannot carry a closure record.
     OpenNodeClosed = 12,
+    /// Seeds cannot already name a kill condition.
     SeedKill = 13,
+    /// Recorded dates must be valid and ordered.
     Dates = 14,
+    /// Node IDs must match their filenames and valid ID syntax.
     NodeId = 15,
+    /// Reference kinds outside the documented vocabulary are reported.
     ReferenceKind = 16,
+    /// An interrupted write must be resolved before further changes.
     InterruptedWrite = 17,
 }
 

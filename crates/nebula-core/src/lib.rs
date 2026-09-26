@@ -1,3 +1,6 @@
+#![deny(clippy::print_stderr, clippy::print_stdout)]
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! nebula's corpus, as a library.
 //!
 //! Three consumers sit on one corpus: a CLI a human types at, an agent that

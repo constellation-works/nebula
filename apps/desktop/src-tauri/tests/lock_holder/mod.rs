@@ -29,6 +29,10 @@ pub const LABEL: &str = "desktop test holder";
 
 /// In the child only: hold the lock, then exit without reaching `main`.
 #[ctor::ctor]
+#[allow(
+    clippy::print_stderr,
+    reason = "the child reports a lock-acquisition failure before test harness startup"
+)]
 unsafe fn hold_the_lock_when_asked() {
     let Some(root) = std::env::var_os(ROOT_VAR) else {
         return;

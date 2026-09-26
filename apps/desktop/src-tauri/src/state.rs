@@ -89,6 +89,7 @@ impl AppState {
         }
     }
 
+    /// Remember the shortcut currently registered with the operating system.
     pub fn set_capture_shortcut(&self, shortcut: String) {
         *self
             .capture_shortcut
@@ -96,6 +97,7 @@ impl AppState {
             .unwrap_or_else(PoisonError::into_inner) = shortcut;
     }
 
+    /// Return the shortcut currently shown in settings.
     pub fn capture_shortcut(&self) -> String {
         self.capture_shortcut
             .lock()

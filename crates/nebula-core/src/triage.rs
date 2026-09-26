@@ -281,6 +281,8 @@ fn promote(
 /// or removed its line (`NoSuchInboxEntry`). The session has then moved past
 /// it, so the next entry shown is a new one.
 pub fn settled_elsewhere(e: &Error) -> bool {
+    // A newly added error is shown to the caller; only these two mean that
+    // another writer already resolved the entry.
     matches!(
         e,
         Error::NoSuchInboxEntry(_) | Error::InboxEntrySettled { .. }

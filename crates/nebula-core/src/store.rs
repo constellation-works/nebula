@@ -45,7 +45,9 @@ pub struct Corpus {
 /// still be checked; graph queries use [`Corpus::load_all`] instead.
 #[derive(Debug)]
 pub struct Scan {
+    /// Node documents that could be read and parsed.
     pub docs: Vec<Doc>,
+    /// Entries that could not be read or parsed, with their reasons.
     pub unreadable: Vec<UnreadableNode>,
 }
 
@@ -54,8 +56,23 @@ pub struct Scan {
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct UnreadableNode {
+    // Keep the TypeScript binding's existing shape and comments stable: ts-rs
+    // copies Rust field docs into generated source, while this lint documents
+    // the Rust API. The field is hidden from Rustdoc only during TS export.
+    #[cfg_attr(
+        not(feature = "ts"),
+        doc = "Path of the unreadable entry as supplied by the corpus root."
+    )]
+    #[cfg_attr(feature = "ts", doc(hidden))]
     pub path: PathBuf,
+    #[cfg_attr(not(feature = "ts"), doc = "Stable error code for the failure.")]
+    #[cfg_attr(feature = "ts", doc(hidden))]
     pub code: String,
+    #[cfg_attr(
+        not(feature = "ts"),
+        doc = "Human-readable description of the failure."
+    )]
+    #[cfg_attr(feature = "ts", doc(hidden))]
     pub message: String,
 }
 
@@ -822,6 +839,10 @@ impl Corpus {
 
     /// Read one node as it existed at a commit hash, or on a date: after the
     /// last commit that day, dated the way [`Self::history`] dates it.
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "all other parse errors pass through unchanged"
+    )]
     pub fn load_at(&self, id: &str, at: &str) -> Result<Doc> {
         // The id becomes half of a git pathspec here rather than a path on
         // disk, and `git show <rev>:nodes/../../x.md` reads outside the
@@ -1067,6 +1088,10 @@ impl Corpus {
     /// stamped this corpus's config over files from before it, and the
     /// parser's unknown-field complaint alone does not lead anyone to the
     /// repair.
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "all other read errors pass through unchanged"
+    )]
     fn read_node(&self, path: &Path) -> Result<Doc> {
         model::read(path).map_err(|error| match error {
             Error::Yaml { .. } => crate::migrate::v1_node_under_current_schema(

@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! The IPC contract where the webview meets it: the app's own command table,
 //! called through Tauri's mock runtime with the same request the webview
 //! sends, answered with the JSON the webview receives (STD-04 §R1). A test of

@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! End-to-end tests over a real corpus in a temporary directory.
 //!
 //! These drive the built binary rather than library functions, because the
@@ -5592,6 +5594,10 @@ fn check_reports_a_broken_observatory_setting_as_a_finding() {
 
 #[cfg(unix)]
 #[test]
+#[allow(
+    clippy::print_stderr,
+    reason = "report why the unreadable-directory test is skipped as root"
+)]
 fn an_unreadable_observatory_directory_is_not_reported_as_unresolved() {
     use std::os::unix::fs::PermissionsExt;
     if rustix::process::geteuid().is_root() {

@@ -237,7 +237,11 @@ mod tests {
                     from: PathBuf::new(),
                     to: to.clone(),
                 },
-                other => other.clone(),
+                Step::Write { .. }
+                | Step::SyncAll(_)
+                | Step::SyncData(_)
+                | Step::Remove(_)
+                | Step::SyncDir(_) => step.clone(),
             })
             .collect()
     }

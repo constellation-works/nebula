@@ -120,7 +120,12 @@ impl DesktopError {
         let error = match self {
             Self::Core(error) => error,
             Self::RootUnresolved(error) => error.as_ref(),
-            _ => return None,
+            Self::Worker(_)
+            | Self::Open { .. }
+            | Self::Watch { .. }
+            | Self::Shortcut(_)
+            | Self::LaunchAtLogin(_)
+            | Self::LaunchAtLoginNotApplied { .. } => return None,
         };
         let nebula_core::Error::Locked {
             holder: Some(holder),
