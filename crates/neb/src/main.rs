@@ -10,9 +10,10 @@
 //! - `render`  terminal output for the values core returns
 //! - `output`  the one owner of stdout and stderr; nothing else writes to them
 //!
-//! Every verb is one core call. Anything that reads or writes the corpus
-//! lives in `nebula_core`, so the desktop app and the agent skill see the
-//! same behaviour this binary does.
+//! Every verb is one core operation: a write is one call into
+//! `nebula_core::verb`, a read is `Corpus::open` plus one query. Anything
+//! that reads or writes the corpus lives in `nebula_core`, so the desktop app
+//! and the agent skill see the same behaviour this binary does.
 
 mod cli;
 mod output;

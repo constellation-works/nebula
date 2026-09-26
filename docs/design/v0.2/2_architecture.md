@@ -43,9 +43,12 @@ nebula/
 The corpus still never lives here. Root resolution lives in
 `nebula-core::store`: the CLI accepts `--root`, then both consumers fall back
 to `NEBULA_ROOT`, the nearest corpus at or above the working directory,
-`~/.config/nebula/root`, and `~/.nebula`. The desktop has no
-command-line argument parser, so it starts at the fallback path resolved once
-when its `AppState` is created.
+`~/.config/nebula/root`, and `~/.nebula`. Core reads none of those itself
+(STD-02 §R3): each surface reads its environment and working directory once,
+into a `Locations`, and every resolver, the `Corpus` it opens and the git
+children that corpus runs take their answers from it. The CLI builds it in
+`main`; the desktop has no command-line argument parser, so it builds it once
+in `AppState::new` and starts at the fallback path resolved from it.
 
 ## `nebula-core`
 
@@ -59,6 +62,7 @@ nebula-core/src/
   error.rs        # `Error` enum (thiserror); every public fn returns Result<T, Error>
   model.rs        # Node, Status, Edge, EdgeType, Reference, Origin, Closed, InboxEntry
                   # serde with deny_unknown_fields; this is the file format
+  locations.rs    # Locations: the environment and working directory a surface resolved
   store.rs        # Corpus: open/init, load/save nodes, inbox append/settle, config
   fs.rs           # the one durable write path: temp + fsync + rename + dir fsync,
                   # 0600 files and 0700 directories; clippy.toml refuses std::fs::write
@@ -70,6 +74,7 @@ nebula-core/src/
   ops.rs          # mutations: capture, promote, drop, new, sharpen, link, cite,
                   # set_status, handoff, tag — each enforces its point-of-action invariants
                   # and returns the changed Node(s)
+  verb.rs         # one call per command: the lock, the op, the commit, then the advice
   check.rs        # rules over a Graph → Vec<Finding { rule, severity, node, message }>
   migrate.rs      # v1 → v2, with its own lenient v1 model kept private to this module
 ```
@@ -123,9 +128,12 @@ every op that writes holds it for its whole duration:
 - **A process-wide table of live locks, keyed by root.** `flock` is held by
   the open file description rather than the thread, so a second thread of one
   process would otherwise sail straight through it.
-- **Re-entrant on one thread.** `cli.rs` takes the lock for a whole verb
-  *including* the `commit` that records it, and the op underneath takes it
-  again; counting the re-entry is what stops that deadlocking.
+- **Re-entrant on one thread.** Core holds the lock across the write and
+  its commit: each function in `nebula_core::verb` takes it for the whole
+  verb *including* the `commit` that records it, and the op underneath takes
+  it again; counting the re-entry is what stops that deadlocking. `migrate`
+  commits inside the lock its migration holds, and a triage decision is one
+  such section per entry. No surface takes the corpus lock or commits.
 
 Contention blocks for up to five seconds and then fails with
 `Error::Locked { root, holder }` — before the op reads or writes anything, so
@@ -214,7 +222,9 @@ neb/src/
   render/         # text rendering of core types: tree, table, badges, colour
 ```
 
-`cli.rs` dispatch is a table: parse args → call one core fn → either
+`cli.rs` dispatch is a table: parse args → one core operation (a write is
+one call into `nebula_core::verb`; a read is `Corpus::open` plus one query)
+→ either
 `--json` (through the `render::json` view where core would leave a field out,
 and the `{items, total, truncated}` envelope for a capped list) or
 `render::*`. A command that does anything
@@ -306,6 +316,9 @@ workspace member, and no surface crate: no `clap`, `clap_complete`, `shlex`,
 `scripts/check-dependency-direction.sh` is the enforcement. It reads each
 member's `Cargo.toml` (no build) and fails on an edge not in that crate's
 allowlist, on a banned crate in core, and on a workspace member with no policy.
+It also greps core for reads of the environment or the working directory
+(`std::env::`, `env::var`, `current_dir`, `home_dir`), with no exemption for
+tests or comments.
 CI and `make ci-fast` run it. Change this layering and the script's policies
 in the same commit (STD-02 §R6).
 

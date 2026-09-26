@@ -1774,8 +1774,9 @@ fn empty_root_flag_is_refused_by_name() {
 /// (the desktop app, the agent skill) is covered the same way the CLI is.
 #[test]
 fn resolve_root_refuses_an_empty_explicit_path() {
-    let err = nebula_core::Corpus::resolve_root(Some(PathBuf::new()))
-        .expect_err("an empty explicit root must be refused");
+    let err =
+        nebula_core::Corpus::resolve_root(&nebula_core::Locations::default(), Some(PathBuf::new()))
+            .expect_err("an empty explicit root must be refused");
     assert!(matches!(err, nebula_core::Error::EmptyRoot), "{err}");
     assert_eq!(err.to_string(), "an explicit corpus root cannot be empty");
 }
@@ -12358,7 +12359,9 @@ fn a_config_write_that_waited_out_the_lock_keeps_the_setting_written_meanwhile()
 
     // The writer ahead finishes its config write and lets go. Taking the
     // lock again underneath is the re-entry the CLI relies on too.
-    let mut ahead = nebula_core::Corpus::open(Some(c.root.clone())).expect("open");
+    let mut ahead =
+        nebula_core::Corpus::open(&nebula_core::Locations::default(), Some(c.root.clone()))
+            .expect("open");
     assert!(
         nebula_core::ops::set_commit(&mut ahead, true)
             .unwrap()

@@ -10,12 +10,14 @@
 //! [`commit`] is its own op rather than the tail of every other one, so a
 //! write's result reaches the caller even when git then refuses: the write is
 //! never rolled back because of git, and the caller can tell the two apart.
+//! The surfaces do not compose these themselves: [`crate::verb`] runs each
+//! write and its commit as one call, under one lock.
 //!
 //! Every op here that writes takes the corpus write lock first and holds it
 //! until it returns, because three processes share one corpus and none of
 //! these is a single atomic file replacement: they are read-modify-write
 //! across steps, sometimes across two files, sometimes followed by a commit.
-//! A caller that wants one critical section over a verb *and* the [`commit`]
+//! A verb that wants one critical section over a write *and* the [`commit`]
 //! that records it takes [`Corpus::lock`] itself and holds it across both;
 //! the lock is re-entrant on one thread, so the op still taking it underneath
 //! costs nothing. Queries take nothing: [`suggest`], [`close_tags`] and
@@ -41,6 +43,7 @@ use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
 use crate::fs::create_private_dir_all;
 use crate::graph::{self, Graph, Neighbour, ObservatoryLink};
+use crate::locations::Locations;
 use crate::lock::{self, CorpusLock};
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
 use crate::pending::{Pending, PendingWrite};
@@ -251,14 +254,18 @@ pub struct Citation {
 /// canonicalized); otherwise this refuses with [`Error::RootAndPathDiffer`]
 /// rather than let one of them go unused (STD-01 §R28). A caller asks here
 /// before any work, so a refusal has created neither.
-pub fn init_target(root: Option<PathBuf>, path: Option<PathBuf>) -> Result<PathBuf> {
+pub fn init_target(
+    locations: &Locations,
+    root: Option<PathBuf>,
+    path: Option<PathBuf>,
+) -> Result<PathBuf> {
     if let (Some(root), Some(path)) = (&root, &path) {
         if root.as_os_str().is_empty() || path.as_os_str().is_empty() {
             return Err(Error::EmptyRoot);
         }
         // Only an empty path fails to be made absolute on Unix, and that is
         // refused above; elsewhere a path that cannot be is compared as given.
-        let absolute = |p: &PathBuf| std::path::absolute(p).unwrap_or_else(|_| p.clone());
+        let absolute = |p: &PathBuf| locations.absolute(p);
         if absolute(root) != absolute(path) {
             return Err(Error::RootAndPathDiffer {
                 root: root.clone(),
@@ -266,7 +273,7 @@ pub fn init_target(root: Option<PathBuf>, path: Option<PathBuf>) -> Result<PathB
             });
         }
     }
-    Corpus::resolve_root(path.or(root))
+    Corpus::resolve_root(locations, path.or(root))
 }
 
 /// Create an empty corpus where [`init_target`] says, which refuses a `root`
@@ -278,23 +285,26 @@ pub fn init_target(root: Option<PathBuf>, path: Option<PathBuf>) -> Result<PathB
 /// and then both write it. It is taken first, before anything is created,
 /// and the corpus lock inside it: the order `lock.rs` documents.
 pub fn init(
+    locations: &Locations,
     root: Option<PathBuf>,
     path: Option<PathBuf>,
     set_root: bool,
     force: bool,
 ) -> Result<Initialized> {
-    let target = init_target(root, path)?;
-    let _settings = set_root.then(Corpus::lock_machine_settings).transpose()?;
+    let target = init_target(locations, root, path)?;
+    let _settings = set_root
+        .then(|| Corpus::lock_machine_settings(locations))
+        .transpose()?;
     if set_root {
-        Corpus::check_root_config(&target, force)?;
+        Corpus::check_root_config(locations, &target, force)?;
     }
     // The lock lives inside the root, so the root has to exist before it can
     // be taken. `Corpus::init` would create it a moment later anyway.
     create_private_dir_all(&target)?;
     let _lock = CorpusLock::acquire(&target)?;
-    Corpus::init(&target)?;
+    Corpus::init(locations, &target)?;
     if set_root {
-        Corpus::write_root_config(&target, force)?;
+        Corpus::write_root_config(locations, &target, force)?;
     }
     Ok(Initialized { root: target })
 }
@@ -874,8 +884,10 @@ pub fn note(corpus: &Corpus, id: &str, text: &str, by: Option<&str>) -> Result<D
 
 /// Replace a node's prose body, leaving its structured fields alone.
 ///
-/// `updated` is stamped by [`Corpus::save`]. Callers that expose free-form
-/// editing must preserve append-only sections before calling this operation.
+/// `updated` is stamped by [`Corpus::save`]. The `## Notes` sections are
+/// append-only, so a body that removes, reorders or rewrites one is refused
+/// with [`Error::NotesChanged`] before anything is written; [`note`] is
+/// their append path.
 ///
 /// Returns `None`, having written nothing and left `updated` alone, when the
 /// body is already `body` as [`body_unchanged`] compares them: a write that
@@ -909,6 +921,33 @@ pub fn body_unchanged(before: &str, edited: &str) -> bool {
     before.trim() == edited.trim()
 }
 
+/// The append-only rule for notes: refuse `after` as [`Error::NotesChanged`]
+/// unless every `## Notes` section of `before` is still there, in order and
+/// unchanged.
+///
+/// A body can hold more than one `## Notes` section, because [`note`] opens a
+/// fresh one rather than reach back into a section some other prose already
+/// closed. Every section is checked, not just the last: an edit that rewrote
+/// an earlier dated note while leaving the final section alone would
+/// otherwise overwrite reasoning that was supposed to be append-only. Prose
+/// outside those sections stays editable, which is what a body edit is for.
+pub fn refuse_rewritten_notes(before: &str, after: &str) -> Result<()> {
+    let before_sections = model::notes_sections(before);
+    if before_sections.is_empty() {
+        return Ok(());
+    }
+    let after_sections = model::notes_sections(after);
+    if before_sections.len() != after_sections.len()
+        || before_sections
+            .iter()
+            .zip(&after_sections)
+            .any(|(before, after)| before.trim_end() != after.trim_end())
+    {
+        return Err(Error::NotesChanged);
+    }
+    Ok(())
+}
+
 fn replace_body(
     corpus: &Corpus,
     id: &str,
@@ -923,6 +962,7 @@ fn replace_body(
     if expected.is_some_and(|expected| doc.body != expected) {
         return Err(Error::EditConflict(id.to_string()));
     }
+    refuse_rewritten_notes(&doc.body, body)?;
     doc.body = body.trim().to_string();
     corpus.save(&mut doc)?;
     Ok(Some(doc))
@@ -1149,8 +1189,8 @@ pub fn handoff(
 /// Returns the setting as `corpus` now resolves it, which is the machine
 /// setting unless `$OBSERVATORY_ROOT` outranks it.
 pub fn set_observatory_root(corpus: &Corpus, dir: &Path) -> Result<ObservatoryRoot> {
-    let _settings = Corpus::lock_machine_settings()?;
-    Corpus::write_observatory_root_config(dir)?;
+    let _settings = Corpus::lock_machine_settings(corpus.locations())?;
+    Corpus::write_observatory_root_config(corpus.locations(), dir)?;
     corpus.observatory_root()
 }
 

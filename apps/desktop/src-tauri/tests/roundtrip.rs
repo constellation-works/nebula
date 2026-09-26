@@ -16,6 +16,12 @@ mod support;
 
 mod lock_holder;
 
+/// The resolved environment the app would build at startup: this process's,
+/// which `support` isolated before any test thread started.
+fn process_locations() -> nebula_core::Locations {
+    nebula_core::Locations::from_reader(|name| std::env::var_os(name), std::env::current_dir().ok())
+}
+
 use lock_holder::LockHolder;
 
 /// Run git in `root`, asserting it succeeded; stdout as text.
@@ -33,13 +39,47 @@ fn git_in(root: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+/// The desktop resolves its corpus from the `Locations` it built at
+/// startup, never from the process it runs in: `NEBULA_ROOT`, then the
+/// machine setting, then `~/.nebula`, each as the value holds it.
+#[test]
+fn session_resolve_root_uses_the_given_locations() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    assert_ne!(home, support::home());
+    let locations = nebula_core::Locations {
+        home: Some(home.clone().into_os_string()),
+        ..nebula_core::Locations::default()
+    };
+    assert_eq!(
+        session::resolve_root(&locations).unwrap(),
+        home.join(".nebula")
+    );
+
+    let configured = dir.path().join("configured");
+    Corpus::write_root_config(&locations, &configured, false).unwrap();
+    assert_eq!(session::resolve_root(&locations).unwrap(), configured);
+
+    let named = dir.path().join("named");
+    let exported = nebula_core::Locations {
+        nebula_root: Some(named.clone().into_os_string()),
+        ..locations
+    };
+    assert_eq!(session::resolve_root(&exported).unwrap(), named);
+
+    assert!(matches!(
+        session::resolve_root(&nebula_core::Locations::default()),
+        Err(Error::HomeUnset)
+    ));
+}
+
 #[test]
 fn capture_then_inbox_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
-    Corpus::init(&root).unwrap();
+    Corpus::init(&process_locations(), &root).unwrap();
 
-    let corpus = session::open(&root).unwrap();
+    let corpus = session::open(&process_locations(), &root).unwrap();
     assert!(session::inbox(&corpus).unwrap().is_empty());
 
     let written = session::capture(&corpus, "  a thought from the menu bar  ").unwrap();
@@ -74,7 +114,7 @@ fn capture_then_inbox_round_trips() {
 fn capture_commits_each_entry_when_enabled() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
-    let mut corpus = Corpus::init(&root).unwrap();
+    let mut corpus = Corpus::init(&process_locations(), &root).unwrap();
     let git = |args: &[&str]| git_in(&root, args);
     git(&["init", "-q"]);
     git(&["config", "user.name", "neb-test"]);
@@ -111,7 +151,7 @@ fn capture_commits_each_entry_when_enabled() {
 fn drop_and_promote_use_core_settlement_and_cli_commit_messages() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
-    let mut corpus = Corpus::init(&root).unwrap();
+    let mut corpus = Corpus::init(&process_locations(), &root).unwrap();
     let git = |args: &[&str]| git_in(&root, args);
     git(&["init", "-q"]);
     git(&["config", "user.name", "neb-test"]);
@@ -163,7 +203,7 @@ fn drop_and_promote_use_core_settlement_and_cli_commit_messages() {
 fn a_refused_settlement_leaves_the_inbox_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
-    let corpus = Corpus::init(&root).unwrap();
+    let corpus = Corpus::init(&process_locations(), &root).unwrap();
     let entry = session::capture(&corpus, "keep this thought")
         .unwrap()
         .value;
@@ -180,7 +220,9 @@ fn a_refused_settlement_leaves_the_inbox_unchanged() {
 fn a_missing_root_is_an_error_naming_the_path() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("nowhere");
-    let err = session::open(&root).unwrap_err().to_string();
+    let err = session::open(&process_locations(), &root)
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("nowhere"), "{err}");
 }
 
@@ -211,7 +253,7 @@ fn opening_a_configless_corpus_errors_and_creates_nothing() {
     };
     let (root_before, nodes_before) = (listing(&root), listing(&root.join("nodes")));
 
-    let refused = session::open(&root);
+    let refused = session::open(&process_locations(), &root);
     assert!(
         matches!(&refused, Err(Error::MissingConfig { path }) if *path == root.join("config.yaml")),
         "{refused:?}"
@@ -224,8 +266,8 @@ fn opening_a_configless_corpus_errors_and_creates_nothing() {
 fn node_file_refuses_an_unknown_id() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
-    Corpus::init(&root).unwrap();
-    let corpus = session::open(&root).unwrap();
+    Corpus::init(&process_locations(), &root).unwrap();
+    let corpus = session::open(&process_locations(), &root).unwrap();
     assert!(session::node_file(&corpus, "no-such-node").is_err());
     assert!(session::graph(&corpus).unwrap().nodes.is_empty());
 }
@@ -238,8 +280,8 @@ fn node_file_refuses_an_unknown_id() {
 fn node_file_refuses_a_symlinked_node() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
-    Corpus::init(&root).unwrap();
-    let corpus = session::open(&root).unwrap();
+    Corpus::init(&process_locations(), &root).unwrap();
+    let corpus = session::open(&process_locations(), &root).unwrap();
     let id = ops::new_node(
         &corpus,
         &ops::NewNode {
@@ -267,7 +309,7 @@ fn node_file_refuses_a_symlinked_node() {
 fn capture_refuses_a_busy_writer_quickly_and_can_be_retried() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
-    let corpus = Corpus::init(&root).unwrap();
+    let corpus = Corpus::init(&process_locations(), &root).unwrap();
     let pending = session::capture(&corpus, "settle me").unwrap().value;
     let holder = LockHolder::start(&root);
 
@@ -298,7 +340,7 @@ fn capture_refuses_a_busy_writer_quickly_and_can_be_retried() {
     assert!(start.elapsed() < Duration::from_secs(1));
 
     holder.release();
-    let corpus = session::open(&root).unwrap();
+    let corpus = session::open(&process_locations(), &root).unwrap();
     assert_eq!(session::inbox(&corpus).unwrap()[0].id, pending.id);
     session::drop_entry(&corpus, &pending.id).unwrap();
     assert!(session::inbox(&corpus).unwrap().is_empty());

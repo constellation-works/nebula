@@ -14,7 +14,9 @@
 //! politeness early; the SIGKILL sweep that follows is unconditional.
 
 use super::forward::{self, Forwarding};
-use super::{Captured, GIT_TERMINATION_GRACE, GitOutput, REPOSITORY_ENV, RunError};
+use super::{
+    CEILING_ENV, Captured, GIT_TERMINATION_GRACE, GitAt, GitOutput, REPOSITORY_ENV, RunError,
+};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::Errno;
 use rustix::process::{
@@ -22,7 +24,6 @@ use rustix::process::{
 };
 use std::io::Read;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
 use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
@@ -45,7 +46,7 @@ const DRAIN_DEADLINE: Duration = Duration::from_secs(1);
 const CHUNK: usize = 16 * 1024;
 
 /// Spawn `git -C <root> <args>` as its own group and see it through.
-pub(super) fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<GitOutput, RunError> {
+pub(super) fn run(at: GitAt<'_>, args: &[&str], deadline: Duration) -> Result<GitOutput, RunError> {
     // Held before the spawn, so a signal from here on is never lost, and
     // dropped only after the group is gone, so it is delivered after that.
     let forwarding = Forwarding::hold();
@@ -55,7 +56,7 @@ pub(super) fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<GitO
     let mut command = Command::new("git");
     command
         .arg("-C")
-        .arg(root)
+        .arg(at.root)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -67,6 +68,12 @@ pub(super) fn run(root: &Path, args: &[&str], deadline: Duration) -> Result<GitO
     for name in REPOSITORY_ENV {
         command.env_remove(name);
     }
+    // Discovery stops where core's own walk stops, whatever this process
+    // inherited.
+    match at.ceilings {
+        Some(ceilings) => command.env(CEILING_ENV, ceilings),
+        None => command.env_remove(CEILING_ENV),
+    };
     let child = command.spawn().map_err(RunError::Start)?;
     let outcome = Supervisor::new(child).run(deadline);
     drop(forwarding);

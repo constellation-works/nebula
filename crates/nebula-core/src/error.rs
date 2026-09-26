@@ -584,6 +584,13 @@ pub enum Error {
     #[error("`{0}`'s body changed while it was being edited; nothing was written")]
     EditConflict(String),
 
+    /// A new body removes, reorders or changes a `## Notes` section the node
+    /// already has. Notes are append-only; nothing was written.
+    #[error(
+        "an existing ## Notes section was removed, reordered, or changed; notes are append-only"
+    )]
+    NotesChanged,
+
     /// Text read from standard input was larger than the ceiling for what it
     /// is. Refused before the corpus is opened for writing, so nothing was
     /// written and no other writer waited on the read.
@@ -922,6 +929,7 @@ impl Error {
         NotRegularFile => "not_regular_file", State,
         Locked => "locked", State,
         EditConflict => "edit_conflict", State,
+        NotesChanged => "notes_changed", State,
         InputTooLarge => "input_too_large", State,
         PendingWriteUnreadable => "pending_write_unreadable", State,
         IoStdin => "io_stdin", State,

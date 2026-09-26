@@ -26,6 +26,12 @@ mod support;
 
 mod lock_holder;
 
+/// The resolved environment the app would build at startup: this process's,
+/// which `support` isolated before any test thread started.
+fn process_locations() -> nebula_core::Locations {
+    nebula_core::Locations::from_reader(|name| std::env::var_os(name), std::env::current_dir().ok())
+}
+
 use lock_holder::LockHolder;
 
 /// The app as `run` builds it, minus the window, tray and plugins: the same
@@ -70,7 +76,7 @@ fn invoke(webview: &WebviewWindow<MockRuntime>, cmd: &str, args: Value) -> Resul
 fn corpus_with_one_capture() -> (tempfile::TempDir, PathBuf, String) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
-    let corpus = Corpus::init(&root).unwrap();
+    let corpus = Corpus::init(&process_locations(), &root).unwrap();
     let entry = session::capture(&corpus, "settle me").unwrap().value;
     (dir, root, entry.id)
 }
@@ -96,7 +102,7 @@ fn corpus_the_repository_ignores() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let outer = dir.path().join("outer");
     let root = outer.join("corpus");
-    let mut corpus = Corpus::init(&root).unwrap();
+    let mut corpus = Corpus::init(&process_locations(), &root).unwrap();
     git(&outer, &["init", "-q"]);
     nebula_core::fs::write_private_atomic(&outer.join(".gitignore"), "corpus/\n").unwrap();
     ops::set_commit(&mut corpus, true).unwrap();
@@ -120,7 +126,7 @@ fn inbox(webview: &WebviewWindow<MockRuntime>) -> Value {
 #[test]
 fn capture_command_reports_busy_while_another_process_holds_the_lock() {
     let (_dir, root, _) = corpus_with_one_capture();
-    let (_app, webview) = app(AppState::with_root(Ok(root.clone())));
+    let (_app, webview) = app(AppState::with_root(process_locations(), Ok(root.clone())));
     let holder = LockHolder::start(&root);
 
     let start = Instant::now();
@@ -160,7 +166,7 @@ fn capture_command_reports_busy_while_another_process_holds_the_lock() {
 #[test]
 fn a_capture_whose_commit_is_refused_returns_the_entry_and_the_refusal() {
     let (_dir, root) = corpus_the_repository_ignores();
-    let (_app, webview) = app(AppState::with_root(Ok(root.clone())));
+    let (_app, webview) = app(AppState::with_root(process_locations(), Ok(root.clone())));
 
     let captured = invoke(&webview, "capture", json!({ "text": "landed once" }))
         .expect("the line is written, so the capture succeeds");
@@ -184,8 +190,8 @@ fn a_capture_whose_commit_is_refused_returns_the_entry_and_the_refusal() {
 #[test]
 fn a_settle_whose_commit_is_refused_reports_the_settlement() {
     let (_dir, root) = corpus_the_repository_ignores();
-    let (_app, webview) = app(AppState::with_root(Ok(root.clone())));
-    let corpus = session::open(&root).unwrap();
+    let (_app, webview) = app(AppState::with_root(process_locations(), Ok(root.clone())));
+    let corpus = session::open(&process_locations(), &root).unwrap();
     let to_drop = session::capture(&corpus, "drop me").unwrap().value;
     let to_promote = session::capture(&corpus, "promote me").unwrap().value;
 
@@ -280,7 +286,7 @@ fn commit_report_serializes_to_the_shape_api_ts_declares() {
 #[test]
 fn settle_commands_report_busy_with_the_same_code() {
     let (_dir, root, id) = corpus_with_one_capture();
-    let (_app, webview) = app(AppState::with_root(Ok(root.clone())));
+    let (_app, webview) = app(AppState::with_root(process_locations(), Ok(root.clone())));
     let before = inbox(&webview);
     let holder = LockHolder::start(&root);
 
@@ -303,7 +309,7 @@ fn an_unresolvable_root_is_reported_not_replaced_with_a_literal_home_path() {
     // What resolution fails with: an empty root, and a root setting that
     // cannot be read.
     let failures = [
-        Corpus::resolve_root(Some(PathBuf::new())).unwrap_err(),
+        Corpus::resolve_root(&process_locations(), Some(PathBuf::new())).unwrap_err(),
         Error::IoAt {
             action: "read",
             path: PathBuf::from("/home/someone/.config/nebula/root"),
@@ -313,7 +319,7 @@ fn an_unresolvable_root_is_reported_not_replaced_with_a_literal_home_path() {
     for failure in failures {
         let code = failure.code();
         let cause = failure.to_string();
-        let (_app, webview) = app(AppState::with_root(Err(failure)));
+        let (_app, webview) = app(AppState::with_root(process_locations(), Err(failure)));
 
         let warnings = invoke(&webview, "startup_warnings", json!({})).unwrap();
         let warnings = warnings.as_array().expect("a list of warnings");
@@ -377,9 +383,9 @@ fn every_core_error_translates_to_its_own_code() {
 #[test]
 fn the_node_command_leaves_absent_fields_out() {
     let (_dir, root, id) = corpus_with_one_capture();
-    let corpus = session::open(&root).unwrap();
+    let corpus = session::open(&process_locations(), &root).unwrap();
     let created = session::promote_root(&corpus, &id).unwrap().value;
-    let (_app, webview) = app(AppState::with_root(Ok(root)));
+    let (_app, webview) = app(AppState::with_root(process_locations(), Ok(root)));
 
     let view = invoke(&webview, "node", json!({ "id": created.doc.node.id })).unwrap();
 

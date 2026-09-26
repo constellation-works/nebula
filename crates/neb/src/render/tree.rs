@@ -231,7 +231,11 @@ mod tests {
     /// `left`: a diamond with a parallel pair in it.
     fn diamond() -> (tempfile::TempDir, Corpus) {
         let dir = tempfile::tempdir().unwrap();
-        let corpus = Corpus::init(&dir.path().join("corpus")).unwrap();
+        let corpus = Corpus::init(
+            &nebula_core::Locations::default(),
+            &dir.path().join("corpus"),
+        )
+        .unwrap();
         let new = |title: &str, parents: &[&str]| {
             let args = NewNode {
                 title: title.into(),

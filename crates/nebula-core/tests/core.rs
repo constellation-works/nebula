@@ -15,10 +15,12 @@
 
 use nebula_core::InboxEntry;
 use nebula_core::triage::{Action, Step, Tally};
+use nebula_core::verb::{self, CommitPolicy, RootWarning, WriteOptions};
 use nebula_core::{
     Band, Citation, CommitOutcome, Committed, Corpus, CorpusLock, Direction, EdgeType, Error,
-    Graph, HUMAN, Handoff, NEAR_DEFAULT, NewNode, ObservatoryLink, Promotion, ReviewItem,
-    ReviewReport, ReviewRule, Settlement, Status, TraceHop, Triage, Via, graph, ops, store,
+    Graph, HUMAN, Handoff, Locations, NEAR_DEFAULT, NewNode, ObservatoryLink, Promotion,
+    ReviewItem, ReviewReport, ReviewRule, Settlement, Status, TraceHop, Triage, Via, graph, ops,
+    store,
 };
 use std::fmt::Write as _;
 use std::path::Path;
@@ -27,9 +29,16 @@ use std::path::Path;
 // any test thread starts, and every child comes from its builder.
 mod support;
 
+/// The resolved environment the existing tests run under: this process's,
+/// which `support` isolated before any test thread started. The new
+/// resolver tests build theirs by hand instead.
+fn process_locations() -> Locations {
+    Locations::from_reader(|name| std::env::var_os(name), std::env::current_dir().ok())
+}
+
 fn corpus() -> (tempfile::TempDir, Corpus) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let corpus = Corpus::init(&dir.path().join("corpus")).expect("init");
+    let corpus = Corpus::init(&process_locations(), &dir.path().join("corpus")).expect("init");
     (dir, corpus)
 }
 
@@ -1488,7 +1497,7 @@ fn init_refuses_a_fifo_gitignore_without_blocking() {
     mkfifo(&gitignore);
     let refused = within_two_seconds({
         let root = root.clone();
-        move || Corpus::init(&root)
+        move || Corpus::init(&process_locations(), &root)
     });
     assert!(
         not_regular(&refused, &gitignore, nebula_core::fs::EntryKind::Fifo),
@@ -1498,7 +1507,7 @@ fn init_refuses_a_fifo_gitignore_without_blocking() {
     let fifo = dir.path().join("outside-fifo");
     std::fs::rename(&gitignore, &fifo).unwrap();
     std::os::unix::fs::symlink(&fifo, &gitignore).unwrap();
-    let refused = within_two_seconds(move || Corpus::init(&root));
+    let refused = within_two_seconds(move || Corpus::init(&process_locations(), &root));
     assert!(
         not_regular(&refused, &gitignore, nebula_core::fs::EntryKind::Fifo),
         "{refused:?}"
@@ -1638,7 +1647,7 @@ fn a_config_write_cannot_reach_a_file_outside_the_corpus() {
             .is_file(),
         "the planted symlink became config.yaml"
     );
-    let reopened = Corpus::open(Some(dir.path().join("corpus"))).unwrap();
+    let reopened = Corpus::open(&process_locations(), Some(dir.path().join("corpus"))).unwrap();
     assert!(
         reopened.commit_setting().enabled,
         "the setting did not reach config.yaml"
@@ -2311,7 +2320,7 @@ fn near_is_capped_at_k_and_empty_for_a_thought_unlike_anything() {
     assert!(stop.0.is_empty(), "stopwords alone are no query: {stop:?}");
 
     let empty = tempfile::tempdir().unwrap();
-    let empty = Corpus::init(&empty.path().join("corpus")).unwrap();
+    let empty = Corpus::init(&process_locations(), &empty.path().join("corpus")).unwrap();
     let docs = empty.load_all().unwrap();
     let graph = Graph::build(&docs).unwrap();
     assert!(
@@ -3147,7 +3156,7 @@ fn opening_a_missing_corpus_is_a_typed_error() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("nowhere");
     assert!(matches!(
-        Corpus::open(Some(missing.clone())),
+        Corpus::open(&process_locations(), Some(missing.clone())),
         Err(Error::NoCorpus(p)) if p == missing
     ));
 }
@@ -3157,11 +3166,12 @@ fn open_or_init_says_whether_it_created_the_corpus() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("fresh");
 
-    let (_, created) = Corpus::open_or_init(Some(root.clone())).expect("first open");
+    let (_, created) =
+        Corpus::open_or_init(&process_locations(), Some(root.clone())).expect("first open");
     assert!(created, "there was no corpus, so this call made one");
     assert!(root.join("nodes").is_dir() && root.join("inbox").is_dir());
 
-    let (_, created) = Corpus::open_or_init(Some(root)).expect("second open");
+    let (_, created) = Corpus::open_or_init(&process_locations(), Some(root)).expect("second open");
     assert!(!created, "an existing corpus is opened, not created");
 }
 
@@ -3170,8 +3180,8 @@ fn discover_finds_the_nearest_corpus_at_or_above_the_start() {
     let dir = tempfile::tempdir().unwrap();
     let outer = dir.path().join("outer");
     let inner = outer.join("projects").join("inner");
-    Corpus::init(&outer).unwrap();
-    Corpus::init(&inner).unwrap();
+    Corpus::init(&process_locations(), &outer).unwrap();
+    Corpus::init(&process_locations(), &inner).unwrap();
     let deep = inner.join("notes").join("deep");
     std::fs::create_dir_all(&deep).unwrap();
 
@@ -3233,7 +3243,7 @@ fn discover_walks_the_path_as_spelled_and_never_resolves_a_symlink() {
 
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("real").join("corpus");
-    Corpus::init(&root).unwrap();
+    Corpus::init(&process_locations(), &root).unwrap();
 
     // Through a symlinked parent, the root comes back in the alias spelling.
     let alias = dir.path().join("alias");
@@ -3258,7 +3268,7 @@ fn discover_walks_the_path_as_spelled_and_never_resolves_a_symlink() {
 fn discover_finds_a_corpus_whose_nodes_is_a_symlink_so_open_can_refuse_it() {
     let dir = tempfile::tempdir().unwrap();
     let outer = dir.path().join("outer");
-    Corpus::init(&outer).unwrap();
+    Corpus::init(&process_locations(), &outer).unwrap();
     let root = outer.join("linked");
     std::fs::create_dir(&root).unwrap();
     std::fs::write(
@@ -3269,7 +3279,8 @@ fn discover_finds_a_corpus_whose_nodes_is_a_symlink_so_open_can_refuse_it() {
     std::os::unix::fs::symlink(outer.join("nodes"), root.join("nodes")).unwrap();
 
     assert_eq!(Corpus::discover(&root), Some(root.clone()));
-    let refused = Corpus::open(Some(root)).expect_err("a symlinked nodes/ is refused");
+    let refused =
+        Corpus::open(&process_locations(), Some(root)).expect_err("a symlinked nodes/ is refused");
     assert!(refused.to_string().contains("is a symlink"), "{refused}");
 }
 
@@ -3284,9 +3295,10 @@ fn a_corpus_that_cannot_be_created_names_the_root_it_aimed_at() {
     std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500)).unwrap();
     let root = parent.join("corpus");
 
-    let init = Corpus::init(&root).map(|_| ());
-    let open_or_init = Corpus::open_or_init(Some(root.clone())).map(|_| ());
-    let ops_init = ops::init(Some(root.clone()), None, false, false).map(|_| ());
+    let init = Corpus::init(&process_locations(), &root).map(|_| ());
+    let open_or_init = Corpus::open_or_init(&process_locations(), Some(root.clone())).map(|_| ());
+    let ops_init =
+        ops::init(&process_locations(), Some(root.clone()), None, false, false).map(|_| ());
     std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
 
     for result in [init, open_or_init, ops_init] {
@@ -3311,7 +3323,14 @@ fn init_refuses_a_root_and_a_path_that_name_different_directories() {
     let dir = tempfile::tempdir().unwrap();
     let (a, b) = (dir.path().join("a"), dir.path().join("b"));
 
-    let refused = ops::init(Some(a.clone()), Some(b.clone()), false, false).map(|_| ());
+    let refused = ops::init(
+        &process_locations(),
+        Some(a.clone()),
+        Some(b.clone()),
+        false,
+        false,
+    )
+    .map(|_| ());
     assert!(
         matches!(&refused, Err(Error::RootAndPathDiffer { root, path }) if *root == a && *path == b),
         "{refused:?}"
@@ -3321,10 +3340,17 @@ fn init_refuses_a_root_and_a_path_that_name_different_directories() {
 
     let spelled = dir.path().join(".").join("a").join("");
     assert_eq!(
-        ops::init_target(Some(a.clone()), Some(spelled.clone())).unwrap(),
+        ops::init_target(&process_locations(), Some(a.clone()), Some(spelled.clone())).unwrap(),
         spelled
     );
-    ops::init(Some(a.clone()), Some(spelled), false, false).unwrap();
+    ops::init(
+        &process_locations(),
+        Some(a.clone()),
+        Some(spelled),
+        false,
+        false,
+    )
+    .unwrap();
     assert!(a.join("nodes").is_dir());
 }
 
@@ -3382,7 +3408,8 @@ fn set_root_replaces_a_symlinked_setting_instead_of_writing_through() {
     std::os::unix::fs::symlink(&outside, &setting).unwrap();
     let target = dir.path().join("new-corpus");
 
-    ops::init(None, Some(target.clone()), true, true).expect("init --set-root --force");
+    ops::init(&process_locations(), None, Some(target.clone()), true, true)
+        .expect("init --set-root --force");
 
     assert_eq!(
         std::fs::read(&outside).unwrap(),
@@ -3449,7 +3476,7 @@ fn open_never_writes_a_missing_config() {
     let root = configless(dir.path(), "an-idea", V2_NODE);
     let before = every_file(&root);
 
-    let refused = Corpus::open(Some(root.clone()));
+    let refused = Corpus::open(&process_locations(), Some(root.clone()));
     assert!(
         matches!(&refused, Err(Error::MissingConfig { path }) if *path == root.join("config.yaml")),
         "{refused:?}"
@@ -3466,12 +3493,12 @@ fn v1_corpus_without_config_still_migrates() {
     let before = every_file(&root);
 
     assert!(matches!(
-        Corpus::open(Some(root.clone())),
+        Corpus::open(&process_locations(), Some(root.clone())),
         Err(Error::MissingConfig { .. })
     ));
     assert_eq!(before, every_file(&root), "a refused open wrote something");
 
-    let report = nebula_core::migrate::run(Some(root.clone())).unwrap();
+    let report = nebula_core::migrate::run(&process_locations(), Some(root.clone())).unwrap();
     assert!(report.config_rewritten);
     assert!(report.minted_corpus_id.is_some(), "{report:?}");
     assert_eq!(
@@ -3486,7 +3513,7 @@ fn v1_corpus_without_config_still_migrates() {
     assert!(node.contains("tags:\n- physics\n"), "{node}");
     assert!(node.contains("status: hypothesis"), "{node}");
 
-    let corpus = Corpus::open(Some(root)).unwrap();
+    let corpus = Corpus::open(&process_locations(), Some(root)).unwrap();
     assert_eq!(corpus.load_all().unwrap().len(), 1);
 }
 
@@ -3501,7 +3528,8 @@ fn a_dangling_config_symlink_is_not_a_missing_config() {
     let config = root.join("config.yaml");
     std::os::unix::fs::symlink(dir.path().join("gone.yaml"), &config).unwrap();
 
-    let refused = Corpus::open(Some(root.clone())).expect_err("a dangling config is refused");
+    let refused = Corpus::open(&process_locations(), Some(root.clone()))
+        .expect_err("a dangling config is refused");
     assert!(
         !matches!(refused, Error::MissingConfig { .. }),
         "{refused:?}"
@@ -3532,14 +3560,14 @@ fn a_symlinked_or_fifo_config_yaml_is_refused() {
     std::os::unix::fs::symlink(&outside, &config).unwrap();
     let before = std::fs::read(&outside).unwrap();
 
-    let opened = Corpus::open(Some(root.clone()));
+    let opened = Corpus::open(&process_locations(), Some(root.clone()));
     assert!(
         not_regular(&opened, &config, EntryKind::Symlink),
         "{opened:?}"
     );
     let set = ops::set_commit(&mut corpus, true);
     assert!(not_regular(&set, &config, EntryKind::Symlink), "{set:?}");
-    let initialized = Corpus::init(&root);
+    let initialized = Corpus::init(&process_locations(), &root);
     assert!(
         not_regular(&initialized, &config, EntryKind::Symlink),
         "{initialized:?}"
@@ -3560,7 +3588,7 @@ fn a_symlinked_or_fifo_config_yaml_is_refused() {
     mkfifo(&config);
     let opened = within_two_seconds({
         let root = root.clone();
-        move || Corpus::open(Some(root))
+        move || Corpus::open(&process_locations(), Some(root))
     });
     assert!(not_regular(&opened, &config, EntryKind::Fifo), "{opened:?}");
     let discovered = within_two_seconds({
@@ -3579,16 +3607,16 @@ fn init_completes_an_interrupted_init_but_refuses_a_configless_corpus() {
 
     let interrupted = dir.path().join("interrupted");
     std::fs::create_dir_all(interrupted.join("nodes")).unwrap();
-    Corpus::init(&interrupted).unwrap();
+    Corpus::init(&process_locations(), &interrupted).unwrap();
     assert!(interrupted.join("inbox").is_dir());
     let config = std::fs::read_to_string(interrupted.join("config.yaml")).unwrap();
     assert!(config.contains("schema_version: 2"), "{config}");
     assert!(config.contains("corpus_id: neb-"), "{config}");
-    Corpus::open(Some(interrupted)).unwrap();
+    Corpus::open(&process_locations(), Some(interrupted)).unwrap();
 
     let with_content = configless(&dir.path().join("content"), "an-idea", V2_NODE);
     let before = every_file(&with_content);
-    let refused = Corpus::init(&with_content);
+    let refused = Corpus::init(&process_locations(), &with_content);
     assert!(
         matches!(&refused, Err(Error::MissingConfig { path }) if *path == with_content.join("config.yaml")),
         "{refused:?}"
@@ -3611,7 +3639,7 @@ fn init_completes_an_interrupted_init_but_refuses_a_configless_corpus() {
     .unwrap();
     let before = every_file(&captured);
     assert!(matches!(
-        Corpus::init(&captured),
+        Corpus::init(&process_locations(), &captured),
         Err(Error::MissingConfig { .. })
     ));
     assert_eq!(before, every_file(&captured));
@@ -3626,7 +3654,7 @@ fn a_config_deleted_under_a_writer_is_refused_not_recreated() {
     let root = dir.path().join("corpus");
     let config = root.join("config.yaml");
     ops::set_commit(&mut corpus, true).unwrap();
-    let mut corpus = Corpus::open(Some(root)).unwrap();
+    let mut corpus = Corpus::open(&process_locations(), Some(root)).unwrap();
     assert!(corpus.commit_setting().enabled);
     std::fs::remove_file(&config).unwrap();
 
@@ -3865,7 +3893,7 @@ fn staged_work_outside_the_corpus_stays_staged_and_out_of_the_commit() {
     let dir = tempfile::tempdir().unwrap();
     let outer = dir.path().join("outer");
     let root = outer.join("corpus");
-    let mut corpus = Corpus::init(&root).unwrap();
+    let mut corpus = Corpus::init(&process_locations(), &root).unwrap();
     git_init(&outer);
     std::fs::write(outer.join("README.md"), "theirs\n").unwrap();
     git(&outer, &["add", "-A"]);
@@ -3897,7 +3925,7 @@ fn staged_corpus_paths_with_unicode_spaces_and_newlines_are_unambiguous() {
     let dir = tempfile::tempdir().unwrap();
     let outer = dir.path().join("outer");
     let root = outer.join("corpus");
-    let mut corpus = Corpus::init(&root).unwrap();
+    let mut corpus = Corpus::init(&process_locations(), &root).unwrap();
     git_init(&outer);
     git(&outer, &["add", "-A"]);
     git(&outer, &["commit", "-q", "-m", "start"]);
@@ -3932,7 +3960,7 @@ fn commit_on_in_a_corpus_the_containing_repository_ignores_is_a_typed_error() {
     let dir = tempfile::tempdir().unwrap();
     let outer = dir.path().join("outer");
     let root = outer.join("corpus");
-    let mut corpus = Corpus::init(&root).unwrap();
+    let mut corpus = Corpus::init(&process_locations(), &root).unwrap();
     git_init(&outer);
     std::fs::write(outer.join(".gitignore"), "corpus/\n").unwrap();
     ops::set_commit(&mut corpus, true).unwrap();
@@ -4240,7 +4268,7 @@ fn a_legacy_observatory_root_in_config_yaml_still_loads_and_is_reported() {
     let root = dir.path().join("corpus");
     let foreign = with_legacy_observatory_root(&root);
 
-    let corpus = Corpus::open(Some(root)).unwrap();
+    let corpus = Corpus::open(&process_locations(), Some(root)).unwrap();
     let setting = corpus.observatory_root().unwrap();
     assert_eq!(setting.legacy, Some(foreign));
     assert!(setting.root.is_some(), "the legacy key is still a fallback");
@@ -4260,7 +4288,7 @@ fn dropping_the_legacy_observatory_root_keeps_every_other_setting() {
     assert_eq!(pristine, std::fs::read(&config).unwrap(), "a no-op wrote");
 
     let foreign = with_legacy_observatory_root(&root);
-    let mut corpus = Corpus::open(Some(root)).unwrap();
+    let mut corpus = Corpus::open(&process_locations(), Some(root)).unwrap();
     let dropped = ops::drop_legacy_observatory_root(&mut corpus).unwrap();
     assert_eq!(dropped.removed, Some(foreign), "it names what it removed");
     assert_eq!(pristine, std::fs::read(&config).unwrap());
@@ -4307,11 +4335,11 @@ fn a_setting_landed_since_open_survives_the_next_writers_rewrite() {
 
     // The waiter opens — and so snapshots the config — before the writer
     // ahead of it in the queue has written anything.
-    let mut waiting = Corpus::open(Some(root.clone())).unwrap();
+    let mut waiting = Corpus::open(&process_locations(), Some(root.clone())).unwrap();
     assert!(!waiting.commit_setting().enabled);
 
     // The writer ahead finishes its own config write and lets go.
-    let mut ahead = Corpus::open(Some(root.clone())).unwrap();
+    let mut ahead = Corpus::open(&process_locations(), Some(root.clone())).unwrap();
     assert!(ops::set_commit(&mut ahead, true).unwrap().enabled);
 
     // The waiter gets in and removes a different key.
@@ -4320,7 +4348,7 @@ fn a_setting_landed_since_open_survives_the_next_writers_rewrite() {
         .setting;
     assert_eq!(setting.legacy, None);
 
-    let reopened = Corpus::open(Some(root.clone())).unwrap();
+    let reopened = Corpus::open(&process_locations(), Some(root.clone())).unwrap();
     assert!(
         reopened.commit_setting().enabled,
         "the commit setting written after the waiter opened was erased by its rewrite"
@@ -4343,18 +4371,18 @@ fn a_stale_commit_write_does_not_restore_the_legacy_key_dropped_since_it_opened(
     let root = dir.path().join("corpus");
     let foreign = with_legacy_observatory_root(&root);
 
-    let mut waiting = Corpus::open(Some(root.clone())).unwrap();
+    let mut waiting = Corpus::open(&process_locations(), Some(root.clone())).unwrap();
     assert_eq!(
         waiting.observatory_root().unwrap().legacy,
         Some(foreign.clone())
     );
 
-    let mut ahead = Corpus::open(Some(root.clone())).unwrap();
+    let mut ahead = Corpus::open(&process_locations(), Some(root.clone())).unwrap();
     ops::drop_legacy_observatory_root(&mut ahead).unwrap();
 
     assert!(ops::set_commit(&mut waiting, true).unwrap().enabled);
 
-    let reopened = Corpus::open(Some(root)).unwrap();
+    let reopened = Corpus::open(&process_locations(), Some(root)).unwrap();
     assert_eq!(
         reopened.observatory_root().unwrap().legacy,
         None,
@@ -4374,11 +4402,11 @@ fn the_commit_decision_follows_the_setting_on_disk_not_the_one_at_open() {
     git_init(&root);
 
     // Opened while the setting was off.
-    let stale_off = Corpus::open(Some(root.clone())).unwrap();
+    let stale_off = Corpus::open(&process_locations(), Some(root.clone())).unwrap();
     assert!(!stale_off.commit_setting().enabled);
 
     // Another writer turns it on and records that.
-    let mut ahead = Corpus::open(Some(root.clone())).unwrap();
+    let mut ahead = Corpus::open(&process_locations(), Some(root.clone())).unwrap();
     ops::set_commit(&mut ahead, true).unwrap();
     committed(ops::commit(&ahead, "config", &["commit"]));
 
@@ -4395,9 +4423,9 @@ fn the_commit_decision_follows_the_setting_on_disk_not_the_one_at_open() {
 
     // And the other way: opened while it was on, but off by the time the
     // verb lands.
-    let stale_on = Corpus::open(Some(root.clone())).unwrap();
+    let stale_on = Corpus::open(&process_locations(), Some(root.clone())).unwrap();
     assert!(stale_on.commit_setting().enabled);
-    let mut ahead = Corpus::open(Some(root.clone())).unwrap();
+    let mut ahead = Corpus::open(&process_locations(), Some(root.clone())).unwrap();
     ops::set_commit(&mut ahead, false).unwrap();
 
     let before = head(&root);
@@ -4593,7 +4621,7 @@ fn two_concurrent_tag_adds_on_one_node_both_survive() {
         for tag in ["alpha", "beta"] {
             let (root, start, id) = (root.clone(), &start, id.clone());
             scope.spawn(move || {
-                let corpus = Corpus::open(Some(root)).expect("open");
+                let corpus = Corpus::open(&process_locations(), Some(root)).expect("open");
                 start.wait();
                 ops::tag_add(&corpus, &id, &[tag.to_string()]).expect("tag");
             });
@@ -4718,14 +4746,16 @@ fn a_body_set_to_what_it_already_is_writes_nothing() {
 /// never one that replaces an earlier kept edit.
 #[test]
 fn a_kept_edit_is_a_new_owner_only_file_outside_the_corpus() {
-    let dir = Corpus::kept_edits_dir().unwrap();
+    let dir = Corpus::kept_edits_dir(&process_locations()).unwrap();
     assert_eq!(
         dir,
         support::home().join(".local/state/nebula/edits"),
         "with no XDG_STATE_HOME, under ~/.local/state"
     );
-    let first = Corpus::keep_edit("kept-edit-fixture", "the first text").unwrap();
-    let second = Corpus::keep_edit("kept-edit-fixture", "the second text").unwrap();
+    let first =
+        Corpus::keep_edit(&process_locations(), "kept-edit-fixture", "the first text").unwrap();
+    let second =
+        Corpus::keep_edit(&process_locations(), "kept-edit-fixture", "the second text").unwrap();
     assert_ne!(first, second, "a second edit never replaces the first");
     for (path, text) in [(&first, "the first text"), (&second, "the second text")] {
         assert_eq!(path.parent(), Some(dir.as_path()));
@@ -4743,7 +4773,7 @@ fn a_kept_edit_is_a_new_owner_only_file_outside_the_corpus() {
         }
     }
     assert!(matches!(
-        Corpus::keep_edit("../escape", "text"),
+        Corpus::keep_edit(&process_locations(), "../escape", "text"),
         Err(Error::UnsafeId(_))
     ));
 }
@@ -4800,7 +4830,7 @@ fn a_write_against_a_held_lock_refuses_and_changes_nothing() {
     let refused = std::thread::scope(|scope| {
         scope
             .spawn(|| {
-                let corpus = Corpus::open(Some(root.clone())).expect("open");
+                let corpus = Corpus::open(&process_locations(), Some(root.clone())).expect("open");
                 // The op uses the real bound, so this waits the full five
                 // seconds before refusing. That wait is the thing under test.
                 ops::tag_add(&corpus, &id, &["never".to_string()])
@@ -4830,7 +4860,7 @@ fn a_write_against_a_held_lock_refuses_and_changes_nothing() {
 
     // And a reader never waited on any of it.
     assert!(corpus.load(&id).is_ok());
-    assert!(Corpus::open(Some(root.clone())).is_ok());
+    assert!(Corpus::open(&process_locations(), Some(root.clone())).is_ok());
     drop(held);
 }
 
@@ -5414,11 +5444,12 @@ fn a_unicode_id_still_round_trips_through_a_write() {
 fn a_corpus_reached_through_a_symlinked_root_still_writes_and_loads() {
     let dir = tempfile::tempdir().expect("tempdir");
     let real = dir.path().join("real");
-    let corpus = Corpus::init(&real).expect("init");
+    let corpus = Corpus::init(&process_locations(), &real).expect("init");
     let link = dir.path().join("link");
     std::os::unix::fs::symlink(&real, &link).expect("symlink");
 
-    let linked = Corpus::open(Some(link.clone())).expect("open through the link");
+    let linked =
+        Corpus::open(&process_locations(), Some(link.clone())).expect("open through the link");
     let id = seed(&linked, "Reached through a link", &[]);
     ops::note(&linked, &id, "a fixture note", None).expect("note");
 
@@ -5448,9 +5479,9 @@ fn a_symlinked_nodes_directory_refuses_open_init_reads_and_writes() {
     std::os::unix::fs::symlink(&outside, &nodes).unwrap();
 
     for result in [
-        Corpus::open(Some(root.clone())),
-        Corpus::init(&root),
-        Corpus::open_or_init(Some(root.clone())).map(|(corpus, _)| corpus),
+        Corpus::open(&process_locations(), Some(root.clone())),
+        Corpus::init(&process_locations(), &root),
+        Corpus::open_or_init(&process_locations(), Some(root.clone())).map(|(corpus, _)| corpus),
     ] {
         assert!(matches!(result, Err(Error::NodesSymlink(path)) if path == nodes));
     }
@@ -5463,7 +5494,7 @@ fn a_symlinked_nodes_directory_refuses_open_init_reads_and_writes() {
         matches!(ops::new_node(&corpus, &NewNode { title: "New".into(), ..NewNode::default() }), Err(Error::NodesSymlink(path)) if path == nodes)
     );
     assert!(
-        matches!(nebula_core::migrate::run(Some(root)), Err(Error::NodesSymlink(path)) if path == nodes)
+        matches!(nebula_core::migrate::run(&process_locations(), Some(root)), Err(Error::NodesSymlink(path)) if path == nodes)
     );
 
     assert_eq!(std::fs::read(&outside_node).unwrap(), before);
@@ -5485,7 +5516,9 @@ fn init_refuses_a_dangling_nodes_symlink_without_creating_a_corpus() {
     let nodes = root.join("nodes");
     std::os::unix::fs::symlink(dir.path().join("missing"), &nodes).unwrap();
 
-    assert!(matches!(Corpus::init(&root), Err(Error::NodesSymlink(path)) if path == nodes));
+    assert!(
+        matches!(Corpus::init(&process_locations(), &root), Err(Error::NodesSymlink(path)) if path == nodes)
+    );
     assert!(
         std::fs::symlink_metadata(&nodes)
             .unwrap()
@@ -5494,4 +5527,504 @@ fn init_refuses_a_dangling_nodes_symlink_without_creating_a_corpus() {
     );
     assert!(!root.join("config.yaml").exists());
     assert!(!root.join("inbox").exists());
+}
+
+// ------------------------------------------------- resolved locations --
+
+/// A `Locations` naming only `home`: no working directory, no variables.
+fn at_home(home: &Path) -> Locations {
+    Locations {
+        home: Some(home.as_os_str().to_owned()),
+        ..Locations::default()
+    }
+}
+
+/// Every answer `resolve_root` gives comes from the `Locations` it is handed,
+/// in order: `--root`, then `NEBULA_ROOT` (empty counts as unset), then the
+/// corpus the working directory is in, then the machine file, then
+/// `~/.nebula` under the given home. With no home the default is refused
+/// rather than read from the process.
+#[test]
+fn resolve_root_follows_explicit_then_nebula_root_then_cwd_then_machine_file_then_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let configured = dir.path().join("configured");
+    let named = dir.path().join("named");
+    let explicit = dir.path().join("explicit");
+    let found = dir.path().join("found");
+    let base = at_home(&home);
+    Corpus::init(&base, &found).unwrap();
+    Corpus::write_root_config(&base, &configured, false).unwrap();
+
+    let every = Locations {
+        cwd: Some(found.join("nodes")),
+        nebula_root: Some(named.as_os_str().to_owned()),
+        ..base.clone()
+    };
+    let resolve = |locations: &Locations| Corpus::resolve_root(locations, None).unwrap();
+
+    assert_eq!(
+        Corpus::resolve_root(&every, Some(explicit.clone())).unwrap(),
+        explicit
+    );
+    assert_eq!(resolve(&every), named);
+
+    let unset = Locations {
+        nebula_root: Some("".into()),
+        ..every.clone()
+    };
+    assert_eq!(resolve(&unset), found, "an empty NEBULA_ROOT is unset");
+
+    let outside = Locations {
+        cwd: Some(home.clone()),
+        ..unset.clone()
+    };
+    assert_eq!(resolve(&outside), configured);
+    assert_eq!(outside.corpus_root().unwrap(), configured);
+
+    let fresh = dir.path().join("fresh-home");
+    let unconfigured = Locations {
+        home: Some(fresh.as_os_str().to_owned()),
+        ..outside.clone()
+    };
+    assert_eq!(resolve(&unconfigured), fresh.join(".nebula"));
+
+    let homeless = Locations {
+        home: None,
+        ..outside
+    };
+    assert!(matches!(
+        Corpus::resolve_root(&homeless, None),
+        Err(Error::HomeUnset)
+    ));
+}
+
+/// The observatory setting is `OBSERVATORY_ROOT` as `Locations` holds it,
+/// else the machine file under its home, else the legacy `config.yaml` key,
+/// which is reported whichever wins. An empty variable is unset, and a
+/// corpus opened with no home still reads the legacy key.
+#[test]
+fn observatory_root_prefers_env_then_machine_file_then_legacy_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let root = dir.path().join("corpus");
+    let locations = at_home(&home);
+    Corpus::init(&locations, &root).unwrap();
+    let foreign = with_legacy_observatory_root(&root);
+    let setting = |locations: &Locations| {
+        Corpus::open(locations, Some(root.clone()))
+            .unwrap()
+            .observatory_root()
+            .unwrap()
+    };
+
+    let legacy = setting(&locations);
+    assert_eq!(legacy.source, nebula_core::ObservatorySource::Config);
+    assert_eq!(legacy.root.as_deref(), Some(foreign.as_path()));
+    assert_eq!(setting(&Locations::default()).root, legacy.root);
+
+    let machine = dir.path().join("machine-observatory");
+    let corpus = Corpus::open(&locations, Some(root.clone())).unwrap();
+    ops::set_observatory_root(&corpus, &machine).unwrap();
+    let from_file = setting(&locations);
+    assert_eq!(from_file.source, nebula_core::ObservatorySource::Machine);
+    assert_eq!(from_file.root.as_deref(), Some(machine.as_path()));
+    assert_eq!(from_file.legacy.as_deref(), Some(foreign.as_path()));
+
+    let env = dir.path().join("env-observatory");
+    let exported = Locations {
+        observatory_root: Some(env.as_os_str().to_owned()),
+        ..locations.clone()
+    };
+    let from_env = setting(&exported);
+    assert_eq!(from_env.source, nebula_core::ObservatorySource::Env);
+    assert_eq!(from_env.root.as_deref(), Some(env.as_path()));
+    assert_eq!(from_env.legacy.as_deref(), Some(foreign.as_path()));
+
+    let empty = Locations {
+        observatory_root: Some("".into()),
+        ..locations
+    };
+    assert_eq!(
+        setting(&empty).source,
+        nebula_core::ObservatorySource::Machine,
+        "an empty OBSERVATORY_ROOT is unset"
+    );
+}
+
+/// `~/.nebula`, the machine file and a corpus created with nothing else set
+/// all sit under the home `Locations` names, not the one this process has.
+#[test]
+fn default_root_comes_from_locations_home_not_process_home() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("elsewhere");
+    assert_ne!(home, support::home());
+    let locations = at_home(&home);
+
+    assert_eq!(
+        Corpus::default_root(&locations).unwrap(),
+        home.join(".nebula")
+    );
+    assert_eq!(
+        Corpus::root_config_path(&locations).unwrap(),
+        home.join(".config").join("nebula").join("root")
+    );
+
+    let captured = verb::capture_at(
+        &locations,
+        None,
+        "a thought with nowhere else to go",
+        0,
+        &WriteOptions::default(),
+    )
+    .unwrap()
+    .value;
+    assert_eq!(captured.root, home.join(".nebula"));
+    assert!(captured.created);
+    assert!(home.join(".nebula").join("nodes").is_dir());
+}
+
+/// `$PWD` names the working directory only when it is absolute, has no `.`
+/// or `..`, and is the same directory as the OS's answer; then a corpus
+/// reached through a symlink is found under the spelling the shell used.
+#[cfg(unix)]
+#[test]
+fn logical_pwd_is_used_only_when_it_names_the_same_directory_as_cwd() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real");
+    let other = dir.path().join("other");
+    let link = dir.path().join("link");
+    std::fs::create_dir_all(&real).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let working = |pwd: Option<&Path>, cwd: Option<&Path>| {
+        Locations {
+            cwd: cwd.map(Path::to_path_buf),
+            pwd: pwd.map(|p| p.as_os_str().to_owned()),
+            ..Locations::default()
+        }
+        .working_dir()
+    };
+
+    assert_eq!(working(Some(&link), Some(&real)), Some(link.clone()));
+    assert_eq!(working(Some(&real), Some(&real)), Some(real.clone()));
+    assert_eq!(working(Some(&other), Some(&real)), Some(real.clone()));
+    assert_eq!(
+        working(Some(Path::new("link")), Some(&real)),
+        Some(real.clone()),
+        "a relative PWD is not trusted"
+    );
+    assert_eq!(
+        working(Some(&other.join("..").join("link")), Some(&real)),
+        Some(real.clone()),
+        "a PWD with `..` is not trusted, even naming the same directory"
+    );
+    assert_eq!(working(None, Some(&real)), Some(real.clone()));
+    assert_eq!(working(Some(&link), None), None);
+
+    let corpus = dir.path().join("corpus");
+    let linked = dir.path().join("linked");
+    Corpus::init(&Locations::default(), &corpus).unwrap();
+    std::os::unix::fs::symlink(&corpus, &linked).unwrap();
+    let inside = Locations {
+        cwd: Some(corpus.join("nodes")),
+        pwd: Some(linked.join("nodes").into_os_string()),
+        ..at_home(&dir.path().join("home"))
+    };
+    assert_eq!(Corpus::resolve_root(&inside, None).unwrap(), linked);
+}
+
+/// `init` names the machine setting that would otherwise send every later
+/// command elsewhere: `~/.nebula` created while it names another corpus,
+/// and any other corpus created beside it. Setting the root warns of
+/// neither, and says where the setting is.
+#[test]
+fn init_returns_default_and_shadowing_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let locations = at_home(&home);
+    let setting = home.join(".config").join("nebula").join("root");
+    let configured = dir.path().join("configured");
+
+    let first = verb::init(&locations, None, Some(configured.clone()), true, false).unwrap();
+    assert!(first.warnings.is_empty(), "{:?}", first.warnings);
+    assert_eq!(first.setting, setting);
+    assert!(!first.suggest_set_root);
+
+    let default = verb::init(&locations, Some(home.join(".nebula")), None, false, false).unwrap();
+    assert_eq!(
+        default.warnings,
+        [RootWarning::DefaultWhileConfigured {
+            setting: setting.clone(),
+            configured: configured.clone(),
+        }]
+    );
+
+    let other = verb::init(
+        &locations,
+        None,
+        Some(dir.path().join("other")),
+        false,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        other.warnings,
+        [RootWarning::Shadowed {
+            setting: setting.clone(),
+            configured,
+        }]
+    );
+    assert!(!other.suggest_set_root, "a machine setting already exists");
+
+    let third = dir.path().join("third");
+    let moved = verb::init(&locations, None, Some(third.clone()), true, true).unwrap();
+    assert!(moved.warnings.is_empty(), "{:?}", moved.warnings);
+    assert_eq!(Corpus::configured_root(&locations).unwrap(), Some(third));
+}
+
+/// The migration's commit is made inside the migration's lock: a hook run
+/// by that commit finds this process's holder record in `.lock`, and the
+/// record is gone once `migrate` returns.
+#[cfg(unix)]
+#[test]
+fn migrate_commits_under_its_own_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = configless(dir.path(), "first", V1_NODE);
+    std::fs::write(
+        root.join("config.yaml"),
+        "schema_version: 1\ncorpus_id: neb-abc123\ncommit: true\n",
+    )
+    .unwrap();
+    git_init(&root);
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "-m", "v1 corpus"]);
+    let seen = dir.path().join("holder-seen");
+    pre_commit_hook(
+        &root,
+        &dir.path().join("hook.pgid"),
+        &format!("cat .lock > '{}'", seen.display()),
+    );
+
+    let migrated = verb::migrate(
+        &process_locations(),
+        Some(root.clone()),
+        &WriteOptions::default(),
+    )
+    .unwrap();
+    let done = committed(migrated.commit.expect("the setting is on"));
+    assert_eq!(done.message, "neb migrate");
+    assert_eq!(migrated.value.root, root);
+
+    let holder = std::fs::read_to_string(&seen).expect("the hook ran");
+    assert!(
+        holder.contains(&std::process::id().to_string()),
+        "the commit ran without this process holding the lock: {holder:?}"
+    );
+    // Released: the holder empties its record before the guard lets go.
+    // Read from the file rather than by taking the lock from another thread,
+    // which a sibling test's fork can briefly make look held.
+    assert_eq!(
+        std::fs::read_to_string(root.join(nebula_core::LOCK_FILE)).unwrap(),
+        ""
+    );
+    assert_eq!(
+        git(&root, &["log", "--format=%s"])
+            .lines()
+            .collect::<Vec<_>>(),
+        ["neb migrate", "v1 corpus"]
+    );
+}
+
+/// What is left uncommitted in a corpus that is its own repository, the
+/// lock file aside.
+#[cfg(unix)]
+fn dirt(root: &Path) -> String {
+    git(
+        root,
+        &[
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--",
+            ".",
+            ":(exclude).lock",
+        ],
+    )
+}
+
+/// With commits on, each writing verb commits what it wrote, as
+/// `neb <verb> <ids>`, and leaves nothing behind for the next one.
+#[cfg(unix)]
+#[test]
+fn every_write_op_commits_what_it_wrote_when_commit_is_on() {
+    let (_dir, mut corpus, root) = committing_corpus();
+    let options = WriteOptions::default();
+    let expect = |commit: Option<Result<CommitOutcome, Error>>, message: &str| {
+        let done = committed(commit.expect("the policy commits"));
+        assert_eq!(done.message, message);
+        assert!(dirt(&root).is_empty(), "{message} left: {}", dirt(&root));
+    };
+
+    let captured = verb::capture(&corpus, "a thought to keep", &options).unwrap();
+    let kept = captured.value.id.clone();
+    expect(captured.commit, &format!("neb capture {kept}"));
+    let gone = verb::capture(&corpus, "a thought to drop", &options).unwrap();
+    expect(gone.commit, &format!("neb capture {}", gone.value.id));
+    let dropped = verb::drop(&corpus, &gone.value.id, &options).unwrap();
+    expect(dropped.commit, &format!("neb drop {}", gone.value.id));
+
+    let promotion = Promotion {
+        title: Some("Kept".to_string()),
+        ..Promotion::default()
+    };
+    let promoted = verb::promote(&corpus, &kept, &promotion, 0, &options).unwrap();
+    let a = promoted.value.doc.node.id.clone();
+    expect(promoted.commit, &format!("neb promote {kept} {a}"));
+
+    let created = verb::new_node(
+        &corpus,
+        &NewNode {
+            title: "Other".to_string(),
+            ..NewNode::default()
+        },
+        &options,
+    )
+    .unwrap();
+    let b = created.value.doc.node.id.clone();
+    expect(created.commit, &format!("neb new {b}"));
+
+    let before = corpus.load(&a).unwrap().body;
+    let edited = verb::edit(
+        &corpus,
+        &a,
+        &before,
+        &format!("{before}\nMore prose.\n"),
+        false,
+        &options,
+    )
+    .unwrap();
+    assert!(edited.value.changed);
+    expect(edited.commit, &format!("neb edit {a}"));
+
+    let noted = verb::note(&corpus, &a, "a dated line", None, false, &options).unwrap();
+    expect(noted.commit, &format!("neb note {a}"));
+
+    let sharpened =
+        verb::sharpen(&corpus, &a, "it never shows up", Some("claude"), &options).unwrap();
+    expect(sharpened.commit, &format!("neb sharpen {a}"));
+    let confirmed = verb::confirm_kill(&corpus, &a, &options).unwrap();
+    expect(confirmed.commit, &format!("neb sharpen {a}"));
+
+    let status = verb::set_status(&corpus, &b, Status::Hypothesis, None, &options);
+    assert!(
+        status.is_err(),
+        "a seed with no kill cannot be a hypothesis"
+    );
+    let refuted =
+        verb::set_status(&corpus, &a, Status::Refuted, Some("it fired"), &options).unwrap();
+    expect(refuted.commit, &format!("neb status {a}"));
+
+    let linked = verb::link(&corpus, &b, EdgeType::DerivesFrom, &a, None, &options).unwrap();
+    expect(linked.commit, &format!("neb link {b} {a}"));
+
+    let tagged = verb::retag(&corpus, &b, &["physics".to_string()], &[], &options).unwrap();
+    expect(tagged.commit, &format!("neb tag {b}"));
+
+    let cited = verb::cite(&corpus, &b, &citing("https://example.com/paper"), &options).unwrap();
+    let reference = cited.value.cited.reference.clone();
+    expect(cited.commit, &format!("neb cite {b} {reference}"));
+
+    let handed = verb::handoff(&corpus, &b, &handing("H012"), &options).unwrap();
+    expect(handed.commit, &format!("neb handoff {b} H012"));
+
+    let triaged = verb::capture(&corpus, "a thought triage drops", &options).unwrap();
+    let entry = triaged.value.id.clone();
+    expect(triaged.commit, &format!("neb capture {entry}"));
+    let mut session = Triage::start(&corpus, None).unwrap();
+    let step = session
+        .decide(&corpus, nebula_core::triage::Action::Drop, &options)
+        .unwrap();
+    step.value.unwrap();
+    expect(step.commit, &format!("neb drop {entry}"));
+
+    with_legacy_observatory_root(&root);
+    git(&root, &["commit", "-q", "-am", "a legacy key"]);
+    let dropped = verb::set_observatory_root(&mut corpus, None, true, &options).unwrap();
+    assert!(dropped.value.dropped.is_some_and(|d| d.removed.is_some()));
+    expect(dropped.commit, "neb config observatory-root");
+
+    // Off means off: the setting that turns commits off is not committed.
+    let off = verb::set_commit(&mut corpus, false, &options).unwrap();
+    assert!(matches!(off.commit, Some(Ok(CommitOutcome::Disabled))));
+    assert!(dirt(&root).contains("config.yaml"), "{}", dirt(&root));
+}
+
+/// `--no-commit` writes and does not commit, whatever the setting says:
+/// the verb reports no commit attempted and `HEAD` stays where it was.
+#[cfg(unix)]
+#[test]
+fn write_op_with_skip_policy_does_not_commit() {
+    let (_dir, corpus, root) = committing_corpus();
+    let skip = WriteOptions {
+        commit: CommitPolicy::Skip,
+        ..WriteOptions::default()
+    };
+    let before = head(&root);
+
+    let captured = verb::capture(&corpus, "an uncommitted thought", &skip).unwrap();
+    assert!(captured.commit.is_none());
+    let created = verb::new_node(
+        &corpus,
+        &NewNode {
+            title: "Loose".to_string(),
+            ..NewNode::default()
+        },
+        &skip,
+    )
+    .unwrap();
+    assert!(created.commit.is_none());
+    let id = created.value.doc.node.id;
+    let noted = verb::note(&corpus, &id, "still loose", None, false, &skip).unwrap();
+    assert!(noted.commit.is_none());
+
+    assert_eq!(head(&root), before);
+    assert!(
+        dirt(&root).contains(&format!("nodes/{id}.md")),
+        "the writes landed on disk: {}",
+        dirt(&root)
+    );
+}
+
+/// The append-only notes rule is enforced where the body is written, not
+/// only by the CLI's editor: a body whose `## Notes` section was rewritten
+/// or removed is refused and the file is left as it was, while prose
+/// outside the notes stays editable.
+#[test]
+fn set_body_refuses_a_rewritten_notes_section() {
+    let (_dir, corpus) = corpus();
+    let id = seed(&corpus, "Noted", &[]);
+    ops::note(&corpus, &id, "the first thought", None).unwrap();
+    let path = corpus.node_path(&id).unwrap();
+    let file = std::fs::read_to_string(&path).unwrap();
+    let body = corpus.load(&id).unwrap().body;
+    assert!(body.contains("## Notes"), "{body}");
+
+    let without = body.split("## Notes").next().unwrap().to_string();
+    for rewritten in [
+        body.replace("the first thought", "a better thought"),
+        without,
+    ] {
+        assert!(
+            matches!(
+                ops::set_body(&corpus, &id, &rewritten),
+                Err(Error::NotesChanged)
+            ),
+            "{rewritten:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), file);
+    }
+
+    let prose = format!("Prose added above.\n\n{body}");
+    assert!(ops::set_body(&corpus, &id, &prose).unwrap().is_some());
 }

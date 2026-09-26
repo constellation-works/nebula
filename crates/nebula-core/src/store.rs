@@ -20,7 +20,8 @@ use crate::fs::{
     EntryKind, Links, append_private, create_private_dir_all, create_private_new,
     read_regular_bytes, read_regular_text, regular_file_at, write_private_atomic,
 };
-use crate::git::{self, GitOutput};
+use crate::git::{self, GitAt, GitOutput};
+use crate::locations::Locations;
 use crate::lock::{CorpusLock, LOCK_FILE};
 use crate::model::{self, Doc};
 use crate::pending::PENDING_FILE;
@@ -39,6 +40,9 @@ use time::{
 pub struct Corpus {
     root: PathBuf,
     config: Config,
+    /// The resolved environment this corpus was opened with: where the
+    /// machine settings are, and the ceilings every git child is given.
+    locations: Locations,
 }
 
 /// A full node scan. Bad files remain visible while the good documents can
@@ -135,23 +139,26 @@ impl Corpus {
     /// purpose and above the two that are standing machine defaults, the way
     /// git finds its repository: standing inside a corpus is itself a choice
     /// of corpus. See [`Self::discover`] for what counts as being inside one.
-    pub fn resolve_root(explicit: Option<PathBuf>) -> Result<PathBuf> {
+    ///
+    /// Every answer but `--root` comes from `locations`, never from the
+    /// process this runs in.
+    pub fn resolve_root(locations: &Locations, explicit: Option<PathBuf>) -> Result<PathBuf> {
         if let Some(p) = explicit {
             if p.as_os_str().is_empty() {
                 return Err(Error::EmptyRoot);
             }
             return Ok(p);
         }
-        if let Some(p) = std::env::var_os("NEBULA_ROOT").filter(|v| !v.is_empty()) {
-            return Ok(PathBuf::from(p));
-        }
-        if let Some(p) = working_dir().and_then(|cwd| Self::discover(&cwd)) {
+        if let Some(p) = locations.nebula_root() {
             return Ok(p);
         }
-        if let Some(p) = Self::configured_root()? {
+        if let Some(p) = locations.working_dir().and_then(|cwd| Self::discover(&cwd)) {
             return Ok(p);
         }
-        Self::default_root()
+        if let Some(p) = Self::configured_root(locations)? {
+            return Ok(p);
+        }
+        Self::default_root(locations)
     }
 
     /// The nearest directory at or above `start` that already holds a corpus:
@@ -181,18 +188,18 @@ impl Corpus {
     }
 
     /// The root used when no command, environment, or machine setting names one.
-    pub fn default_root() -> Result<PathBuf> {
-        Ok(Self::home()?.join(".nebula"))
+    pub fn default_root(locations: &Locations) -> Result<PathBuf> {
+        Ok(locations.home()?.join(".nebula"))
     }
 
     /// The machine-local file that records a non-default corpus root.
-    pub fn root_config_path() -> Result<PathBuf> {
-        Ok(Self::machine_settings_dir()?.join("root"))
+    pub fn root_config_path(locations: &Locations) -> Result<PathBuf> {
+        Ok(Self::machine_settings_dir(locations)?.join("root"))
     }
 
     /// Where this machine's settings live: `~/.config/nebula`.
-    pub fn machine_settings_dir() -> Result<PathBuf> {
-        Ok(Self::home()?.join(".config").join("nebula"))
+    pub fn machine_settings_dir(locations: &Locations) -> Result<PathBuf> {
+        Ok(locations.home()?.join(".config").join("nebula"))
     }
 
     /// Where an edit that could not be saved is kept:
@@ -202,13 +209,10 @@ impl Corpus {
     /// a node the save was refused for, so it belongs to this machine and not
     /// to the corpus it would sync or commit into. A relative
     /// `$XDG_STATE_HOME` is ignored, as the XDG base-directory rules ask.
-    pub fn kept_edits_dir() -> Result<PathBuf> {
-        let state = std::env::var_os("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .filter(|dir| dir.is_absolute());
-        let state = match state {
+    pub fn kept_edits_dir(locations: &Locations) -> Result<PathBuf> {
+        let state = match locations.xdg_state_home() {
             Some(dir) => dir,
-            None => Self::home()?.join(".local").join("state"),
+            None => locations.home()?.join(".local").join("state"),
         };
         Ok(state.join("nebula").join("edits"))
     }
@@ -220,7 +224,7 @@ impl Corpus {
     /// This is how a refused `neb edit` keeps what the person typed before
     /// its temporary file goes (STD-03 §R30). A file is never replaced: a
     /// second edit kept in the same second takes the next free `-N` suffix.
-    pub fn keep_edit(id: &str, text: &str) -> Result<PathBuf> {
+    pub fn keep_edit(locations: &Locations, id: &str, text: &str) -> Result<PathBuf> {
         /// Names tried before giving up. Only a second refused edit of the
         /// same node in the same second takes a suffix at all.
         const ATTEMPTS: u32 = 16;
@@ -228,7 +232,7 @@ impl Corpus {
         if !is_path_safe_id(id) {
             return Err(Error::UnsafeId(id.to_string()));
         }
-        let dir = Self::kept_edits_dir()?;
+        let dir = Self::kept_edits_dir(locations)?;
         create_private_dir_all(&dir)?;
         let stamp = OffsetDateTime::now_utc()
             .format(format_description!(
@@ -265,8 +269,8 @@ impl Corpus {
     /// cannot both pass the check. Taken before any corpus lock, never after
     /// one; see the lock order in `lock.rs`.
     #[must_use = "the machine-setting lock is released when this guard drops"]
-    pub fn lock_machine_settings() -> Result<CorpusLock> {
-        let dir = Self::machine_settings_dir()?;
+    pub fn lock_machine_settings(locations: &Locations) -> Result<CorpusLock> {
+        let dir = Self::machine_settings_dir(locations)?;
         create_private_dir_all(&dir)?;
         CorpusLock::acquire(&dir)
     }
@@ -277,8 +281,8 @@ impl Corpus {
     /// by name rather than skipped or used: skipping would send every
     /// command to `~/.nebula` without a word, and a relative path would name
     /// a different corpus from each working directory (STD-02 §R28).
-    pub fn configured_root() -> Result<Option<PathBuf>> {
-        let path = Self::root_config_path()?;
+    pub fn configured_root(locations: &Locations) -> Result<Option<PathBuf>> {
+        let path = Self::root_config_path(locations)?;
         match std::fs::read_to_string(&path) {
             Ok(raw) => Self::root_setting(&path, &raw).map(Some),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -316,8 +320,8 @@ impl Corpus {
     /// is, beside [`Self::root_config_path`]. A machine setting rather than a
     /// corpus one, because the corpus travels between machines and the
     /// checkout's path does not.
-    pub fn observatory_root_config_path() -> Result<PathBuf> {
-        Ok(Self::machine_settings_dir()?.join("observatory-root"))
+    pub fn observatory_root_config_path(locations: &Locations) -> Result<PathBuf> {
+        Ok(Self::machine_settings_dir(locations)?.join("observatory-root"))
     }
 
     /// Read this machine's Observatory checkout setting, if it has one.
@@ -329,8 +333,8 @@ impl Corpus {
     /// is present but empty or relative is refused rather than skipped,
     /// because falling through to the legacy key would resolve records
     /// against another machine's path without a word.
-    pub fn configured_observatory_root() -> Result<Option<PathBuf>> {
-        let path = match Self::observatory_root_config_path() {
+    pub fn configured_observatory_root(locations: &Locations) -> Result<Option<PathBuf>> {
+        let path = match Self::observatory_root_config_path(locations) {
             Ok(path) => path,
             Err(Error::HomeUnset) => return Ok(None),
             Err(error) => return Err(error),
@@ -356,25 +360,31 @@ impl Corpus {
     /// corpus. The directory is not required to exist yet; `check` says so
     /// when a reference fails to resolve under it. It must be absolute, since
     /// the setting is read from whatever directory a command runs in.
-    pub(crate) fn write_observatory_root_config(dir: &Path) -> Result<PathBuf> {
+    pub(crate) fn write_observatory_root_config(
+        locations: &Locations,
+        dir: &Path,
+    ) -> Result<PathBuf> {
         if !dir.is_absolute() {
             return Err(Error::RelativeObservatoryRoot {
                 root: dir.to_path_buf(),
                 setting: None,
             });
         }
-        let path = Self::observatory_root_config_path()?;
-        create_private_dir_all(&Self::machine_settings_dir()?)?;
+        let path = Self::observatory_root_config_path(locations)?;
+        create_private_dir_all(&Self::machine_settings_dir(locations)?)?;
         write_private_atomic(&path, format!("{}\n", dir.display()))?;
         Ok(path)
     }
 
     /// The machine-local setting that a new non-default corpus will write.
-    pub fn root_config_path_if_absent(root: &Path) -> Result<Option<PathBuf>> {
-        if root == Self::default_root()? {
+    pub fn root_config_path_if_absent(
+        locations: &Locations,
+        root: &Path,
+    ) -> Result<Option<PathBuf>> {
+        if root == Self::default_root(locations)? {
             return Ok(None);
         }
-        let path = Self::root_config_path()?;
+        let path = Self::root_config_path(locations)?;
         if path.exists() {
             return Ok(None);
         }
@@ -388,11 +398,11 @@ impl Corpus {
     /// and the write happen under [`Self::lock_machine_settings`], and the
     /// file is replaced whole: a symlink at `root` is replaced by a regular
     /// file, and whatever it pointed at is left alone.
-    pub fn write_root_config(root: &Path, force: bool) -> Result<PathBuf> {
-        let _lock = Self::lock_machine_settings()?;
-        let path = Self::root_config_path()?;
-        Self::check_root_config(root, force)?;
-        create_private_dir_all(&Self::machine_settings_dir()?)?;
+    pub fn write_root_config(locations: &Locations, root: &Path, force: bool) -> Result<PathBuf> {
+        let _lock = Self::lock_machine_settings(locations)?;
+        let path = Self::root_config_path(locations)?;
+        Self::check_root_config(locations, root, force)?;
+        create_private_dir_all(&Self::machine_settings_dir(locations)?)?;
         write_private_atomic(&path, Self::root_setting_contents(root))?;
         Ok(path)
     }
@@ -406,10 +416,10 @@ impl Corpus {
     /// there that fails that rule names no corpus, since every command
     /// refuses it, so replacing it redirects nothing and needs no `force`:
     /// it is the remedy that refusal suggests.
-    pub(crate) fn check_root_config(root: &Path, force: bool) -> Result<()> {
-        let path = Self::root_config_path()?;
+    pub(crate) fn check_root_config(locations: &Locations, root: &Path, force: bool) -> Result<()> {
+        let path = Self::root_config_path(locations)?;
         Self::root_setting(&path, &Self::root_setting_contents(root))?;
-        let configured = match Self::configured_root() {
+        let configured = match Self::configured_root(locations) {
             Ok(configured) => configured,
             Err(Error::EmptyRootSetting(_) | Error::RelativeRootSetting { .. }) => None,
             Err(error) => return Err(error),
@@ -430,11 +440,14 @@ impl Corpus {
     /// A conflicting machine setting is worth naming before creating the
     /// legacy default corpus. The normal resolver cannot reach this state,
     /// but an explicit `--root ~/.nebula` can.
-    pub fn warning_before_default_init(root: &Path) -> Result<Option<PathBuf>> {
-        if root != Self::default_root()? || root.exists() {
+    pub fn warning_before_default_init(
+        locations: &Locations,
+        root: &Path,
+    ) -> Result<Option<PathBuf>> {
+        if root != Self::default_root(locations)? || root.exists() {
             return Ok(None);
         }
-        Ok(Self::configured_root()?.filter(|configured| configured != root))
+        Ok(Self::configured_root(locations)?.filter(|configured| configured != root))
     }
 
     /// A configured root that names a *different* directory than the one
@@ -444,28 +457,22 @@ impl Corpus {
     /// one orphaned. `None` when there is no configured root, the target
     /// already matches it, or the target is the default (covered by
     /// [`Self::warning_before_default_init`] instead).
-    pub fn warning_before_shadowing_init(root: &Path) -> Result<Option<PathBuf>> {
-        if root == Self::default_root()? {
+    pub fn warning_before_shadowing_init(
+        locations: &Locations,
+        root: &Path,
+    ) -> Result<Option<PathBuf>> {
+        if root == Self::default_root(locations)? {
             return Ok(None);
         }
-        Ok(Self::configured_root()?.filter(|configured| configured != root))
-    }
-
-    /// `$HOME`, refused by what is actually wrong with it: unset, or set to
-    /// something that is not UTF-8 (STD-02 §R26).
-    fn home() -> Result<PathBuf> {
-        match std::env::var("HOME") {
-            Ok(home) => Ok(PathBuf::from(home)),
-            Err(std::env::VarError::NotPresent) => Err(Error::HomeUnset),
-            Err(std::env::VarError::NotUnicode(value)) => Err(Error::HomeNotUnicode(value)),
-        }
+        Ok(Self::configured_root(locations)?.filter(|configured| configured != root))
     }
 
     /// Open the corpus named by `--root`, else `NEBULA_ROOT`, else the one
     /// the working directory is in, else the configured root, else
-    /// `~/.nebula`.
-    pub fn open(explicit: Option<PathBuf>) -> Result<Self> {
-        let root = Self::resolve_root(explicit)?;
+    /// `~/.nebula`, all as `locations` resolves them. The corpus keeps
+    /// `locations` for the machine settings and git runs it makes later.
+    pub fn open(locations: &Locations, explicit: Option<PathBuf>) -> Result<Self> {
+        let root = Self::resolve_root(locations, explicit)?;
         refuse_nodes_symlink(&root)?;
         if !root.join("nodes").is_dir() {
             return Err(Error::NoCorpus(root));
@@ -474,7 +481,11 @@ impl Corpus {
         // config at all, refuses to open until `neb migrate` has brought it
         // forward (STD-03 §R6).
         let config = Config::load(&root)?;
-        Ok(Self { root, config })
+        Ok(Self {
+            root,
+            config,
+            locations: locations.clone(),
+        })
     }
 
     /// Create an empty corpus, or open an existing one without resetting it.
@@ -489,7 +500,7 @@ impl Corpus {
     /// Takes the corpus lock before it creates anything inside the root, so
     /// no two initializers write `config.yaml` at once and every path that
     /// creates one holds the lock (STD-03 §R6).
-    pub fn init(root: &Path) -> Result<Self> {
+    pub fn init(locations: &Locations, root: &Path) -> Result<Self> {
         refuse_nodes_symlink(root)?;
         // Decided before anything is created, not even the lock file, so a
         // refusal leaves the root exactly as it was.
@@ -517,6 +528,7 @@ impl Corpus {
         Ok(Self {
             root: root.to_path_buf(),
             config,
+            locations: locations.clone(),
         })
     }
 
@@ -550,10 +562,10 @@ impl Corpus {
     /// The flag is `true` when there was no corpus at the root, so the caller
     /// can say where it made one: a mistyped root would otherwise split the
     /// corpus with nothing to show for it.
-    pub fn open_or_init(explicit: Option<PathBuf>) -> Result<(Self, bool)> {
-        let root = Self::resolve_root(explicit)?;
-        match Self::open(Some(root.clone())) {
-            Err(Error::NoCorpus(_)) => Self::init(&root).map(|corpus| (corpus, true)),
+    pub fn open_or_init(locations: &Locations, explicit: Option<PathBuf>) -> Result<(Self, bool)> {
+        let root = Self::resolve_root(locations, explicit)?;
+        match Self::open(locations, Some(root.clone())) {
+            Err(Error::NoCorpus(_)) => Self::init(locations, &root).map(|corpus| (corpus, true)),
             other => other.map(|corpus| (corpus, false)),
         }
     }
@@ -561,6 +573,28 @@ impl Corpus {
     /// Where the corpus lives, as it was given.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The resolved environment this corpus was opened with.
+    pub fn locations(&self) -> &Locations {
+        &self.locations
+    }
+
+    /// Run one query over the graph of every node as it is on disk now.
+    ///
+    /// A [`Graph`](crate::Graph) borrows the nodes it indexes, so it cannot
+    /// be handed back; this loads them, builds it, and gives it to `query`,
+    /// which is how a read is `open` plus one call. Takes no lock: a reader
+    /// never waits on a writer.
+    pub fn query<T>(&self, query: impl FnOnce(&crate::Graph<'_>) -> Result<T>) -> Result<T> {
+        let docs = self.load_all()?;
+        query(&crate::Graph::build(&docs)?)
+    }
+
+    /// Where this corpus's git commands run, and where git's repository
+    /// discovery stops for them.
+    pub(crate) fn git_at(&self) -> GitAt<'_> {
+        self.locations.git_at(&self.root)
     }
 
     /// Take this corpus's write lock, waiting up to [`crate::LOCK_WAIT`] for
@@ -646,18 +680,23 @@ impl Corpus {
     /// The paths are used as given and never canonicalized, like every other
     /// path here.
     ///
-    /// The environment and the machine file are read now; the legacy key is
+    /// The environment is the one this corpus was opened with and the machine
+    /// file is read now; the legacy key is
     /// the snapshot [`Self::open`] took, which is what a read wants: it
     /// answers without waiting on a writer. Fails only on a machine setting
     /// that is unreadable, empty or relative.
     pub fn observatory_root(&self) -> Result<ObservatoryRoot> {
-        let env = std::env::var_os(config::OBSERVATORY_ROOT_ENV).filter(|v| !v.is_empty());
+        let env = self
+            .locations
+            .observatory_root
+            .clone()
+            .filter(|v| !v.is_empty());
         // The environment outranks the machine file, which is then not read
         // at all: a machine whose file is broken still works while the
         // variable is exported.
         let machine = match env {
             Some(_) => None,
-            None => Self::configured_observatory_root()?,
+            None => Self::configured_observatory_root(&self.locations)?,
         };
         Ok(ObservatoryRoot::from_settings(
             env,
@@ -724,23 +763,23 @@ impl Corpus {
         if !self.current_config()?.commit {
             return Ok(CommitOutcome::Disabled);
         }
-        let root = &self.root;
+        let at = self.git_at();
         // Fail closed (integrity, STD-02 §R31): a repository git cannot read
         // is an error here, never a reason to leave the write unrecorded
         // without a word.
-        if !inside_work_tree(root)? {
+        if !inside_work_tree(at)? {
             return Ok(CommitOutcome::NotARepository);
         }
-        refuse_ignored_corpus(root)?;
-        let paths = commit_pathspec(root);
+        refuse_ignored_corpus(at)?;
+        let paths = commit_pathspec(&self.root);
         if paths.is_empty() {
             return Ok(CommitOutcome::NothingToCommit);
         }
         let mut add = vec!["add", "-A", "--"];
         add.extend(&paths);
         add.extend(NEVER_STAGED);
-        git_ok(root, &add)?;
-        let changed = staged_paths(root, &paths)?;
+        git_ok(at, &add)?;
+        let changed = staged_paths(at, &paths)?;
         if changed.is_empty() {
             // The write changed nothing git can see.
             return Ok(CommitOutcome::NothingToCommit);
@@ -753,8 +792,8 @@ impl Corpus {
         // so work someone else stages meanwhile stays staged and theirs.
         let mut commit = vec!["commit", "-q", "-m", &message, "--only", "--"];
         commit.extend(&changed);
-        git_ok(root, &commit)?;
-        let hash = git_ok(root, &["rev-parse", "HEAD"])?.trim().to_string();
+        git_ok(at, &commit)?;
+        let hash = git_ok(at, &["rev-parse", "HEAD"])?.trim().to_string();
         Ok(CommitOutcome::Committed(Committed { hash, message }))
     }
 
@@ -808,7 +847,7 @@ impl Corpus {
         self.load(id)?;
         let path = format!("nodes/{id}.md");
         let raw = git_ok(
-            &self.root,
+            self.git_at(),
             &[
                 "log",
                 "-z",
@@ -875,12 +914,15 @@ impl Corpus {
                 revision: at.to_string(),
             });
         }
-        let prefix = git_ok(&self.root, &["rev-parse", "--show-prefix"])?;
+        let prefix = git_ok(self.git_at(), &["rev-parse", "--show-prefix"])?;
         let object = format!("{revision}:{}nodes/{id}.md", prefix.trim());
         if !self.resolves(&object)? {
             return Err(absent());
         }
-        let shown = git_ok(&self.root, &["show", "--no-ext-diff", "--format=", &object])?;
+        let shown = git_ok(
+            self.git_at(),
+            &["show", "--no-ext-diff", "--format=", &object],
+        )?;
         let doc = model::parse(&shown, &node_path).map_err(|e| match e {
             // Same reporting as a read from disk: an id that came out of a
             // file is a fact about that file.
@@ -904,7 +946,7 @@ impl Corpus {
     /// Whether `object` names something in the corpus's repository:
     /// `false` when git says it does not, [`Error::Git`] when git failed.
     fn resolves(&self, object: &str) -> Result<bool> {
-        let out = git(&self.root, &["rev-parse", "--verify", "--quiet", object])?;
+        let out = git(self.git_at(), &["rev-parse", "--verify", "--quiet", object])?;
         match out.status.code() {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
@@ -924,7 +966,7 @@ impl Corpus {
     /// the revision that `log` shows for the date.
     fn last_commit_on_or_before(&self, path: &str, date: &str) -> Result<Option<String>> {
         let listed = git_ok(
-            &self.root,
+            self.git_at(),
             &[
                 "rev-list",
                 "--no-commit-header",
@@ -951,7 +993,7 @@ impl Corpus {
     }
 
     fn require_git(&self) -> Result<()> {
-        if inside_work_tree(&self.root)? {
+        if inside_work_tree(self.git_at())? {
             Ok(())
         } else {
             Err(Error::NotGitWorkTree(self.root.clone()))
@@ -1459,43 +1501,6 @@ fn holds_corpus(dir: &Path) -> bool {
         }
 }
 
-/// The working directory as the shell names it.
-///
-/// `$PWD` when it is absolute, has no `.` or `..` in it, and is the same
-/// directory as `.`, which is the rule `pwd -L` follows; otherwise what the
-/// OS reports. A corpus reached through a symlink is then found under the
-/// spelling the user typed rather than the one the kernel resolved, because
-/// paths are used as given. `None` when there is no working directory to
-/// speak of, as when it has been removed: there is nothing to discover from.
-fn working_dir() -> Option<PathBuf> {
-    let logical = std::env::var_os("PWD").map(PathBuf::from).filter(|pwd| {
-        pwd.is_absolute()
-            && !pwd
-                .components()
-                .any(|c| matches!(c, Component::CurDir | Component::ParentDir))
-            && same_dir(pwd, Path::new("."))
-    });
-    logical.or_else(|| std::env::current_dir().ok())
-}
-
-/// Whether two paths name the same directory, by identity rather than by
-/// spelling.
-#[cfg(unix)]
-fn same_dir(a: &Path, b: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    match (std::fs::metadata(a), std::fs::metadata(b)) {
-        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
-        _ => false,
-    }
-}
-
-/// Without inode identity there is no cheap way to tell, so `$PWD` is never
-/// trusted and the OS's answer stands.
-#[cfg(not(unix))]
-fn same_dir(_: &Path, _: &Path) -> bool {
-    false
-}
-
 /// Check the named inbox entry itself, without resolving the corpus root. A
 /// symlinked root is a supported way to reach a corpus, but a symlink planted
 /// at `inbox/` or a month file must not redirect an inbox write.
@@ -1585,12 +1590,12 @@ fn commit_pathspec(root: &Path) -> Vec<&'static str> {
 /// Refuse a corpus that the repository around it ignores: `commit` on would
 /// otherwise record nothing, forever, without a word. A private repository at
 /// the corpus root is the fix.
-fn refuse_ignored_corpus(root: &Path) -> Result<()> {
-    let ignored = git(root, &["check-ignore", "-q", "--", "nodes"])?;
+fn refuse_ignored_corpus(at: GitAt<'_>) -> Result<()> {
+    let ignored = git(at, &["check-ignore", "-q", "--", "nodes"])?;
     match ignored.status.code() {
-        Some(0) => Err(Error::CorpusIgnored(root.to_path_buf())),
+        Some(0) => Err(Error::CorpusIgnored(at.root.to_path_buf())),
         Some(1) => Ok(()),
-        _ => Err(git_failed(root, "check-ignore", &ignored.stderr.text())),
+        _ => Err(git_failed(at.root, "check-ignore", &ignored.stderr.text())),
     }
 }
 
@@ -1603,14 +1608,14 @@ fn refuse_ignored_corpus(root: &Path) -> Result<()> {
 /// asked about alone would mean everything else: a file to keep out of a
 /// commit is kept out of the `git add` before it, since `--only` commits only
 /// paths git already tracks.
-fn staged_paths<'a>(root: &Path, pathspec: &[&'a str]) -> Result<Vec<&'a str>> {
+fn staged_paths<'a>(at: GitAt<'_>, pathspec: &[&'a str]) -> Result<Vec<&'a str>> {
     let mut staged = Vec::new();
     for &path in pathspec {
-        let diff = git(root, &["diff", "--cached", "--quiet", "--", path])?;
+        let diff = git(at, &["diff", "--cached", "--quiet", "--", path])?;
         match diff.status.code() {
             Some(0) => {}
             Some(1) => staged.push(path),
-            _ => return Err(git_failed(root, "diff", &diff.stderr.text())),
+            _ => return Err(git_failed(at.root, "diff", &diff.stderr.text())),
         }
     }
     Ok(staged)
@@ -1705,19 +1710,20 @@ fn ensure_lock_ignored(root: &Path) -> Result<()> {
 /// starting, running out of time or being stopped is what this reports;
 /// whether the command succeeded is the caller's to judge, since a non-zero
 /// exit is an answer for some of them.
-pub(crate) fn git(root: &Path, args: &[&str]) -> Result<GitOutput> {
-    git::run_git(root, args).map_err(|e| e.into_error(root, args.first().copied().unwrap_or("git")))
+pub(crate) fn git(at: GitAt<'_>, args: &[&str]) -> Result<GitOutput> {
+    git::run_git(at, args)
+        .map_err(|e| e.into_error(at.root, args.first().copied().unwrap_or("git")))
 }
 
 /// Run git at the corpus root and require it to succeed; all of stdout as
 /// text.
-fn git_ok(root: &Path, args: &[&str]) -> Result<String> {
+fn git_ok(at: GitAt<'_>, args: &[&str]) -> Result<String> {
     let context = args.first().copied().unwrap_or("git");
-    let out = git(root, args)?;
+    let out = git(at, args)?;
     if !out.status.success() {
-        return Err(git_failed(root, context, &out.stderr.text()));
+        return Err(git_failed(at.root, context, &out.stderr.text()));
     }
-    Ok(String::from_utf8_lossy(out.stdout_whole(root, context)?).into_owned())
+    Ok(String::from_utf8_lossy(out.stdout_whole(at.root, context)?).into_owned())
 }
 
 pub(crate) fn git_failed(root: &Path, context: &str, stderr: &str) -> Error {
@@ -1735,15 +1741,15 @@ pub(crate) fn git_failed(root: &Path, context: &str, stderr: &str) -> Error {
 /// one and says the root is not in its work tree. With a repository there, git
 /// failing — not starting, or unable to read it — is [`Error::Git`], never
 /// "not a work tree" (STD-02 §R29).
-pub(crate) fn inside_work_tree(root: &Path) -> Result<bool> {
-    if !git::repository_expected(root) {
+pub(crate) fn inside_work_tree(at: GitAt<'_>) -> Result<bool> {
+    if !git::repository_expected(at) {
         return Ok(false);
     }
-    let out = git(root, &["rev-parse", "--is-inside-work-tree"])?;
+    let out = git(at, &["rev-parse", "--is-inside-work-tree"])?;
     if !out.status.success() {
-        return Err(git_failed(root, "rev-parse", &out.stderr.text()));
+        return Err(git_failed(at.root, "rev-parse", &out.stderr.text()));
     }
-    Ok(String::from_utf8_lossy(out.stdout_whole(root, "rev-parse")?).trim() == "true")
+    Ok(String::from_utf8_lossy(out.stdout_whole(at.root, "rev-parse")?).trim() == "true")
 }
 
 /// Every capture still waiting to be promoted or dropped.
@@ -2436,7 +2442,8 @@ mod tests {
     #[test]
     fn a_capture_line_is_built_whole_and_written_once() {
         let dir = tempfile::tempdir().unwrap();
-        let corpus = Corpus::init(&dir.path().join("corpus")).unwrap();
+        let corpus =
+            Corpus::init(&crate::Locations::default(), &dir.path().join("corpus")).unwrap();
         let month = dir
             .path()
             .join("corpus")

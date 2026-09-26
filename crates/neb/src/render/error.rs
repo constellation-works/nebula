@@ -170,6 +170,10 @@ fn message(e: &Error) -> String {
                 age(held)
             )
         }
+        // Core says the rule; the CLI names the verb that appends.
+        Error::NotesChanged => "an existing ## Notes section was removed, reordered, or changed; \
+                                use `neb note` to append notes"
+            .to_owned(),
         other => other.to_string(),
     }
 }

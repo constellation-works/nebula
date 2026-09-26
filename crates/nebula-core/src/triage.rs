@@ -6,9 +6,11 @@
 //! and the nodes it reads closest to, and moves on when an [`Action`] settles
 //! or skips it. Promotion and dropping go through [`ops::promote`] and
 //! [`ops::drop`] unchanged, so every invariant, every refusal and the `by`
-//! attribution are the ones the single verbs already have. What to commit,
-//! and how to ask for the next action, is the caller's: this module never
-//! reads a key and never commits.
+//! attribution are the ones the single verbs already have. How to ask for
+//! the next action is the caller's: this module never reads a key.
+//! [`Triage::decide`] is the one call per decision, which holds the lock
+//! across the write and its commit as the single verbs do; [`Triage::apply`]
+//! is the decision alone.
 //!
 //! Nothing links automatically. The candidates are a numbered suggestion, and
 //! a parent is written only when the caller names one of them by number.
@@ -17,6 +19,7 @@ use crate::error::{Error, Result};
 use crate::graph::{NEAR_DEFAULT, Neighbour};
 use crate::ops::{self, Created, Promotion};
 use crate::store::{self, Corpus, InboxEntry};
+use crate::verb::{WriteOptions, Written};
 use serde::Serialize;
 use std::collections::VecDeque;
 
@@ -215,6 +218,42 @@ impl Triage {
         step
     }
 
+    /// [`Self::apply`] as one critical section, as the single verb has: a
+    /// promotion or a drop takes the lock, writes, and commits under it, the
+    /// way `options` say. Never across the wait for the next action, which
+    /// would hold every other writer off meanwhile.
+    ///
+    /// `Err` only when the lock could not be taken, which ends a session. A
+    /// refusal of the decision itself is the `value`, as [`Self::apply`]
+    /// returns it, and was not committed.
+    pub fn decide(
+        &mut self,
+        corpus: &Corpus,
+        action: Action,
+        options: &WriteOptions,
+    ) -> Result<Written<Result<Step>>> {
+        let writes = match action {
+            Action::Promote | Action::PromoteUnder(_) | Action::Drop => true,
+            Action::Title(_) | Action::Skip | Action::Quit => false,
+        };
+        // The candidates are a scan of every node, so they are read before
+        // the lock, never under it (STD-03 §R1).
+        if let Err(e) = self.look(corpus) {
+            return Ok(Written::new(Err(e), None));
+        }
+        let lock = writes.then(|| options.lock(corpus)).transpose()?;
+        let step = self.apply(corpus, action);
+        let commit = match &step {
+            Ok(Step::Promoted { entry, created }) => {
+                options.commit(corpus, "promote", &[&entry.id, &created.doc.node.id])
+            }
+            Ok(Step::Dropped { entry }) => options.commit(corpus, "drop", &[&entry.id]),
+            Ok(Step::Titled { .. } | Step::Skipped { .. } | Step::Quit) | Err(_) => None,
+        };
+        std::mem::drop(lock);
+        Ok(Written::new(step, commit))
+    }
+
     /// What the session has done so far, and how much of it is left.
     pub fn tally(&self) -> Tally {
         // The current entry is still at the front of the queue until it is
@@ -300,7 +339,8 @@ mod tests {
     #[test]
     fn triage_orders_mixed_stamp_forms_by_instant() {
         let dir = tempfile::tempdir().unwrap();
-        let corpus = Corpus::init(&dir.path().join("corpus")).unwrap();
+        let corpus =
+            Corpus::init(&crate::Locations::default(), &dir.path().join("corpus")).unwrap();
         let inbox = dir.path().join("corpus/inbox");
         std::fs::create_dir_all(&inbox).unwrap();
         // In file order, and so that text order differs from instant order:

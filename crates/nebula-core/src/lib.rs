@@ -24,6 +24,7 @@
 //! Module map:
 //!
 //! - [`model`]  the file format: [`Node`], [`Status`], [`Edge`], [`Reference`], [`Note`]
+//! - `locations` [`Locations`]: the resolved environment every surface builds once and hands down
 //! - [`store`]  [`Corpus`]: where it lives, loading, saving, the inbox
 //! - [`fs`]     the one durable write path: fsync, rename, owner-only modes
 //! - `lock`    [`CorpusLock`]: the advisory `.lock` every write holds, and reads never do
@@ -33,18 +34,20 @@
 //! - [`ops`]    the mutations, each enforcing its point-of-action invariants
 //! - [`check`]  the invariant checker, and where an `observatory` record resolves
 //! - [`triage`] [`Triage`]: the inbox one entry at a time, through the ops above
+//! - [`verb`]   one call per command: the lock, the write, the commit, then the advice
 //! - [`migrate`] v1 → v2, with its own lenient v1 model kept private
 //!
 //! The public API is exactly what this file names. A consumer that needs more
 //! is a signal to add an API, not to reach in.
 //!
 //! ```no_run
-//! use nebula_core::{Corpus, Graph, graph};
+//! use nebula_core::{Corpus, Locations, graph};
 //!
-//! let corpus = Corpus::open(None)?;
-//! let docs = corpus.load_all()?;
-//! let g = Graph::build(&docs)?;
-//! for node in graph::export(&g)?.nodes {
+//! // A surface builds this once, from its own environment and working
+//! // directory; core never reads either.
+//! let locations = Locations::default();
+//! let corpus = Corpus::open(&locations, None)?;
+//! for node in corpus.query(graph::export)?.nodes {
 //!     println!("{} {}", node.id, node.title);
 //! }
 //! # Ok::<(), nebula_core::Error>(())
@@ -53,6 +56,7 @@
 mod config;
 mod error;
 mod git;
+mod locations;
 mod lock;
 mod pending;
 
@@ -64,6 +68,7 @@ pub mod model;
 pub mod ops;
 pub mod store;
 pub mod triage;
+pub mod verb;
 
 #[cfg(test)]
 mod tests;
@@ -83,6 +88,7 @@ pub use graph::{
     ReviewItem, ReviewReport, ReviewRule, SEED_DAYS, TagCount, TagCounts, Touched, Trace, TraceHop,
     TraceNode, Via,
 };
+pub use locations::Locations;
 pub use lock::{CorpusLock, LOCK_FILE, LOCK_WAIT, LockHolder};
 pub use migrate::{MigrationReport, NodeMigration};
 pub use model::{Closed, Doc, Edge, EdgeType, HUMAN, Node, Note, Origin, Reference, Status};

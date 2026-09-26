@@ -72,7 +72,7 @@ fn keys(config: &str) -> (BTreeSet<String>, u64) {
 fn fresh_and_migrated_configs_match() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("fresh");
-    crate::store::Corpus::init(&root).unwrap();
+    crate::store::Corpus::init(&crate::Locations::default(), &root).unwrap();
     let fresh = std::fs::read_to_string(root.join(crate::config::FILE)).unwrap();
     let expected = keys(&fresh);
     assert_eq!(expected.1, u64::from(SCHEMA_VERSION));

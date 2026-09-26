@@ -1,14 +1,17 @@
 //! The corpus as the desktop reads it.
 //!
-//! One thin function per command, each a single `nebula-core` call, so the
+//! One thin function per command, each one core operation: a write is one
+//! call into [`nebula_core::verb`], which holds the lock across the write and
+//! its commit; a read is the open corpus plus one query. So the
 //! `#[tauri::command]` wrappers in [`crate::commands`] carry no logic and this
 //! file can be exercised by a test without a window. Nothing here shells out
 //! to `neb`: the desktop links the library and sees exactly what the CLI sees.
 
 use crate::error::IpcError;
+use nebula_core::verb::{self, CommitPolicy, WriteOptions};
 use nebula_core::{
-    CommitOutcome, Committed, Corpus, Created, Graph, GraphExport, InboxEntry, NodeView, Result,
-    graph, ops,
+    CommitOutcome, Committed, Corpus, Created, GraphExport, InboxEntry, Locations, NodeView,
+    Result, graph, ops,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -17,18 +20,30 @@ use std::time::Duration;
 /// A desktop write should tell the UI promptly when another writer is busy.
 pub const WRITE_LOCK_WAIT: Duration = Duration::from_millis(150);
 
-/// Where the corpus is expected: `$NEBULA_ROOT`, else the corpus the working
-/// directory is in, else `~/.config/nebula/root`, else `~/.nebula`. The CLI's
-/// rule without `--root`, so the app and the terminal never disagree.
-pub fn resolve_root() -> Result<PathBuf> {
-    Corpus::resolve_root(None)
+/// Where the corpus is expected, as `locations` resolves it: `$NEBULA_ROOT`,
+/// else the corpus the working directory is in, else
+/// `~/.config/nebula/root`, else `~/.nebula`. The CLI's rule without
+/// `--root`, so the app and the terminal never disagree.
+pub fn resolve_root(locations: &Locations) -> Result<PathBuf> {
+    locations.corpus_root()
 }
 
 /// Open the corpus at `root`. Fails when there is none, or when it is at a
 /// schema this build does not read; the desktop never creates one, because a
 /// wrong `NEBULA_ROOT` should be seen, not papered over.
-pub fn open(root: &Path) -> Result<Corpus> {
-    Corpus::open(Some(root.to_path_buf()))
+pub fn open(locations: &Locations, root: &Path) -> Result<Corpus> {
+    Corpus::open(locations, Some(root.to_path_buf()))
+}
+
+/// How every desktop write takes the lock: a short wait, so the UI hears
+/// promptly that another writer is busy, and `label` for that writer to be
+/// told. Commits follow `config.yaml`; the desktop has no `--no-commit`.
+fn write_options(label: String) -> WriteOptions {
+    WriteOptions {
+        commit: CommitPolicy::Configured,
+        wait: WRITE_LOCK_WAIT,
+        label: Some(label),
+    }
 }
 
 /// What a write command returns once the write is on disk: the written value,
@@ -71,6 +86,17 @@ pub enum CommitReport {
     },
 }
 
+impl<T> Written<T> {
+    /// A core write as the webview reads it.
+    fn of(done: verb::Written<T>) -> Self {
+        Self {
+            value: done.value,
+            // Always `Some`: the desktop never skips a commit.
+            commit: done.commit.map_or(CommitReport::Disabled, CommitReport::of),
+        }
+    }
+}
+
 impl CommitReport {
     /// Report the commit that followed a write. A refusal is logged as well:
     /// the write stands, and the corpus now holds an uncommitted change.
@@ -93,16 +119,8 @@ impl CommitReport {
 /// Append and, when configured, commit one line just as `neb capture` does.
 /// Fails only when nothing was written; a refused commit is in the report.
 pub fn capture(corpus: &Corpus, text: &str) -> Result<Written<InboxEntry>> {
-    // Hold the lock across the write and commit, just as the CLI does. Both
-    // core operations re-enter it on this thread without waiting again, and
-    // leave this label as the one a waiting writer is told about.
-    let _lock = corpus.lock_as(WRITE_LOCK_WAIT, "desktop capture")?;
-    let entry = ops::capture(corpus, text)?;
-    let commit = CommitReport::of(ops::commit(corpus, "capture", &[&entry.id]));
-    Ok(Written {
-        value: entry,
-        commit,
-    })
+    let options = write_options("desktop capture".to_string());
+    verb::capture(corpus, text, &options).map(Written::of)
 }
 
 /// Every capture not yet promoted or dropped.
@@ -113,35 +131,20 @@ pub fn inbox(corpus: &Corpus) -> Result<Vec<InboxEntry>> {
 /// Settle one entry through the same core op and commit as `neb drop`. As
 /// with [`capture`], a refused commit is reported, not raised.
 pub fn drop_entry(corpus: &Corpus, entry: &str) -> Result<Written<InboxEntry>> {
-    let _lock = corpus.lock_as(WRITE_LOCK_WAIT, &format!("desktop drop {entry}"))?;
-    let dropped = ops::drop(corpus, entry)?;
-    let commit = CommitReport::of(ops::commit(corpus, "drop", &[entry]));
-    Ok(Written {
-        value: dropped,
-        commit,
-    })
+    let options = write_options(format!("desktop drop {entry}"));
+    verb::drop(corpus, entry, &options).map(Written::of)
 }
 
 /// Promote the captured text as an unlinked root, like `neb promote --quiet`.
 /// As with [`capture`], a refused commit is reported, not raised.
 pub fn promote_root(corpus: &Corpus, entry: &str) -> Result<Written<Created>> {
-    let _lock = corpus.lock_as(WRITE_LOCK_WAIT, &format!("desktop promote {entry}"))?;
-    let created = ops::promote(corpus, entry, &ops::Promotion::default(), 0)?;
-    let commit = CommitReport::of(ops::commit(
-        corpus,
-        "promote",
-        &[entry, &created.doc.node.id],
-    ));
-    Ok(Written {
-        value: created,
-        commit,
-    })
+    let options = write_options(format!("desktop promote {entry}"));
+    verb::promote(corpus, entry, &ops::Promotion::default(), 0, &options).map(Written::of)
 }
 
 /// The whole corpus as nodes and edges, for the Graph view.
 pub fn graph(corpus: &Corpus) -> Result<GraphExport> {
-    let docs = corpus.load_all()?;
-    graph::export(&Graph::build(&docs)?)
+    corpus.query(graph::export)
 }
 
 /// Match graph nodes without transferring every body to the webview. One
@@ -181,9 +184,7 @@ fn matches_graph_query(id: &str, title: &str, body: &str, status: &str, needle: 
 /// file omits it). The generated `NodeView.ts` marks those fields optional
 /// to match.
 pub fn node(corpus: &Corpus, id: &str) -> Result<NodeView> {
-    let docs = corpus.load_all()?;
-    let observatory = corpus.observatory_root()?.root;
-    graph::node(&Graph::build(&docs)?, id)?.with_observatory(observatory.as_deref())
+    verb::show(corpus, id, None).map(|shown| shown.view)
 }
 
 /// The file behind a node, for handing to the OS. Fails when the node does
