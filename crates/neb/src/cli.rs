@@ -574,9 +574,9 @@ impl From<OnOff> for bool {
     }
 }
 
-/// A message the CLI exits on. Core errors become one through [`render`], so
+/// A refusal the CLI exits on. Core errors become one through [`render`], so
 /// the advice that names commands stays in the crate that has commands.
-struct Failure(String);
+struct Failure(render::Refusal);
 
 /// Refusals specific to the terminal-owned editor flow.
 #[derive(Debug)]
@@ -612,42 +612,72 @@ impl std::fmt::Display for EditorError {
     }
 }
 
+impl EditorError {
+    /// The refusal's `kind` under `--json`; exhaustive for the same reason
+    /// as [`Error::kind`].
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::NotConfigured => "EditorNotConfigured",
+            Self::InvalidCommand(_) => "EditorInvalidCommand",
+            Self::Start { .. } => "EditorStart",
+            Self::Unsuccessful(_) => "EditorUnsuccessful",
+            Self::NotesChanged => "NotesChanged",
+        }
+    }
+}
+
 impl From<Error> for Failure {
     fn from(e: Error) -> Self {
-        Self(render::message(&e))
+        Self(render::refusal(&e))
     }
 }
 
 impl From<serde_json::Error> for Failure {
     fn from(e: serde_json::Error) -> Self {
-        Self(format!("could not write JSON: {e}"))
+        Self::of("Json", format!("could not write JSON: {e}"))
     }
 }
 
 impl From<EditorError> for Failure {
     fn from(e: EditorError) -> Self {
-        Self(e.to_string())
+        Self::of(e.kind(), e.to_string())
     }
 }
 
 impl Failure {
     /// An error raised about one node, so the hint can name it.
     fn about(e: &Error, node: &str) -> Self {
-        Self(render::message_about(e, node))
+        Self(render::refusal_about(e, node))
     }
 
+    /// Arguments that parsed but ask for nothing that can be done. Clap's
+    /// own usage errors never get here: they exit 2, in prose, before `run`.
     fn say(message: impl Into<String>) -> Self {
-        Self(message.into())
+        Self::of("Usage", message)
+    }
+
+    /// A refusal of the CLI's own, named `kind` under `--json`.
+    fn of(kind: &'static str, message: impl Into<String>) -> Self {
+        Self(render::Refusal::new(kind, message))
     }
 }
 
 /// Parse the command line, run it, and turn the outcome into an exit code.
+///
+/// A refusal exits 1 either way. Under `--json` it is one line of JSON on
+/// stderr, so stdout still holds nothing but a verb's payload; without, it
+/// is the prose it always was.
 pub fn main() -> ExitCode {
     let cli = Cli::parse();
+    let json = cli.json;
     match run(cli) {
         Ok(code) => code,
-        Err(e) => {
-            eprintln!("{} {}", render::paint("31;1", "error:"), e.0);
+        Err(Failure(refused)) => {
+            if json {
+                eprintln!("{}", refused.json());
+            } else {
+                eprintln!("{} {}", render::paint("31;1", "error:"), refused.prose());
+            }
             ExitCode::FAILURE
         }
     }
@@ -1431,7 +1461,8 @@ fn run(cli: Cli) -> Outcome {
             if mermaid {
                 print!(
                     "{}",
-                    render::mermaid(&exported, from.as_deref()).map_err(Failure::say)?
+                    render::mermaid(&exported, from.as_deref())
+                        .map_err(|message| Failure::of("NoSuchNode", message))?
                 );
             } else {
                 out_json(&exported)?;
@@ -1504,7 +1535,7 @@ fn out_json<T: serde::Serialize>(v: &T) -> std::result::Result<(), Failure> {
 fn write_report(out: Option<&Path>, text: &str) -> std::result::Result<(), Failure> {
     match out {
         Some(path) => std::fs::write(path, format!("{text}\n"))
-            .map_err(|e| Failure::say(format!("writing {}: {e}", path.display())))?,
+            .map_err(|e| Failure::of("IoAt", format!("writing {}: {e}", path.display())))?,
         None => println!("{text}"),
     }
     Ok(())

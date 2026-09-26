@@ -439,6 +439,138 @@ fn cite_refuses_an_absolute_local_path_as_a_typed_error() {
     }
 }
 
+#[test]
+fn a_reference_kind_outside_the_vocabulary_is_refused_by_name() {
+    let (_dir, corpus) = corpus();
+    let a = seed(&corpus, "A", &[]);
+    let path = corpus.node_path(&a).unwrap();
+    let before = std::fs::read_to_string(&path).unwrap();
+    let refused = ops::cite(
+        &corpus,
+        &a,
+        &Citation {
+            uri: Some("https://example.org".into()),
+            kind: "bogus".into(),
+            note: Some("n".into()),
+            ..Citation::default()
+        },
+    );
+    assert!(
+        matches!(&refused, Err(Error::UnknownReferenceKind(kind)) if kind == "bogus"),
+        "{refused:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        before,
+        "nothing written"
+    );
+}
+
+/// `kind()` is what `neb --json` reports, so it must be the variant's own
+/// name: a consumer reading the variant in Rust and one reading the kind in
+/// JSON should be matching the same word.
+#[test]
+fn every_error_kind_is_its_variant_name() {
+    use std::path::PathBuf;
+
+    let path = PathBuf::from("/corpus");
+    let yaml = serde_yaml_ng::from_str::<u32>("[").unwrap_err();
+    let json = serde_json::from_str::<u32>("[").unwrap_err();
+    let errors = [
+        Error::NoSuchNode("x".into()),
+        Error::NoSuchInboxEntry("x".into()),
+        Error::NoCorpus(path.clone()),
+        Error::NotGitWorkTree(path.clone()),
+        Error::NoNodeAtRevision {
+            node: "x".into(),
+            revision: "HEAD".into(),
+        },
+        Error::EmptyRoot,
+        Error::RootConfigConflict {
+            path: path.clone(),
+            configured: path.clone(),
+            requested: path.clone(),
+        },
+        Error::SchemaMismatch {
+            path: path.clone(),
+            found: 1,
+            expected: 2,
+        },
+        Error::CurrentSchemaUnreadable {
+            path: path.clone(),
+            version: 2,
+            source: Box::new(Error::EmptyRoot),
+        },
+        Error::Cycle {
+            from: "a".into(),
+            to: "b".into(),
+        },
+        Error::SelfLoop,
+        Error::DuplicateEdge,
+        Error::NeedsKill(Status::Hypothesis),
+        Error::EmptyKill,
+        Error::KillAlreadySet("k".into()),
+        Error::RefutedNeedsWhy,
+        Error::RefutedCannotReopen,
+        Error::SeedWithKill,
+        Error::DuplicateId("x".into()),
+        Error::NodeExists("x".into()),
+        Error::UnresolvedUri {
+            uri: "./x".into(),
+            from: path.clone(),
+        },
+        Error::AbsoluteUri("/x.md".into()),
+        Error::InvalidTransition {
+            from: Status::Seed,
+            to: Status::Refuted,
+        },
+        Error::MissingParent("x".into()),
+        Error::UnusableTitle("!".into()),
+        Error::UnknownReferenceKind("bogus".into()),
+        Error::InvalidObservatoryId("x".into()),
+        Error::InvalidId("X".into()),
+        Error::UnsafeId("../x".into()),
+        Error::IdMismatch {
+            path: path.clone(),
+            id: "x".into(),
+        },
+        Error::Locked { root: path.clone() },
+        Error::StagedElsewhere {
+            root: path.clone(),
+            paths: vec!["README.md".into()],
+        },
+        Error::CorpusIgnored(path.clone()),
+        Error::Git {
+            root: path.clone(),
+            context: "commit".into(),
+            stderr: String::new(),
+        },
+        Error::Corpus("x".into()),
+        Error::Io(std::io::Error::other("x")),
+        Error::IoAt {
+            action: "reading",
+            path,
+            source: std::io::Error::other("x"),
+        },
+        Error::Yaml {
+            context: "x".into(),
+            source: yaml,
+        },
+        Error::Json {
+            context: "x".into(),
+            source: json,
+        },
+    ];
+    for error in &errors {
+        let debug = format!("{error:?}");
+        let variant = debug
+            .split(|c: char| !c.is_alphanumeric())
+            .next()
+            .unwrap_or_default();
+        assert_eq!(error.kind(), variant, "{debug}");
+    }
+}
+
 /// Authorship as a consumer that is not a terminal sees it: stored per field,
 /// the human by omission, and confirmable without touching the kill text.
 #[test]

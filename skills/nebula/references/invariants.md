@@ -56,7 +56,9 @@ and never something to delete or edit.
 ## What each refusal means and what to do
 
 Refusals are typed. The message is what the CLI prints; the variant is what
-`nebula-core` returns to the desktop app. **Do not retry the same command.**
+`nebula-core` returns to the desktop app, and what `--json` reports as the
+refusal's `kind` (the envelope is in [verbs.md](verbs.md#refusals-under---json)).
+**Do not retry the same command.**
 
 | Message | Variant | Rule | Do instead |
 |---|---|---|---|
@@ -80,6 +82,7 @@ Refusals are typed. The message is what the CLI prints; the variant is what
 | `\`../x.md\` does not resolve from .../nodes` | `UnresolvedUri` | 8 | Local URIs are relative to `nodes/`. Fix the path (`../../studies/x.md`) or use a URL/wikilink. |
 | `\`X\` is an absolute local path; local references are relative to nodes/` | `AbsoluteUri` | 8 | An absolute path or `file:` URI names nothing on any other machine the corpus is synced to, so it is refused even when it exists here. Rewrite it relative to `nodes/` (`../../studies/x.md`), cite an Observatory record by its id with `--kind observatory`, or use a URL. |
 | `\`X\` is not an Observatory record id` | `InvalidObservatoryId` | 9 | `--kind observatory` takes the bare id (`Q002`, `H007`, `T003`, `R012`), never a path or a slug. Never fall back to `--uri <absolute path>`: it breaks on every other machine. |
+| `\`X\` is not an accepted reference kind; accepted kinds: ...` | `UnknownReferenceKind` | 16 | `--kind` takes one of the listed kinds. Pick the closest (`other` when none fits); never invent a kind. |
 | `no open inbox entry \`X\`` | `NoSuchInboxEntry` | — | Already promoted or dropped, or the id is wrong. `neb inbox --json`. |
 | `node \`X\` already exists` | `NodeExists` | — | A node with that slug exists. Show it; the human decides whether this is a duplicate (drop) or a refinement (`new` with a different title + `refines`). |
 | `no corpus at <dir>` | `NoCorpus` | — | The root is wrong. Do **not** `neb init` somewhere new; confirm `NEBULA_ROOT` with the human. |

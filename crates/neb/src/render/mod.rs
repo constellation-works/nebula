@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::sync::OnceLock;
 
-pub use error::{message, message_about};
+pub use error::{Refusal, refusal, refusal_about};
 pub use report::{
     check, commit_setting, impact, inbox, migration, near, node, observatory_root, open, review,
     suggestions, tags,

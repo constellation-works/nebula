@@ -223,6 +223,40 @@ impl Run {
         );
         self
     }
+    /// The refusal `--json` reports: exit 1, and stderr exactly one line
+    /// holding `{"error": {kind, message, hint}}` and nothing else. Returns
+    /// the inner object.
+    fn refusal(&self) -> serde_json::Value {
+        let stderr = self.stderr();
+        assert_eq!(
+            self.out.status.code(),
+            Some(1),
+            "`neb {}` should refuse with exit 1:\n{stderr}",
+            self.args
+        );
+        assert!(
+            stderr.ends_with('\n') && stderr.lines().count() == 1,
+            "`neb {}` should write one line to stderr:\n{stderr}",
+            self.args
+        );
+        let value: serde_json::Value = serde_json::from_str(&stderr)
+            .unwrap_or_else(|e| panic!("`neb {}` stderr is not JSON ({e}):\n{stderr}", self.args));
+        let envelope = value.as_object().expect("the envelope is an object");
+        assert_eq!(envelope.keys().collect::<Vec<_>>(), ["error"], "{value}");
+        let error = value["error"].as_object().expect("`error` is an object");
+        assert_eq!(
+            error.keys().collect::<Vec<_>>(),
+            ["hint", "kind", "message"],
+            "{value}"
+        );
+        assert!(error["kind"].is_string(), "{value}");
+        assert!(error["message"].is_string(), "{value}");
+        assert!(
+            error["hint"].is_string() || error["hint"].is_null(),
+            "{value}"
+        );
+        value["error"].clone()
+    }
 }
 
 fn write(path: &Path, s: &str) {
@@ -3011,6 +3045,271 @@ fn an_unparsable_reference_added_date_is_a_rule_14_error() {
         .says("[14]")
         .says("reference `r1` has an added date `not-a-date` that does not parse")
         .says("1 errors");
+}
+
+// --------------------------------------------------------- --json refusals --
+
+/// Under `--json` a refusal is data: one envelope on stderr, stdout left to
+/// the payload, and the exit code it always had. Without `--json` nothing
+/// changed, byte for byte.
+#[test]
+fn a_json_refusal_is_one_envelope_on_stderr_and_the_prose_is_unchanged() {
+    let c = Corpus::new();
+    let run = c.run(&["show", "nope", "--json"]);
+    assert_eq!(
+        run.refusal(),
+        serde_json::json!({
+            "kind": "NoSuchNode",
+            "message": "no node `nope`",
+            "hint": "List what exists with:  neb list",
+        })
+    );
+    assert!(run.stdout().is_empty(), "{}", run.stdout());
+
+    let run = c.run(&["show", "nope"]).assert_fails();
+    assert_eq!(run.out.status.code(), Some(1));
+    assert_eq!(
+        run.stderr(),
+        "error: no node `nope`\n\nList what exists with:  neb list\n"
+    );
+    assert!(run.stdout().is_empty(), "{}", run.stdout());
+}
+
+/// Each point-of-action guard reports its core variant as `kind`.
+#[test]
+fn json_refusals_name_the_link_or_cite_that_was_refused() {
+    let c = Corpus::new();
+    let a = c.seed("an idea", "An idea");
+    let b = c
+        .run(&["new", "A child", "--parent", &a])
+        .assert_ok()
+        .stdout_trim();
+
+    let self_loop = c.run(&["--json", "link", &a, "refines", &a]).refusal();
+    assert_eq!(self_loop["kind"], "SelfLoop");
+    assert_eq!(self_loop["message"], "a node cannot link to itself");
+    assert_eq!(self_loop["hint"], serde_json::Value::Null);
+
+    let cycle = c.run(&["--json", "link", &a, "derives-from", &b]).refusal();
+    assert_eq!(cycle["kind"], "Cycle");
+    assert_eq!(
+        cycle["message"],
+        format!("that edge would make `{a}` its own ancestor")
+    );
+
+    let unknown = c
+        .run(&[
+            "--json",
+            "cite",
+            &b,
+            "--kind",
+            "bogus",
+            "--uri",
+            "https://example.org",
+            "--note",
+            "n",
+        ])
+        .refusal();
+    assert_eq!(unknown["kind"], "UnknownReferenceKind");
+    assert_eq!(
+        unknown["message"],
+        "`bogus` is not an accepted reference kind; accepted kinds: paper, study, article, note, discussion, book, dataset, thread, observatory, other"
+    );
+
+    let unresolved = c
+        .run(&[
+            "--json",
+            "cite",
+            &b,
+            "--uri",
+            "./notes/missing.md",
+            "--note",
+            "n",
+        ])
+        .refusal();
+    assert_eq!(unresolved["kind"], "UnresolvedUri");
+    let message = unresolved["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("`./notes/missing.md` does not resolve from")
+            && message.ends_with("local references are relative to nodes/"),
+        "{message}"
+    );
+}
+
+/// The guards whose hint names the node report a clean message and hint
+/// under `--json`, and keep their prose exactly without it.
+#[test]
+fn json_refusals_about_a_node_split_message_and_hint() {
+    let c = Corpus::new();
+    let a = c.seed("an idea", "An idea");
+    let b = c.seed("a child", "A child");
+    c.run(&["sharpen", &b, "--kill", "if X"]).assert_ok();
+    let dead = c.seed("a dead idea", "A dead idea");
+    c.run(&["sharpen", &dead, "--kill", "if Y"]).assert_ok();
+    c.run(&["status", &dead, "refuted", "--why", "Y happened"])
+        .assert_ok();
+    // (arguments, kind, message, hint, the prose without --json)
+    let guards: [(&[&str], &str, String, String, String); 3] = [
+        (
+            &["status", &a, "hypothesis"],
+            "NeedsKill",
+            "`hypothesis` needs a kill condition first".to_string(),
+            format!("neb sharpen {a} --kill \"...\""),
+            format!(
+                "error: `hypothesis` needs a kill condition first:\n\n  neb sharpen {a} --kill \"...\"\n"
+            ),
+        ),
+        (
+            &["status", &b, "refuted"],
+            "RefutedNeedsWhy",
+            "refuted needs --why: say how the kill condition fired".to_string(),
+            format!("neb status {b} refuted --why \"...\""),
+            format!(
+                "error: refuted needs --why: say how the kill condition fired\n\n  neb status {b} refuted --why \"...\"\n"
+            ),
+        ),
+        (
+            &["status", &dead, "seed"],
+            "RefutedCannotReopen",
+            format!("`{dead}` is refuted and cannot simply reopen"),
+            format!(
+                "Create the new idea and link it:\n  neb new \"...\" && neb link <new> reopens {dead}"
+            ),
+            format!(
+                "error: `{dead}` is refuted and cannot simply reopen.\n\nCreate the new idea and link it:\n  neb new \"...\" && neb link <new> reopens {dead}\n"
+            ),
+        ),
+    ];
+    for (args, kind, message, hint, prose) in guards {
+        let mut with_json = vec!["--json"];
+        with_json.extend_from_slice(args);
+        let refused = c.run(&with_json).refusal();
+        assert_eq!(
+            refused,
+            serde_json::json!({"kind": kind, "message": message, "hint": hint}),
+            "neb {}",
+            args.join(" ")
+        );
+        let run = c.run(args).assert_fails();
+        assert_eq!(run.out.status.code(), Some(1));
+        assert_eq!(run.stderr(), prose);
+    }
+}
+
+/// A schema this build does not read is one kind either way; the hint says
+/// which way to go.
+#[test]
+fn json_refusals_for_a_schema_too_old_or_too_new_carry_the_direction_in_the_hint() {
+    let old = v1_corpus();
+    let refused = old.run(&["list", "--json"]).refusal();
+    assert_eq!(refused["kind"], "SchemaMismatch");
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .ends_with("is schema_version 1, and this build understands 2"),
+        "{refused}"
+    );
+    assert_eq!(
+        refused["hint"],
+        "Bring the corpus forward with:  neb migrate"
+    );
+
+    let new = Corpus::new();
+    let config = new.root.join("config.yaml");
+    let raw = std::fs::read_to_string(&config).unwrap();
+    write(
+        &config,
+        &raw.replacen("schema_version: 2", "schema_version: 3", 1),
+    );
+    let refused = new.run(&["list", "--json"]).refusal();
+    assert_eq!(refused["kind"], "SchemaMismatch");
+    assert_eq!(
+        refused["hint"],
+        "This corpus was written by a newer nebula. Upgrade this build."
+    );
+}
+
+/// A refused commit comes after the write, so under `--json` stdout still
+/// holds the write's payload and stderr the refusal: two streams, each one
+/// JSON document.
+#[test]
+fn json_commit_refusals_leave_the_payload_on_stdout() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outer = dir.path().join("outer");
+    let root = outer.join("corpus");
+    let c = Corpus { dir, root };
+    c.run(&["init"]).assert_ok();
+    git_init(&outer);
+    write(&outer.join("README.md"), "theirs\n");
+    git(&outer, &["add", "-A"]);
+    git(&outer, &["commit", "-q", "-m", "start"]);
+    c.run(&["config", "commit", "on"]).assert_ok();
+    write(&outer.join("README.md"), "theirs, edited\n");
+    git(&outer, &["add", "README.md"]);
+
+    let run = c.run(&["new", "An idea", "--json"]);
+    let refused = run.refusal();
+    assert_eq!(refused["kind"], "StagedElsewhere");
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .contains("has staged changes outside the corpus (README.md)"),
+        "{refused}"
+    );
+    assert!(
+        refused["hint"].as_str().unwrap().contains("--no-commit"),
+        "{refused}"
+    );
+    let created: serde_json::Value =
+        serde_json::from_str(&run.stdout()).expect("the write's payload is still JSON");
+    assert_eq!(created["doc"]["node"]["id"], "an-idea");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outer = dir.path().join("outer");
+    let root = outer.join("corpus");
+    let c = Corpus { dir, root };
+    c.run(&["init"]).assert_ok();
+    git_init(&outer);
+    write(&outer.join(".gitignore"), "corpus/\n");
+    let run = c.run(&["config", "commit", "on", "--json"]);
+    let refused = run.refusal();
+    assert_eq!(refused["kind"], "CorpusIgnored");
+    assert!(
+        refused["hint"]
+            .as_str()
+            .unwrap()
+            .contains("neb config commit off"),
+        "{refused}"
+    );
+    serde_json::from_str::<serde_json::Value>(&run.stdout())
+        .expect("the setting's payload is still JSON");
+}
+
+/// The CLI's own refusals use the same envelope; only clap's usage errors,
+/// raised before `neb` knows it was asked for JSON, stay prose with exit 2.
+#[test]
+fn json_covers_the_clis_own_refusals_but_not_clap_usage_errors() {
+    let c = Corpus::new();
+    let empty = c.run(&["capture", "  ", "--json"]).refusal();
+    assert_eq!(
+        empty,
+        serde_json::json!({"kind": "Usage", "message": "nothing to capture", "hint": null})
+    );
+
+    let id = c.seed("an idea", "An idea");
+    let editor = c.run(&["edit", &id, "--json"]).refusal();
+    assert_eq!(editor["kind"], "EditorNotConfigured");
+
+    let run = c.run(&["show", "--json"]);
+    assert_eq!(run.out.status.code(), Some(2));
+    assert!(run.stderr().starts_with("error:"), "{}", run.stderr());
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&run.stderr()).is_err(),
+        "{}",
+        run.stderr()
+    );
 }
 
 // ------------------------------------------------------------------ triage --

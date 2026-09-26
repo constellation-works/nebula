@@ -22,6 +22,42 @@ by single dashes, 60 characters or fewer) and is refused, as a typed error,
 if it breaks those rules or collides with an existing node.
 The `--json` excerpts below are real output from a three-node fixture corpus.
 
+## Refusals under `--json`
+
+Under `--json` a refusal is data too: one JSON object on one line, the last
+line on **stderr**. Stdout stays the payload's alone. Match on `kind`, never
+on `message`:
+
+```json
+// neb show nope --json      (stderr; stdout is empty; exit 1)
+{"error":{"hint":"List what exists with:  neb list","kind":"NoSuchNode","message":"no node `nope`"}}
+```
+
+| field | type | what it is |
+|---|---|---|
+| `error.kind` | string | The refusal's stable name. For a core refusal it is the `nebula-core` variant: `NoSuchNode`, `Cycle`, `SelfLoop`, `NeedsKill`, `RefutedNeedsWhy`, `RefutedCannotReopen`, `UnknownReferenceKind`, `UnresolvedUri`, `SchemaMismatch`, `StagedElsewhere`, `CorpusIgnored`, `Locked`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `Usage` (arguments that parse but ask for nothing, such as an empty `capture`), `EditorNotConfigured`, `EditorInvalidCommand`, `EditorStart`, `EditorUnsuccessful`, `NotesChanged`, `Json` and `IoAt`. |
+| `error.message` | string | What is wrong, in the words the text output uses before its hint. |
+| `error.hint` | string or `null` | What to do about it, as the text output words it: often a command to run, such as `neb sharpen <id> --kill "..."`. `null` when the CLI has nothing to add. |
+
+Key order is not significant. A new refusal arrives with its own `kind` and
+the same three fields; new fields may be added, and existing ones will not
+change meaning. `SchemaMismatch` covers both directions: the hint says
+whether to `neb migrate` (the corpus is older) or upgrade `neb` (newer).
+
+Exit codes, with or without `--json`:
+
+| code | means | stdout | stderr under `--json` |
+|---|---|---|---|
+| 0 | success | the payload | empty, bar a `warning:` line from `init` or `capture` |
+| 1 | a refusal | empty, **except** when the write landed and its commit was refused (`StagedElsewhere`, `CorpusIgnored`, `Git`): then it holds the write's payload | the envelope |
+| 1 | `check` found an `error`-level finding | the report | empty |
+| 2 | clap rejected the command line: unknown flag, missing argument, bad value | empty | clap's prose, **not** JSON: it is raised before `neb` knows `--json` was asked for |
+
+`neb graph` with neither `--json` nor `--mermaid` also exits 2, with its hint
+on stdout; under `--json` that cannot happen. Without `--json`, every refusal
+prints exactly what it printed before the envelope existed: `error:`, the
+message, and the hint after a blank line.
+
 ## Corpus
 
 | verb | does | flags |
