@@ -40,6 +40,7 @@ beforeEach(() => {
   mocked.inbox.mockResolvedValue(entries);
   mocked.onCorpusChanged.mockResolvedValue(() => {});
   mocked.corpusPath.mockResolvedValue("/tmp/nowhere/.nebula");
+  mocked.startupWarnings.mockResolvedValue([]);
   mocked.reload.mockResolvedValue(undefined);
 });
 

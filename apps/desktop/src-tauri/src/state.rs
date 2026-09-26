@@ -16,6 +16,7 @@ pub struct AppState {
     pub corpus_root: PathBuf,
     corpus: Mutex<Option<Corpus>>,
     watcher: Mutex<Option<RecommendedWatcher>>,
+    startup_warnings: Mutex<Vec<String>>,
 }
 
 impl AppState {
@@ -31,7 +32,25 @@ impl AppState {
             corpus_root,
             corpus: Mutex::new(corpus),
             watcher: Mutex::new(None),
+            startup_warnings: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Retain setup warnings so the tray and a later-opened main window can
+    /// report failures from before the webview started.
+    pub fn set_startup_warnings(&self, warnings: Vec<String>) {
+        *self
+            .startup_warnings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = warnings;
+    }
+
+    /// The startup warnings captured during application setup.
+    pub fn startup_warnings(&self) -> Vec<String> {
+        self.startup_warnings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The open corpus, opening it now if the last attempt failed. The error

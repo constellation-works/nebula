@@ -2,19 +2,39 @@
 
 use crate::state::AppState;
 use crate::{session, shortcut};
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{IsMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Wry};
 
 /// The tray's id, for finding it again from the watcher.
 pub const ID: &str = "nebula";
 
 /// Build the tray. Called once, from setup.
-pub fn build(app: &AppHandle) -> tauri::Result<()> {
+pub fn build(app: &AppHandle, warnings: &[String]) -> tauri::Result<()> {
     let capture = MenuItem::with_id(app, "capture", "Capture", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open Nebula", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&capture, &open, &quit])?;
+    let warning_items = warnings
+        .iter()
+        .enumerate()
+        .map(|(index, warning)| {
+            MenuItem::with_id(
+                app,
+                format!("startup-warning-{index}"),
+                format!("Startup warning: {warning}"),
+                false,
+                None::<&str>,
+            )
+        })
+        .collect::<tauri::Result<Vec<_>>>()?;
+    let mut menu_items: Vec<&dyn IsMenuItem<Wry>> = vec![&capture, &open];
+    menu_items.extend(
+        warning_items
+            .iter()
+            .map(|item| item as &dyn IsMenuItem<Wry>),
+    );
+    menu_items.push(&quit);
+    let menu = Menu::with_items(app, &menu_items)?;
 
     TrayIconBuilder::with_id(ID)
         .icon(tauri::include_image!("icons/tray.png"))
