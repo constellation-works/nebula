@@ -336,6 +336,27 @@ describe("GraphView", () => {
     );
   });
 
+  it("fits the first layout in the commit that draws it", async () => {
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(400);
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(300);
+    mocked.graph.mockResolvedValue(synthetic(4));
+    const layoutSpy = vi.spyOn(layoutClient, "layoutGraph");
+    render(<GraphView />);
+    // waitFor's MutationObserver checks right after the commit that draws the
+    // nodes, before any later task. A fit deferred past that commit shows an
+    // unfitted frame here, and a wheel handled in the gap was overwritten.
+    let first: string | null = null;
+    await waitFor(() => {
+      expect(drawnNodes()).toHaveLength(4);
+      first = canvas().querySelector("g.scene")!.getAttribute("transform");
+    });
+    const laid = await layoutSpy.mock.results[0]!.value;
+    const k = Math.min(1, 320 / laid.width!, 220 / laid.height!);
+    const fitted = `translate(${(400 - laid.width! * k) / 2} ${(300 - laid.height! * k) / 2}) scale(${k})`;
+    expect(first).toBe(fitted);
+    expect(canvas().querySelector("g.scene")).toHaveAttribute("transform", fitted);
+  });
+
   it("refetches on corpus-changed and keeps the selection", async () => {
     let fire: () => void = () => {};
     mocked.onCorpusChanged.mockImplementation(async (handler) => {
