@@ -299,6 +299,11 @@ fn hint(e: &Error) -> Option<String> {
         return Some(hint);
     }
     Some(match e {
+        Error::InvalidReadOnlyEnvironment { .. } => "Set NEBULA_READ_ONLY=1 to refuse writes, or unset it.".to_owned(),
+        Error::InvalidOriginEnvironment { .. } => "Unset the invalid Orbit variable or provide an explicit --task or --run value.".to_owned(),
+        Error::ReadOnly => "Unset NEBULA_READ_ONLY to permit writes.".to_owned(),
+        Error::ByRequired => "Pass --by human or --by <agent-label> to state who wrote the words.".to_owned(),
+        Error::HumanOnly => "Ask the human to run `neb sharpen <node> --confirm` outside the Orbit run.".to_owned(),
         Error::UnreadableNodes { .. } => "Run `neb check` for every unreadable file and the findings from the rest of the corpus.".to_owned(),
         Error::NoSuchNode(_) => "List what exists with:  neb list".to_owned(),
         Error::NoSuchInboxEntry(_) => "See them with:  neb inbox".to_owned(),

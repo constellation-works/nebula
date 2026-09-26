@@ -1,5 +1,10 @@
 # Verbs
 
+`ORBIT_TASK_ID` and `ORBIT_RUN_ID` fill absent provenance flags on `new`,
+`promote`, `cite` and `handoff`. A nonempty `ORBIT_RUN_ID` requires explicit
+`--by` for new authored words (`by_required`) and refuses `sharpen --confirm`
+(`human_only`). `NEBULA_READ_ONLY=1` refuses every write (`read_only`).
+
 Every corpus verb below takes `--root <DIR>` and `--json`, and those flags may
 appear anywhere on the line — before the verb, after it, or after the free
 text of `capture`, `note` and `near`. Every verb that writes also takes
@@ -340,7 +345,7 @@ and a thought unlike anything in the corpus all read the same way:
 | verb | does | flags |
 |---|---|---|
 | `neb new <TITLE>` | create a node directly | `--body <TEXT\|->`, `--parent <ID>`×, `--reopens <ID>`, `--contradicts <ID>`×, `--kill`, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run` |
-| `neb edit <NODE>` | open the body, without frontmatter, in `$VISUAL` or `$EDITOR` | — |
+| `neb edit <NODE>` | open the body, without frontmatter, in `$VISUAL` or `$EDITOR` | `--by <LABEL>` (required under an Orbit run) |
 | `neb sharpen <NODE> --kill <KILL>` | seed → hypothesis by naming the falsifier | `--by <LABEL>`, or `--confirm` instead of `--kill` |
 | `neb status <NODE> <STATUS>` | `seed`, `hypothesis`, `refuted`, `abandoned`, with guards | `--why` (required for refuted, optional for abandoned) |
 | `neb link <FROM> <KIND> <TO>` | `derives-from`, `refines`, `generalizes`, `reopens`, `contradicts` | `--by <LABEL>` |

@@ -321,6 +321,7 @@ pub(crate) fn run_then<T>(
     root: Option<PathBuf>,
     after: impl FnOnce(&Path) -> T,
 ) -> Result<(PathBuf, MigrationReport, T)> {
+    locations.write_gate(crate::locations::WriteIntent::Ordinary)?;
     let root = Corpus::resolve_root(locations, root)?;
     store::refuse_nodes_symlink(&root)?;
     if !root.join("nodes").is_dir() {

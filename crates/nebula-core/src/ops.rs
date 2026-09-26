@@ -211,6 +211,10 @@ pub struct Promotion {
     pub title: Option<String>,
     /// Prose appended after the captured text.
     pub body: String,
+    /// Whether the caller explicitly supplied a body, even an empty one.
+    /// This is invocation context and never part of a stored document.
+    #[serde(skip)]
+    pub body_supplied: bool,
     /// Ids this descends from.
     pub parents: Vec<String>,
     /// Labels.
@@ -291,6 +295,7 @@ pub fn init(
     set_root: bool,
     force: bool,
 ) -> Result<Initialized> {
+    locations.write_gate(crate::locations::WriteIntent::Ordinary)?;
     let target = init_target(locations, root, path)?;
     let _settings = set_root
         .then(|| Corpus::lock_machine_settings(locations))
@@ -447,6 +452,11 @@ pub fn promote_with(
     args: &Promotion,
     near: Vec<Neighbour>,
 ) -> Result<Created> {
+    if args.title.is_some() || args.body_supplied || !args.body.trim().is_empty() {
+        corpus
+            .locations()
+            .write_gate(crate::locations::WriteIntent::Authored(args.by.as_deref()))?;
+    }
     // Held across the whole verb: the node is written and *then* the inbox
     // line is struck, and a capture landing between the two would shift the
     // line this entry was found at.
@@ -543,6 +553,9 @@ fn free_capture_id(corpus: &Corpus, text: &str) -> Result<Option<String>> {
 /// genealogy edge may not close a loop, and a `contradicts` edge is recorded
 /// on the other node too. Every refusal comes before anything is written.
 pub fn new_node(corpus: &Corpus, args: &NewNode) -> Result<Created> {
+    corpus
+        .locations()
+        .write_gate(crate::locations::WriteIntent::Authored(args.by.as_deref()))?;
     if args.kill.as_ref().is_some_and(|k| k.trim().is_empty()) {
         return Err(Error::EmptyKill);
     }
@@ -702,6 +715,9 @@ fn refuse_cycle(corpus: &Corpus, doc: &Doc) -> Result<()> {
 /// change is: the idea stays dead, and a new node with a `reopens` edge is the
 /// way back.
 pub fn sharpen(corpus: &Corpus, id: &str, kill: &str, by: Option<&str>) -> Result<Doc> {
+    corpus
+        .locations()
+        .write_gate(crate::locations::WriteIntent::Authored(by))?;
     let _lock = corpus.lock()?;
     let mut doc = corpus.load(id)?;
     if doc.node.status.is_closed_by_verdict() {
@@ -734,6 +750,9 @@ pub fn sharpen(corpus: &Corpus, id: &str, kill: &str, by: Option<&str>) -> Resul
 /// human read what somebody else proposed and now stands behind it, which is
 /// the only thing that takes the node off `review`'s unconfirmed list.
 pub fn confirm_kill(corpus: &Corpus, id: &str) -> Result<Doc> {
+    corpus
+        .locations()
+        .write_gate(crate::locations::WriteIntent::ConfirmKill)?;
     let _lock = corpus.lock()?;
     let mut doc = corpus.load(id)?;
     if doc.node.status.is_closed_by_verdict() {
@@ -768,6 +787,9 @@ pub fn link(
     to: &str,
     by: Option<&str>,
 ) -> Result<Vec<Doc>> {
+    corpus
+        .locations()
+        .write_gate(crate::locations::WriteIntent::Authored(by))?;
     if from == to {
         return Err(Error::SelfLoop);
     }
@@ -864,6 +886,9 @@ fn finish_contradiction(
 /// `by` is whoever wrote the paragraph; `None` is the human, whose line
 /// carries no attribution.
 pub fn note(corpus: &Corpus, id: &str, text: &str, by: Option<&str>) -> Result<Doc> {
+    corpus
+        .locations()
+        .write_gate(crate::locations::WriteIntent::Authored(by))?;
     let text = text
         .trim()
         .lines()
@@ -993,6 +1018,9 @@ pub fn cite_with_observatory(
     args: &Citation,
     observatory_root: Option<&Path>,
 ) -> Result<Cited> {
+    corpus
+        .locations()
+        .write_gate(crate::locations::WriteIntent::Authored(args.by.as_deref()))?;
     let resolved_record = if normalize_reference_kind(&args.kind) == OBSERVATORY {
         match (observatory_root, args.uri.as_deref()) {
             (Some(root), Some(record)) => resolve_observatory(root, &observatory_record(record)?)?,
@@ -1122,6 +1150,9 @@ pub fn handoff(
     args: &Handoff,
     observatory: Option<&Path>,
 ) -> Result<HandedOff> {
+    corpus
+        .locations()
+        .write_gate(crate::locations::WriteIntent::Authored(args.by.as_deref()))?;
     let _lock = corpus.lock()?;
     let by = model::author(args.by.as_deref())?;
     let mut doc = corpus.load(id)?;

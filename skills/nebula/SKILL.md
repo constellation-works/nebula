@@ -101,8 +101,8 @@ human refines an idea in conversation, `neb note` the refinement in their words.
 ## Provenance and authorship
 
 Two different questions, kept apart. **Provenance** says which run produced a
-write: under Orbit pass `--task <id>` and `--run <id>` on `promote`, `new` and
-`cite`, from `ORBIT_TASK_ID` / `ORBIT_RUN_ID` or the task you were given.
+write: `promote`, `new`, `cite` and `handoff` fill absent `--task` and `--run`
+from `ORBIT_TASK_ID` and `ORBIT_RUN_ID`; explicit flags win.
 
 **Authorship** says who wrote the words. `--by <label>` defaults to `human`,
 so an unattributed write claims the human wrote it. Pass `--by` with your own
@@ -113,12 +113,18 @@ human's words; leave it that way. Never hardcode an agent family: crews and
 model names change underneath the skill. Authorship is stored per field
 (`title_by`, `kill_by`, `by` on each edge, reference and note entry) and
 `show --json` states it, `human` included.
+Under an Orbit run, the core refuses agent-supplied words without explicit
+`--by` (`by_required`). Pass it on `handoff` and `edit` too, and on `promote`
+when supplying `--body`. `--by human` is a deliberate authorship statement.
 
 A kill condition you wrote is a proposal, not the human's claim. `neb review`
 lists it under "Agent-authored kills not yet confirmed by a human" until the
 human runs `neb sharpen <node> --confirm`. Propose that line; never run it
 yourself, because confirming is the human saying they stand behind the
 falsifier.
+The core refuses confirmation under an Orbit run (`human_only`). Routine
+sessions should set `NEBULA_READ_ONLY=1`; the core then refuses corpus writes
+(`read_only`) while leaving reads available.
 
 ## Triage heuristics
 

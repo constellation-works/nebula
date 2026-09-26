@@ -2,6 +2,12 @@
 
 ## 0.2.0 — unreleased
 
+- Orbit run provenance now fills missing task and run ids from the resolved
+  environment; explicit flags take precedence. Under an Orbit run, newly
+  supplied words require an explicit `--by`, and kill confirmation is refused
+  with `human_only`. `NEBULA_READ_ONLY=1` refuses every corpus write with
+  `read_only`; other nonempty values are rejected when the environment loads.
+
 The reduced model of `docs/design/v0.2/1_spec.md`. Five days after v0.1 the
 corpus held eight nodes and an empty inbox: the machinery was heavier than the
 habit. This cut keeps what a person actually uses.
@@ -30,8 +36,6 @@ habit. This cut keeps what a person actually uses.
 - `new --status`. `new --kill "..."` starts a hypothesis; without it, a seed.
 - The quick glance (`open` in v0.1, now `review --short`) no longer reports
   references without a note; that is `check` rule 10.
-- `neb edit --by`. It was validated and then dropped, because a body has no
-  author field, so `edit --by x` is now refused as an unexpected argument.
 
 ### Added
 
@@ -76,7 +80,8 @@ habit. This cut keeps what a person actually uses.
   its line, `- YYYY-MM-DD (agent:crew): text`. It defaults to `human`, stored
   by omission, so files written earlier need no migration; `show --json` and
   `list --json` state it outright. A label cannot hold parentheses, a newline
-  or `: `. `edit` validates `--by` but stores nothing, since a body has no
+  or `: `. `edit` accepts `--by` as an explicit authorship statement under an
+  Orbit run but stores nothing, since a body has no
   author field. `sharpen <id> --confirm` adopts the kill condition already on
   a node as the human's own and changes nothing else; it is what takes a node
   off `review`'s unconfirmed-kill list. `--by` is not `--task`/`--run`, which
