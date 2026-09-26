@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "--json",
+    "handoff",
+    "first-idea",
+    "H999",
+    "--note",
+    "Continued there"
+  ],
+  "exit_code": 0,
+  "stdout": "{\n  \"doc\": {\n    \"node\": {\n      \"id\": \"first-idea\",\n      \"title\": \"First idea\",\n      \"title_by\": \"human\",\n      \"status\": \"abandoned\",\n      \"created\": \"<TODAY>\",\n      \"updated\": \"<TODAY>\",\n      \"kill\": null,\n      \"kill_by\": null,\n      \"tags\": [],\n      \"edges\": [],\n      \"references\": [\n        {\n          \"id\": \"r1\",\n          \"kind\": \"observatory\",\n          \"uri\": \"H999\",\n          \"title\": null,\n          \"note\": \"Continued there\",\n          \"added\": \"<TODAY>\",\n          \"by\": \"human\",\n          \"origin\": null\n        }\n      ],\n      \"closed\": {\n        \"why\": \"handed off to H999\",\n        \"at\": \"<TODAY>\"\n      },\n      \"origin\": null\n    },\n    \"body\": \"A stable body\\n\"\n  },\n  \"reference\": \"r1\",\n  \"record\": \"H999\",\n  \"from\": \"seed\",\n  \"observatory\": {\n    \"reference\": \"r1\",\n    \"record\": \"H999\",\n    \"path\": \"<ROOT>/observatory/hypotheses/H999-golden.md\"\n  }\n}\n",
+  "stderr": ""
+}

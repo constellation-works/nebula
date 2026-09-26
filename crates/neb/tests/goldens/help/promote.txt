@@ -1,0 +1,54 @@
+Turn an inbox entry into a seed node. Suggests parents, never picks one.
+
+Deliberately separate from capture. Most captures should never be promoted, and dropping one is a normal outcome rather than a failure. Without `--parent` the node is written as a root and the three existing nodes it reads closest to are printed afterwards, so a parent that was defensible can still be linked; no edge is ever written from that list.
+
+Usage: neb promote [OPTIONS] <ENTRY>
+
+Arguments:
+  <ENTRY>
+          Inbox entry id, from `neb inbox`
+
+Options:
+  -q, --quiet
+          Print the node id alone, without its path or the nearest nodes. `--json` carries the path
+
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+      --title <TITLE>
+          Node title. Defaults to the captured text
+
+      --body <TEXT|->
+          Prose appended after the captured line. `-` reads standard input
+
+      --parent <ID>
+          A parent this descends from. Repeat for a merge
+
+      --tag <TAG>
+          Labels
+
+      --id <SLUG>
+          Explicit id, overriding the title's slug. Same rules as a slug: lowercase words joined by single dashes, 60 characters or fewer. Without this or `--title`, a capture over five words gets its first five significant words, not the whole sentence
+
+      --by <LABEL>
+          Who authored the text: `human`, or the agent's session or crew label. Free text; defaults to `human`
+
+      --task <TASK>
+          Orbit task that produced it
+
+      --run <RUN>
+          Orbit run that produced it
+
+      --no-commit
+          Skip the commit this once, where `neb config commit on` would make one
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  neb promote <entry>
+  neb promote <entry> --title "A sharper title" --parent <id>
+  neb promote <entry> --parent <id> --parent <id> --tag <tag>

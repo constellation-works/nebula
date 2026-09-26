@@ -1,0 +1,36 @@
+Add a typed edge between two nodes
+
+Usage: neb link [OPTIONS] <FROM> <KIND> <TO>
+
+Arguments:
+  <FROM>
+          Node the edge starts at
+
+  <KIND>
+          The relation
+          
+          [possible values: derives-from, refines, generalizes, reopens, contradicts]
+
+  <TO>
+          Node the edge points at
+
+Options:
+      --by <LABEL>
+          Who authored the text: `human`, or the agent's session or crew label. Free text; defaults to `human`
+
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+      --no-commit
+          Skip the commit this once, where `neb config commit on` would make one
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  neb link <id> derives-from <parent-id>
+  neb link <id> refines <broader-id>
+  neb link <id> contradicts <rival-id> --by <label>

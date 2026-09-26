@@ -1,0 +1,19 @@
+Read or set a corpus or machine setting.
+
+`commit` lives in the corpus's `config.yaml`, which stays machine-written: this rewrites it whole rather than inviting a hand edit. `observatory-root` lives per machine, because the corpus travels between machines and the checkout's path does not.
+
+Usage: neb config [OPTIONS] <COMMAND>
+
+Commands:
+  observatory-root  Where the Observatory checkout is on this machine, so `cite --kind observatory --uri <record-id>` resolves. A directory is saved to `~/.config/nebula/observatory-root`, never into the corpus, which travels between machines. Without one, prints the effective root and which setting supplied it: `$OBSERVATORY_ROOT`, else this machine's setting, else a legacy `observatory_root` key in `config.yaml`
+  commit            Whether each mutating verb commits the corpus afterwards, when the root is inside a git work tree. Off by default. The commit stages `nodes/`, `inbox/`, `config.yaml` and the generated `.gitignore` and commits those paths alone, whatever else is staged, as `neb <verb> <ids>`. It never pushes. `--no-commit` skips it once
+
+Options:
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+  -h, --help
+          Print help (see a summary with '-h')

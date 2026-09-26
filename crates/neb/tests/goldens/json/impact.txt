@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "--json",
+    "impact",
+    "first-idea"
+  ],
+  "exit_code": 0,
+  "stdout": "[\n  {\n    \"id\": \"second-idea\",\n    \"via\": \"descends\"\n  }\n]\n",
+  "stderr": ""
+}

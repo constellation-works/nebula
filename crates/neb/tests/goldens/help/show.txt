@@ -1,0 +1,12 @@
+Show one node in full
+
+Usage: neb show [OPTIONS] <NODE>
+
+Arguments:
+  <NODE>  Node id
+
+Options:
+      --at <HASH|YYYY-MM-DD>  Show the node at this commit hash, or at the end of this date as `neb log` dates commits, whatever the local timezone
+      --root <DIR>            Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+      --json                  Emit JSON instead of text, for scripts and agents
+  -h, --help                  Print help

@@ -1,0 +1,60 @@
+Capture a half-formed thought in five seconds. Trace where any idea came from years later.
+
+Ideas branch, merge and die, so the structure is a directed acyclic graph. Nothing is ever deleted: refuted and abandoned ideas are what stop you re-treading ground.
+
+Usage: neb [OPTIONS] <COMMAND>
+
+Corpus:
+  init         Create an empty corpus
+  check        Run the invariants. Exits non-zero on any error
+  migrate      Bring a v1 corpus forward to the v2 schema, in place
+  config       Read or set a corpus or machine setting
+  completions  Generate shell completion scripts
+
+Inbox:
+  capture      Append a thought to the inbox. One line, no decisions, no parent
+  inbox        List captures that have not been promoted or dropped
+  promote      Turn an inbox entry into a seed node. Suggests parents, never picks one
+  drop         Discard an inbox entry. Struck through, never deleted
+  triage       Work through the inbox oldest first, one key per entry
+
+Nodes:
+  new          Create a node directly, without going through the inbox
+  edit         Edit a node's body in $VISUAL or $EDITOR
+  sharpen      Sharpen a seed into a hypothesis by naming what would kill it
+  status       Move a node to a new status, with the transition guards applied
+  link         Add a typed edge between two nodes
+  tag          Edit a node's tags, or list every tag with its node count
+  note         Append a dated paragraph of reasoning to a node body
+
+References:
+  cite         Attach context, with a note saying why it is here
+  handoff      Hand a node off to an Observatory record: cite it and close the node
+
+Query:
+  show         Show one node in full
+  log          List the commits that changed a node
+  list         List nodes
+  near         The existing nodes closest to some text, or to a node, and how close
+  trace        Walk ancestry. The feature the whole system exists for
+  impact       What descends from this node, and what contradicts it
+  graph        The whole corpus as nodes and edges, for a tool that draws it
+
+Maintenance:
+  review       The weekly maintenance report: stale hypotheses, untouched seeds,
+               nodes with no references, and inbox entries waiting too long
+
+Options:
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+The corpus lives outside this repository. It is found via --root, else $NEBULA_ROOT, else the nearest corpus at or above the current directory, else ~/.config/nebula/root, else ~/.nebula.

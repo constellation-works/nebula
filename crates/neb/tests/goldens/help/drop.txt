@@ -1,0 +1,12 @@
+Discard an inbox entry. Struck through, never deleted
+
+Usage: neb drop [OPTIONS] <ENTRY>
+
+Arguments:
+  <ENTRY>  Inbox entry id, from `neb inbox`
+
+Options:
+      --no-commit   Skip the commit this once, where `neb config commit on` would make one
+      --root <DIR>  Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+      --json        Emit JSON instead of text, for scripts and agents
+  -h, --help        Print help

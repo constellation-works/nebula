@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "--json",
+    "tag",
+    "list"
+  ],
+  "exit_code": 0,
+  "stdout": "[]\n",
+  "stderr": "no tags\n"
+}

@@ -1,0 +1,11 @@
+List nodes
+
+Usage: neb list [OPTIONS]
+
+Options:
+      --root <DIR>       Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+      --status <STATUS>  Only this status [possible values: seed, hypothesis, refuted, abandoned]
+      --json             Emit JSON instead of text, for scripts and agents
+      --tag <TAG>        Only nodes carrying this tag. Repeat to require every one
+      --limit <N>        Show at most N of the matching nodes, in corpus order, N at least 1. Defaults to every one
+  -h, --help             Print help

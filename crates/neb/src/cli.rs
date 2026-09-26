@@ -2655,6 +2655,102 @@ fn write_report(out: Option<&Path>, text: &str) -> std::result::Result<(), Failu
 mod tests {
     use super::*;
 
+    /// The fixture names are the exact assembled clap tree, including hidden
+    /// commands and the two settings below `config`.
+    #[test]
+    fn help_goldens_cover_the_command_tree() {
+        use std::collections::BTreeSet;
+
+        fn walk(command: &clap::Command, prefix: &str, found: &mut BTreeSet<String>) {
+            found.insert(prefix.to_owned());
+            for sub in command.get_subcommands() {
+                let path = if prefix.is_empty() {
+                    sub.get_name().to_owned()
+                } else {
+                    format!("{prefix} {}", sub.get_name())
+                };
+                walk(sub, &path, found);
+            }
+        }
+
+        fn fixture_names(dir: &Path, prefix: &str, found: &mut BTreeSet<String>) {
+            for entry in std::fs::read_dir(dir).expect("help fixture directory") {
+                let path = entry.expect("help fixture entry").path();
+                if path.is_dir() {
+                    let child = if prefix.is_empty() {
+                        path.file_name().unwrap().to_string_lossy().into_owned()
+                    } else {
+                        format!("{prefix} {}", path.file_name().unwrap().to_string_lossy())
+                    };
+                    fixture_names(&path, &child, found);
+                } else if path.extension().is_some_and(|extension| extension == "txt") {
+                    let stem = path.file_stem().unwrap().to_string_lossy();
+                    found.insert(if prefix.is_empty() && stem == "neb" {
+                        String::new()
+                    } else if prefix.is_empty() {
+                        stem.into_owned()
+                    } else {
+                        format!("{prefix} {stem}")
+                    });
+                }
+            }
+        }
+
+        let manifest: BTreeSet<String> = serde_json::from_str::<Vec<String>>(include_str!(
+            "../tests/goldens/help/commands.json"
+        ))
+        .expect("help fixture manifest")
+        .into_iter()
+        .collect();
+        let mut tree = BTreeSet::new();
+        walk(&Cli::command(), "", &mut tree);
+        assert_eq!(manifest, tree, "add a fixture for every command");
+
+        let mut files = BTreeSet::new();
+        fixture_names(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/help"),
+            "",
+            &mut files,
+        );
+        assert_eq!(files, tree, "help fixture filenames differ from clap tree");
+    }
+
+    #[test]
+    fn no_subcommand_argument_shadows_a_global_id() {
+        use std::collections::BTreeSet;
+
+        fn globals(command: &clap::Command, ids: &mut BTreeSet<String>) {
+            for arg in command.get_arguments().filter(|arg| arg.is_global_set()) {
+                ids.insert(arg.get_id().to_string());
+            }
+            for sub in command.get_subcommands() {
+                globals(sub, ids);
+            }
+        }
+        fn check(command: &clap::Command, path: &str, ids: &BTreeSet<String>) {
+            for sub in command.get_subcommands() {
+                let subpath = if path.is_empty() {
+                    sub.get_name().to_owned()
+                } else {
+                    format!("{path} {}", sub.get_name())
+                };
+                for arg in sub.get_arguments().filter(|arg| !arg.is_global_set()) {
+                    assert!(
+                        !ids.contains(&arg.get_id().to_string()),
+                        "{subpath} shadows global argument id {}",
+                        arg.get_id()
+                    );
+                }
+                check(sub, &subpath, ids);
+            }
+        }
+        let mut command = Cli::command();
+        command.build();
+        let mut ids = BTreeSet::new();
+        globals(&command, &mut ids);
+        check(&command, "", &ids);
+    }
+
     fn help() -> String {
         Cli::command().render_long_help().to_string()
     }

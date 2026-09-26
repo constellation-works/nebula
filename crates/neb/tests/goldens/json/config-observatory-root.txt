@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "--json",
+    "config",
+    "observatory-root"
+  ],
+  "exit_code": 0,
+  "stdout": "{\n  \"root\": \"<ROOT>/observatory\",\n  \"source\": \"env\",\n  \"legacy\": null\n}\n",
+  "stderr": ""
+}

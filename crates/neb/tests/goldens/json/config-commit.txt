@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "--json",
+    "config",
+    "commit"
+  ],
+  "exit_code": 0,
+  "stdout": "{\n  \"enabled\": false\n}\n",
+  "stderr": ""
+}

@@ -1,0 +1,28 @@
+Edit a node's tags, or list every tag with its node count.
+
+Tags are normalised to lowercase kebab-case on the way in. A tag new to the corpus that differs from one in use only by case or a trailing `s` is written, with a note on stderr naming the existing one. A tag already on the node to add, or not on it to remove, is noted on stderr; when that leaves the tags as they were, nothing is written.
+
+Usage: neb tag [OPTIONS] <TARGET>
+
+Arguments:
+  <TARGET>
+          Node id, or `list` to show every tag in the corpus with a count
+
+Options:
+      --add <TAG>
+          A tag to add. Repeatable
+
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+      --remove <TAG>
+          A tag to remove. Repeatable
+
+      --no-commit
+          Skip the commit this once, where `neb config commit on` would make one
+
+  -h, --help
+          Print help (see a summary with '-h')

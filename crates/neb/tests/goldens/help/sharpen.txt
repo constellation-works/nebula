@@ -1,0 +1,31 @@
+Sharpen a seed into a hypothesis by naming what would kill it.
+
+`--confirm` adopts the kill condition already on the node as the human's own: the text is untouched and nothing is appended, which is what takes the node off `review`'s unconfirmed list.
+
+Usage: neb sharpen [OPTIONS] <NODE>
+
+Arguments:
+  <NODE>
+          Node id
+
+Options:
+      --kill <KILL>
+          The falsifier, written before anything is read
+
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --by <LABEL>
+          Who wrote the kill condition: `human`, or the agent's session or crew label. Free text; defaults to `human`
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+      --confirm
+          Stand behind the kill condition already there, as the human
+
+      --no-commit
+          Skip the commit this once, where `neb config commit on` would make one
+
+  -h, --help
+          Print help (see a summary with '-h')

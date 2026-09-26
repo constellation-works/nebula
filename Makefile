@@ -1,4 +1,4 @@
-.PHONY: help build release run dev check test doctest hostile-env-test types types-check fmt fmt-check release-check standards-check terminal-guard dependency-direction clippy ci-lint audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
+.PHONY: help build release run dev check test goldens doctest hostile-env-test types types-check fmt fmt-check release-check standards-check terminal-guard dependency-direction clippy ci-lint audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
 
 # ------------------------------------------------------------
 # Config
@@ -46,6 +46,7 @@ help:
 	@echo "  make dev ARGS=...  Run the built binary directly"
 	@echo "  make check         Type-check every crate"
 	@echo "  make test          Run all tests, every crate"
+	@echo "  make goldens       Check CLI fixtures (UPDATE=1 regenerates them)"
 	@echo "  make hostile-env-test  Run the suites under a hostile HOME, TMPDIR and GIT_DIR"
 	@echo "  make doctest       Run the documentation examples, every crate"
 	@echo "  make types         Regenerate apps/desktop/src/types from nebula-core"
@@ -105,6 +106,9 @@ check:
 
 test:
 	$(CARGO) test $(LOCKED) --workspace --all-targets
+
+goldens:
+	NEB_UPDATE_GOLDENS=$(if $(filter 1,$(UPDATE)),1,0) $(CARGO) test $(LOCKED) -p neb --test goldens
 
 # `--all-targets` leaves doctests out, so the examples in doc comments run here.
 doctest:

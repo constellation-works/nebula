@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "--json",
+    "cite",
+    "first-idea",
+    "--kind",
+    "paper"
+  ],
+  "exit_code": 2,
+  "stdout": "",
+  "stderr": "{\"code\":\"uri_required\",\"error\":\"a reference of kind `paper` needs a URI; only a discussion may have none\",\"hint\":\"Pass where it lives with --uri, or cite it with --kind discussion when it has no location.\"}\n"
+}

@@ -1,0 +1,21 @@
+The whole corpus as nodes and edges, for a tool that draws it.
+
+Use `--json` for structured data or `--mermaid` for a diagram that can be pasted into a document. Without either, it is refused as a usage error.
+
+Usage: neb graph [OPTIONS]
+
+Options:
+      --mermaid
+          Emit a Mermaid `graph BT` diagram
+
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --from <ID>
+          Limit the Mermaid diagram to this node's ancestors and descendants
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+  -h, --help
+          Print help (see a summary with '-h')

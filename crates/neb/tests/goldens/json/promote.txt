@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "--json",
+    "promote",
+    "<ENTRY>",
+    "--title",
+    "Promoted thought",
+    "--id",
+    "promoted-thought"
+  ],
+  "exit_code": 0,
+  "stdout": "{\n  \"doc\": {\n    \"node\": {\n      \"id\": \"promoted-thought\",\n      \"title\": \"Promoted thought\",\n      \"title_by\": \"human\",\n      \"status\": \"seed\",\n      \"created\": \"<TODAY>\",\n      \"updated\": \"<TODAY>\",\n      \"kill\": null,\n      \"kill_by\": null,\n      \"tags\": [],\n      \"edges\": [],\n      \"references\": [],\n      \"closed\": null,\n      \"origin\": null\n    },\n    \"body\": \"Pending insight\"\n  },\n  \"path\": \"<ROOT>/corpus/nodes/promoted-thought.md\",\n  \"near\": []\n}\n",
+  "stderr": ""
+}

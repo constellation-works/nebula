@@ -1,0 +1,41 @@
+Hand a node off to an Observatory record: cite it and close the node.
+
+One write: an `observatory` reference to the record, and the node moved to `abandoned` with `why: handed off to <RECORD>`. A refuted or already closed node is refused. When this machine has an observatory root, the record must resolve under it; with none, the id is accepted and cannot be located yet, as with `cite --kind observatory`.
+
+Usage: neb handoff [OPTIONS] <NODE> <RECORD>
+
+Arguments:
+  <NODE>
+          Node id
+
+  <RECORD>
+          The Observatory record id: Q, H, T or R followed by digits, as in `H<nnn>`
+
+Options:
+      --note <NOTE>
+          Why it goes there. The reference's note, and the only field that matters in a year
+
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --by <LABEL>
+          Who authored the text: `human`, or the agent's session or crew label. Free text; defaults to `human`
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+      --task <TASK>
+          Orbit task that produced it
+
+      --run <RUN>
+          Orbit run that produced it
+
+      --no-commit
+          Skip the commit this once, where `neb config commit on` would make one
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  neb handoff <id> <record-id> --note "the question this became"
+  neb handoff <id> <record-id> --note "why it goes there" --by <label>

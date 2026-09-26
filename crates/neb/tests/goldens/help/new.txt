@@ -1,0 +1,22 @@
+Create a node directly, without going through the inbox
+
+Usage: neb new [OPTIONS] <TITLE>
+
+Arguments:
+  <TITLE>  Node title
+
+Options:
+      --body <TEXT|->     The node's prose body. `-` reads standard input
+      --root <DIR>        Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+      --json              Emit JSON instead of text, for scripts and agents
+      --parent <ID>       A parent this descends from. Repeat for a merge
+      --reopens <ID>      A refuted node this revives, written as a `reopens` edge. That edge is genealogy already, so do not name the node as a parent too
+      --contradicts <ID>  A node this contradicts, recorded on both nodes as `link` does. Repeatable
+      --kill <KILL>       What would falsify this. Naming one starts the node as a hypothesis
+      --tag <TAG>         Labels
+      --id <SLUG>         Explicit id, overriding the title's slug. Same rules as a slug: lowercase words joined by single dashes, 60 characters or fewer
+      --by <LABEL>        Who authored the text: `human`, or the agent's session or crew label. Free text; defaults to `human`
+      --task <TASK>       Orbit task that produced it
+      --run <RUN>         Orbit run that produced it
+      --no-commit         Skip the commit this once, where `neb config commit on` would make one
+  -h, --help              Print help

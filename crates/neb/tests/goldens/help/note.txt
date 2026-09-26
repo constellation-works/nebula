@@ -1,0 +1,30 @@
+Append a dated paragraph of reasoning to a node body.
+
+Creates a `## Notes` section at the end of the body if needed, then appends `- YYYY-MM-DD: <text>`. Repeated notes accumulate in order; earlier body text is not rewritten. Status, edges and tags are left as they are.
+
+Usage: neb note [OPTIONS] <NODE> <TEXT>...
+
+Arguments:
+  <NODE>
+          Node id
+
+  <TEXT>...
+          The reasoning, as they said it.
+          
+          Remaining words, so it can be typed without quotes. Not a trailing vararg: a flag after the text (`--no-commit`, `--by`) is still a flag. A dash-leading token belongs in quotes, or after `--`.
+
+Options:
+      --by <LABEL>
+          Who authored the text: `human`, or the agent's session or crew label. Free text; defaults to `human`
+
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+      --no-commit
+          Skip the commit this once, where `neb config commit on` would make one
+
+  -h, --help
+          Print help (see a summary with '-h')

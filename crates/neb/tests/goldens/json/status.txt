@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "--json",
+    "status",
+    "first-idea",
+    "abandoned",
+    "--why",
+    "Superseded"
+  ],
+  "exit_code": 0,
+  "stdout": "{\n  \"doc\": {\n    \"node\": {\n      \"id\": \"first-idea\",\n      \"title\": \"First idea\",\n      \"title_by\": \"human\",\n      \"status\": \"abandoned\",\n      \"created\": \"<TODAY>\",\n      \"updated\": \"<TODAY>\",\n      \"kill\": null,\n      \"kill_by\": null,\n      \"tags\": [],\n      \"edges\": [],\n      \"references\": [],\n      \"closed\": {\n        \"why\": \"Superseded\",\n        \"at\": \"<TODAY>\"\n      },\n      \"origin\": null\n    },\n    \"body\": \"A stable body\\n\"\n  },\n  \"from\": \"seed\"\n}\n",
+  "stderr": ""
+}
