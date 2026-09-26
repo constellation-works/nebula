@@ -29,6 +29,12 @@ export const promoteRoot = (entry: string): Promise<Created> =>
 /** The whole corpus as nodes and edges. */
 export const graph = (): Promise<GraphExport> => invoke<GraphExport>("graph");
 
+/** Matching graph IDs from one corpus read, including markdown bodies. */
+export const graphSearch = (query: string): Promise<string[]> => invoke<string[]>("graph_search", { query });
+
+/** The capture shortcut loaded when the app started. */
+export const captureShortcut = (): Promise<string> => invoke<string>("capture_shortcut");
+
 /** One node in full: frontmatter and trimmed markdown body. */
 export const node = (id: string): Promise<NodeView> => invoke<NodeView>("node", { id });
 

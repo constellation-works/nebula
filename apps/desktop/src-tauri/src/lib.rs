@@ -47,6 +47,8 @@ pub fn run() {
             commands::drop_entry,
             commands::promote_root,
             commands::graph,
+            commands::graph_search,
+            commands::capture_shortcut,
             commands::node,
             commands::open_in_editor,
             commands::corpus_path,
@@ -75,6 +77,7 @@ pub fn run() {
             }
 
             let state = app.state::<AppState>();
+            state.set_capture_shortcut(settings.capture_shortcut.clone());
             state.set_startup_warnings(startup_warnings.clone());
             tray::build(handle, &startup_warnings)?;
 

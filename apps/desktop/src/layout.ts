@@ -18,10 +18,10 @@ export const TITLE_CHARS = 40;
 /** Tag chips drawn on a card before "+n" takes over. */
 export const MAX_CHIPS = 3;
 
-/** What the toolbar narrows the drawing to. Both empty means everything. */
+/** What the toolbar highlights. Both empty means everything. */
 export interface Filter {
-  /** Case-insensitive title substring. */
-  query: string;
+  /** IDs returned by full-text search, or null when there is no query. */
+  searchIds: ReadonlySet<string> | null;
   /** A node must carry every one of these, as `neb list --tag` does. */
   tags: string[];
 }
@@ -69,19 +69,13 @@ export function tagCounts(nodes: readonly NodeSummary[]): TagCount[] {
 }
 
 /**
- * The nodes that pass the filter and the edges with both ends still present.
- * Applied before layout so the drawing stays compact rather than leaving holes.
+ * Matching IDs only: layout always receives the full graph, so filtering never
+ * moves cards or cuts the edges that explain a match's lineage.
  */
-export function filterGraph(graph: GraphExport, filter: Filter): GraphExport {
-  const q = filter.query.trim().toLowerCase();
-  const nodes = graph.nodes.filter(
-    (n) =>
-      (q === "" || n.title.toLowerCase().includes(q)) &&
-      filter.tags.every((t) => n.tags.includes(t)),
-  );
-  const kept = new Set(nodes.map((n) => n.id));
-  const edges = graph.edges.filter((e) => kept.has(e.from) && kept.has(e.to));
-  return { nodes, edges };
+export function matchingIds(graph: GraphExport, filter: Filter): Set<string> {
+  return new Set(graph.nodes
+    .filter((n) => (filter.searchIds === null || filter.searchIds.has(n.id)) && filter.tags.every((t) => n.tags.includes(t)))
+    .map((n) => n.id));
 }
 
 /** The elk id for an edge; both ends and the type, so parallel edges stay distinct. */

@@ -13,6 +13,12 @@ interface Props {
   selected: string | null;
   /** The selected node's lineage, so the rest can be dimmed. */
   lineage: Lineage | null;
+  /** Active filter matches; null means no filter. */
+  matches: ReadonlySet<string> | null;
+  /** IDs to show when lineage isolation is active. */
+  isolatedIds: ReadonlySet<string> | null;
+  /** A toolbar navigation request, including repeated visits to one node. */
+  focus: { id: string; serial: number } | null;
   onSelect: (id: string | null) => void;
   onOpen: (id: string) => void;
   /** Bumped by the toolbar's Fit button; also fits once on the first layout. */
@@ -110,12 +116,14 @@ const Nodes = memo(function Nodes({
   nodes,
   selected,
   lineage,
+  matches,
   onSelect,
   onOpen,
 }: {
   nodes: PlacedNode[];
   selected: string | null;
   lineage: Lineage | null;
+  matches: ReadonlySet<string> | null;
   onSelect: (id: string) => void;
   onOpen: (id: string) => void;
 }) {
@@ -127,6 +135,7 @@ const Nodes = memo(function Nodes({
           "node",
           `node--${n.status}`,
           tint === undefined ? "" : tint === null ? "node--dim" : `node--${tint}`,
+          matches !== null && !matches.has(n.id) ? "node--filter-dim" : "",
         ]
           .filter(Boolean)
           .join(" ");
@@ -201,7 +210,7 @@ const Nodes = memo(function Nodes({
  * transform that the mouse moves. Drag and plain wheel pan; ctrl-wheel zooms about the cursor,
  * a click on empty canvas clears the selection.
  */
-export function GraphCanvas({ layout, selected, lineage, onSelect, onOpen, fitRequest }: Props) {
+export function GraphCanvas({ layout, selected, lineage, matches, isolatedIds, focus, onSelect, onOpen, fitRequest }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState<Viewport>({ x: FIT_PADDING, y: FIT_PADDING, k: 1 });
   const [panning, setPanning] = useState(false);
@@ -219,6 +228,19 @@ export function GraphCanvas({ layout, selected, lineage, onSelect, onOpen, fitRe
     const svg = svgRef.current;
     setView(fit(layout, svg?.clientWidth ?? 0, svg?.clientHeight ?? 0));
   }, [layout, fitRequest]);
+
+  useEffect(() => {
+    if (focus === null) return;
+    const node = layout.nodes.find((n) => n.id === focus.id);
+    if (node === undefined) return;
+    const svg = svgRef.current;
+    const k = Math.max(1, viewRef.current.k);
+    setView({
+      x: (svg?.clientWidth ?? 0) / 2 - (node.x + node.width / 2) * k,
+      y: (svg?.clientHeight ?? 0) / 2 - (node.y + node.height / 2) * k,
+      k,
+    });
+  }, [focus, layout]);
 
   // React registers wheel listeners passively, and a passive listener cannot
   // stop the page from scrolling; attach the real one.
@@ -305,8 +327,8 @@ export function GraphCanvas({ layout, selected, lineage, onSelect, onOpen, fitRe
         ))}
       </defs>
       <g className="scene" transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
-        <Edges edges={layout.edges} selected={selected} lineage={lineage} />
-        <Nodes nodes={layout.nodes} selected={selected} lineage={lineage} onSelect={onSelect} onOpen={onOpen} />
+        <Edges edges={isolatedIds === null ? layout.edges : layout.edges.filter((e) => isolatedIds.has(e.from) && isolatedIds.has(e.to))} selected={selected} lineage={lineage} />
+        <Nodes nodes={isolatedIds === null ? layout.nodes : layout.nodes.filter((n) => isolatedIds.has(n.id))} selected={selected} lineage={lineage} matches={matches} onSelect={onSelect} onOpen={onOpen} />
       </g>
     </svg>
   );

@@ -63,6 +63,32 @@ pub fn graph(corpus: &Corpus) -> Result<GraphExport> {
     graph::export(&Graph::build(&docs)?)
 }
 
+/// Match graph nodes without transferring every body to the webview. One
+/// corpus read per debounced query keeps search linear in corpus size.
+pub fn graph_search(corpus: &Corpus, query: &str) -> Result<Vec<String>> {
+    let needle = query.trim().to_lowercase();
+    Ok(corpus
+        .load_all()?
+        .into_iter()
+        .filter(|doc| {
+            matches_graph_query(
+                &doc.node.id,
+                &doc.node.title,
+                &doc.body,
+                &doc.node.status.to_string(),
+                &needle,
+            )
+        })
+        .map(|doc| doc.node.id)
+        .collect())
+}
+
+fn matches_graph_query(id: &str, title: &str, body: &str, status: &str, needle: &str) -> bool {
+    [id, title, body, status]
+        .iter()
+        .any(|value| value.to_lowercase().contains(needle))
+}
+
 /// One node in full: the `neb show --json` shape, body trimmed and ready for
 /// a markdown renderer. Observatory references are located the same way
 /// `neb show` locates them, so the panel and the terminal agree.
@@ -77,4 +103,29 @@ pub fn node(corpus: &Corpus, id: &str) -> Result<NodeView> {
 pub fn node_file(corpus: &Corpus, id: &str) -> Result<PathBuf> {
     corpus.load(id)?;
     corpus.node_path(id)
+}
+
+#[cfg(test)]
+mod graph_search_tests {
+    use super::matches_graph_query;
+
+    #[test]
+    fn matches_every_requested_field_case_insensitively() {
+        for query in ["n42", "IDEA", "evidence", "REFUTED"] {
+            assert!(matches_graph_query(
+                "n42",
+                "An idea",
+                "new evidence",
+                "refuted",
+                &query.to_lowercase()
+            ));
+        }
+        assert!(!matches_graph_query(
+            "n42",
+            "An idea",
+            "new evidence",
+            "refuted",
+            "absent"
+        ));
+    }
 }
