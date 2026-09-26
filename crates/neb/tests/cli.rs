@@ -4947,31 +4947,18 @@ fn json_refusal_goes_to_stderr_through_the_output_layer() {
 /// JSON document.
 #[test]
 fn json_commit_refusals_leave_the_payload_on_stdout() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let outer = dir.path().join("outer");
-    let root = outer.join("corpus");
-    let c = Corpus { dir, root };
-    c.run(&["init"]).assert_ok();
-    git_init(&outer);
-    write(&outer.join("README.md"), "theirs\n");
-    git(&outer, &["add", "-A"]);
-    git(&outer, &["commit", "-q", "-m", "start"]);
+    let (c, _remote) = corpus_repo();
     c.run(&["config", "commit", "on"]).assert_ok();
-    write(&outer.join("README.md"), "theirs, edited\n");
-    git(&outer, &["add", "README.md"]);
+    break_head(&c.root);
 
     let run = c.run(&["new", "An idea", "--json"]);
     let refused = run.refusal();
-    assert_eq!(refused["code"], "staged_elsewhere");
+    assert_eq!(refused["code"], "git");
     assert!(
         refused["error"]
             .as_str()
             .unwrap()
-            .contains("has staged changes outside the corpus (README.md)"),
-        "{refused}"
-    );
-    assert!(
-        refused["hint"].as_str().unwrap().contains("--no-commit"),
+            .starts_with("git rev-parse failed in"),
         "{refused}"
     );
     let created: serde_json::Value =
@@ -8817,6 +8804,26 @@ fn migrate_refuses_a_dirty_git_tree() {
     c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
 }
 
+/// Whether the tree is clean is unknown when git cannot read the repository,
+/// and unknown is not clean: `migrate` refuses before it rewrites a node.
+#[test]
+fn migrate_refuses_when_git_cannot_report_status() {
+    let c = v1_corpus();
+    git_init(&c.root);
+    git_commit_at(&c.root, "2020-01-01", "v1 corpus");
+    break_head(&c.root);
+    let before = snapshot_corpus_files(&c.root);
+    let config = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+
+    let refused = c.run(&["--json", "migrate"]).refusal();
+    assert_eq!(refused["code"], "git", "{refused}");
+    assert_eq!(snapshot_corpus_files(&c.root), before);
+    assert_eq!(
+        std::fs::read_to_string(c.root.join("config.yaml")).unwrap(),
+        config
+    );
+}
+
 // ------------------------------------------------------------------ commit --
 
 /// Run git in `dir`, asserting it succeeded; stdout as text.
@@ -8993,6 +9000,33 @@ fn log_and_show_at_read_a_node_sharpened_across_two_commits() {
     c.run(&["show", &id, "--at", "2028-02-29"]).assert_ok();
 }
 
+/// A commit that does not exist and a commit from before the node existed
+/// are different answers: the first is a mistyped or foreign hash, the
+/// second a true fact about the node's history.
+#[test]
+fn show_at_unknown_revision_is_not_no_node_at_revision() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let before = git(&c.root, &["rev-parse", "HEAD"]).trim().to_string();
+    let id = c.run(&["new", "An idea"]).assert_ok().stdout_trim();
+
+    let unknown = c
+        .run(&["--json", "show", &id, "--at", "deadbeef"])
+        .refusal();
+    assert_eq!(unknown["code"], "unknown_revision", "{unknown}");
+    assert!(
+        unknown["error"].as_str().unwrap().contains("deadbeef"),
+        "{unknown}"
+    );
+    assert!(
+        unknown["hint"].as_str().unwrap().contains("neb log"),
+        "{unknown}"
+    );
+
+    let absent = c.run(&["--json", "show", &id, "--at", &before]).refusal();
+    assert_eq!(absent["code"], "no_node_at_revision", "{absent}");
+}
+
 #[test]
 fn log_reports_when_an_uncommitted_node_has_no_history() {
     let c = Corpus::new();
@@ -9043,6 +9077,81 @@ fn history_verbs_refuse_a_corpus_outside_a_git_work_tree() {
     c.run(&["show", &id, "--at", "2020-01-01"])
         .assert_fails()
         .says("is not inside a git work tree");
+}
+
+/// Make the repository at `repo` one git cannot read, as a bad disk or a
+/// half-finished edit of `.git` does: git no longer recognises it at all.
+fn break_head(repo: &Path) {
+    write(&repo.join(".git").join("HEAD"), "garbage\n");
+}
+
+/// With `commit` on, a repository git cannot read is reported, never taken
+/// for "no repository" and the commit silently skipped. The write stays.
+#[test]
+fn commit_on_with_broken_git_reports_instead_of_skipping() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    break_head(&c.root);
+
+    let run = c.run(&["capture", "broken head probe"]).assert_fails();
+    let run = run
+        .says("git rev-parse failed in")
+        .says(&c.root.display().to_string());
+    assert!(
+        !run.stdout_trim().is_empty(),
+        "the verb reported its write before the refusal"
+    );
+    let inbox = std::fs::read_dir(c.root.join("inbox"))
+        .unwrap()
+        .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert!(inbox.contains("broken head probe"), "{inbox}");
+
+    let run = c.run(&["--json", "capture", "second probe"]);
+    let refused = run.refusal();
+    assert_eq!(refused["code"], "git");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains(&c.root.display().to_string()),
+        "{refused}"
+    );
+    serde_json::from_str::<serde_json::Value>(&run.stdout()).expect("the write's payload");
+}
+
+/// A history query in a repository git cannot read is a git failure, not a
+/// corpus that is "not inside a git work tree", which would be false.
+#[test]
+fn history_on_a_broken_repository_is_a_git_error_not_not_a_work_tree() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let id = c.run(&["new", "An idea"]).assert_ok().stdout_trim();
+    break_head(&c.root);
+    let refused = c.run(&["--json", "log", &id]).refusal();
+    assert_eq!(refused["code"], "git", "{refused}");
+}
+
+/// `commit` on with no repository anywhere above the corpus: the write lands
+/// and the command succeeds, but it says once, on stderr, that nothing was
+/// committed and why. The payload on stdout is what it always is.
+#[test]
+fn commit_on_outside_a_repository_says_it_did_not_commit() {
+    let c = Corpus::new();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let run = c.run(&["capture", "x"]).assert_ok();
+    let id = run.stdout_trim();
+    assert_eq!(run.stdout(), format!("{id}\n"));
+    assert_eq!(
+        run.stderr(),
+        format!(
+            "note: not committed: {} is not inside a git work tree\n",
+            c.root.display()
+        )
+    );
+    // `--no-commit` asks for no commit, so there is nothing to say.
+    let run = c.run(&["capture", "y", "--no-commit"]).assert_ok();
+    assert_eq!(run.stderr(), "");
 }
 
 /// The setting is off by default and the verbs behave as they always did;
@@ -9308,9 +9417,6 @@ fn a_staged_unicode_node_is_accepted_with_default_git_quoting() {
     assert!(dirt(&c.root).is_empty(), "{}", dirt(&c.root));
 }
 
-/// The corpus nested in a larger repository, the shape the refusal exists
-/// for: something staged outside the corpus must not ride in a `neb`
-/// commit, and the write must never be undone because of it.
 /// A hand-off is one write, so it is one commit: the node's file alone,
 /// named for the node and the record it went to.
 #[test]
@@ -9507,8 +9613,36 @@ fn closed_stdout_still_commits_a_write() {
     }
 }
 
+/// `git diff --cached --name-only` in `dir`: what is staged, relative to
+/// the repository's top level, in git's order.
+fn staged(dir: &Path) -> Vec<String> {
+    git(dir, &["diff", "--cached", "--name-only"])
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
+/// A `neb` commit is exactly the corpus, by pathspec: work already staged
+/// elsewhere in the repository neither blocks it nor rides in it, and is
+/// still staged afterwards. Both shapes: a repository at the corpus root with
+/// a stranger's file in it, and the corpus in a subdirectory of a larger one.
 #[test]
-fn a_staged_change_outside_the_corpus_refuses_the_commit_and_keeps_the_write() {
+fn unrelated_staged_work_does_not_block_or_join_a_neb_commit() {
+    // The repository is the corpus root.
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    write(&c.root.join("unrelated.txt"), "theirs\n");
+    git(&c.root, &["add", "unrelated.txt"]);
+    let entry = c.run(&["capture", "x"]).assert_ok().stdout_trim();
+    assert_eq!(log(&c.root)[0], format!("neb capture {entry}"));
+    let paths = head_paths(&c.root);
+    assert!(
+        !paths.is_empty() && paths.iter().all(|p| p.starts_with("inbox/")),
+        "{paths:?}"
+    );
+    assert_eq!(staged(&c.root), ["unrelated.txt"]);
+
+    // The corpus is a subdirectory of someone else's repository.
     let dir = tempfile::tempdir().expect("tempdir");
     let outer = dir.path().join("outer");
     let root = outer.join("corpus");
@@ -9522,51 +9656,90 @@ fn a_staged_change_outside_the_corpus_refuses_the_commit_and_keeps_the_write() {
     assert_eq!(head_paths(&outer), ["corpus/config.yaml"]);
 
     write(&outer.join("README.md"), "theirs, edited\n");
-    git(&outer, &["add", "README.md"]);
+    write(&outer.join("unrelated.txt"), "theirs\n");
+    git(&outer, &["add", "README.md", "unrelated.txt"]);
     write(&outer.join("notes.txt"), "never staged\n");
-    let head = git(&outer, &["rev-parse", "HEAD"]);
 
-    let run = c.run(&["new", "An idea"]).assert_fails();
-    let run = run
-        .says("staged changes outside the corpus (README.md)")
-        .says("the write is in place");
+    let entry = c
+        .run(&["capture", "x"])
+        .assert_ok()
+        .says("committed ")
+        .stdout_trim();
+    assert_eq!(log(&outer)[0], format!("neb capture {entry}"));
+    let paths = head_paths(&outer);
     assert!(
-        run.stdout().contains("an-idea"),
-        "the verb reported its write before the refusal:\n{}",
-        run.stdout()
+        !paths.is_empty() && paths.iter().all(|p| p.starts_with("corpus/inbox/")),
+        "{paths:?}"
     );
-    assert!(c.node_file("an-idea").exists(), "the write stays");
-    assert_eq!(git(&outer, &["rev-parse", "HEAD"]), head, "no commit");
-    let status = git(&outer, &["status", "--porcelain"]);
-    assert!(
-        status.contains("M  README.md"),
-        "their staging is intact:\n{status}"
-    );
-    assert!(
-        status.contains("?? notes.txt"),
-        "nothing outside was touched:\n{status}"
-    );
-    assert!(
-        status.contains("?? corpus/nodes/"),
-        "and the node was not even staged:\n{status}"
-    );
+    assert_eq!(staged(&outer), ["README.md", "unrelated.txt"]);
+    assert!(git(&outer, &["status", "--porcelain"]).contains("?? notes.txt"));
     assert_eq!(
         std::fs::read_to_string(outer.join("README.md")).unwrap(),
         "theirs, edited\n"
     );
+}
 
-    // With their change committed, the next verb sweeps the node up too.
-    git(&outer, &["commit", "-q", "-m", "theirs"]);
-    let b = c.run(&["new", "B"]).assert_ok().stdout_trim();
-    assert_eq!(log(&outer)[0], format!("neb new {b}"));
-    assert_eq!(
-        head_paths(&outer),
-        [
-            "corpus/nodes/an-idea.md".to_string(),
-            format!("corpus/nodes/{b}.md")
-        ]
+/// The absolute path of the `git` this suite would run.
+#[cfg(unix)]
+fn real_git() -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    std::env::split_paths(&std::env::var_os("PATH").expect("PATH is set"))
+        .map(|dir| dir.join("git"))
+        .find(|git| {
+            std::fs::metadata(git)
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        })
+        .expect("git is on PATH")
+}
+
+/// Work someone stages while a `neb` commit is under way cannot ride in it:
+/// the commit names the corpus paths, so it never reads the rest of the
+/// index. A `git` first on `PATH` stages a stranger's file at the last
+/// moment, just before running the real `git commit`.
+#[cfg(unix)]
+#[test]
+fn work_staged_during_the_commit_is_not_swept_in() {
+    use std::os::unix::fs::PermissionsExt;
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    write(&c.root.join("foreign.txt"), "theirs\n");
+    let shims = c.workdir().join("shims");
+    std::fs::create_dir(&shims).unwrap();
+    let shim = shims.join("git");
+    write(
+        &shim,
+        &format!(
+            "#!/bin/sh\n\
+             real='{real}'\n\
+             if [ \"$1\" = -C ] && [ \"$3\" = commit ]; then\n\
+             \"$real\" -C \"$2\" add foreign.txt || exit 99\n\
+             fi\n\
+             exec \"$real\" \"$@\"\n",
+            real = real_git().display()
+        ),
     );
-    assert!(git(&outer, &["status", "--porcelain"]).contains("?? notes.txt"));
+    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(shims).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+
+    let entry = c
+        .run_with_env(&["capture", "x"], &[("PATH", path.to_str().unwrap())])
+        .assert_ok()
+        .says("committed ")
+        .stdout_trim();
+    assert_eq!(log(&c.root)[0], format!("neb capture {entry}"));
+    let paths = head_paths(&c.root);
+    assert!(
+        !paths.is_empty() && paths.iter().all(|p| p.starts_with("inbox/")),
+        "{paths:?}"
+    );
+    assert_eq!(
+        staged(&c.root),
+        ["foreign.txt"],
+        "the shim ran, and theirs is still staged"
+    );
 }
 
 /// `commit: on` in a corpus the containing repository ignores would commit

@@ -85,32 +85,45 @@ error: /corpus has uncommitted changes; commit or stash them so the migration is
 ```
 
 This is deliberate: see [migrate-v1-to-v2.md](migrate-v1-to-v2.md). Commit or
-stash, then run `neb migrate` again.
+stash, then run `neb migrate` again. A `git rev-parse failed` or `git status
+failed` refusal instead means git could not say whether the tree is clean, so
+nothing was rewritten; repair the repository first.
 
 ## Symptom: a verb writes but refuses to commit
 
-With `neb config commit on`, a verb prints its usual result and then:
+With `neb config commit on`, a verb prints its usual result and then a git
+refusal, for example:
 
 ```
-error: /corpus has staged changes outside the corpus (README.md); the write is in place and nothing was committed
+error: git rev-parse failed in /corpus: fatal: not a git repository (or any of the parent directories): .git
 ```
 
-The write happened — the node or inbox line is on disk — but `neb` will not
-fold a stranger's staged work into a `neb` commit, so it left the index
-alone. It checks for staged paths outside the managed corpus paths (`nodes/`,
-`inbox/`, `config.yaml`, and the generated `.gitignore`), so the refusal can
-also occur in a repository rooted at the corpus when, for example, an
-unrelated `README.md` is staged. Commit or unstage the other change, then
+The write happened — the node or inbox line is on disk — and only the commit
+did not. `rev-parse failed` means there is a `.git` at or above the corpus
+root that git cannot read: a corrupt `HEAD`, a half-finished edit of `.git`,
+or a repository owned by another user that `safe.directory` does not trust.
+`neb` reports that rather than treat the corpus as unversioned. Repair the
+repository (`git -C "$NEBULA_ROOT" status` shows git's own complaint), then
 either run any verb (its commit sweeps up the earlier write) or catch up by
 hand:
 
 ```sh
 git -C "$NEBULA_ROOT" add nodes inbox config.yaml .gitignore
-git -C "$NEBULA_ROOT" commit -m "neb"
+git -C "$NEBULA_ROOT" commit -m "neb" -- nodes inbox config.yaml .gitignore
 ```
 
 `--no-commit` on a verb skips its commit once, if you need to keep working
-before sorting the index out.
+before sorting the repository out.
+
+Work staged elsewhere in the repository never blocks a `neb` commit and never
+rides in one: the commit names the corpus paths (`nodes/`, `inbox/`,
+`config.yaml`, and the generated `.gitignore`), so anything else stays staged
+for you.
+
+If instead a verb succeeds with `note: not committed: /corpus is not inside a
+git work tree`, there is no repository at or above the root: set one up as
+[corpus-setup.md](corpus-setup.md#put-it-under-git) describes, or turn the
+setting off with `neb config commit off`.
 
 A different refusal, `is ignored by the git repository that contains it`,
 means the corpus sits under an outer repository whose `.gitignore` hides it,

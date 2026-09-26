@@ -27,7 +27,8 @@
 //! not bind a trusted child).
 
 use crate::error::Error;
-use std::path::Path;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::Duration;
 
@@ -101,6 +102,85 @@ pub(crate) fn run_git(root: &Path, args: &[&str]) -> Result<GitOutput, RunError>
             std::io::ErrorKind::Unsupported,
             "nebula runs git only where it can supervise it (Unix)",
         )))
+    }
+}
+
+/// Whether git, run at `root`, has a repository to find: a `.git` directory,
+/// or a `.git` file naming one (`gitdir: …`), at the root or in a directory
+/// above it, stopping below the nearest of `GIT_CEILING_DIRECTORIES` as git
+/// does.
+///
+/// Decided from the file system and never from git's answer, so git failing
+/// inside a repository — a corrupt `HEAD`, a `safe.directory` refusal, git
+/// not starting — is never mistaken for there being no repository at all
+/// (STD-02 §R29). `GIT_DIR` and the rest of [`REPOSITORY_ENV`] are not
+/// consulted: [`run_git`] removes them, so git discovers the repository this
+/// same way. Where this finds a `.git` that git does not use — past a mount
+/// point, say — a caller that asks git gets git's own reason as an error,
+/// which is the safe side to be wrong on.
+pub(crate) fn repository_expected(root: &Path) -> bool {
+    // git walks up from the directory it was moved into, which it knows by
+    // its resolved name; the ceilings are resolved the same way below.
+    let start = std::fs::canonicalize(root)
+        .or_else(|_| std::path::absolute(root))
+        .unwrap_or_else(|_| root.to_path_buf());
+    let ceilings = ceiling_directories(std::env::var_os("GIT_CEILING_DIRECTORIES").as_deref());
+    discovers(&start, &ceilings)
+}
+
+/// The directories named in a `GIT_CEILING_DIRECTORIES` value, read as git
+/// reads it: relative entries are ignored; entries are resolved, and one that
+/// cannot be resolved is dropped, until an empty entry, after which they are
+/// taken as written.
+fn ceiling_directories(value: Option<&OsStr>) -> Vec<PathBuf> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    let mut resolve = true;
+    let mut ceilings = Vec::new();
+    for entry in std::env::split_paths(value) {
+        if entry.as_os_str().is_empty() {
+            resolve = false;
+            continue;
+        }
+        if !entry.is_absolute() {
+            continue;
+        }
+        if !resolve {
+            ceilings.push(entry);
+        } else if let Ok(resolved) = std::fs::canonicalize(&entry) {
+            ceilings.push(resolved);
+        }
+    }
+    ceilings
+}
+
+/// Whether a repository is found from `start` upwards, never looking in a
+/// ceiling above `start` or anywhere past it.
+fn discovers(start: &Path, ceilings: &[PathBuf]) -> bool {
+    for dir in start.ancestors() {
+        if dir != start && ceilings.iter().any(|ceiling| ceiling == dir) {
+            return false;
+        }
+        if names_a_repository(&dir.join(".git")) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether `dot_git` is a repository directory, or a file pointing at one.
+fn names_a_repository(dot_git: &Path) -> bool {
+    use std::io::Read;
+    match std::fs::metadata(dot_git) {
+        Ok(meta) if meta.is_dir() => true,
+        Ok(meta) if meta.is_file() => {
+            let mut head = [0; 7];
+            std::fs::File::open(dot_git)
+                .and_then(|mut file| file.read_exact(&mut head))
+                .is_ok_and(|()| &head == b"gitdir:")
+        }
+        _ => false,
     }
 }
 
@@ -391,6 +471,70 @@ mod tests {
         for name in named {
             assert!(REPOSITORY_ENV.contains(&name), "{name} is not scrubbed");
         }
+    }
+
+    /// `outer/.git` and a corpus two levels below it, resolved, so the walk
+    /// and the ceilings compare the same spelling on every platform.
+    fn nested_repository() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let outer = std::fs::canonicalize(dir.path()).unwrap().join("outer");
+        let root = outer.join("a").join("corpus");
+        crate::fs::create_private_dir_all(&root).unwrap();
+        std::fs::create_dir(outer.join(".git")).unwrap();
+        (dir, outer, root)
+    }
+
+    #[test]
+    fn a_repository_is_found_at_or_above_the_root() {
+        let (_dir, outer, root) = nested_repository();
+        assert!(discovers(&root, &[]));
+        assert!(discovers(&outer, &[]));
+        // What is in `.git` is not read: a repository git cannot use is
+        // still one, which is the point.
+        assert!(discovers(&root, &[root.join("elsewhere")]));
+    }
+
+    #[test]
+    fn a_ceiling_stops_the_walk_before_it_but_never_at_the_root() {
+        let (_dir, outer, root) = nested_repository();
+        let a = outer.join("a");
+        assert!(!discovers(&root, std::slice::from_ref(&a)));
+        assert!(!discovers(&root, std::slice::from_ref(&outer)));
+        // The root itself is always looked in, as git looks in its own
+        // working directory whatever the ceilings say.
+        assert!(discovers(&outer, std::slice::from_ref(&outer)));
+    }
+
+    #[test]
+    fn a_gitdir_file_names_a_repository_and_any_other_file_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let dot_git = root.join(".git");
+        crate::fs::write_private_atomic(&dot_git, b"not a pointer\n").unwrap();
+        assert!(!names_a_repository(&dot_git));
+        crate::fs::write_private_atomic(&dot_git, b"gitdir: ../elsewhere/.git\n").unwrap();
+        assert!(names_a_repository(&dot_git));
+        assert!(discovers(&root, &[]));
+    }
+
+    #[test]
+    fn ceilings_are_read_as_git_reads_them() {
+        let (_dir, outer, _root) = nested_repository();
+        let missing = outer.join("missing");
+        let joined = |parts: &[&Path]| std::env::join_paths(parts).unwrap();
+        // Relative and unresolvable entries are dropped; the rest resolve.
+        assert_eq!(
+            ceiling_directories(Some(
+                joined(&[Path::new("relative"), &missing, &outer.join("a").join("..")]).as_os_str()
+            )),
+            std::slice::from_ref(&outer)
+        );
+        // After an empty entry, entries are taken as written.
+        assert_eq!(
+            ceiling_directories(Some(joined(&[Path::new(""), &missing]).as_os_str())),
+            [missing]
+        );
+        assert!(ceiling_directories(None).is_empty());
     }
 
     #[test]

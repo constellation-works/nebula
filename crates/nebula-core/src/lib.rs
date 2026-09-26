@@ -82,7 +82,7 @@ pub use ops::{
     Captured, Citation, Cited, CloseTag, Created, HandedOff, Handoff, Initialized, NewNode,
     Promotion, StatusChange,
 };
-pub use store::{Committed, Corpus, HistoryEntry, Inbox, InboxEntry, Settlement};
+pub use store::{CommitOutcome, Committed, Corpus, HistoryEntry, Inbox, InboxEntry, Settlement};
 pub use triage::Triage;
 
 // Unit tests for the top-level modules, one file each (STD-02 §R19).

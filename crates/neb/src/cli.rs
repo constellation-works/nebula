@@ -23,9 +23,9 @@ use crate::render::{self, json};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use nebula_core::triage::{Action, Step};
 use nebula_core::{
-    Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, Handoff, InboxEntry,
-    NEAR_DEFAULT, NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, ObservatoryRoot, Origin, Promotion,
-    Severity, Status, Triage, check, graph, migrate, model, ops,
+    Citation, CommitOutcome, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, Handoff,
+    InboxEntry, NEAR_DEFAULT, NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, ObservatoryRoot, Origin,
+    Promotion, Severity, Status, Triage, check, graph, migrate, model, ops,
 };
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -704,10 +704,9 @@ enum ConfigSetting {
 
     /// Whether each mutating verb commits the corpus afterwards, when the
     /// root is inside a git work tree. Off by default. The commit stages
-    /// `nodes/`, `inbox/`, `config.yaml` and the generated `.gitignore` only,
-    /// is `neb <verb> <ids>`, never pushes, and is refused (the write kept)
-    /// when something outside the corpus is already staged. `--no-commit`
-    /// skips it once.
+    /// `nodes/`, `inbox/`, `config.yaml` and the generated `.gitignore` and
+    /// commits those paths alone, whatever else is staged, as
+    /// `neb <verb> <ids>`. It never pushes. `--no-commit` skips it once.
     Commit {
         /// `on` or `off`. Omit to read the current setting.
         state: Option<OnOff>,
@@ -1241,10 +1240,18 @@ fn commit(
     if opts.skip {
         return Ok(());
     }
-    let done = ops::commit(corpus, verb, ids)?;
-    if let Some(done) = done.filter(|_| !opts.json) {
-        let short = done.hash.get(..7).unwrap_or(&done.hash);
-        errln!("{}", render::notice(&format!("committed {short}")));
+    match ops::commit(corpus, verb, ids)? {
+        CommitOutcome::Committed(done) if !opts.json => {
+            let short = done.hash.get(..7).unwrap_or(&done.hash);
+            errln!("{}", render::notice(&format!("committed {short}")));
+        }
+        // Asked for and not done: said on stderr in every mode, so the
+        // payload on stdout reads the same either way.
+        CommitOutcome::NotARepository => errln!(
+            "note: not committed: {} is not inside a git work tree",
+            corpus.root().display()
+        ),
+        CommitOutcome::Committed(_) | CommitOutcome::Disabled | CommitOutcome::NothingToCommit => {}
     }
     Ok(())
 }

@@ -131,13 +131,15 @@ What it does, and does not do:
   or from a cron job, and the remote is your off-disk copy.
 - It needs a git identity, like any commit: `git -C "$NEBULA_ROOT" config
   user.name ...` and `user.email` if your global config has none.
-- If something outside the managed corpus paths (`nodes/`, `inbox/`,
-  `config.yaml`, and the generated `.gitignore`) is already staged in the
-  repository, the commit is refused so that a `neb` commit is always exactly
-  the corpus. This includes an unrelated file in a repository rooted at the
-  corpus as well as a change elsewhere in a larger enclosing repository. The
-  write itself is never rolled back; see
+- The commit names the corpus paths as its pathspec, so a `neb` commit is
+  always exactly the corpus. Anything else staged in the repository — an
+  unrelated file in a repository rooted at the corpus, or a change elsewhere
+  in a larger enclosing one — is neither committed nor unstaged, even if it
+  is staged while the commit runs.
+- If git fails, the write itself is never rolled back; see
   [corpus-recovery.md](corpus-recovery.md#symptom-a-verb-writes-but-refuses-to-commit).
+  With no repository at or above the root, each verb that writes says
+  `note: not committed` on stderr and succeeds.
 - If the repository around the corpus ignores it, `neb` says so rather than
   silently commit nothing; the fix is the `git init` at the root above.
 - `--no-commit` on any verb that writes skips the commit once; the next verb that commits

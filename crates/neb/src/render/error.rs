@@ -151,6 +151,9 @@ fn hint(e: &Error) -> Option<String> {
             ..
         } => format!("See the node with:  neb show {node}"),
         Error::InboxEntrySettled { .. } => "See what is still waiting with:  neb inbox".to_owned(),
+        Error::UnknownRevision { .. } => "Pass a hash from the node's history, which \
+             `neb log <id>` lists, or a date as YYYY-MM-DD."
+            .to_owned(),
         Error::NoCorpus(root) => format!("Create one with:  neb init {}", root.display()),
         Error::Locked { .. } => {
             "Another `neb`, an agent session, or the desktop app is mid-write. \
@@ -159,12 +162,6 @@ fn hint(e: &Error) -> Option<String> {
              .lock to remove."
                 .to_owned()
         }
-        Error::StagedElsewhere { root, .. } => format!(
-            "Commit or unstage them, then catch the corpus up:\n  \
-             git -C {0} add nodes inbox config.yaml .gitignore && git -C {0} commit -m \"neb\"\n\n\
-             Or skip the commit next time with --no-commit.",
-            root.display()
-        ),
         Error::GitTimedOut { root, context, .. } if context == "commit" => format!(
             "A git hook is the likely cause: `git commit` runs the repository's \
              pre-commit and commit-msg hooks, and one did not finish. Run it by \

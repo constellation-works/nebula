@@ -5,7 +5,9 @@
 //! file can be exercised by a test without a window. Nothing here shells out
 //! to `neb`: the desktop links the library and sees exactly what the CLI sees.
 
-use nebula_core::{Corpus, Created, Graph, GraphExport, InboxEntry, NodeView, Result, graph, ops};
+use nebula_core::{
+    CommitOutcome, Corpus, Created, Graph, GraphExport, InboxEntry, NodeView, Result, graph, ops,
+};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -32,7 +34,9 @@ pub fn capture(corpus: &Corpus, text: &str) -> Result<InboxEntry> {
     // core operations re-enter it on this thread without waiting again.
     let _lock = corpus.lock_within(WRITE_LOCK_WAIT)?;
     let entry = ops::capture(corpus, text)?;
-    ops::commit(corpus, "capture", &[&entry.id])?;
+    // Not surfaced yet: the desktop has no place to say a write went
+    // uncommitted. DSK1b maps the outcome onto its commit report.
+    let _: CommitOutcome = ops::commit(corpus, "capture", &[&entry.id])?;
     Ok(entry)
 }
 
@@ -45,7 +49,8 @@ pub fn inbox(corpus: &Corpus) -> Result<Vec<InboxEntry>> {
 pub fn drop_entry(corpus: &Corpus, entry: &str) -> Result<InboxEntry> {
     let _lock = corpus.lock_within(WRITE_LOCK_WAIT)?;
     let dropped = ops::drop(corpus, entry)?;
-    ops::commit(corpus, "drop", &[entry])?;
+    // Discarded for now, as in [`capture`].
+    let _: CommitOutcome = ops::commit(corpus, "drop", &[entry])?;
     Ok(dropped)
 }
 
@@ -53,7 +58,8 @@ pub fn drop_entry(corpus: &Corpus, entry: &str) -> Result<InboxEntry> {
 pub fn promote_root(corpus: &Corpus, entry: &str) -> Result<Created> {
     let _lock = corpus.lock_within(WRITE_LOCK_WAIT)?;
     let created = ops::promote(corpus, entry, &ops::Promotion::default(), 0)?;
-    ops::commit(corpus, "promote", &[entry, &created.doc.node.id])?;
+    // Discarded for now, as in [`capture`].
+    let _: CommitOutcome = ops::commit(corpus, "promote", &[entry, &created.doc.node.id])?;
     Ok(created)
 }
 

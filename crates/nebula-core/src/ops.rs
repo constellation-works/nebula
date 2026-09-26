@@ -36,7 +36,7 @@ use crate::fs::create_private_dir_all;
 use crate::graph::{self, Graph, Neighbour};
 use crate::lock::CorpusLock;
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
-use crate::store::{self, Committed, Corpus, InboxEntry};
+use crate::store::{self, CommitOutcome, Corpus, InboxEntry};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -902,13 +902,14 @@ pub fn set_commit(corpus: &mut Corpus, enabled: bool) -> Result<CommitSetting> {
 
 /// Commit the corpus after a successful write, as `neb <verb> <ids>`.
 ///
-/// Does nothing, and says so with `None`, unless `commit: true` is set in
-/// `config.yaml` and the root is inside a git work tree. Stages only
-/// `nodes/`, `inbox/`, `config.yaml` and the generated `.gitignore` under the
-/// root, never pushes, and refuses with [`Error::StagedElsewhere`] rather than
-/// sweep up something staged outside the corpus. Called after the write it
-/// records, which stays on disk whatever happens here.
-pub fn commit(corpus: &Corpus, verb: &str, ids: &[&str]) -> Result<Option<Committed>> {
+/// Does nothing unless `commit: true` is set in `config.yaml` and the root is
+/// inside a git work tree, and the [`CommitOutcome`] says which of those it
+/// was. Stages and commits only `nodes/`, `inbox/`, `config.yaml` and the
+/// generated `.gitignore` under the root, by pathspec, so anything else staged
+/// in the repository stays staged and out of the commit. Never pushes. A
+/// repository git cannot read is [`Error::Git`], not a skipped commit. Called
+/// after the write it records, which stays on disk whatever happens here.
+pub fn commit(corpus: &Corpus, verb: &str, ids: &[&str]) -> Result<CommitOutcome> {
     // Two commits racing would race on git's index. Taking the lock here
     // covers a caller that commits on its own; a caller that already holds it
     // from the write this records re-enters, which is the point.
