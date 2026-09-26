@@ -42,7 +42,10 @@ pub enum Error {
     #[error("no corpus at {}", .0.display())]
     NoCorpus(PathBuf),
 
-    /// A history query requires the corpus to live inside a git work tree.
+    /// A history query needs a git work tree around the corpus, and there is
+    /// none: no repository at or above the root, or git says the root is
+    /// outside its work tree. A repository git cannot read is [`Error::Git`]
+    /// instead.
     #[error("{} is not inside a git work tree", .0.display())]
     NotGitWorkTree(PathBuf),
 
@@ -52,6 +55,14 @@ pub enum Error {
         /// The node requested.
         node: String,
         /// The hash or date requested.
+        revision: String,
+    },
+
+    /// The requested commit does not exist in the corpus's repository, as
+    /// distinct from a commit that exists but did not hold the node.
+    #[error("no commit `{revision}` in the corpus's repository")]
+    UnknownRevision {
+        /// The hash requested.
         revision: String,
     },
 
@@ -356,28 +367,13 @@ pub enum Error {
         root: PathBuf,
     },
 
-    /// The commit after a write was refused because something outside the
-    /// corpus was already staged, and a `neb` commit must be exactly the
-    /// corpus. The write itself is in place: git never rolls back a write.
-    #[error(
-        "{} has staged changes outside the corpus ({}); the write is in place and nothing was committed",
-        .root.display(),
-        .paths.join(", ")
-    )]
-    StagedElsewhere {
-        /// The corpus root.
-        root: PathBuf,
-        /// What is staged, relative to the repository's top level.
-        paths: Vec<String>,
-    },
-
     /// `commit` is on, but the repository containing the corpus ignores it,
     /// so there is nothing git would ever record.
     #[error("{} is ignored by the git repository that contains it; nothing can be committed", .0.display())]
     CorpusIgnored(PathBuf),
 
-    /// A git command did not succeed. The write it was meant to record is in
-    /// place.
+    /// A git command did not succeed, or git could not read the repository
+    /// around the corpus. A write it was meant to record is in place.
     #[error("git {context} failed in {}: {stderr}", .root.display())]
     Git {
         /// The corpus root the command ran in.
@@ -489,6 +485,7 @@ impl Error {
         NoCorpus => "no_corpus",
         NotGitWorkTree => "not_git_work_tree",
         NoNodeAtRevision => "no_node_at_revision",
+        UnknownRevision => "unknown_revision",
         EmptyRoot => "empty_root",
         RootConfigConflict => "root_config_conflict",
         RelativeObservatoryRoot => "relative_observatory_root",
@@ -523,7 +520,6 @@ impl Error {
         UnsafeId => "unsafe_id",
         IdMismatch => "id_mismatch",
         Locked => "locked",
-        StagedElsewhere => "staged_elsewhere",
         CorpusIgnored => "corpus_ignored",
         Git => "git",
         GitTimedOut => "git_timed_out",

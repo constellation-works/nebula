@@ -20,7 +20,6 @@
 
 use crate::config::{self, Config, Declared};
 use crate::error::{Error, Result};
-use crate::git::RunError;
 use crate::lock::{CorpusLock, LOCK_FILE};
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
 use crate::store::{self, Corpus};
@@ -468,15 +467,14 @@ fn in_file(e: Error, path: &Path) -> Error {
 
 /// A corpus under git with uncommitted changes is refused, so the migration
 /// lands as its own commit and the pre-migration state stays recoverable.
-/// A corpus that is not a git repository is migrated as is.
+/// A corpus with no repository at or above it is migrated as is.
+///
+/// Fails closed (integrity, STD-02 §R31): inside a repository, git that
+/// cannot say whether the tree is clean refuses the migration, because
+/// unknown is not clean and the rewrite that follows touches every node.
 fn refuse_dirty_tree(root: &Path) -> Result<()> {
-    match store::inside_work_tree(root) {
-        Ok(true) => {}
-        // No git on PATH, or no repository: nothing to protect against.
-        Ok(false) | Err(RunError::Start(_)) => return Ok(()),
-        // git ran and gave no answer: whether the tree is dirty is unknown,
-        // which is not the same as clean.
-        Err(error) => return Err(error.into_error(root, "rev-parse")),
+    if !store::inside_work_tree(root)? {
+        return Ok(());
     }
     // The write lock is a fact about which process is writing, not corpus
     // content, and it is untracked in a corpus that is its own repository.
@@ -485,11 +483,11 @@ fn refuse_dirty_tree(root: &Path) -> Result<()> {
     let exclude = format!(":(exclude){LOCK_FILE}");
     let status = store::git(root, &["status", "--porcelain", "--", ".", &exclude])?;
     if !status.status.success() {
-        return Err(Error::corpus(format!(
-            "git status failed in {}:\n{}",
-            root.display(),
-            status.stderr.text()
-        )));
+        return Err(Error::Git {
+            root: root.to_path_buf(),
+            context: "status".to_string(),
+            stderr: status.stderr.text(),
+        });
     }
     if !status.stdout.is_empty() {
         return Err(Error::corpus(format!(

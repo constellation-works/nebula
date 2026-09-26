@@ -2,7 +2,7 @@
 //! `session` functions the commands call. The line written is the one
 //! `neb capture` writes, so `neb inbox` lists it too.
 
-use nebula_core::{Corpus, Error, ops};
+use nebula_core::{CommitOutcome, Corpus, Error, ops};
 use nebula_desktop::session;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -72,9 +72,10 @@ fn capture_commits_each_entry_when_enabled() {
     git(&["config", "user.email", "neb-test@example.invalid"]);
     git(&["config", "commit.gpgsign", "false"]);
     ops::set_commit(&mut corpus, true).unwrap();
-    ops::commit(&corpus, "config", &["commit"])
-        .unwrap()
-        .unwrap();
+    assert!(matches!(
+        ops::commit(&corpus, "config", &["commit"]).unwrap(),
+        CommitOutcome::Committed(_)
+    ));
 
     let first = session::capture(&corpus, "first thought").unwrap();
     assert_eq!(
@@ -102,7 +103,10 @@ fn drop_and_promote_use_core_settlement_and_cli_commit_messages() {
     git(&["config", "user.email", "neb-test@example.invalid"]);
     git(&["config", "commit.gpgsign", "false"]);
     ops::set_commit(&mut corpus, true).unwrap();
-    ops::commit(&corpus, "config", &["commit"]).unwrap();
+    assert!(matches!(
+        ops::commit(&corpus, "config", &["commit"]).unwrap(),
+        CommitOutcome::Committed(_)
+    ));
 
     let dropped = session::capture(&corpus, "discard this").unwrap();
     assert_eq!(

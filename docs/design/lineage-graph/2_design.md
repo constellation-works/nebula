@@ -75,7 +75,12 @@ The variables that point git at another repository — the fifteen
 them — are removed first, so a `neb` run from inside another repository's hook
 still commits to, and reads history from, the repository around the corpus.
 The rest of the environment passes through, so the user's identity, signing
-and hooks still apply.
+and hooks still apply. Whether the corpus has a repository at all is decided
+from the file system — a `.git` at or above the root, below
+`GIT_CEILING_DIRECTORIES` — never from git's answer, so a repository git
+cannot read is a `git` refusal rather than "not a work tree" and a commit
+silently skipped. The commit names the corpus paths as its pathspec, so work
+staged elsewhere in the repository stays staged and out of it.
 
 ## Tags, not a declared list
 

@@ -37,9 +37,12 @@ git -C "$NEBULA_ROOT" commit -m "pre-migration snapshot"
 neb migrate
 ```
 
-A corpus that is not a git repository at all is migrated as is — put it under
-git first if you want the safety net (see
-[corpus-setup.md](corpus-setup.md)).
+A corpus with no git repository at or above it is migrated as is — put it
+under git first if you want the safety net (see
+[corpus-setup.md](corpus-setup.md)). A repository git cannot read is not the
+same thing: when git cannot say whether the tree is clean (`git rev-parse
+failed` or `git status failed`), `neb migrate` refuses and rewrites nothing.
+Repair the repository, then run it again.
 
 ## The already-at-v2 refusal
 

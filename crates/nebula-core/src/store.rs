@@ -375,8 +375,8 @@ impl Corpus {
         }
     }
 
-    /// Where the corpus lives.
-    pub(crate) fn root(&self) -> &Path {
+    /// Where the corpus lives, as it was given.
+    pub fn root(&self) -> &Path {
         &self.root
     }
 
@@ -496,91 +496,51 @@ impl Corpus {
     ///
     /// Stages `nodes/`, `inbox/`, `config.yaml` and the generated `.gitignore`
     /// under the root and nothing else — not `.lock`, which records nothing
-    /// about the corpus — and commits as `neb <verb> <ids>`. `None` when the
-    /// setting is off, the root is not under git, or the write left nothing to
-    /// record. Refused, as [`Error::StagedElsewhere`], when the index already
-    /// holds something outside the corpus: a `neb` commit is exactly the
-    /// corpus, and folding a stranger's staged work into one would misfile it.
-    /// The write is on disk before this runs and stays there whatever git says.
-    /// Never pushes.
+    /// about the corpus — and commits exactly those paths as
+    /// `neb <verb> <ids>`. The commit names them as its pathspec, so whatever
+    /// else is staged in the repository, before this runs or while it does,
+    /// is neither committed nor unstaged (STD-03 §R28). The write is on disk
+    /// before this runs and stays there whatever git says. Never pushes.
     ///
     /// The setting is read from disk under the caller's lock rather than from
     /// the snapshot: whether this write is recorded is a question about the
     /// configuration in force, and a writer that waited its turn opened before
     /// the writer ahead of it had finished saying what that configuration is.
-    pub(crate) fn commit(&self, verb: &str, ids: &[&str]) -> Result<Option<Committed>> {
+    pub(crate) fn commit(&self, verb: &str, ids: &[&str]) -> Result<CommitOutcome> {
         if !self.current_config()?.commit {
-            return Ok(None);
+            return Ok(CommitOutcome::Disabled);
         }
         let root = &self.root;
-        if !inside_work_tree(root).map_err(|e| e.into_error(root, "rev-parse"))? {
-            return Ok(None);
+        // Fail closed (integrity, STD-02 §R31): a repository git cannot read
+        // is an error here, never a reason to leave the write unrecorded
+        // without a word.
+        if !inside_work_tree(root)? {
+            return Ok(CommitOutcome::NotARepository);
         }
-        // The corpus is gitignored by the repository around it, which is
-        // exactly the setup a private repository at the corpus root fixes.
-        let ignored = git(root, &["check-ignore", "-q", "--", "nodes"])?;
-        match ignored.status.code() {
-            Some(0) => return Err(Error::CorpusIgnored(root.clone())),
-            Some(1) => {}
-            _ => {
-                return Err(git_failed(root, "check-ignore", &ignored.stderr.text()));
-            }
-        }
-        let prefix = git_ok(root, &["rev-parse", "--show-prefix"])?;
-        let prefix = prefix.trim();
-        // The whole index, not just the part under the root: a path staged
-        // elsewhere in the repository is exactly what the refusal is for.
-        // Paths come back relative to the top level, hence the prefix.
-        // `-z` both separates names unambiguously and disables Git's
-        // `core.quotePath` quoting. Newlines therefore stay inside one record,
-        // and non-ASCII names are checked as the paths they actually name.
-        let staged = git(
-            root,
-            &["diff", "--cached", "--name-only", "--no-renames", "-z"],
-        )?;
-        if !staged.status.success() {
-            return Err(git_failed(root, "diff", &staged.stderr.text()));
-        }
-        let outside: Vec<String> = staged
-            .stdout_whole(root, "diff")?
-            .split(|byte| *byte == b'\0')
-            .filter(|path| !path.is_empty())
-            .map(|path| String::from_utf8_lossy(path).into_owned())
-            .filter(|path| !is_corpus_path(prefix, path))
-            .collect();
-        if !outside.is_empty() {
-            return Err(Error::StagedElsewhere {
-                root: root.clone(),
-                paths: outside,
-            });
-        }
-
-        // Only paths that exist can be named: `inbox/` appears on the first
-        // capture and a pathspec that matches nothing is a git error.
-        let present: Vec<&str> = COMMIT_PATHS
-            .iter()
-            .copied()
-            .filter(|p| root.join(p).exists())
-            .collect();
-        if present.is_empty() {
-            return Ok(None);
+        refuse_ignored_corpus(root)?;
+        let paths = commit_pathspec(root);
+        if paths.is_empty() {
+            return Ok(CommitOutcome::NothingToCommit);
         }
         let mut add = vec!["add", "-A", "--"];
-        add.extend(present);
+        add.extend(&paths);
         git_ok(root, &add)?;
-        let staged = git(root, &["diff", "--cached", "--quiet"])?;
-        match staged.status.code() {
-            Some(0) => return Ok(None), // the write changed nothing git can see
-            Some(1) => {}
-            _ => return Err(git_failed(root, "diff", &staged.stderr.text())),
+        let changed = staged_paths(root, &paths)?;
+        if changed.is_empty() {
+            // The write changed nothing git can see.
+            return Ok(CommitOutcome::NothingToCommit);
         }
         let message = match ids {
             [] => format!("neb {verb}"),
             ids => format!("neb {verb} {}", ids.join(" ")),
         };
-        git_ok(root, &["commit", "-q", "-m", &message])?;
+        // `--only` commits the named paths and nothing else the index holds,
+        // so work someone else stages meanwhile stays staged and theirs.
+        let mut commit = vec!["commit", "-q", "-m", &message, "--only", "--"];
+        commit.extend(&changed);
+        git_ok(root, &commit)?;
         let hash = git_ok(root, &["rev-parse", "HEAD"])?.trim().to_string();
-        Ok(Some(Committed { hash, message }))
+        Ok(CommitOutcome::Committed(Committed { hash, message }))
     }
 
     /// Path of a node file, whether or not it exists.
@@ -682,24 +642,29 @@ impl Corpus {
                 "invalid --at value `{at}`: expected a YYYY-MM-DD date or git revision"
             )));
         };
+        let absent = || Error::NoNodeAtRevision {
+            node: id.to_string(),
+            revision: at.to_string(),
+        };
         if revision.is_empty() {
-            return Err(Error::NoNodeAtRevision {
-                node: id.to_string(),
-                revision: at.to_string(),
-            });
+            return Err(absent());
         }
 
-        let prefix = git_ok(&self.root, &["rev-parse", "--show-prefix"])?;
-        let object = format!("{revision}:{}nodes/{id}.md", prefix.trim());
-        let shown = git(&self.root, &["show", "--no-ext-diff", "--format=", &object])?;
-        if !shown.status.success() {
-            return Err(Error::NoNodeAtRevision {
-                node: id.to_string(),
+        // Three different answers, told apart by git's exit status rather
+        // than its words: no such commit, no such node in that commit, and
+        // git failing (STD-02 §R30).
+        if !self.resolves(&format!("{revision}^{{commit}}"))? {
+            return Err(Error::UnknownRevision {
                 revision: at.to_string(),
             });
         }
-        let text = String::from_utf8_lossy(shown.stdout_whole(&self.root, "show")?);
-        let doc = model::parse(&text).map_err(|e| match e {
+        let prefix = git_ok(&self.root, &["rev-parse", "--show-prefix"])?;
+        let object = format!("{revision}:{}nodes/{id}.md", prefix.trim());
+        if !self.resolves(&object)? {
+            return Err(absent());
+        }
+        let shown = git_ok(&self.root, &["show", "--no-ext-diff", "--format=", &object])?;
+        let doc = model::parse(&shown).map_err(|e| match e {
             // Same reporting as a read from disk: an id that came out of a
             // file is a fact about that file.
             Error::UnsafeId(id) => Error::IdMismatch {
@@ -719,10 +684,19 @@ impl Corpus {
         Ok(doc)
     }
 
+    /// Whether `object` names something in the corpus's repository:
+    /// `false` when git says it does not, [`Error::Git`] when git failed.
+    fn resolves(&self, object: &str) -> Result<bool> {
+        let out = git(&self.root, &["rev-parse", "--verify", "--quiet", object])?;
+        match out.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(git_failed(&self.root, "rev-parse", &out.stderr.text())),
+        }
+    }
+
     fn require_git(&self) -> Result<()> {
-        if inside_work_tree(&self.root)
-            .map_err(|error| error.into_error(&self.root, "rev-parse"))?
-        {
+        if inside_work_tree(&self.root)? {
             Ok(())
         } else {
             Err(Error::NotGitWorkTree(self.root.clone()))
@@ -1155,6 +1129,22 @@ pub struct Committed {
     pub message: String,
 }
 
+/// What the commit after a write did. The write is on disk before the commit
+/// runs, so it stays there whichever this is.
+#[must_use = "a write left uncommitted is a fact to report, not to drop"]
+#[derive(Debug, Clone)]
+pub enum CommitOutcome {
+    /// The corpus paths were committed, as `neb <verb> <ids>`.
+    Committed(Committed),
+    /// `config.yaml` does not ask for commits.
+    Disabled,
+    /// Commits are on, but there is no git repository at or above the root,
+    /// so the write was not recorded.
+    NotARepository,
+    /// The write left nothing git would record.
+    NothingToCommit,
+}
+
 /// One commit that changed a node.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -1177,18 +1167,49 @@ pub struct HistoryEntry {
 const GITIGNORE_FILE: &str = ".gitignore";
 const COMMIT_PATHS: [&str; 4] = ["nodes", "inbox", config::FILE, GITIGNORE_FILE];
 
-/// Whether a path from a NUL-delimited `git diff --name-only -z`, relative to
-/// the repository's top level, is one a `neb` commit may contain. `prefix` is
-/// the root's own position under that top level (`git rev-parse
-/// --show-prefix`), empty when the corpus root is the repository.
-fn is_corpus_path(prefix: &str, path: &str) -> bool {
-    let Some(rest) = path.strip_prefix(prefix) else {
-        return false;
-    };
-    rest == config::FILE
-        || rest == GITIGNORE_FILE
-        || rest.starts_with("nodes/")
-        || rest.starts_with("inbox/")
+/// The pathspec a `neb` commit stages and commits: the [`COMMIT_PATHS`] that
+/// exist under `root`, relative to it. Only those, because `inbox/` appears
+/// on the first capture and a pathspec that matches nothing is a git error.
+fn commit_pathspec(root: &Path) -> Vec<&'static str> {
+    COMMIT_PATHS
+        .iter()
+        .copied()
+        .filter(|path| root.join(path).exists())
+        .collect()
+}
+
+/// Refuse a corpus that the repository around it ignores: `commit` on would
+/// otherwise record nothing, forever, without a word. A private repository at
+/// the corpus root is the fix.
+fn refuse_ignored_corpus(root: &Path) -> Result<()> {
+    let ignored = git(root, &["check-ignore", "-q", "--", "nodes"])?;
+    match ignored.status.code() {
+        Some(0) => Err(Error::CorpusIgnored(root.to_path_buf())),
+        Some(1) => Ok(()),
+        _ => Err(git_failed(root, "check-ignore", &ignored.stderr.text())),
+    }
+}
+
+/// The entries of `pathspec` under which the index holds a change `HEAD`
+/// does not: what a `neb` commit names, since `git commit --only` refuses an
+/// entry that matches nothing git knows, such as the empty `nodes/` of a new
+/// corpus. Each entry is asked about alone and nothing else is: something
+/// staged elsewhere is not the corpus's to commit, so it is not something to
+/// commit either. The entries are paths, never `:(exclude)` magic, which
+/// asked about alone would mean everything else: a file to keep out of a
+/// commit is kept out of the `git add` before it, since `--only` commits only
+/// paths git already tracks.
+fn staged_paths<'a>(root: &Path, pathspec: &[&'a str]) -> Result<Vec<&'a str>> {
+    let mut staged = Vec::new();
+    for &path in pathspec {
+        let diff = git(root, &["diff", "--cached", "--quiet", "--", path])?;
+        match diff.status.code() {
+            Some(0) => {}
+            Some(1) => staged.push(path),
+            _ => return Err(git_failed(root, "diff", &diff.stderr.text())),
+        }
+    }
+    Ok(staged)
 }
 
 /// Keep the process-local advisory lock out of the corpus repository.
@@ -1259,16 +1280,22 @@ fn git_failed(root: &Path, context: &str, stderr: &str) -> Error {
     }
 }
 
-/// Whether the root is inside a git work tree. `Err` only when git gave no
-/// answer: [`git::RunError::Start`] when it could not be run at all, which a
-/// caller that merely wants to know may treat as "no".
-pub(crate) fn inside_work_tree(root: &Path) -> std::result::Result<bool, git::RunError> {
-    let out = git::run_git(root, &["rev-parse", "--is-inside-work-tree"])?;
-    Ok(out.status.success()
-        && out
-            .stdout
-            .whole()
-            .is_some_and(|stdout| String::from_utf8_lossy(stdout).trim() == "true"))
+/// Whether the root is inside a git work tree.
+///
+/// `false` when there is no repository to find
+/// ([`git::repository_expected`]), without running git, or when git found
+/// one and says the root is not in its work tree. With a repository there, git
+/// failing — not starting, or unable to read it — is [`Error::Git`], never
+/// "not a work tree" (STD-02 §R29).
+pub(crate) fn inside_work_tree(root: &Path) -> Result<bool> {
+    if !git::repository_expected(root) {
+        return Ok(false);
+    }
+    let out = git(root, &["rev-parse", "--is-inside-work-tree"])?;
+    if !out.status.success() {
+        return Err(git_failed(root, "rev-parse", &out.stderr.text()));
+    }
+    Ok(String::from_utf8_lossy(out.stdout_whole(root, "rev-parse")?).trim() == "true")
 }
 
 /// Every capture still waiting to be promoted or dropped.
