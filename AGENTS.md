@@ -66,7 +66,12 @@ given.
 Every file nebula writes goes through `nebula_core::fs`: `write_private_atomic`
 (temp file, fsync, rename, directory fsync, `0600`) and `create_private_dir_all`
 (`0700`). `clippy.toml` refuses `std::fs::write` and `std::fs::create_dir_all`
-elsewhere; test fixtures opt out with an `#[allow]` that gives a reason. Take
+elsewhere; test fixtures opt out with an `#[allow]` that gives a reason. A
+file below the corpus root is opened by name only through `fs::open_regular`
+or the readers built on it (`read_regular_text`, `read_regular_bytes`), which
+refuse a symlink, a FIFO, a device or a directory as `NotRegularFile` before
+reading or writing anything; the root itself may be reached through a
+symlink, the entries beneath it may not. Take
 the machine-setting lock (`Corpus::lock_machine_settings`) before any corpus
 lock, never after one.
 

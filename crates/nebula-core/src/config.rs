@@ -189,8 +189,9 @@ impl Config {
 #[derive(Debug)]
 pub(crate) enum Declared {
     /// There is no `config.yaml`: looking it up said `NotFound`, and nothing
-    /// else does. A path that exists but cannot be followed or read (a
-    /// dangling symlink, a permission) is an [`Error::IoAt`] naming it.
+    /// else does. An entry that is not a regular file (a symlink, dangling
+    /// or not, a FIFO, a directory) is [`Error::NotRegularFile`], and one
+    /// that cannot be read (a permission) an [`Error::IoAt`] naming it.
     Missing,
     /// This build's schema, read with the strict model.
     Current {
@@ -228,14 +229,12 @@ pub(crate) fn declared(root: &Path) -> Result<Declared> {
     // Absent is decided on the entry itself, without following it: a read
     // alone says `NotFound` for a symlink to nowhere too, and reading that as
     // "no config" is what let a dangling link be replaced with a fabricated
-    // file (STD-02 §R29).
-    match std::fs::symlink_metadata(&path) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Declared::Missing),
-        Err(error) => return Err(Error::io_at("inspecting", &path, error)),
-    }
-    let raw =
-        std::fs::read_to_string(&path).map_err(|error| Error::io_at("reading", &path, error))?;
+    // file (STD-02 §R29). Anything there but a regular file is refused before
+    // it is read, so a symlink cannot hand the corpus another's settings and
+    // a FIFO cannot hang every verb that opens it (STD-05 §R7).
+    let Some(raw) = crate::fs::read_regular_text(&path)? else {
+        return Ok(Declared::Missing);
+    };
     // Probe the version before the strict parse, so a v1 file with its
     // extra keys gets the migrate hint rather than an unknown-field error.
     let version = schema_version_of(&raw)

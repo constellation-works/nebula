@@ -91,10 +91,10 @@ pub(crate) fn pending_path(root: &Path) -> PathBuf {
 /// reading it as absent would expose the half-written state it guards.
 pub(crate) fn read(root: &Path) -> Result<Option<PendingWrite>> {
     let path = pending_path(root);
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(Error::io_at("reading", &path, error)),
+    // A regular file only: a symlink or a FIFO planted here is refused
+    // rather than followed or waited on (STD-05 §R7).
+    let Some(bytes) = crate::fs::read_regular_bytes(&path, crate::fs::Links::Refuse)? else {
+        return Ok(None);
     };
     serde_json::from_slice(&bytes)
         .map(Some)

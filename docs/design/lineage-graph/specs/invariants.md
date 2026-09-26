@@ -191,14 +191,25 @@ alias, and aliases are refused at both doors, before anything is written. A
 hard link `nodes/safe.md` to `nodes/victim.md` was once accepted by `load`
 and was a split waiting to happen: a write replaces the file the id names
 through a rename, the link keeps the old bytes under the other name, and the
-next load of either refuses. A symlink `nodes/alias.md` stayed linked across
-the write but made a scan read the node twice. Both are now `IdMismatch`,
-naming the alias, when the node is reached through the alias or by a scan. A
-hard link is refused through the node's own name too, since that write would
-split it; a symlink is not, since the write leaves it pointing at the new
-file. Only a link a scan would read counts: a backup
-hard-linked from outside `nodes/` is not a second name the corpus sees. The
-Unicode respelling survives because it is one entry however it is typed.
+next load of either refuses. A symlink `nodes/alias.md` made a scan read the
+node twice. Both are now `IdMismatch`, naming the alias, when the node is
+reached through the alias or by a scan. A hard link is refused through the
+node's own name too, since that write would split it. Only a link a scan
+would read counts: a backup hard-linked from outside `nodes/` is not a second
+name the corpus sees. The Unicode respelling survives because it is one entry
+however it is typed.
+
+A node is a regular file, and a symlink is refused at every door. A write
+would not follow a symlinked node but replace it with a regular file, leaving
+its target behind, so a link that looked like a way to keep a node elsewhere
+silently forked it. A symlink that opens another node's file beside it is
+that node's alias, as above; any other symlink, dangling or not, and a FIFO,
+a device or a directory named like a node, is `NotRegularFile`, naming the
+entry, by `load`, by a scan and so by `check`, and by every verb that writes.
+Nothing is read through it, so a link to `/dev/zero` cannot exhaust memory
+and a FIFO cannot hang a read. The same rule holds for `config.yaml`, `.lock`,
+`.pending` and the inbox's month files; see "The root as spelled, every entry
+below it judged physically" in [4_decisions.md](../4_decisions.md).
 
 ## Errors and warnings
 
