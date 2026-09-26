@@ -59,6 +59,8 @@ beforeEach(() => {
   mocked.onCorpusChanged.mockResolvedValue(() => {});
   mocked.openInEditor.mockResolvedValue(undefined);
   mocked.reload.mockResolvedValue(undefined);
+  mocked.captureShortcut.mockResolvedValue("CmdOrCtrl+Shift+N");
+  mocked.graphSearch.mockResolvedValue([]);
   mocked.node.mockImplementation(async (id) => ({
     node: { id, title: `Idea ${id}`, status: "seed", created: "", updated: "" },
     body: "",
@@ -157,55 +159,78 @@ describe("GraphView", () => {
     expect(mocked.graph).toHaveBeenCalledTimes(2);
   });
 
-  it("filters by title and by tag before layout, and says when nothing matches", async () => {
+  it("dims nonmatches without losing edges, then steps through matches and focuses each", async () => {
+    mocked.graph.mockResolvedValue(synthetic(10));
+    mocked.graphSearch.mockResolvedValue(["n1", "n3"]);
+    render(<GraphView />);
+    await waitFor(() => expect(drawnNodes()).toHaveLength(10));
+    const edges = canvas().querySelectorAll("path.edge").length;
+    const initial = canvas().querySelector("g.scene")!.getAttribute("transform");
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search graph" }), { target: { value: "evidence" } });
+    await waitFor(() => expect(mocked.graphSearch).toHaveBeenCalledWith("evidence"));
+    await waitFor(() => expect(screen.getByText("2 of 10 nodes", { exact: false })).toBeInTheDocument());
+    expect(drawnNodes()).toHaveLength(10);
+    expect(canvas().querySelectorAll("path.edge")).toHaveLength(edges);
+    expect(canvas().querySelector('g.node[data-id="n0"]')).toHaveClass("node--filter-dim");
+    expect(canvas().querySelector('g.node[data-id="n1"]')).not.toHaveClass("node--filter-dim");
+    fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+    expect(canvas().querySelector('g.node[data-id="n1"]')).toHaveClass("node--selected");
+    const first = canvas().querySelector("g.scene")!.getAttribute("transform");
+    expect(first).not.toBe(initial);
+    fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+    expect(canvas().querySelector('g.node[data-id="n3"]')).toHaveClass("node--selected");
+    expect(canvas().querySelector("g.scene")!.getAttribute("transform")).not.toBe(first);
+    fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
+    expect(canvas().querySelector('g.node[data-id="n1"]')).toHaveClass("node--selected");
+  });
+
+  it("combines tags with search and retains the canvas when no node matches", async () => {
     mocked.graph.mockResolvedValue(synthetic(10));
     render(<GraphView />);
     await waitFor(() => expect(drawnNodes()).toHaveLength(10));
-
-    fireEvent.change(screen.getByLabelText("Filter by title"), { target: { value: "number 1" } });
-    await waitFor(() => expect(drawnNodes()).toHaveLength(1));
-    expect(screen.getByText("1 of 10 nodes", { exact: false })).toBeInTheDocument();
-    // n1's only edge went to n0, which is hidden, so no edge is drawn.
-    expect(canvas().querySelectorAll("path.edge")).toHaveLength(0);
-
-    fireEvent.change(screen.getByLabelText("Filter by title"), { target: { value: "" } });
-    await waitFor(() => expect(drawnNodes()).toHaveLength(10));
     fireEvent.click(within(screen.getByRole("list", { name: "Filter by tag" })).getByRole("button", { name: /^t2/ }));
-    await waitFor(() => expect(drawnNodes()).toHaveLength(2));
+    expect(canvas().querySelectorAll("g.node--filter-dim")).toHaveLength(8);
     fireEvent.click(within(screen.getByRole("list", { name: "Filter by tag" })).getByRole("button", { name: /^t3/ }));
     expect(await screen.findByText("No nodes match the filter.")).toBeInTheDocument();
+    expect(drawnNodes()).toHaveLength(10);
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
-    await waitFor(() => expect(drawnNodes()).toHaveLength(10));
+    expect(canvas().querySelector("g.node--filter-dim")).toBeNull();
   });
 
-  it("debounces title edits and discards a layout superseded by newer input", async () => {
+  it("debounces search and does not re-layout on filter changes", async () => {
     mocked.graph.mockResolvedValue(synthetic(10));
-    const layout = layoutClient.layoutGraph;
     const layoutSpy = vi.spyOn(layoutClient, "layoutGraph");
     render(<GraphView />);
     await waitFor(() => expect(drawnNodes()).toHaveLength(10));
     expect(layoutSpy).toHaveBeenCalledTimes(1);
-
-    const stale = deferred<Awaited<ReturnType<typeof layoutClient.layoutGraph>>>();
-    layoutSpy.mockImplementationOnce(() => stale.promise).mockImplementation(layout);
-    vi.useFakeTimers();
-    const input = screen.getByLabelText("Filter by title");
+    const input = screen.getByRole("searchbox", { name: "Search graph" });
     fireEvent.change(input, { target: { value: "number" } });
-    await act(async () => vi.advanceTimersByTimeAsync(150));
     fireEvent.change(input, { target: { value: "number 1" } });
-    await act(async () => vi.advanceTimersByTimeAsync(249));
+    await waitFor(() => expect(mocked.graphSearch).toHaveBeenCalledWith("number 1"));
+    expect(mocked.graphSearch).toHaveBeenCalledTimes(1);
     expect(layoutSpy).toHaveBeenCalledTimes(1);
-    await act(async () => vi.advanceTimersByTimeAsync(1));
-    expect(layoutSpy).toHaveBeenCalledTimes(2);
-
-    vi.useRealTimers();
-    fireEvent.change(input, { target: { value: "number 2" } });
-    await act(async () => stale.resolve({} as Awaited<ReturnType<typeof layoutClient.layoutGraph>>));
     expect(drawnNodes()).toHaveLength(10);
-    expect(screen.queryByRole("alert")).toBeNull();
-    await waitFor(() => expect(drawnNodes()).toHaveLength(1));
-    expect(canvas().querySelector('g.node[data-id="n2"]')).toBeInTheDocument();
-    expect(layoutSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("isolates the selected node with ancestors and descendants at their original positions", async () => {
+    mocked.graph.mockResolvedValue(synthetic(8));
+    render(<GraphView />);
+    await waitFor(() => expect(drawnNodes()).toHaveLength(8));
+    const before = canvas().querySelector('g.node[data-id="n3"]')!.getAttribute("transform");
+    fireEvent.click(canvas().querySelector('g.node[data-id="n3"]')!);
+    fireEvent.click(screen.getByRole("button", { name: "Lineage only" }));
+    expect([...drawnNodes()].map((n) => n.getAttribute("data-id"))).toEqual(["n0", "n1", "n3", "n7"]);
+    expect(canvas().querySelector('g.node[data-id="n3"]')).toHaveAttribute("transform", before);
+    expect(canvas().querySelectorAll("path.edge")).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "Lineage only" }));
+    expect(drawnNodes()).toHaveLength(8);
+  });
+
+  it("shows graph interactions and the configured capture shortcut", async () => {
+    mocked.graph.mockResolvedValue(synthetic(2));
+    render(<GraphView />);
+    expect(await screen.findByText(/Capture: CmdOrCtrl\+Shift\+N/)).toHaveTextContent("Double-click a node to open");
+    expect(screen.getByText(/Orange ancestors/)).toHaveTextContent("Ctrl+scroll to zoom");
   });
 
   it("pans on plain wheel and zooms around the pointer on ctrl-wheel", async () => {

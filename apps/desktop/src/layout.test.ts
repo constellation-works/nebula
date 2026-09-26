@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  filterGraph,
+  matchingIds,
   fromElkLayout,
   lineage,
   NODE_HEIGHT,
@@ -63,21 +63,19 @@ describe("toElkGraph", () => {
   });
 });
 
-describe("filterGraph", () => {
-  it("matches titles case-insensitively and drops the edges of hidden nodes", () => {
-    const out = filterGraph(graph, { query: "REFINE", tags: [] });
-    expect(out.nodes.map((n) => n.id)).toEqual(["a", "b"]);
-    // a→root and b↔c went with root and c; b→a stays.
-    expect(out.edges).toEqual([{ from: "b", type: "refines", to: "a" }]);
+describe("matchingIds", () => {
+  it("intersects search results with tags without changing the graph", () => {
+    expect([...matchingIds(graph, { searchIds: new Set(["a", "b"]), tags: ["capture"] })]).toEqual(["a"]);
+    expect(graph.edges).toHaveLength(6);
   });
 
   it("requires every selected tag", () => {
-    expect(filterGraph(graph, { query: "", tags: ["desktop"] }).nodes.map((n) => n.id)).toEqual(["a", "b", "d"]);
-    expect(filterGraph(graph, { query: "", tags: ["desktop", "capture"] }).nodes.map((n) => n.id)).toEqual(["a"]);
+    expect([...matchingIds(graph, { searchIds: null, tags: ["desktop"] })]).toEqual(["a", "b", "d"]);
+    expect([...matchingIds(graph, { searchIds: null, tags: ["desktop", "capture"] })]).toEqual(["a"]);
   });
 
   it("is the identity with no filter", () => {
-    expect(filterGraph(graph, { query: "  ", tags: [] })).toEqual(graph);
+    expect([...matchingIds(graph, { searchIds: null, tags: [] })]).toEqual(graph.nodes.map((n) => n.id));
   });
 });
 

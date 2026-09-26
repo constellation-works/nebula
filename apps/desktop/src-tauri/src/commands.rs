@@ -81,6 +81,23 @@ pub async fn graph(app: AppHandle) -> Result<GraphExport, String> {
     .map_err(err)?
 }
 
+/// IDs matching id, title, body, or status in the current corpus.
+#[tauri::command]
+pub async fn graph_search(app: AppHandle, query: String) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let corpus = app.state::<AppState>().corpus()?;
+        session::graph_search(&corpus, &query).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// The capture shortcut loaded and registered at startup.
+#[tauri::command]
+pub fn capture_shortcut(app: AppHandle) -> String {
+    app.state::<AppState>().capture_shortcut()
+}
+
 /// One node in full.
 #[tauri::command]
 pub async fn node(app: AppHandle, id: String) -> Result<NodeView, String> {

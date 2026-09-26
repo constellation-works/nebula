@@ -43,6 +43,8 @@ beforeEach(() => {
   mocked.corpusPath.mockResolvedValue("/tmp/nowhere/.nebula");
   mocked.startupWarnings.mockResolvedValue([]);
   mocked.reload.mockResolvedValue(undefined);
+  mocked.captureShortcut.mockResolvedValue("Alt+Space");
+  mocked.graphSearch.mockResolvedValue(["n1"]);
 });
 
 afterEach(() => {
@@ -410,16 +412,18 @@ describe("App", () => {
     fireEvent.wheel(graphCanvas, { deltaX: 12, deltaY: 30 });
     const transform = graphCanvas.querySelector("g.scene")!.getAttribute("transform");
     fireEvent.click(screen.getByRole("button", { name: "focus1" }));
-    fireEvent.change(screen.getByLabelText("Filter by title"), { target: { value: "Idea 1" } });
-    await waitFor(() => expect(layoutSpy).toHaveBeenCalledTimes(3));
-    await waitFor(() => expect(graphCanvas.querySelectorAll("g.node")).toHaveLength(1));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search graph" }), { target: { value: "Idea 1" } });
+    await waitFor(() => expect(mocked.graphSearch).toHaveBeenCalledWith("Idea 1"));
+    await waitFor(() => expect(graphCanvas.querySelector('g.node[data-id="n0"]')).toHaveClass("node--filter-dim"));
+    expect(graphCanvas.querySelectorAll("g.node")).toHaveLength(2);
+    expect(layoutSpy).toHaveBeenCalledTimes(1);
     const layoutCount = layoutSpy.mock.calls.length;
 
     fireEvent.click(screen.getByRole("tab", { name: /Inbox/ }));
     fireEvent.click(screen.getByRole("tab", { name: "Graph" }));
     expect(screen.getByRole("img", { name: "Graph" })).toBe(graphCanvas);
     expect(graphCanvas.querySelector("g.scene")).toHaveAttribute("transform", transform);
-    expect(screen.getByLabelText("Filter by title")).toHaveValue("Idea 1");
+    expect(screen.getByRole("searchbox", { name: "Search graph" })).toHaveValue("Idea 1");
     expect(screen.getByRole("button", { name: "focus1" })).toHaveAttribute("aria-pressed", "true");
     expect(graphCanvas.querySelector('g.node[data-id="n1"]')).toHaveClass("node--selected");
     expect(screen.getByRole("complementary", { name: "Node" })).toBeInTheDocument();

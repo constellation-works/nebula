@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "./api";
 import { GraphCanvas } from "./GraphCanvas";
-import { filterGraph, fromElkLayout, lineage, tagCounts, toElkGraph, type Layout } from "./layout";
+import { fromElkLayout, lineage, matchingIds, tagCounts, toElkGraph, type Layout } from "./layout";
 import { layoutGraph } from "./layoutClient";
 import { NodePanel } from "./NodePanel";
 import { useGraph } from "./useGraph";
@@ -11,14 +11,16 @@ const PANEL_DEFAULT = 380;
 const FILTER_DEBOUNCE_MS = 250;
 
 /**
- * The whole corpus as a layered DAG, with a toolbar that narrows it and a
- * panel that shows one node. One `graph()` export feeds everything; the
- * selection and the viewport live here and outlast a refetch.
+ * The whole corpus as a layered DAG, with filter highlighting and a panel
+ * for one node. Layout stays fixed across search and tag changes.
  */
 export function GraphView({ active = true }: { active?: boolean }) {
   const { graph, error, loaded, refresh } = useGraph();
   const [query, setQuery] = useState("");
-  const [appliedQuery, setAppliedQuery] = useState({ query: "", revision: 0 });
+  const [appliedQuery, setAppliedQuery] = useState("");
+  const [searchResult, setSearchResult] = useState<{ graph: typeof graph; query: string; ids: Set<string> } | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [shortcut, setShortcut] = useState<string | null>(null);
   const [tags, setTags] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [panelWidth, setPanelWidth] = useState(PANEL_DEFAULT);
@@ -29,47 +31,67 @@ export function GraphView({ active = true }: { active?: boolean }) {
   const [reloading, setReloading] = useState(false);
   const [timing, setTiming] = useState<{ layout: number; paint: number } | null>(null);
   const [fitRequest, setFitRequest] = useState(0);
+  const [focus, setFocus] = useState<{ id: string; serial: number } | null>(null);
+  const [cursor, setCursor] = useState(-1);
+  const [isolated, setIsolated] = useState(false);
   const started = useRef(0);
-  const layoutVersion = useRef(0);
 
   useEffect(() => {
-    if (query === appliedQuery.query && layoutVersion.current === appliedQuery.revision) return;
-    const timer = setTimeout(() => {
-      setAppliedQuery({ query, revision: layoutVersion.current });
-    }, FILTER_DEBOUNCE_MS);
+    if (query === appliedQuery) return;
+    const timer = setTimeout(() => setAppliedQuery(query), FILTER_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [query, appliedQuery]);
 
-  const counts = useMemo(() => (graph === null ? [] : tagCounts(graph.nodes)), [graph]);
-  const filtered = useMemo(
-    () => (graph === null ? null : filterGraph(graph, { query: appliedQuery.query, tags })),
-    [graph, appliedQuery, tags],
-  );
-
-  // Every change to what is drawn re-runs layout; the previous drawing stays
-  // up until the new one lands, so the canvas never flashes empty.
   useEffect(() => {
-    if (filtered === null) return;
-    if (filtered.nodes.length === 0) {
+    let live = true;
+    void api.captureShortcut().then((value) => { if (live) setShortcut(value); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+
+  useEffect(() => {
+    if (graph === null || appliedQuery.trim() === "") return;
+    let live = true;
+    setSearchError(null);
+    void api.graphSearch(appliedQuery).then(
+      (ids) => {
+        if (!live) return;
+        setSearchResult({ graph, query: appliedQuery, ids: new Set(ids) });
+        setSearchError(null);
+      },
+      (e: unknown) => { if (live) setSearchError(`Search failed: ${String(e)}`); },
+    );
+    return () => { live = false; };
+  }, [graph, appliedQuery]);
+
+  const counts = useMemo(() => (graph === null ? [] : tagCounts(graph.nodes)), [graph]);
+  const searchIds = appliedQuery.trim() === "" ? null : searchResult?.graph === graph && searchResult.query === appliedQuery ? searchResult.ids : null;
+  const searchPending = query !== appliedQuery || (appliedQuery.trim() !== "" && searchIds === null);
+  const matches = useMemo(() => graph === null || searchPending ? null : matchingIds(graph, { searchIds, tags }), [graph, searchIds, searchPending, tags]);
+  const matchList = useMemo(() => graph?.nodes.filter((n) => matches?.has(n.id)).map((n) => n.id) ?? [], [graph, matches]);
+  useEffect(() => { setCursor(-1); }, [matchList]);
+
+  // Filtering changes only opacity. The full graph is laid out on refetch.
+  useEffect(() => {
+    if (graph === null) return;
+    if (graph.nodes.length === 0) {
       setLayout(EMPTY);
       setLaying(false);
       return;
     }
     let live = true;
-    const version = layoutVersion.current;
     started.current = performance.now();
     setLaying(true);
-    layoutGraph(toElkGraph(filtered)).then(
+    layoutGraph(toElkGraph(graph)).then(
       (laid) => {
-        if (!live || version !== layoutVersion.current) return;
+        if (!live) return;
         const ms = performance.now() - started.current;
-        setLayout(fromElkLayout(laid, filtered));
+        setLayout(fromElkLayout(laid, graph));
         setTiming({ layout: ms, paint: 0 });
         setLayoutError(null);
         setLaying(false);
       },
       (e: unknown) => {
-        if (!live || version !== layoutVersion.current) return;
+        if (!live) return;
         setLayoutError(String(e));
         setLaying(false);
       },
@@ -77,7 +99,7 @@ export function GraphView({ active = true }: { active?: boolean }) {
     return () => {
       live = false;
     };
-  }, [filtered]);
+  }, [graph]);
 
   // Paint time: from the layout request to the frame after the new drawing
   // committed. Shown in the toolbar so the number is checkable in the app.
@@ -90,12 +112,12 @@ export function GraphView({ active = true }: { active?: boolean }) {
     return () => cancelAnimationFrame(raf);
   }, [layout]);
 
-  // A node that left the corpus, or the filter, cannot stay selected.
+  // A node that left the corpus cannot stay selected.
   useEffect(() => {
-    if (selected !== null && filtered !== null && !filtered.nodes.some((n) => n.id === selected)) {
+    if (selected !== null && graph !== null && !graph.nodes.some((n) => n.id === selected)) {
       setSelected(null);
     }
-  }, [filtered, selected]);
+  }, [graph, selected]);
 
   useEffect(() => {
     if (!active) return;
@@ -107,9 +129,11 @@ export function GraphView({ active = true }: { active?: boolean }) {
   }, [active]);
 
   const lin = useMemo(
-    () => (selected === null || filtered === null ? null : lineage(filtered.edges, selected)),
-    [filtered, selected],
+    () => (selected === null || graph === null ? null : lineage(graph.edges, selected)),
+    [graph, selected],
   );
+  const isolatedIds = useMemo(() => isolated && selected !== null && lin !== null ? new Set([selected, ...lin.ancestors, ...lin.descendants]) : null, [isolated, selected, lin]);
+  useEffect(() => { if (selected === null) setIsolated(false); }, [selected]);
 
   const open = useCallback((id: string) => {
     setOpenError(null);
@@ -138,14 +162,23 @@ export function GraphView({ active = true }: { active?: boolean }) {
     </div>
   );
   const toggleTag = (t: string) => {
-    const revision = ++layoutVersion.current;
-    setAppliedQuery((cur) => ({ ...cur, revision }));
     setTags((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
   };
   const clearQuery = () => {
-    const revision = ++layoutVersion.current;
     setQuery("");
-    setAppliedQuery({ query: "", revision });
+    setAppliedQuery("");
+    setSearchError(null);
+  };
+  const step = (direction: number) => {
+    if (matchList.length === 0) return;
+    const next = cursor < 0
+      ? direction > 0 ? 0 : matchList.length - 1
+      : (cursor + direction + matchList.length) % matchList.length;
+    const id = matchList[next]!;
+    setCursor(next);
+    setIsolated(false);
+    setSelected(id);
+    setFocus((previous) => ({ id, serial: (previous?.serial ?? 0) + 1 }));
   };
 
   if (error !== null) {
@@ -173,7 +206,7 @@ export function GraphView({ active = true }: { active?: boolean }) {
   }
 
   const filtering = query.trim() !== "" || tags.length > 0;
-  const shown = filtered?.nodes.length ?? 0;
+  const shown = matches?.size ?? graph.nodes.length;
 
   return (
     <section className="graph" aria-label="Graph">
@@ -189,11 +222,10 @@ export function GraphView({ active = true }: { active?: boolean }) {
         <input
           className="toolbar__search"
           type="search"
-          placeholder="Filter by title"
-          aria-label="Filter by title"
+          placeholder="Search id, title, body, status"
+          aria-label="Search graph"
           value={query}
           onChange={(e) => {
-            layoutVersion.current += 1;
             setQuery(e.target.value);
           }}
           onKeyDown={(e) => {
@@ -204,6 +236,13 @@ export function GraphView({ active = true }: { active?: boolean }) {
             }
           }}
         />
+        {filtering && !searchPending && (
+          <span className="toolbar__matches">
+            <button type="button" className="toolbar__button" onClick={() => step(-1)} disabled={matchList.length === 0} aria-label="Previous match">←</button>
+            <span aria-live="polite">{cursor < 0 ? 0 : cursor + 1} / {matchList.length}</span>
+            <button type="button" className="toolbar__button" onClick={() => step(1)} disabled={matchList.length === 0} aria-label="Next match">→</button>
+          </span>
+        )}
         {counts.length > 0 && (
           <ul className="toolbar__tags" aria-label="Filter by tag">
             {counts.map(({ tag, count }) => (
@@ -236,24 +275,29 @@ export function GraphView({ active = true }: { active?: boolean }) {
         <button type="button" className="toolbar__button" onClick={() => setFitRequest((n) => n + 1)}>
           Fit
         </button>
+        <button type="button" className="toolbar__button" aria-pressed={isolated} disabled={selected === null} onClick={() => setIsolated((value) => !value)}>
+          Lineage only
+        </button>
         <span className="toolbar__stats" aria-live="polite">
-          {shown === graph.nodes.length ? `${shown} nodes` : `${shown} of ${graph.nodes.length} nodes`}
+          {searchPending ? searchError === null ? "searching…" : "search unavailable" : shown === graph.nodes.length ? `${shown} nodes` : `${shown} of ${graph.nodes.length} nodes`}
           {laying ? " · laying out…" : timing !== null && ` · ${Math.round(timing.paint || timing.layout)} ms`}
         </span>
       </div>
+      <div className="graph__hint">Drag or scroll to pan · Ctrl+scroll to zoom · Double-click a node to open · Orange ancestors · Green descendants · Capture: {shortcut ?? "…"}</div>
       <div className="graph__body">
-        {shown === 0 ? (
-          <p className="graph__empty">No nodes match the filter.</p>
-        ) : (
-          <GraphCanvas
+        {searchError !== null && <div className="graph__error" role="alert">{searchError}</div>}
+        <GraphCanvas
             layout={layout}
             selected={selected}
             lineage={lin}
+            matches={filtering ? matches : null}
+            isolatedIds={isolatedIds}
+            focus={focus}
             onSelect={setSelected}
             onOpen={open}
             fitRequest={fitRequest}
-          />
-        )}
+        />
+        {filtering && !searchPending && shown === 0 && <p className="graph__no-matches">No nodes match the filter.</p>}
         {layoutError !== null && graphError(layoutError)}
         {selected !== null && (
           <NodePanel

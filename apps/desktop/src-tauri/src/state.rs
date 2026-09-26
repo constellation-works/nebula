@@ -1,6 +1,6 @@
 //! What the app holds between commands.
 
-use crate::session;
+use crate::{session, settings};
 use nebula_core::Corpus;
 use notify::RecommendedWatcher;
 use std::path::PathBuf;
@@ -17,6 +17,7 @@ pub struct AppState {
     corpus: Mutex<Option<Corpus>>,
     watcher: Mutex<Option<RecommendedWatcher>>,
     startup_warnings: Mutex<Vec<String>>,
+    capture_shortcut: Mutex<String>,
 }
 
 impl AppState {
@@ -33,6 +34,7 @@ impl AppState {
             corpus: Mutex::new(corpus),
             watcher: Mutex::new(None),
             startup_warnings: Mutex::new(Vec::new()),
+            capture_shortcut: Mutex::new(settings::DEFAULT_CAPTURE_SHORTCUT.to_string()),
         }
     }
 
@@ -48,6 +50,20 @@ impl AppState {
     /// The startup warnings captured during application setup.
     pub fn startup_warnings(&self) -> Vec<String> {
         self.startup_warnings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    pub fn set_capture_shortcut(&self, shortcut: String) {
+        *self
+            .capture_shortcut
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = shortcut;
+    }
+
+    pub fn capture_shortcut(&self) -> String {
+        self.capture_shortcut
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()

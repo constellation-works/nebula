@@ -404,6 +404,37 @@ code {
   border-color: var(--accent);
 }
 
+.toolbar__matches {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.toolbar__button:disabled {
+  opacity: 0.45;
+}
+
+.graph__hint {
+  padding: 4px 14px;
+  color: var(--fg-muted);
+  font-size: 0.8em;
+  border-bottom: 1px solid var(--line);
+}
+
+.graph__no-matches {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  pointer-events: none;
+}
+
 .toolbar__tags {
   display: flex;
   flex: 1;
@@ -558,6 +589,10 @@ code {
 
 .node--dim {
   opacity: 0.25;
+}
+
+.node--filter-dim {
+  opacity: 0.16;
 }
 
 .node__stripe {
