@@ -33,8 +33,9 @@ impl AppState {
     /// Start from a root already resolved, or from the reason it could not
     /// be. An unresolved root stays unresolved: it is a startup warning and
     /// every corpus command's error, never a stand-in path (STD-02 §R26,
-    /// §R29). Resolution fails on a missing `HOME` and equally on an empty or
-    /// unreadable `~/.config/nebula/root`, so no single guess would be right.
+    /// §R29). Resolution fails on a missing `HOME` and equally on an empty,
+    /// relative or unreadable `~/.config/nebula/root`, so no single guess
+    /// would be right.
     pub fn with_root(root: nebula_core::Result<PathBuf>) -> Self {
         let corpus_root = root.map_err(Arc::new);
         // Deliberately dropped: a corpus that will not open now is opened

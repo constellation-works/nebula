@@ -170,7 +170,9 @@ Every read verb keeps `--json`. The JSON shape **is** the core library's
 return type serialised, with every field present (an absent value `null`, an
 empty list `[]`) and every author label stated; see
 [2_architecture.md](2_architecture.md). `--limit` and `--depth` bound the
-output and default to everything; under `--json`, given either flag, the list
+output and default to everything; they and `near -k` take at least 1, and
+`review --since` at least 0, so a value below is a usage error rather than an
+empty answer; under `--json`, given either flag, the list
 is `{items, total, truncated}`, `total` counting the matches before the cut,
 and without it the bare array. `near` always has a limit, so it always
 answers in that envelope. Every verb that writes takes `--no-commit`; a

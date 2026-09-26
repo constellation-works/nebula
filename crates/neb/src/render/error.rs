@@ -263,6 +263,12 @@ fn exit(e: &Error) -> Exit {
         | Error::NoNodeAtRevision { .. }
         | Error::UnknownRevision { .. }
         | Error::RootConfigConflict { .. }
+        // Exit 1 from `init --set-root` too, although the path came off the
+        // command line there: one rule over the setting's contents serves
+        // load and write alike, and read back from the file it is no usage
+        // error.
+        | Error::EmptyRootSetting(_)
+        | Error::RelativeRootSetting { .. }
         | Error::RelativeObservatoryRoot {
             setting: Some(_), ..
         }
@@ -389,6 +395,13 @@ fn hint(e: &Error) -> Option<String> {
         Error::RelativeObservatoryRoot { setting: None, .. } => {
             "The setting is read from whatever directory a command runs in, so \
              pass the checkout's absolute path."
+                .to_owned()
+        }
+        // No `--force`: a setting that fails the rule is replaced without
+        // one, and a valid one already there should still be refused.
+        Error::EmptyRootSetting(_) | Error::RelativeRootSetting { .. } => {
+            "The setting is read from whatever directory a command runs in, so \
+             name the corpus by its absolute path:\n  neb init <DIR> --set-root"
                 .to_owned()
         }
         Error::Interactive(_) => "Script the same steps with:\n  \
