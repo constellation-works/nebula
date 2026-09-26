@@ -111,6 +111,8 @@ Revisit when a scan is measurably slow, not before.
 walks descendants and `contradicts` neighbours. The tree renderer prints a node
 at every place it appears, so a diamond is visible as a diamond, but expands it
 only once, so the output stays finite on a graph with many shared ancestors.
+Each line names the edge kind(s) joining it to its tree parent. Two edges
+between the same pair are parallel, not a diamond: one line naming both kinds.
 
 ## Enforcement placement
 

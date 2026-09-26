@@ -331,6 +331,24 @@ impl Node {
             .map(|e| e.to.as_str())
     }
 
+    /// Genealogical parents, each once, with every kind of edge naming it.
+    ///
+    /// Two edges to one parent (a `derives-from` and a later `reopens`) are
+    /// parallel, not a diamond: one relation between the pair, stated twice.
+    /// Parents keep the order of their first edge, and kinds the order they
+    /// were declared in.
+    pub fn lineage(&self) -> Vec<(&str, Vec<EdgeType>)> {
+        let mut out: Vec<(&str, Vec<EdgeType>)> = Vec::new();
+        for e in self.edges.iter().filter(|e| e.kind.is_genealogy()) {
+            match out.iter_mut().find(|(to, _)| *to == e.to) {
+                Some((_, kinds)) if kinds.contains(&e.kind) => {}
+                Some((_, kinds)) => kinds.push(e.kind),
+                None => out.push((e.to.as_str(), vec![e.kind])),
+            }
+        }
+        out
+    }
+
     /// Edges of one kind.
     pub fn edges_of(&self, kind: EdgeType) -> impl Iterator<Item = &str> {
         self.edges
@@ -687,6 +705,29 @@ mod tests {
         }
         assert!("graduated".parse::<Status>().is_err());
         assert!("supports".parse::<EdgeType>().is_err());
+    }
+
+    #[test]
+    fn lineage_names_each_parent_once_with_every_kind() {
+        let doc = parse(
+            "---\nid: child\ntitle: Child\nstatus: seed\ncreated: 2026-09-26\nupdated: 2026-09-26\n\
+             edges:\n\
+             - type: derives-from\n  to: old\n\
+             - type: refines\n  to: other\n\
+             - type: contradicts\n  to: old\n\
+             - type: reopens\n  to: old\n\
+             - type: derives-from\n  to: old\n\
+             ---\n\nbody\n",
+        )
+        .unwrap();
+        assert_eq!(
+            doc.node.lineage(),
+            [
+                ("old", vec![EdgeType::DerivesFrom, EdgeType::Reopens]),
+                ("other", vec![EdgeType::Refines]),
+            ],
+            "first-declared order, `contradicts` left out, a repeated kind once"
+        );
     }
 
     #[test]

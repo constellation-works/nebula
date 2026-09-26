@@ -2053,6 +2053,90 @@ fn a_shared_ancestor_is_reached_by_both_branches_and_expanded_once() {
 }
 
 #[test]
+fn trace_names_edge_kinds_and_draws_parallel_edges_as_one_line() {
+    let c = Corpus::new();
+    let root = c.seed("gravity might be about scarcity", "Gravity as scarcity");
+    c.run(&["new", "Left branch", "--parent", &root])
+        .assert_ok();
+    c.run(&["new", "Right branch", "--parent", &root])
+        .assert_ok();
+    c.run(&[
+        "new",
+        "Synthesis",
+        "--parent",
+        "left-branch",
+        "--parent",
+        "right-branch",
+    ])
+    .assert_ok();
+    // A parallel edge: synthesis now both derives from and reopens `left-branch`.
+    c.run(&["link", "synthesis", "reopens", "left-branch"])
+        .assert_ok();
+
+    let branches = |tree: &str| -> Vec<(String, String)> {
+        tree.lines()
+            .skip(1)
+            .map(|l| {
+                let l = l.trim_start_matches(['│', '├', '└', '─', ' ']);
+                let (kinds, rest) = l.split_once("  ").expect("kinds, then the node");
+                let id = rest.split_whitespace().nth(1).expect("an id");
+                (kinds.to_string(), id.to_string())
+            })
+            .collect()
+    };
+
+    let up = c.run(&["trace", "synthesis"]).assert_ok().stdout();
+    assert!(up.lines().next().unwrap().contains("synthesis"), "{up}");
+    assert_eq!(
+        branches(&up),
+        [
+            ("derives-from, reopens".into(), "left-branch".into()),
+            ("derives-from".into(), root.clone()),
+            ("derives-from".into(), "right-branch".into()),
+            ("derives-from".into(), root.clone()),
+        ],
+        "every line names its edge, and the parallel pair is one line:\n{up}"
+    );
+    assert_eq!(up.matches("shown above").count(), 1, "{up}");
+    assert!(
+        up.lines().last().unwrap().ends_with("(shown above)"),
+        "the true diamond is still marked:\n{up}"
+    );
+
+    let down = c.run(&["trace", "--down", &root]).assert_ok().stdout();
+    assert_eq!(
+        branches(&down),
+        [
+            ("derives-from".into(), "left-branch".into()),
+            ("derives-from, reopens".into(), "synthesis".into()),
+            ("derives-from".into(), "right-branch".into()),
+            ("derives-from".into(), "synthesis".into()),
+        ],
+        "descent names the same edges, and reaches the parallel pair once:\n{down}"
+    );
+    assert_eq!(down.matches("shown above").count(), 1, "{down}");
+
+    let json = c
+        .run(&["trace", "--json", "synthesis"])
+        .assert_ok()
+        .stdout();
+    let walk: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert!(walk[0]["via"].is_null(), "the start has no step: {json}");
+    assert_eq!(
+        walk[0]["parents"],
+        serde_json::json!(["left-branch", "right-branch"]),
+        "a parent is named once however many edges reach it: {json}"
+    );
+    assert_eq!(walk[1]["id"], "left-branch");
+    assert_eq!(
+        walk[1]["via"],
+        serde_json::json!({ "from": "synthesis", "kinds": ["derives-from", "reopens"] }),
+        "{json}"
+    );
+    assert_eq!(walk.as_array().unwrap().len(), 4, "{json}");
+}
+
+#[test]
 fn genealogy_cycles_are_refused_at_the_point_of_linking() {
     let c = Corpus::new();
     let a = c.seed("first", "First");
