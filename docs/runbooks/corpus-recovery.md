@@ -129,7 +129,9 @@ manually or an id was mistyped. Restore the file from git, or correct the id.
 ## Symptom: `neb migrate` refuses with uncommitted changes
 
 ```
-error: /corpus has uncommitted changes; commit or stash them so the migration is its own commit
+error: /corpus has uncommitted changes, and the migration must be its own commit; nothing was changed
+
+Commit or stash them, then run it again.
 ```
 
 This is deliberate: see [migrate-v1-to-v2.md](migrate-v1-to-v2.md). Commit or

@@ -160,10 +160,11 @@ impl Corpus {
                 Err(error) => return Err(error),
             }
         }
-        Err(Error::corpus(format!(
-            "no free name to keep the edit of `{id}` under in {} after {ATTEMPTS} tries",
-            dir.display()
-        )))
+        Err(Error::NoFreeKeepName {
+            id: id.to_string(),
+            dir,
+            attempts: ATTEMPTS,
+        })
     }
 
     /// Take the lock that serializes writes to this machine's settings,
@@ -192,7 +193,7 @@ impl Corpus {
         match std::fs::read_to_string(&path) {
             Ok(raw) => Self::root_setting(&path, &raw).map(Some),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error.into()),
+            Err(error) => Err(Error::io_at("reading", &path, error)),
         }
     }
 
@@ -234,12 +235,16 @@ impl Corpus {
     ///
     /// A machine with no `HOME` has no machine settings, which is not an
     /// error: `$OBSERVATORY_ROOT` and an explicit `--root` still work there.
-    /// A file that is present but empty or relative is refused rather than
-    /// skipped, because falling through to the legacy key would resolve
-    /// records against another machine's path without a word.
+    /// A `HOME` that is set but unreadable is not that machine, so it is
+    /// refused rather than read as "no setting" (STD-02 §R29). A file that
+    /// is present but empty or relative is refused rather than skipped,
+    /// because falling through to the legacy key would resolve records
+    /// against another machine's path without a word.
     pub fn configured_observatory_root() -> Result<Option<PathBuf>> {
-        let Ok(path) = Self::observatory_root_config_path() else {
-            return Ok(None);
+        let path = match Self::observatory_root_config_path() {
+            Ok(path) => path,
+            Err(Error::HomeUnset) => return Ok(None),
+            Err(error) => return Err(error),
         };
         let raw = match std::fs::read_to_string(&path) {
             Ok(raw) => raw,
@@ -270,10 +275,7 @@ impl Corpus {
             });
         }
         let path = Self::observatory_root_config_path()?;
-        let parent = path
-            .parent()
-            .ok_or_else(|| Error::corpus("observatory root configuration path has no parent"))?;
-        create_private_dir_all(parent)?;
+        create_private_dir_all(&Self::machine_settings_dir()?)?;
         write_private_atomic(&path, format!("{}\n", dir.display()))?;
         Ok(path)
     }
@@ -301,10 +303,7 @@ impl Corpus {
         let _lock = Self::lock_machine_settings()?;
         let path = Self::root_config_path()?;
         Self::check_root_config(root, force)?;
-        let parent = path
-            .parent()
-            .ok_or_else(|| Error::corpus("root configuration path has no parent"))?;
-        create_private_dir_all(parent)?;
+        create_private_dir_all(&Self::machine_settings_dir()?)?;
         write_private_atomic(&path, Self::root_setting_contents(root))?;
         Ok(path)
     }
@@ -363,10 +362,14 @@ impl Corpus {
         Ok(Self::configured_root()?.filter(|configured| configured != root))
     }
 
+    /// `$HOME`, refused by what is actually wrong with it: unset, or set to
+    /// something that is not UTF-8 (STD-02 §R26).
     fn home() -> Result<PathBuf> {
-        std::env::var("HOME")
-            .map(PathBuf::from)
-            .map_err(|_| Error::corpus("HOME is not set"))
+        match std::env::var("HOME") {
+            Ok(home) => Ok(PathBuf::from(home)),
+            Err(std::env::VarError::NotPresent) => Err(Error::HomeUnset),
+            Err(std::env::VarError::NotUnicode(value)) => Err(Error::HomeNotUnicode(value)),
+        }
     }
 
     /// Open the corpus named by `--root`, else `NEBULA_ROOT`, else the one
@@ -705,7 +708,11 @@ impl Corpus {
         let fields: Vec<&str> = raw.split('\0').filter(|field| !field.is_empty()).collect();
         let (records, remainder) = fields.as_chunks::<3>();
         if !remainder.is_empty() {
-            return Err(Error::corpus("git log returned a malformed history record"));
+            return Err(Error::MalformedHistory {
+                root: self.root.clone(),
+                command: "log",
+                pathspec: path,
+            });
         }
         Ok(records
             .iter()
@@ -733,9 +740,7 @@ impl Corpus {
         } else if at.len() >= 4 && at.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             at.to_string()
         } else {
-            return Err(Error::corpus(format!(
-                "invalid --at value `{at}`: expected a YYYY-MM-DD date or git revision"
-            )));
+            return Err(Error::InvalidAt(at.to_string()));
         };
         let absent = || Error::NoNodeAtRevision {
             node: id.to_string(),
@@ -759,7 +764,7 @@ impl Corpus {
             return Err(absent());
         }
         let shown = git_ok(&self.root, &["show", "--no-ext-diff", "--format=", &object])?;
-        let doc = model::parse(&shown).map_err(|e| match e {
+        let doc = model::parse(&shown, &node_path).map_err(|e| match e {
             // Same reporting as a read from disk: an id that came out of a
             // file is a fact about that file.
             Error::UnsafeId(id) => Error::IdMismatch {
@@ -814,9 +819,11 @@ impl Corpus {
         )?;
         for line in listed.lines() {
             let Some((hash, day)) = line.split_once(' ') else {
-                return Err(Error::corpus(
-                    "git rev-list returned a malformed commit record",
-                ));
+                return Err(Error::MalformedHistory {
+                    root: self.root.clone(),
+                    command: "rev-list",
+                    pathspec: path.to_string(),
+                });
             };
             // Both sides are `YYYY-MM-DD`, so text order is date order.
             if day <= date {
@@ -867,7 +874,8 @@ impl Corpus {
         if !dir.is_dir() {
             return Ok(out);
         }
-        let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)?
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .map_err(|error| Error::io_at("listing", &dir, error))?
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| is_node_file_name(p))
             .collect();
@@ -961,7 +969,7 @@ impl Corpus {
     /// Text that spans lines is joined onto one with [`capture_line`] rather
     /// than refused: the inbox holds one entry per line, and a refusal would
     /// lose the thought at the moment it arrived. Only text that is nothing
-    /// but whitespace is refused.
+    /// but whitespace is refused, by [`validate_capture`].
     ///
     /// The line, with the newline that repairs a month file missing its last
     /// one, is built whole and handed to one append, so a crash can lose the
@@ -978,10 +986,7 @@ impl Corpus {
     /// a capture. `stamp` is an inbox stamp in either form an inbox line
     /// holds, and its first seven characters name the month file.
     pub(crate) fn capture_at(&self, text: &str, stamp: &str) -> Result<InboxEntry> {
-        let text = capture_line(text);
-        if text.is_empty() {
-            return Err(Error::corpus("nothing to capture"));
-        }
+        let text = validate_capture(text)?;
         let dir = self.root.join("inbox");
         refuse_inbox_symlink(&dir)?;
         create_private_dir_all(&dir)?;
@@ -1027,7 +1032,7 @@ impl Corpus {
     pub(crate) fn live_entries(&self) -> Result<Vec<InboxEntry>> {
         let mut out = Vec::new();
         for file in self.inbox_files()? {
-            for (lineno, line) in std::fs::read_to_string(&file)?.lines().enumerate() {
+            for (lineno, line) in read_inbox_file(&file)?.lines().enumerate() {
                 if let Some(e) = InboxEntry::parse(line, &file, lineno) {
                     out.push(e);
                 }
@@ -1044,7 +1049,8 @@ impl Corpus {
         if !dir.is_dir() {
             return Ok(Vec::new());
         }
-        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)?
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .map_err(|error| Error::io_at("listing", &dir, error))?
             .filter_map(|entry| {
                 let entry = entry.ok()?;
                 if !entry.file_type().ok()?.is_file()
@@ -1086,7 +1092,7 @@ impl Corpus {
     fn settlement(&self, id: &str) -> Result<Option<Settlement>> {
         let mut found = None;
         for file in self.inbox_files()? {
-            for line in std::fs::read_to_string(&file)?.lines() {
+            for line in read_inbox_file(&file)?.lines() {
                 if let Some((settled, settlement)) = Settlement::parse(line)
                     && settled == id
                 {
@@ -1105,25 +1111,33 @@ impl Corpus {
     pub fn settle_inbox(&self, entry: &InboxEntry, outcome: &str) -> Result<()> {
         // Guard against settling an entry that belongs to a different corpus,
         // which would silently strike a line in someone else's inbox.
-        if !entry.file.starts_with(self.root.join("inbox")) {
-            return Err(Error::corpus(format!(
-                "inbox entry `{}` is not in this corpus",
-                entry.id
-            )));
+        let inbox = self.root.join("inbox");
+        if !entry.file.starts_with(&inbox) {
+            return Err(Error::InboxEntryForeign {
+                id: entry.id.clone(),
+                file: entry.file.clone(),
+                inbox,
+            });
         }
-        refuse_inbox_symlink(&self.root.join("inbox"))?;
+        refuse_inbox_symlink(&inbox)?;
         refuse_inbox_symlink(&entry.file)?;
-        let content = std::fs::read_to_string(&entry.file)?;
+        let content = read_inbox_file(&entry.file)?;
         let mut lines: Vec<String> = content.lines().map(String::from).collect();
+        // Two ways for the line to have moved, told apart: the file got
+        // shorter, or the line now holds some other text.
         let Some(slot) = lines.get_mut(entry.line) else {
-            return Err(Error::corpus(
-                "inbox entry moved underneath us; nothing written",
-            ));
+            return Err(Error::InboxEntryMissing {
+                id: entry.id.clone(),
+                file: entry.file.clone(),
+                line: entry.line,
+            });
         };
         if !slot.starts_with(&format!("- [{}]", entry.id)) {
-            return Err(Error::corpus(
-                "inbox entry moved underneath us; nothing written",
-            ));
+            return Err(Error::InboxEntryChanged {
+                id: entry.id.clone(),
+                file: entry.file.clone(),
+                line: entry.line,
+            });
         }
         // The stamp goes back as the line held it, so settling a legacy
         // entry never rewrites when it was captured (STD-02 §R16).
@@ -1144,10 +1158,7 @@ impl Corpus {
 pub(crate) fn refuse_nodes_symlink(root: &Path) -> Result<()> {
     let path = root.join("nodes");
     match std::fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::corpus(format!(
-            "{} is a symlink; node operations require a real directory",
-            path.display()
-        ))),
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::NodesSymlink(path)),
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(Error::io_at("inspecting", &path, error)),
@@ -1171,6 +1182,26 @@ pub fn capture_line(text: &str) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// The one rule for what may be captured: `text` as [`capture_line`] stores
+/// it, or [`Error::EmptyCapture`] when that is nothing.
+///
+/// [`Corpus::capture`] applies it, and a surface that may create a corpus
+/// for the capture calls it first, so blank text is refused before any
+/// directory exists rather than after one was made for it (STD-02 §R24,
+/// §R34).
+pub fn validate_capture(text: &str) -> Result<String> {
+    let line = capture_line(text);
+    if line.is_empty() {
+        return Err(Error::EmptyCapture);
+    }
+    Ok(line)
+}
+
+/// One inbox month file's text, or a refusal naming the file.
+fn read_inbox_file(path: &Path) -> Result<String> {
+    std::fs::read_to_string(path).map_err(|error| Error::io_at("reading", path, error))
 }
 
 /// Whether `root` holds anything a corpus is made of: a node file under
@@ -1249,10 +1280,9 @@ fn same_dir(_: &Path, _: &Path) -> bool {
 /// at `inbox/` or a month file must not redirect an inbox write.
 fn refuse_inbox_symlink(path: &Path) -> Result<()> {
     match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::corpus(format!(
-            "{} is a symlink; inbox operations require real paths",
-            path.display()
-        ))),
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(Error::InboxSymlink(path.to_path_buf()))
+        }
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(Error::io_at("inspecting", path, error)),
@@ -1470,7 +1500,7 @@ fn git_ok(root: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(out.stdout_whole(root, context)?).into_owned())
 }
 
-fn git_failed(root: &Path, context: &str, stderr: &str) -> Error {
+pub(crate) fn git_failed(root: &Path, context: &str, stderr: &str) -> Error {
     Error::Git {
         root: root.to_path_buf(),
         context: context.to_string(),
@@ -1728,9 +1758,7 @@ fn unique_entry_id(seed: &str, inbox: &Inbox) -> Result<String> {
             return Ok(id);
         }
     }
-    Err(Error::corpus(
-        "inbox id namespace exhausted; nothing captured",
-    ))
+    Err(Error::InboxIdsExhausted)
 }
 
 /// A stable id for a corpus, derived from where it was created and when.

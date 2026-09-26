@@ -1,10 +1,9 @@
 //! Core errors as the refusals `neb` reports.
 //!
 //! The library says what is wrong; this says what to do about it, because the
-//! advice names commands and only the CLI has commands. Each hint here is the
-//! advice the verb printed before the error had a type, and the prose a
-//! refusal renders to is byte-for-byte what it printed then, so a script
-//! grepping for a line keeps working.
+//! advice names commands and flags and only the CLI has them. A core message
+//! never names a flag, since the desktop has none (STD-02 §R26); the flag
+//! that fixes a refusal is named here, in its hint.
 //!
 //! Under `--json` the same refusal is one JSON object instead. Its `code` is
 //! [`Error::code`], so a new core variant arrives with its code and message
@@ -13,7 +12,7 @@
 //! How a refusal exits is decided here too, once: [`exit`] places every core
 //! variant, and the CLI's own refusals say which they are when they are made.
 
-use nebula_core::{EdgeType, Error, Settlement, Status};
+use nebula_core::{EdgeType, Error, ErrorClass, Settlement, Status};
 
 /// How a refusal ends `neb` (STD-01 §R20).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,81 +231,16 @@ pub fn refusal_about(e: &Error, node: &str) -> Refusal {
     }
 }
 
-/// How a core refusal exits: the one place that is decided.
-///
-/// A usage error is an argument no corpus could accept, whatever it holds: a
-/// value of the wrong shape, a flag the verb's other arguments rule out, or a
-/// verb asked for a form it has none of. Everything that turns on what the
-/// corpus, the machine or git holds is a failure. No wildcard: a new variant
-/// does not compile until it is placed.
+/// How a core refusal exits: the one place that is decided, from the class
+/// core gives every variant (STD-01 §R20). An argument no corpus could
+/// accept is a usage error; anything that turns on what the corpus, the
+/// machine or git holds is a failure. The class lives in core because
+/// [`Error`] is `#[non_exhaustive]`, so only there can the match be
+/// exhaustive (STD-02 §R27).
 fn exit(e: &Error) -> Exit {
-    match e {
-        Error::EmptyRoot
-        | Error::RootAndPathDiffer { .. }
-        | Error::RelativeObservatoryRoot { setting: None, .. }
-        | Error::SelfLoop
-        | Error::ParentAndReopens(_)
-        | Error::EmptyKill
-        | Error::RefutedNeedsWhy
-        | Error::Interactive(_)
-        | Error::AbsoluteUri(_)
-        | Error::UnusableTitle(_)
-        | Error::UnknownReferenceKind(_)
-        | Error::InvalidObservatoryId(_)
-        | Error::InvalidId(_) => Exit::Usage,
-        // `UnsafeId` stays here: the id may have come out of a node file
-        // somebody edited, not off the command line.
-        Error::NoSuchNode(_)
-        | Error::NoSuchInboxEntry(_)
-        | Error::InboxEntrySettled { .. }
-        | Error::NoCorpus(_)
-        | Error::NotGitWorkTree(_)
-        | Error::NoNodeAtRevision { .. }
-        | Error::UnknownRevision { .. }
-        | Error::RootConfigConflict { .. }
-        // Exit 1 from `init --set-root` too, although the path came off the
-        // command line there: one rule over the setting's contents serves
-        // load and write alike, and read back from the file it is no usage
-        // error.
-        | Error::EmptyRootSetting(_)
-        | Error::RelativeRootSetting { .. }
-        | Error::RelativeObservatoryRoot {
-            setting: Some(_), ..
-        }
-        | Error::MissingConfig { .. }
-        | Error::SchemaMismatch { .. }
-        | Error::CurrentSchemaUnreadable { .. }
-        | Error::V1NodeUnderCurrentSchema { .. }
-        | Error::Cycle { .. }
-        | Error::DuplicateEdge { .. }
-        | Error::NeedsKill(_)
-        | Error::KillAlreadySet(_)
-        | Error::RefutedCannotReopen
-        | Error::AlreadyClosed { .. }
-        | Error::SeedWithKill
-        | Error::NoSuchCandidate { .. }
-        | Error::DuplicateId(_)
-        | Error::NodeExists(_)
-        | Error::UnresolvedUri { .. }
-        | Error::InvalidTransition { .. }
-        | Error::MissingParent(_)
-        | Error::UnresolvedObservatoryRecord { .. }
-        | Error::UnsafeId(_)
-        | Error::IdMismatch { .. }
-        | Error::Locked { .. }
-        | Error::PendingWriteUnreadable { .. }
-        | Error::EditConflict(_)
-        // Stdin is data, not an argument: too much of it is refused like
-        // any other input the corpus will not take.
-        | Error::InputTooLarge { .. }
-        | Error::CorpusIgnored(_)
-        | Error::Git { .. }
-        | Error::GitTimedOut { .. }
-        | Error::Corpus(_)
-        | Error::Io(_)
-        | Error::IoAt { .. }
-        | Error::Yaml { .. }
-        | Error::Json { .. } => Exit::Failure,
+    match e.class() {
+        ErrorClass::Argument => Exit::Usage,
+        ErrorClass::State => Exit::Failure,
     }
 }
 
@@ -420,15 +354,43 @@ fn hint(e: &Error) -> Option<String> {
              neb promote <entry> [--title <title>] [--parent <id>]\n  \
              neb drop <entry>"
             .to_owned(),
+        _ => return flag_hint(e),
+    })
+}
+
+/// The advice for a refusal whose fix is a flag. Core's message is the
+/// desktop's too, so it states the fact and the flag is named here.
+fn flag_hint(e: &Error) -> Option<String> {
+    Some(match e {
+        Error::EmptyRoot => {
+            "Pass --root a corpus directory, or leave it out to resolve the corpus as usual."
+                .to_owned()
+        }
+        Error::RootConfigConflict { .. } => "Pass --force to replace it.".to_owned(),
+        Error::NoKillToConfirm(id) => {
+            format!("Name one first with:  neb sharpen {id} --kill \"...\"")
+        }
+        Error::UriRequired { .. } => {
+            "Pass where it lives with --uri, or cite it with --kind discussion \
+             when it has no location."
+                .to_owned()
+        }
+        Error::ReasonOnOpenStatus(_) => "Drop --why when moving to an open status.".to_owned(),
+        Error::InvalidAt(_) => {
+            "Pass --at a commit hash or a YYYY-MM-DD date; `neb log <NODE>` lists the commits."
+                .to_owned()
+        }
         _ => return None,
     })
 }
 
 /// The advice for a corpus this build cannot read as it stands: its config
 /// is missing or at another schema, or a node is not at the schema the
-/// config declares. Each names `neb migrate` or the repair that precedes it.
+/// config declares, or `neb migrate` cannot run yet. Each names `neb migrate`
+/// or the repair that precedes it.
 fn schema_hint(e: &Error) -> Option<String> {
     Some(match e {
+        Error::DirtyTree(_) => "Commit or stash them, then run it again.".to_owned(),
         Error::SchemaMismatch {
             found, expected, ..
         } if found > expected => {

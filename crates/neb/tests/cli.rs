@@ -792,6 +792,78 @@ fn empty_stdin_capture_creates_no_corpus() {
     );
 }
 
+/// Blank text to a root that does not exist yet is refused with core's code
+/// for it, and the root is still not there: the rule runs before a corpus
+/// can be created for it (STD-02 §R24, §R34).
+#[test]
+fn blank_capture_to_a_missing_root_creates_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let missing = dir.path().join("not-yet");
+
+    let refused =
+        run_from_home(&home, None, &["--json", "capture", "  "], Some(&missing)).usage_refusal();
+    assert_eq!(refused["code"], "empty_capture", "{refused}");
+    assert!(
+        !missing.exists(),
+        "a refused capture must not init a corpus"
+    );
+}
+
+/// Three rules the CLI used to spell itself, as `usage`, now reach it from
+/// core with core's codes, still exiting 2 as usage errors: the codes
+/// `blank_capture_note_and_open_status_reason_are_typed_refusals` in
+/// `core.rs` asserts for the same calls.
+#[test]
+fn blank_capture_note_and_open_status_reason_refuse_with_core_codes() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+
+    for (args, code) in [
+        (vec!["--json", "capture", "   "], "empty_capture"),
+        (vec!["--json", "note", &id, "  "], "empty_note"),
+        (
+            vec!["--json", "status", &id, "seed", "--why", "y"],
+            "reason_on_open_status",
+        ),
+    ] {
+        let refused = c.run(&args).usage_refusal();
+        assert_eq!(refused["code"], code, "{args:?}: {refused}");
+    }
+    assert_eq!(std::fs::read_to_string(c.node_file(&id)).unwrap(), before);
+}
+
+/// A month file the inbox cannot read is named, under `--json` and in prose.
+#[cfg(unix)]
+#[test]
+fn unreadable_inbox_file_error_names_the_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let c = Corpus::new();
+    c.run(&["capture", "a thought"]).assert_ok();
+    let month = std::fs::read_dir(c.root.join("inbox"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().is_some_and(|e| e == "md"))
+        .expect("a month file");
+    std::fs::set_permissions(&month, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&month).is_ok() {
+        // Running as root, where a mode refuses nothing.
+        return;
+    }
+    let shown = month.display().to_string();
+
+    let refused = c.run(&["--json", "inbox"]).refusal();
+    assert_eq!(refused["code"], "io_at", "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains(&shown),
+        "{refused}"
+    );
+    let prose = c.run(&["inbox"]).assert_fails().says(&shown);
+    assert_eq!(prose.out.status.code(), Some(1));
+}
+
 /// Whether `at` is RFC 3339, which says its offset by construction.
 fn is_rfc3339(at: &serde_json::Value) -> bool {
     at.as_str().is_some_and(|at| {
@@ -1624,6 +1696,61 @@ fn empty_nebula_root_env_falls_through_to_configured_then_default() {
     .says("0 nodes");
 }
 
+/// An empty machine root setting is refused naming the file, so the reader
+/// knows which file to fix.
+#[test]
+fn empty_root_setting_names_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let setting = home.join(".config/nebula/root");
+    std::fs::create_dir_all(setting.parent().unwrap()).unwrap();
+    std::fs::write(&setting, "  \n").unwrap();
+
+    let refused = run_from_home(&home, None, &["--json", "list"], None).refusal();
+    assert_eq!(refused["code"], "empty_root_setting", "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains(&setting.display().to_string()),
+        "{refused}"
+    );
+}
+
+/// A `HOME` that is set to bytes that are not UTF-8 is refused as that, not
+/// as a `HOME` that is not set; an unset one still says so.
+#[cfg(unix)]
+#[test]
+fn non_utf8_home_is_not_reported_as_unset() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let run = |cmd: &mut Command| Run {
+        args: "--json list".into(),
+        out: output(
+            cmd.args(["--json", "list"])
+                .current_dir(dir.path())
+                .env("PWD", dir.path()),
+        ),
+    };
+
+    let refused =
+        run(neb_command(&home).env("HOME", std::ffi::OsStr::from_bytes(b"\xff"))).refusal();
+    assert_ne!(refused["code"], "corpus", "{refused}");
+    assert_eq!(refused["code"], "home_not_unicode", "{refused}");
+    let said = refused["error"].as_str().unwrap();
+    assert!(!said.contains("not set"), "{said}");
+    assert!(said.contains("not valid UTF-8"), "{said}");
+
+    let unset = run(neb_command(&home).env_remove("HOME")).refusal();
+    assert_eq!(unset["code"], "home_unset", "{unset}");
+    assert!(
+        unset["error"].as_str().unwrap().contains("HOME is not set"),
+        "{unset}"
+    );
+}
+
 #[test]
 fn empty_root_flag_is_refused_by_name() {
     let dir = tempfile::tempdir().unwrap();
@@ -1647,7 +1774,8 @@ fn empty_root_flag_is_refused_by_name() {
 fn resolve_root_refuses_an_empty_explicit_path() {
     let err = nebula_core::Corpus::resolve_root(Some(PathBuf::new()))
         .expect_err("an empty explicit root must be refused");
-    assert_eq!(err.to_string(), "--root cannot be empty");
+    assert!(matches!(err, nebula_core::Error::EmptyRoot), "{err}");
+    assert_eq!(err.to_string(), "an explicit corpus root cannot be empty");
 }
 
 /// A relative `~/.config/nebula/root` would name a different corpus from
@@ -1774,7 +1902,7 @@ fn set_root_requires_force_to_replace_a_different_corpus() {
 
     let refused = run_from_home(&home, Some(&second), &["init", "--set-root"], None).assert_fails();
     assert!(
-        refused.stderr().contains("pass --force to replace it"),
+        refused.stderr().contains("Pass --force to replace it."),
         "expected typed conflict in:\n{}",
         refused.stderr()
     );
@@ -1863,7 +1991,7 @@ fn set_root_replaces_an_invalid_machine_root_without_force() {
     let other = dir.path().join("other");
     run_from_home(&home, Some(&other), &["init", "--set-root"], None)
         .assert_fails()
-        .says("pass --force to replace it");
+        .says("Pass --force to replace it.");
 }
 
 /// Two `init --set-root` at once could both find the setting free and both
@@ -3892,6 +4020,21 @@ fn graph_exports_mermaid_and_limits_it_to_lineage() {
     );
 }
 
+/// An unknown `--from` is core's `NoSuchNode`, with its message and hint,
+/// rather than a code the CLI made up.
+#[test]
+fn mermaid_from_an_unknown_node_is_no_such_node() {
+    let c = Corpus::new();
+    c.run(&["new", "Something", "--id", "something"])
+        .assert_ok();
+    let run = c
+        .run(&["graph", "--mermaid", "--from", "nope"])
+        .assert_fails();
+    assert_eq!(run.out.status.code(), Some(1));
+    assert_eq!(run.stdout(), "");
+    run.says("no node `nope`").says("neb list");
+}
+
 #[test]
 fn orbit_provenance_is_recorded_only_when_supplied() {
     let c = Corpus::new();
@@ -4536,7 +4679,8 @@ fn refuting_needs_a_reason_and_writes_the_closed_block() {
     // And --why means nothing on an open status.
     c.run(&["status", &seed, "hypothesis", "--why", "no"])
         .assert_fails()
-        .says("--why only applies");
+        .says("a reason only applies to refuted or abandoned")
+        .says("Drop --why");
 }
 
 #[test]
@@ -4991,7 +5135,8 @@ fn a_discussion_reference_may_omit_its_uri_but_other_kinds_may_not() {
 
     c.run(&["cite", &id, "--kind", "paper", "--note", "missing URI"])
         .assert_fails()
-        .says("--uri is required unless --kind is discussion");
+        .says("a reference of kind `paper` needs a URI")
+        .says("--uri");
     c.run(&[
         "cite",
         &id,
@@ -5001,7 +5146,7 @@ fn a_discussion_reference_may_omit_its_uri_but_other_kinds_may_not() {
         "missing URI",
     ])
     .assert_fails()
-    .says("--uri is required unless --kind is discussion");
+    .says("a reference of kind `discussions` needs a URI");
     c.run(&[
         "cite",
         &id,
@@ -5013,7 +5158,7 @@ fn a_discussion_reference_may_omit_its_uri_but_other_kinds_may_not() {
         "empty URI",
     ])
     .assert_fails()
-    .says("--uri is required unless --kind is discussion");
+    .says("a reference of kind `paper` needs a URI");
 
     // The kind's case is normalised before it decides whether a URI is
     // needed, so `Discussion` is a discussion.
@@ -5049,6 +5194,30 @@ fn a_discussion_reference_may_omit_its_uri_but_other_kinds_may_not() {
         .assert_fails()
         .says("kind `paper` but no URI")
         .says("1 error, 0 warnings");
+}
+
+/// A citation with no URI, or a blank one, has its own code. Core's message
+/// names no flag, since the desktop has none; the CLI's hint names `--uri`.
+#[test]
+fn cite_without_uri_has_a_specific_code() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+
+    for args in [
+        vec!["--json", "cite", &id, "--kind", "paper"],
+        vec!["--json", "cite", &id, "--kind", "paper", "--uri", "  "],
+    ] {
+        let refused = c.run(&args).usage_refusal();
+        assert_eq!(refused["code"], "uri_required", "{args:?}: {refused}");
+        let said = refused["error"].as_str().unwrap();
+        assert!(!said.contains("--"), "a flag in core's message: {said}");
+        assert!(
+            refused["hint"].as_str().unwrap().contains("--uri"),
+            "{refused}"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(c.node_file(&id)).unwrap(), before);
 }
 
 #[test]
@@ -5773,7 +5942,7 @@ fn json_covers_the_clis_own_refusals_but_not_clap_usage_errors() {
     let empty = c.run(&["capture", "  ", "--json"]).usage_refusal();
     assert_eq!(
         empty,
-        serde_json::json!({"error": "nothing to capture", "code": "usage", "hint": null})
+        serde_json::json!({"error": "nothing to capture", "code": "empty_capture", "hint": null})
     );
 
     let id = c.seed("an idea", "An idea");
@@ -5821,18 +5990,29 @@ fn usage_refusals_exit_two() {
     let before = snapshot_corpus_files(&c.root);
     for (args, message) in [
         (
-            vec!["status", &id, "seed", "--why", "x"],
-            "--why only applies to refuted or abandoned",
-        ),
-        (
             vec!["tag", &id],
             "nothing to do; pass --add <tag> or --remove <tag>",
         ),
-        (vec!["capture", "  "], "nothing to capture"),
-        (vec!["note", &id, "  "], "nothing to note"),
         (vec!["near", "  "], "nothing to look near"),
     ] {
         let refused = assert_usage_error(&c, &args, "usage");
+        assert_eq!(refused["error"], message, "neb {}", args.join(" "));
+    }
+    // Core's own argument rules, with core's codes, exit 2 as well.
+    for (args, code, message) in [
+        (
+            vec!["status", &id, "seed", "--why", "x"],
+            "reason_on_open_status",
+            "a reason only applies to refuted or abandoned, not `seed`",
+        ),
+        (vec!["capture", "  "], "empty_capture", "nothing to capture"),
+        (
+            vec!["note", &id, "  "],
+            "empty_note",
+            "a note cannot be empty",
+        ),
+    ] {
+        let refused = assert_usage_error(&c, &args, code);
         assert_eq!(refused["error"], message, "neb {}", args.join(" "));
     }
     // `triage` has no JSON form: `--json` is a flag the verb does not take.
@@ -7383,6 +7563,21 @@ fn by_records_the_author_of_each_field_it_wrote() {
         .says("cannot be an author label");
 }
 
+/// A label that cannot be an author has its own code, not the catch-all.
+#[test]
+fn invalid_author_label_has_its_own_code() {
+    let c = Corpus::new();
+    let refused = c
+        .run(&["--json", "new", "t", "--by", "a (b)"])
+        .usage_refusal();
+    assert_eq!(refused["code"], "invalid_author_label", "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains("`a (b)`"),
+        "{refused}"
+    );
+    assert_eq!(std::fs::read_dir(c.root.join("nodes")).unwrap().count(), 0);
+}
+
 /// The point of recording authorship: a kill condition the agent proposed is
 /// not yet the human's claim, and `review` says so until one is confirmed.
 #[test]
@@ -7966,6 +8161,25 @@ fn review_out_names_the_file() {
         report.as_array().is_some_and(|items| !items.is_empty()),
         "{report}"
     );
+}
+
+/// A report that cannot be written is refused naming the path it was for.
+#[test]
+fn report_out_write_failure_names_the_path() {
+    let c = Corpus::new();
+    let out_path = c.workdir().join("no-such-dir").join("review.md");
+    let refused = c
+        .run(&["--json", "review", "--out", out_path.to_str().unwrap()])
+        .refusal();
+    assert_eq!(refused["code"], "io_at", "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains(&out_path.display().to_string()),
+        "{refused}"
+    );
+    assert!(!out_path.exists());
 }
 
 /// Piped, a listing is one tab-separated line per node with no header, and
@@ -9102,7 +9316,7 @@ fn an_observatory_uri_that_is_not_a_record_id_is_refused_at_cite() {
     }
     c.run(&["cite", &id, "--kind", "observatory", "--note", "n"])
         .assert_fails()
-        .says("--uri is required unless --kind is discussion");
+        .says("a reference of kind `observatory` needs a URI");
 }
 
 /// [`observatory`], plus the hypothesis record `H012` a hand-off goes to.
@@ -10599,7 +10813,10 @@ fn log_and_show_at_read_a_node_sharpened_across_two_commits() {
     for at in ["not-a-date", "2026-99-99", "2026-13-01", "2027-02-29"] {
         c.run(&["show", &id, "--at", at])
             .assert_fails()
-            .says(&format!("invalid --at value `{at}`"));
+            .says(&format!(
+                "`{at}` is not a YYYY-MM-DD date or a git revision"
+            ))
+            .says("--at");
     }
 
     // A real leap date is a date, not malformed.

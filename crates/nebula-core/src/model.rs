@@ -76,7 +76,7 @@ impl FromStr for Status {
             "hypothesis" => Ok(Self::Hypothesis),
             "refuted" => Ok(Self::Refuted),
             "abandoned" => Ok(Self::Abandoned),
-            other => Err(Error::corpus(format!("`{other}` is not a status"))),
+            other => Err(Error::NotAStatus(other.to_string())),
         }
     }
 }
@@ -133,7 +133,7 @@ impl FromStr for EdgeType {
             "generalizes" => Ok(Self::Generalizes),
             "reopens" => Ok(Self::Reopens),
             "contradicts" => Ok(Self::Contradicts),
-            other => Err(Error::corpus(format!("`{other}` is not an edge type"))),
+            other => Err(Error::NotAnEdgeType(other.to_string())),
         }
     }
 }
@@ -184,9 +184,7 @@ pub fn author(by: Option<&str>) -> Result<Option<String>> {
     }
     let label = by.unwrap_or_default().trim();
     if label.contains(['(', ')', '\n']) || label.contains(": ") {
-        return Err(Error::corpus(format!(
-            "`{label}` cannot be an author label: no parentheses, newlines or `: `"
-        )));
+        return Err(Error::InvalidAuthorLabel(label.to_string()));
     }
     Ok(Some(label.to_string()))
 }
@@ -504,12 +502,11 @@ pub struct Doc {
 pub(crate) fn read(path: &Path) -> Result<Doc> {
     let raw =
         std::fs::read_to_string(path).map_err(|error| Error::io_at("reading", path, error))?;
-    parse(&raw).map_err(|e| match e {
+    parse(&raw, path).map_err(|e| match e {
         Error::Yaml { context, source } => Error::Yaml {
             context: format!("in {}: {context}", path.display()),
             source,
         },
-        Error::Corpus(message) => Error::Corpus(format!("in {}: {message}", path.display())),
         // An id out of a *file* is reported against that file: a name that
         // could not be one is a disagreement with the file it was found in,
         // and the path is what the human needs to go and look at.
@@ -521,22 +518,42 @@ pub(crate) fn read(path: &Path) -> Result<Doc> {
     })
 }
 
-/// Split node text into its YAML frontmatter and its prose.
-pub(crate) fn split_frontmatter(raw: &str) -> Result<(&str, &str)> {
+/// Which `---` delimiter a node file's frontmatter is missing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrontmatterProblem {
+    /// The file does not start with a `---` line.
+    Missing,
+    /// No `---` line closes the frontmatter.
+    Unterminated,
+}
+
+impl fmt::Display for FrontmatterProblem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Missing => "missing YAML frontmatter (a node file starts with a `---` line)",
+            Self::Unterminated => "frontmatter is not terminated by a `---` line",
+        })
+    }
+}
+
+/// Split node text into its YAML frontmatter and its prose. `path` is the
+/// file the text came from, which a refusal names.
+pub(crate) fn split_frontmatter<'a>(raw: &'a str, path: &Path) -> Result<(&'a str, &'a str)> {
+    let malformed = |problem| Error::MalformedFrontmatter {
+        path: path.to_path_buf(),
+        problem,
+    };
     let Some(rest) = raw.strip_prefix("---\n") else {
-        return Err(Error::corpus(
-            "missing YAML frontmatter (a node file starts with a `---` line)",
-        ));
+        return Err(malformed(FrontmatterProblem::Missing));
     };
     let Some(end) = rest.find("\n---\n") else {
-        return Err(Error::corpus(
-            "frontmatter is not terminated by a `---` line",
-        ));
+        return Err(malformed(FrontmatterProblem::Unterminated));
     };
     Ok((&rest[..end], rest[end + 5..].trim_start_matches('\n')))
 }
 
-/// Parse node text. Split out from [`read`] so it can be tested without a disk.
+/// Parse node text. Split out from [`read`] so it can be tested without a
+/// disk; `path` is where the text came from, which a refusal names.
 ///
 /// The id is checked here, at the door, the same placement rule 7 gets and
 /// for the same reason: an id decides which file a later write lands in, so
@@ -544,8 +561,8 @@ pub(crate) fn split_frontmatter(raw: &str) -> Result<(&str, &str)> {
 /// `Doc` that every verb downstream would treat as a node. A check at the
 /// point of action alone would have to be repeated in every verb, and the one
 /// that was forgotten would be the one that wrote outside the corpus.
-pub(crate) fn parse(raw: &str) -> Result<Doc> {
-    let (front, body) = split_frontmatter(raw)?;
+pub(crate) fn parse(raw: &str, path: &Path) -> Result<Doc> {
+    let (front, body) = split_frontmatter(raw, path)?;
     let node: Node =
         serde_yaml_ng::from_str(front).map_err(|e| Error::yaml("parsing frontmatter", e))?;
     // "Ids stay strings, checked where they become paths" (4_decisions.md, STD-02@2 §R14).
@@ -748,8 +765,14 @@ mod tests {
         ] {
             assert_eq!(e.to_string().parse::<EdgeType>().unwrap(), e);
         }
-        assert!("graduated".parse::<Status>().is_err());
-        assert!("supports".parse::<EdgeType>().is_err());
+        assert!(matches!(
+            "graduated".parse::<Status>(),
+            Err(Error::NotAStatus(s)) if s == "graduated"
+        ));
+        assert!(matches!(
+            "supports".parse::<EdgeType>(),
+            Err(Error::NotAnEdgeType(s)) if s == "supports"
+        ));
     }
 
     #[test]
@@ -763,6 +786,7 @@ mod tests {
              - type: reopens\n  to: old\n\
              - type: derives-from\n  to: old\n\
              ---\n\nbody\n",
+            Path::new("nodes/child.md"),
         )
         .unwrap();
         assert_eq!(

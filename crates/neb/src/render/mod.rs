@@ -18,7 +18,7 @@ mod tree;
 mod triage;
 
 use crate::output::{self, Role, Stream};
-use nebula_core::{EdgeType, GraphExport, HistoryEntry, Node, Status};
+use nebula_core::{EdgeType, Error, GraphExport, HistoryEntry, Node, Status};
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use table::{Cell, Column, Table};
@@ -193,7 +193,7 @@ pub fn history_notice(entries: &[HistoryEntry]) -> Option<Notice> {
 
 /// A Mermaid flowchart for the whole export, or one node's ancestry and
 /// descendants. Genealogy points from a child to its parent, hence `BT`.
-pub fn mermaid(graph: &GraphExport, from: Option<&str>) -> Result<String, String> {
+pub fn mermaid(graph: &GraphExport, from: Option<&str>) -> Result<String, Error> {
     let included = lineage(graph, from)?;
     let mut out = String::from("graph BT\n");
 
@@ -241,12 +241,12 @@ pub fn mermaid(graph: &GraphExport, from: Option<&str>) -> Result<String, String
 /// The union of a node's upward and downward genealogy walks. Keeping the two
 /// walks separate matters: walking the union as an undirected graph would pull
 /// in siblings through their shared parent.
-fn lineage(graph: &GraphExport, from: Option<&str>) -> Result<HashSet<String>, String> {
+fn lineage(graph: &GraphExport, from: Option<&str>) -> Result<HashSet<String>, Error> {
     let Some(from) = from else {
         return Ok(graph.nodes.iter().map(|node| node.id.clone()).collect());
     };
     if !graph.nodes.iter().any(|node| node.id == from) {
-        return Err(format!("no node `{from}`"));
+        return Err(Error::NoSuchNode(from.to_string()));
     }
 
     let mut included = HashSet::from([from.to_string()]);

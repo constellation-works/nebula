@@ -26,7 +26,7 @@ use nebula_core::{
     Citation, CommitOutcome, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, Handoff,
     InboxEntry, NEAR_DEFAULT, NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, ObservatoryLink,
     ObservatoryRoot, ObservatorySource, Origin, Promotion, Severity, Status, Triage, check, graph,
-    migrate, model, ops,
+    migrate, model, ops, store,
 };
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -827,37 +827,23 @@ impl From<OnOff> for bool {
 struct Failure(render::Refusal);
 
 /// Refusals specific to the terminal-owned editor flow.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum EditorError {
+    #[error("neither $VISUAL nor $EDITOR names an editor")]
     NotConfigured,
+    #[error("editor command `{0}` is empty or has unmatched quotes")]
     InvalidCommand(String),
+    #[error("could not start editor `{editor}`: {source}")]
     Start {
         editor: String,
         source: std::io::Error,
     },
+    #[error("editor `{0}` exited unsuccessfully; the node was not changed")]
     Unsuccessful(String),
+    #[error(
+        "an existing ## Notes section was removed, reordered, or changed; use `neb note` to append notes"
+    )]
     NotesChanged,
-}
-
-impl std::fmt::Display for EditorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotConfigured => f.write_str("neither $VISUAL nor $EDITOR names an editor"),
-            Self::InvalidCommand(editor) => write!(
-                f,
-                "editor command `{editor}` is empty or has unmatched quotes"
-            ),
-            Self::Start { editor, source } => {
-                write!(f, "could not start editor `{editor}`: {source}")
-            }
-            Self::Unsuccessful(editor) => {
-                write!(f, "editor `{editor}` exited unsuccessfully; the node was not changed")
-            }
-            Self::NotesChanged => f.write_str(
-                "an existing ## Notes section was removed, reordered, or changed; use `neb note` to append notes",
-            ),
-        }
-    }
 }
 
 impl EditorError {
@@ -893,36 +879,28 @@ impl From<output::StdoutFailed> for Failure {
 }
 
 /// Input `neb triage` cannot act on.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum KeyError {
     /// A line that is not a triage key.
+    #[error("`{0}` is not a triage key; use p, a candidate number, t, d, s or q (? lists them)")]
     Unknown(String),
     /// Input ended while a title for `entry` was waiting to be used: after
     /// `t <title>`, or after `t` alone, before its line (STD-01 §R27).
+    #[error("{}", title_lost(entry, title.as_deref()))]
     TitleLost {
         entry: String,
         title: Option<String>,
     },
 }
 
-impl std::fmt::Display for KeyError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unknown(line) => write!(
-                f,
-                "`{line}` is not a triage key; use p, a candidate number, t, d, s or q (? lists them)"
-            ),
-            Self::TitleLost {
-                entry,
-                title: Some(title),
-            } => write!(
-                f,
-                "input ended before the title `{title}` was used for `{entry}`; nothing was promoted"
-            ),
-            Self::TitleLost { entry, title: None } => write!(
-                f,
-                "input ended before the title for `{entry}` was given; nothing was promoted"
-            ),
+/// [`KeyError::TitleLost`]'s message, which says whether the title arrived.
+fn title_lost(entry: &str, title: Option<&str>) -> String {
+    match title {
+        Some(title) => format!(
+            "input ended before the title `{title}` was used for `{entry}`; nothing was promoted"
+        ),
+        None => {
+            format!("input ended before the title for `{entry}` was given; nothing was promoted")
         }
     }
 }
@@ -1233,9 +1211,11 @@ fn edit_body(body: &str) -> std::result::Result<Edited, Failure> {
         .filter(|words| !words.is_empty())
         .ok_or_else(|| EditorError::InvalidCommand(editor_name.clone()))?;
     let program = words.remove(0);
-    let mut file = tempfile::NamedTempFile::new().map_err(Error::from)?;
-    file.write_all(body.as_bytes()).map_err(Error::from)?;
-    file.flush().map_err(Error::from)?;
+    let mut file = tempfile::NamedTempFile::new()
+        .map_err(|e| Error::io_at("creating a temporary file in", std::env::temp_dir(), e))?;
+    file.write_all(body.as_bytes())
+        .and_then(|()| file.flush())
+        .map_err(|e| Error::io_at("writing", file.path(), e))?;
     // The one child not run like git: it stays in the terminal's foreground
     // group with no deadline, because a person drives it (STD-03@2 §R11,
     // recorded in docs/design/lineage-graph/4_decisions.md).
@@ -1250,7 +1230,8 @@ fn edit_body(body: &str) -> std::result::Result<Edited, Failure> {
     if !status.success() {
         return Err(EditorError::Unsuccessful(editor_name).into());
     }
-    let text = std::fs::read_to_string(file.path()).map_err(Error::from)?;
+    let text = std::fs::read_to_string(file.path())
+        .map_err(|e| Error::io_at("reading", file.path(), e))?;
     Ok(Edited { text, file })
 }
 
@@ -1430,7 +1411,8 @@ fn commit(
 /// Write rendered text to `out`. On stdout this never fails: the output
 /// layer absorbs a closed pipe, so the commit after it still runs.
 fn say(out: &mut impl Write, text: &str) -> std::result::Result<(), Failure> {
-    out.write_all(text.as_bytes()).map_err(Error::from)?;
+    out.write_all(text.as_bytes())
+        .map_err(output::StdoutFailed::from)?;
     Ok(())
 }
 
@@ -1514,13 +1496,20 @@ fn triage(
         }
         if interactive {
             say(out, if titling { "title> " } else { "> " })?;
-            out.flush().map_err(Error::from)?;
+            out.flush().map_err(output::StdoutFailed::from)?;
         }
         if out.is_closed() {
             break;
         }
         let mut line = String::new();
-        if input.read_line(&mut line).map_err(Error::from)? == 0 {
+        if input
+            .read_line(&mut line)
+            .map_err(|source| Error::IoStdin {
+                what: "a triage key",
+                source,
+            })?
+            == 0
+        {
             if interactive {
                 say(out, "\n")?;
             }
@@ -1800,15 +1789,17 @@ fn run(cli: Cli) -> Outcome {
             // the layer, not clap, decides what a closed stdout means.
             let mut script = Vec::new();
             clap_complete::generate(shell, &mut Cli::command(), "neb", &mut script);
-            output::stdout().write_all(&script).map_err(Error::from)?;
+            output::stdout()
+                .write_all(&script)
+                .map_err(output::StdoutFailed::from)?;
             Ok(ok)
         }
 
         Command::Capture { quiet, text, .. } => {
+            // Core's own emptiness rule, run before a corpus can be created
+            // for text that would be refused anyway.
             let text = capture_text(&text)?;
-            if text.trim().is_empty() {
-                return Err(Failure::say("nothing to capture"));
-            }
+            store::validate_capture(&text)?;
             // Capture must work on a corpus that does not exist yet. Being
             // told to run a setup command is precisely the friction that
             // loses the thought. A root found from the working directory is
@@ -2105,11 +2096,6 @@ fn run(cli: Cli) -> Outcome {
             node, status, why, ..
         } => {
             let status = Status::from(status);
-            // `--why` is this command's flag, so what it does and does not
-            // apply to is this command's rule to state.
-            if status.is_open() && why.as_ref().is_some_and(|w| !w.trim().is_empty()) {
-                return Err(Failure::say("--why only applies to refuted or abandoned"));
-            }
             let (corpus, _lock) = open_locked(root)?;
             let changed = ops::set_status(&corpus, &node, status, why.as_deref())
                 .map_err(|e| Failure::about(&e, &node))?;
@@ -2208,9 +2194,6 @@ fn run(cli: Cli) -> Outcome {
 
         Command::Note { node, by, text, .. } => {
             let text = text.join(" ");
-            if text.trim().is_empty() {
-                return Err(Failure::say("nothing to note"));
-            }
             let (corpus, lock) = open_locked(root)?;
             ops::note(&corpus, &node, &text, by.as_deref())
                 .map_err(|e| Failure::about(&e, &node))?;
@@ -2456,11 +2439,7 @@ fn run(cli: Cli) -> Outcome {
             let docs = corpus.load_all()?;
             let exported = graph::export(&Graph::build(&docs)?)?;
             if mermaid {
-                out!(
-                    "{}",
-                    render::mermaid(&exported, from.as_deref())
-                        .map_err(|message| Failure::of("no_such_node", message))?
-                );
+                out!("{}", render::mermaid(&exported, from.as_deref())?);
             } else {
                 out_json(&exported)?;
             }
@@ -2605,7 +2584,7 @@ fn write_report(out: Option<&Path>, text: &str) -> std::result::Result<(), Failu
     match out {
         Some(path) => {
             std::fs::write(path, format!("{text}\n"))
-                .map_err(|e| Failure::of("io_at", format!("writing {}: {e}", path.display())))?;
+                .map_err(|e| Error::io_at("writing", path, e))?;
             // stdout stays empty, so the file is named on stderr, in every
             // mode: a write says what it wrote (STD-01 §R30).
             errln!("{}", render::notice(&format!("wrote {}", path.display())));

@@ -24,7 +24,9 @@ neb migrate
 If `$NEBULA_ROOT` is a git repository with uncommitted changes, this refuses:
 
 ```
-error: /corpus has uncommitted changes; commit or stash them so the migration is its own commit
+error: /corpus has uncommitted changes, and the migration must be its own commit; nothing was changed
+
+Commit or stash them, then run it again.
 ```
 
 That is deliberate. The migration should land as its own commit, so that
