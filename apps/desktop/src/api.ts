@@ -32,8 +32,21 @@ export const graph = (): Promise<GraphExport> => invoke<GraphExport>("graph");
 /** Matching graph IDs from one corpus read, including markdown bodies. */
 export const graphSearch = (query: string): Promise<string[]> => invoke<string[]>("graph_search", { query });
 
-/** The capture shortcut loaded when the app started. */
+/** The capture shortcut currently used by the app. */
 export const captureShortcut = (): Promise<string> => invoke<string>("capture_shortcut");
+
+/** Register a replacement immediately and save it for the next launch. */
+export const setCaptureShortcut = (shortcut: string): Promise<string> =>
+  invoke<string>("set_capture_shortcut", { shortcut });
+
+/** Read and change the OS login registration. */
+export const launchAtLogin = (): Promise<boolean> => invoke<boolean>("launch_at_login");
+export const setLaunchAtLogin = (enabled: boolean): Promise<boolean> =>
+  invoke<boolean>("set_launch_at_login", { enabled });
+
+/** Open Settings when the tray menu requests it. */
+export const onOpenSettings = (handler: () => void): Promise<UnlistenFn> =>
+  listen("show-settings", handler);
 
 /** One node in full: frontmatter and trimmed markdown body. */
 export const node = (id: string): Promise<NodeView> => invoke<NodeView>("node", { id });

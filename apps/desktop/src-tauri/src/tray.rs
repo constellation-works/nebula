@@ -1,10 +1,10 @@
-//! The menu-bar item: the unsettled inbox count, and three menu entries.
+//! The menu-bar item: the unsettled inbox count and app actions.
 
 use crate::state::AppState;
 use crate::{session, shortcut};
 use tauri::menu::{IsMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, Wry};
+use tauri::{AppHandle, Emitter, Manager, Wry};
 
 /// The tray's id, for finding it again from the watcher.
 pub const ID: &str = "nebula";
@@ -13,6 +13,7 @@ pub const ID: &str = "nebula";
 pub fn build(app: &AppHandle, warnings: &[String]) -> tauri::Result<()> {
     let capture = MenuItem::with_id(app, "capture", "Capture", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open Nebula", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let warning_items = warnings
         .iter()
@@ -27,7 +28,7 @@ pub fn build(app: &AppHandle, warnings: &[String]) -> tauri::Result<()> {
             )
         })
         .collect::<tauri::Result<Vec<_>>>()?;
-    let mut menu_items: Vec<&dyn IsMenuItem<Wry>> = vec![&capture, &open];
+    let mut menu_items: Vec<&dyn IsMenuItem<Wry>> = vec![&capture, &open, &settings];
     menu_items.extend(
         warning_items
             .iter()
@@ -46,6 +47,10 @@ pub fn build(app: &AppHandle, warnings: &[String]) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "capture" => shortcut::toggle_capture(app),
             "open" => show_main(app),
+            "settings" => {
+                show_main(app);
+                let _ = app.emit("show-settings", ());
+            }
             "quit" => app.exit(0),
             _ => {}
         })

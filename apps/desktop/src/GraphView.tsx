@@ -43,10 +43,11 @@ export function GraphView({ active = true }: { active?: boolean }) {
   }, [query, appliedQuery]);
 
   useEffect(() => {
+    if (!active) return;
     let live = true;
     void api.captureShortcut().then((value) => { if (live) setShortcut(value); }).catch(() => {});
     return () => { live = false; };
-  }, []);
+  }, [active]);
 
   useEffect(() => {
     if (graph === null || appliedQuery.trim() === "") return;

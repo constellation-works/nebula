@@ -4,7 +4,7 @@ use crate::{session, settings};
 use nebula_core::Corpus;
 use notify::RecommendedWatcher;
 use std::path::PathBuf;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError, TryLockError};
 
 /// Managed by Tauri; every command borrows it.
 ///
@@ -18,6 +18,7 @@ pub struct AppState {
     watcher: Mutex<Option<RecommendedWatcher>>,
     startup_warnings: Mutex<Vec<String>>,
     capture_shortcut: Mutex<String>,
+    shortcut_change: Mutex<()>,
 }
 
 impl AppState {
@@ -35,6 +36,7 @@ impl AppState {
             watcher: Mutex::new(None),
             startup_warnings: Mutex::new(Vec::new()),
             capture_shortcut: Mutex::new(settings::DEFAULT_CAPTURE_SHORTCUT.to_string()),
+            shortcut_change: Mutex::new(()),
         }
     }
 
@@ -67,6 +69,16 @@ impl AppState {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// Only shortcut changes take this gate; readers never wait for the OS or
+    /// filesystem calls needed to apply a change.
+    pub fn begin_shortcut_change(&self) -> Result<MutexGuard<'_, ()>, String> {
+        match self.shortcut_change.try_lock() {
+            Ok(guard) => Ok(guard),
+            Err(TryLockError::Poisoned(guard)) => Ok(guard.into_inner()),
+            Err(TryLockError::WouldBlock) => Err("Shortcut change already in progress".into()),
+        }
     }
 
     /// The open corpus, opening it now if the last attempt failed. The error
