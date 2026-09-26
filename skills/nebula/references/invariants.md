@@ -17,7 +17,7 @@ exit non-zero; `warn` findings do not.
 | 8 | Non-discussion references have a URI; local URIs resolve relative to `nodes/` and are never absolute | error; warn for an absolute path already in the corpus | `cite` refuses both; `check` reports both |
 | 9 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`) |
 | 10 | Every reference has a note | warn | `check` |
-| 11 | No two tags differ only by case or a trailing `s` | warn | `check` |
+| 11 | No two tags differ only by case or a trailing `s` | warn | `check`; noted at `new`/`promote`/`tag` |
 | 12 | `closed` is set only on a `refuted`/`abandoned` node, never an open one | error | `check` |
 | 13 | A `seed` does not carry a `kill` condition | warn | `status` refuses the move to `seed`; `check` |
 | 14 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
@@ -83,7 +83,7 @@ refusal's `kind` (the envelope is in [verbs.md](verbs.md#refusals-under---json))
 | `\`../x.md\` does not resolve from .../nodes` | `UnresolvedUri` | 8 | Local URIs are relative to `nodes/`. Fix the path (`../../studies/x.md`) or use a URL/wikilink. |
 | `\`X\` is an absolute local path; local references are relative to nodes/` | `AbsoluteUri` | 8 | An absolute path or `file:` URI names nothing on any other machine the corpus is synced to, so it is refused even when it exists here. Rewrite it relative to `nodes/` (`../../studies/x.md`), cite an Observatory record by its id with `--kind observatory`, or use a URL. |
 | `\`X\` is not an Observatory record id` | `InvalidObservatoryId` | 9 | `--kind observatory` takes the bare id (`Q002`, `H007`, `T003`, `R012`), never a path or a slug. Never fall back to `--uri <absolute path>`: it breaks on every other machine. |
-| `\`X\` is not an accepted reference kind; accepted kinds: ...` | `UnknownReferenceKind` | 16 | `--kind` takes one of the listed kinds. Pick the closest (`other` when none fits); never invent a kind. |
+| `\`X\` is not an accepted reference kind; accepted kinds: ...` | `UnknownReferenceKind` | 16 | `--kind` takes one of the listed kinds, in any case. Pick the closest (`other` when none fits); never invent a kind. |
 | `the observatory root must be an absolute path, not \`X\`` | `RelativeObservatoryRoot { root, setting }` | 9 | The setting is per machine and read from any directory. With `(in <file>)`, this machine's setting file is empty or relative: tell the human, who sets it again with an absolute `neb config observatory-root <DIR>`. Otherwise pass the checkout's absolute path. Never write the path into `config.yaml` instead. |
 | `no open inbox entry \`X\`` | `NoSuchInboxEntry` | — | The id is wrong: no inbox line, waiting or settled, carries it. `neb inbox --json`. |
 | `\`X\` was already promoted to \`N\`` / `\`X\` was already dropped` | `InboxEntrySettled { id, settlement }` | — | The entry is settled and the verb has nothing to do. Promoted: work on node `N` (`neb show N`). Dropped: it stays dropped; if the human wants it back, capture it again. Do not retry. |
@@ -113,6 +113,9 @@ refusal's `kind` (the envelope is in [verbs.md](verbs.md#refusals-under---json))
   resolve here and nowhere else. Propose rewriting it relative to `nodes/`, or
   as an Observatory id if that is what it points at; the new reference goes in
   with `neb cite`, since there is no verb that edits one in place.
-- **Rule 11** — `Design` next to `design`, or `study` next to `studies`. Tags
-  are normalised on write, so this only arises from hand edits; propose
-  `neb tag <id> --remove <bad> --add <good>` and name the node.
+- **Rule 11** — `Design` next to `design`, or `study` next to `studies`. Writes
+  normalise case, so a case pair is a hand edit; a plural is usually a write,
+  which printed `note: tag X is close to Y (N nodes)` on stderr when it
+  happened. The finding names the nodes carrying each variant: propose
+  `neb tag <id> --remove <bad> --add <good>` for each node on the minority
+  variant, and name them.

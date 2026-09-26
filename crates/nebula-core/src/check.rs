@@ -15,7 +15,7 @@ use crate::graph::Graph;
 use crate::model::{Doc, EdgeType, Status, is_iso_date};
 use crate::store::Corpus;
 use serde::Serialize;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Stable IDs for corpus invariants. Some rules are enforced before a graph
@@ -177,20 +177,23 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
     // 11. Two tags that differ only by case or a trailing `s` are one label
     //     drifting into two. Writes normalise case, so this mostly catches
     //     hand edits and plurals; a warning keeps drift visible without a
-    //     declared list to maintain.
-    let tags: BTreeSet<&str> = docs
-        .iter()
-        .flat_map(|d| d.node.tags.iter().map(String::as_str))
-        .collect();
-    let tags: Vec<&str> = tags.into_iter().collect();
-    for (i, a) in tags.iter().enumerate() {
-        for b in &tags[i + 1..] {
+    //     declared list to maintain. `ops::close_tags` notes the same drift
+    //     at the write that introduces it. Each variant names the nodes that
+    //     carry it, since those are the files to retag.
+    let carriers = tag_carriers(docs);
+    let tags: Vec<(&str, &Vec<&str>)> = carriers.iter().map(|(t, ids)| (*t, ids)).collect();
+    for (i, (a, on_a)) in tags.iter().enumerate() {
+        for (b, on_b) in &tags[i + 1..] {
             if let Some(how) = tag_drift(a, b) {
                 r.push(
                     Severity::Warn,
                     Rule::TagDrift,
                     None,
-                    format!("tags `{a}` and `{b}` differ only by {how}"),
+                    format!(
+                        "tags `{a}` (on {}) and `{b}` (on {}) differ only by {how}",
+                        on_a.join(", "),
+                        on_b.join(", ")
+                    ),
                 );
             }
         }
@@ -201,8 +204,27 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
     Ok(r)
 }
 
+/// Every tag in the corpus, as written, with the ids of the nodes carrying
+/// it in id order.
+pub(crate) fn tag_carriers(docs: &[Doc]) -> BTreeMap<&str, Vec<&str>> {
+    let mut carriers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for d in docs {
+        for t in &d.node.tags {
+            carriers
+                .entry(t.as_str())
+                .or_default()
+                .push(d.node.id.as_str());
+        }
+    }
+    for ids in carriers.values_mut() {
+        ids.sort_unstable();
+        ids.dedup();
+    }
+    carriers
+}
+
 /// How two distinct tags collide, if they do.
-fn tag_drift(a: &str, b: &str) -> Option<&'static str> {
+pub(crate) fn tag_drift(a: &str, b: &str) -> Option<&'static str> {
     let (a, b) = (a.to_ascii_lowercase(), b.to_ascii_lowercase());
     if a == b {
         return Some("case");
@@ -284,8 +306,17 @@ pub const REFERENCE_KINDS: [&str; 10] = [
 ];
 
 /// Whether a reference kind belongs to the vocabulary accepted for new writes.
+/// Exact: a stored kind is judged as written. Writes normalise first, with
+/// [`normalize_reference_kind`].
 pub fn is_reference_kind(kind: &str) -> bool {
     REFERENCE_KINDS.contains(&kind)
+}
+
+/// A reference kind as a write stores it: trimmed and lowercased, the way
+/// tags are, so `Paper` is `paper` rather than a refusal. Whether the result
+/// is in the vocabulary is still [`is_reference_kind`]'s question.
+pub fn normalize_reference_kind(kind: &str) -> String {
+    kind.trim().to_lowercase()
 }
 
 /// Whether `id` has the shape of an Observatory record id: one of `Q`, `H`,

@@ -36,7 +36,7 @@ and its "What is removed" table for the rules this replaced.
 | 8 | Non-discussion references have a URI; local URIs resolve relative to `nodes/` and are never absolute | error; warn for an absolute path already in the corpus | `cite` refuses both; `check` reports both |
 | 9 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`) |
 | 10 | Every reference has a note | warn | `check` |
-| 11 | No two tags differ only by case or a trailing `s` | warn | `check` |
+| 11 | No two tags differ only by case or a trailing `s` | warn | `check`; noted at `new`/`promote`/`tag` |
 | 12 | `closed` is set only on a `refuted`/`abandoned` node, never an open one | error | `check` |
 | 13 | A `seed` does not carry a `kill` condition | warn | `status` refuses the move to `seed`; `check` |
 | 14 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |

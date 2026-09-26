@@ -2784,8 +2784,30 @@ fn cite_accepts_the_documented_kinds_and_refuses_other_values() {
         );
     }
 
+    // Case is not a second kind: it is lowercased, as tags are, and only
+    // then checked against the vocabulary.
+    for (given, uri) in [
+        ("Paper", "https://example.org/case"),
+        ("Observatory", "q003"),
+    ] {
+        c.run(&[
+            "cite", "--kind", given, "--uri", uri, "--note", "context", &id,
+        ])
+        .assert_ok();
+    }
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(
+        raw.contains("  kind: paper\n  uri: https://example.org/case\n"),
+        "{raw}"
+    );
+    assert!(raw.contains("  kind: observatory\n  uri: Q003\n"), "{raw}");
+    assert!(
+        !raw.contains("Paper") && !raw.contains("Observatory"),
+        "{raw}"
+    );
+
     let before = raw;
-    for kind in ["bogus", "VERDICT", "", "not a kind"] {
+    for kind in ["bogus", "VERDICT", "Bogus", "", "not a kind"] {
         c.run(&[
             "cite",
             "--kind",
@@ -2923,11 +2945,16 @@ fn a_discussion_reference_may_omit_its_uri_but_other_kinds_may_not() {
     c.run(&["cite", &id, "--kind", "paper", "--note", "missing URI"])
         .assert_fails()
         .says("--uri is required unless --kind is discussion");
-    for kind in ["Discussion", "discussions"] {
-        c.run(&["cite", &id, "--kind", kind, "--note", "missing URI"])
-            .assert_fails()
-            .says("--uri is required unless --kind is discussion");
-    }
+    c.run(&[
+        "cite",
+        &id,
+        "--kind",
+        "discussions",
+        "--note",
+        "missing URI",
+    ])
+    .assert_fails()
+    .says("--uri is required unless --kind is discussion");
     c.run(&[
         "cite",
         &id,
@@ -2941,7 +2968,11 @@ fn a_discussion_reference_may_omit_its_uri_but_other_kinds_may_not() {
     .assert_fails()
     .says("--uri is required unless --kind is discussion");
 
-    c.run(&["cite", &id, "--kind", "discussion"]).assert_ok();
+    // The kind's case is normalised before it decides whether a URI is
+    // needed, so `Discussion` is a discussion.
+    c.run(&["cite", &id, "--kind", "Discussion"]).assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(!raw.contains("Discussion"), "{raw}");
     c.run(&["check"])
         .assert_ok()
         .says("reference `r2` has no note saying why it is here")
@@ -4756,9 +4787,89 @@ fn tag_drift_by_case_or_plural_is_a_warning() {
     c.run(&["check"])
         .assert_ok()
         .says("[11]")
-        .says("tags `Physics` and `physics` differ only by case")
-        .says("tags `sim` and `sims` differ only by a trailing `s`")
+        .says(&format!(
+            "tags `Physics` (on {b}) and `physics` (on {a}) differ only by case"
+        ))
+        .says(&format!(
+            "tags `sim` (on {a}) and `sims` (on {b}) differ only by a trailing `s`"
+        ))
         .says("0 errors, 2 warnings");
+
+    let json = c.run(&["--json", "check"]).assert_ok().stdout();
+    let report: serde_json::Value = serde_json::from_str(&json).expect("check --json");
+    let drift: Vec<&str> = report["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["rule"] == 11)
+        .map(|f| f["message"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        drift,
+        [
+            format!("tags `Physics` (on {b}) and `physics` (on {a}) differ only by case"),
+            format!("tags `sim` (on {a}) and `sims` (on {b}) differ only by a trailing `s`"),
+        ],
+        "{json}"
+    );
+}
+
+/// Drift is noted at the write that introduces it, on stderr, and never
+/// refused: there is no declared list to refuse against.
+#[test]
+fn a_write_introducing_a_near_variant_of_a_tag_notes_it_and_succeeds() {
+    let c = Corpus::new();
+    c.run(&["new", "First", "--tag", "physics"]).assert_ok();
+    c.run(&["new", "Second", "--tag", "Physics"]).assert_ok();
+
+    let run = c.run(&["new", "Third", "--tag", "physic"]).assert_ok();
+    assert_eq!(run.stdout_trim(), "third");
+    assert_eq!(
+        run.stderr(),
+        "note: tag physic is close to physics (2 nodes)\n"
+    );
+    let raw = std::fs::read_to_string(c.node_file("third")).unwrap();
+    assert!(
+        raw.contains("tags:\n- physic\n"),
+        "the tag is written as given: {raw}"
+    );
+
+    // `tag --add` says the same, and `--json` keeps stdout the payload.
+    let run = c
+        .run(&["--json", "tag", "first", "--add", "Orrerys"])
+        .assert_ok();
+    assert!(
+        run.stderr().is_empty(),
+        "nothing close yet: {}",
+        run.stderr()
+    );
+    let run = c
+        .run(&["--json", "tag", "second", "--add", "orrery"])
+        .assert_ok();
+    serde_json::from_str::<serde_json::Value>(&run.stdout()).expect("stdout stays JSON");
+    assert_eq!(
+        run.stderr(),
+        "note: tag orrery is close to orrerys (1 node)\n"
+    );
+    let run = c.run(&["tag", "list"]).assert_ok();
+    assert!(run.stderr().is_empty(), "a read notes nothing");
+
+    // A tag someone else already carries is not new to the corpus, so the
+    // write adds nothing to what `check` already says.
+    let run = c.run(&["tag", "first", "--add", "physic"]).assert_ok();
+    assert!(run.stderr().is_empty(), "{}", run.stderr());
+    let run = c.run(&["new", "Fourth", "--tag", "design"]).assert_ok();
+    assert!(run.stderr().is_empty(), "{}", run.stderr());
+}
+
+#[test]
+fn promote_notes_a_tag_close_to_one_in_use() {
+    let c = Corpus::new();
+    c.run(&["new", "First", "--tag", "sims"]).assert_ok();
+    let entry = c.run(&["capture", "a promoted thought"]).stdout_trim();
+    c.run(&["promote", &entry, "--title", "Promoted", "--tag", "SIM"])
+        .assert_ok()
+        .says("note: tag sim is close to sims (1 node)");
 }
 
 // ------------------------------------------------------------------ review --

@@ -62,7 +62,9 @@ pub use graph::{
 pub use lock::{CorpusLock, LOCK_FILE, LOCK_WAIT};
 pub use migrate::{MigrationReport, NodeMigration};
 pub use model::{Closed, Doc, Edge, EdgeType, HUMAN, Node, Note, Origin, Reference, Status};
-pub use ops::{Captured, Citation, Cited, Created, Initialized, NewNode, Promotion, StatusChange};
+pub use ops::{
+    Captured, Citation, Cited, CloseTag, Created, Initialized, NewNode, Promotion, StatusChange,
+};
 pub use store::{Committed, Corpus, HistoryEntry, Inbox, InboxEntry, Settlement};
 
 /// Writes `apps/desktop/src/types/*.ts` from the types above.
@@ -99,6 +101,7 @@ mod ts_export {
         Captured::export_all(&cfg).unwrap();
         Near::export_all(&cfg).unwrap();
         Cited::export_all(&cfg).unwrap();
+        CloseTag::export_all(&cfg).unwrap();
         StatusChange::export_all(&cfg).unwrap();
         Initialized::export_all(&cfg).unwrap();
         Direction::export_all(&cfg).unwrap();

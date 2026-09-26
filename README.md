@@ -30,8 +30,10 @@ corpus   = nodes/ and inbox/                          (elsewhere, private)
 ## Tags
 
 Nodes carry free-form tags, normalised to lowercase kebab-case on every
-write. There is no declared list; `neb check` warns when two tags differ only
-by case or a trailing `s`. Use a second corpus only for a second owner, which
+write. There is no declared list; a write that introduces a tag differing from
+one in use only by case or a trailing `s` goes through with a note on stderr
+(`note: tag physic is close to physics (2 nodes)`), and `neb check` warns on
+any such pair, naming the nodes that carry each. Use a second corpus only for a second owner, which
 is what keeps work and personal material apart.
 
 ```sh

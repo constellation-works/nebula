@@ -221,6 +221,12 @@ way: no `near` key.
 | `neb tag list` | every tag with its node count | — |
 | `neb note [--by <LABEL>] <NODE> <TEXT>...` | append a dated paragraph of reasoning to the body | `--by <LABEL>` (before or after the text) |
 
+`new`, `promote` and `tag --add` print `note: tag physic is close to physics
+(2 nodes)` on stderr, in every output mode, when a tag they introduce to the
+corpus differs from one in use only by case or a trailing `s`. The write has
+already succeeded. Reuse the existing tag unless the difference is deliberate:
+`neb tag <NODE> --remove physic --add physics`.
+
 `new --body <TEXT>` sets the prose at creation; `--body -` reads it from
 standard input. `new --kill "..."` starts the node as a hypothesis; without
 it, a seed.
@@ -340,7 +346,9 @@ changes both nodes.
 |---|---|---|
 | `neb cite <NODE> [--uri <URI>]` | attach context | `--kind` (paper, study, article, note, discussion, book, dataset, thread, observatory, other), `--title`, `--note`, `--by <LABEL>`, `--task`, `--run` |
 
-`--uri` may be omitted only with `--kind discussion`; every other kind requires
+`--kind` is lowercased before it is checked (`--kind Paper` stores `paper`);
+anything still outside the list is refused. `--uri` may be omitted only with
+`--kind discussion`; every other kind requires
 it. A local URI is resolved relative to `nodes/` and refused if it does not
 exist; an absolute path or `file:` URI is refused even when it does, because
 it resolves on this machine only. Always pass `--note`: it is the only field

@@ -241,7 +241,7 @@ pub struct Reference {
     /// Unique within the node, never reused.
     pub id: String,
     /// `paper`, `study`, `article`, `note`, `discussion`, `book`, `dataset`,
-    /// `thread`, `observatory` or `other`.
+    /// `thread`, `observatory` or `other`, lowercase as `cite` writes it.
     pub kind: String,
     /// A URL, DOI, repo path, or almanac wikilink. Discussions may omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -305,7 +305,8 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kill_by: Option<String>,
     /// Free-form labels, lowercase kebab-case, normalised on every write.
-    /// No declared list: `check` warns on drift instead of walling it off.
+    /// No declared list: a write notes drift and `check` warns on it instead
+    /// of walling it off.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
     /// Typed links to other nodes.

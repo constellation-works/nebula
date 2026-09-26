@@ -375,7 +375,9 @@ enum Command {
 
     /// Edit a node's tags, or list every tag with its node count.
     ///
-    /// Tags are normalised to lowercase kebab-case on the way in.
+    /// Tags are normalised to lowercase kebab-case on the way in. A tag new
+    /// to the corpus that differs from one in use only by case or a trailing
+    /// `s` is written, with a note on stderr naming the existing one.
     Tag {
         /// Node id, or `list` to show every tag in the corpus with a count.
         target: String,
@@ -418,8 +420,9 @@ enum Command {
         #[arg(long)]
         uri: Option<String>,
         /// paper, study, article, note, discussion, book, dataset, thread,
-        /// observatory, other. With `observatory`, `--uri` is a bare record
-        /// id (`Q002`) resolved through the configured observatory root.
+        /// observatory, other, in any case (stored lowercase). With
+        /// `observatory`, `--uri` is a bare record id (`Q002`) resolved
+        /// through the configured observatory root.
         #[arg(long, default_value = "other")]
         kind: String,
         /// Human-readable name.
@@ -707,6 +710,28 @@ pub fn main() -> ExitCode {
 }
 
 type Outcome = std::result::Result<ExitCode, Failure>;
+
+/// After a write that added `tags` to `node`, say on stderr which of them
+/// read as a variant of a tag already in use, in every output mode.
+///
+/// Advice, never a refusal: there is no declared list to refuse against, and
+/// `check` rule 11 reports the same drift later. The write has landed by the
+/// time this runs, so a corpus that cannot be read for the comparison costs
+/// the note, not the command; `check` is where an unreadable node surfaces.
+fn note_close_tags(corpus: &Corpus, node: &str, tags: &[String]) {
+    let Ok(close) = ops::close_tags(corpus, node, tags) else {
+        return;
+    };
+    for c in close {
+        eprintln!(
+            "note: tag {} is close to {} ({} node{})",
+            c.tag,
+            c.near,
+            c.nodes,
+            if c.nodes == 1 { "" } else { "s" }
+        );
+    }
+}
 
 /// Resolve a `--body` value, using stdin only for the explicit `-` spelling.
 fn body_value(value: Option<String>) -> std::result::Result<String, Failure> {
@@ -1111,6 +1136,7 @@ fn run(cli: Cli) -> Outcome {
                 );
                 print!("{}", render::suggestions(&created.near));
             }
+            note_close_tags(&corpus, &created.doc.node.id, &created.doc.node.tags);
             commit(&corpus, commits, "promote", &[&entry, &created.doc.node.id])?;
             Ok(ok)
         }
@@ -1171,6 +1197,7 @@ fn run(cli: Cli) -> Outcome {
             let ids: Vec<&str> = std::iter::once(node.id.as_str())
                 .chain(node.edges_of(EdgeType::Contradicts))
                 .collect();
+            note_close_tags(&corpus, &node.id, &node.tags);
             commit(&corpus, commits, "new", &ids)?;
             Ok(ok)
         }
@@ -1330,6 +1357,7 @@ fn run(cli: Cli) -> Outcome {
                 };
                 println!("{} {shown}", render::bold(&target));
             }
+            note_close_tags(&corpus, &target, &add);
             commit(&corpus, commits, "tag", &[&target])?;
             Ok(ok)
         }
@@ -1366,8 +1394,10 @@ fn run(cli: Cli) -> Outcome {
             let (corpus, _lock) = open_locked(root)?;
             let bare = note.as_ref().is_none_or(|n| n.trim().is_empty());
             // Read before the write, so a broken machine setting refuses the
-            // cite rather than failing it after the reference has landed.
-            let observatory = (!json && kind == OBSERVATORY)
+            // cite rather than failing it after the reference has landed. The
+            // kind is compared as the write will store it, so `--kind
+            // Observatory` is read here too.
+            let observatory = (!json && check::normalize_reference_kind(&kind) == OBSERVATORY)
                 .then(|| corpus.observatory_root())
                 .transpose()?;
             let cited = ops::cite(
@@ -1375,7 +1405,7 @@ fn run(cli: Cli) -> Outcome {
                 &node,
                 &Citation {
                     uri,
-                    kind: kind.clone(),
+                    kind,
                     title,
                     note,
                     by,
