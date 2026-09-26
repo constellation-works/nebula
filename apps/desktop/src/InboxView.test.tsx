@@ -38,6 +38,8 @@ function Harness() {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  windowMock.onFocusChanged.mockResolvedValue(() => {});
+  windowMock.hide.mockResolvedValue(undefined);
   mocked.inbox.mockResolvedValue(entries);
   mocked.onCorpusChanged.mockResolvedValue(() => {});
   mocked.corpusPath.mockResolvedValue("/tmp/nowhere/.nebula");
@@ -395,6 +397,55 @@ describe("CaptureBox", () => {
 });
 
 describe("CaptureWindow", () => {
+  it("focuses on mount and each reopening, and hides on Escape", async () => {
+    let focusChanged: (event: { payload: boolean }) => void = () => {};
+    const off = vi.fn();
+    windowMock.onFocusChanged.mockImplementation((handler) => {
+      focusChanged = handler;
+      return Promise.resolve(off);
+    });
+    const { unmount } = render(<CaptureWindow />);
+    const input = screen.getByLabelText("Capture");
+    expect(input).toHaveFocus();
+    await waitFor(() => expect(windowMock.onFocusChanged).toHaveBeenCalledTimes(1));
+
+    input.blur();
+    act(() => focusChanged({ payload: false }));
+    expect(input).not.toHaveFocus();
+    act(() => focusChanged({ payload: true }));
+    expect(input).toHaveFocus();
+    input.blur();
+    act(() => focusChanged({ payload: true }));
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(windowMock.hide).toHaveBeenCalledTimes(1);
+    expect(mocked.capture).not.toHaveBeenCalled();
+    unmount();
+    expect(off).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides after confirmation, but keeps a new draft open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mocked.capture.mockResolvedValue({ id: "9999", at: "2026-09-13T12:00", text: "saved" });
+    render(<CaptureWindow />);
+    const input = screen.getByLabelText("Capture");
+    fireEvent.change(input, { target: { value: "saved" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("captured")).toBeInTheDocument();
+    expect(windowMock.hide).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "next thought" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(CONFIRM_MS); });
+    expect(windowMock.hide).not.toHaveBeenCalled();
+    expect(input).toHaveValue("next thought");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("captured")).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(CONFIRM_MS); });
+    expect(windowMock.hide).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   it("clears a previous error on reopening while keeping the draft", async () => {
     let focusChanged: (event: { payload: boolean }) => void = () => {};
     windowMock.onFocusChanged.mockImplementation((handler) => {

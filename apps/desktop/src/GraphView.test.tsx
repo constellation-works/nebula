@@ -289,6 +289,53 @@ describe("GraphView", () => {
     );
   });
 
+  it("converts line wheel deltas and clamps pointer-centered zoom", async () => {
+    mocked.graph.mockResolvedValue(synthetic(2));
+    render(<GraphView />);
+    await waitFor(() => expect(drawnNodes()).toHaveLength(2));
+    const svg = canvas();
+    const scene = svg.querySelector("g.scene")!;
+    vi.spyOn(svg, "getBoundingClientRect").mockReturnValue({ left: 20, top: 30 } as DOMRect);
+
+    fireEvent.wheel(svg, { deltaMode: 1, deltaX: 2, deltaY: 3 });
+    expect(scene).toHaveAttribute("transform", "translate(8 -8) scale(1)");
+    fireEvent.wheel(svg, { ctrlKey: true, clientX: 120, clientY: 130, deltaY: -10000 });
+    expect(scene).toHaveAttribute("transform", "translate(-176 -224) scale(3)");
+    fireEvent.wheel(svg, { ctrlKey: true, clientX: 120, clientY: 130, deltaY: 10000 });
+    expect(scene).toHaveAttribute("transform", "translate(86.2 83.8) scale(0.15)");
+  });
+
+  it("ignores small drags, pans past the threshold, and fits the laid out graph", async () => {
+    mocked.graph.mockResolvedValue(synthetic(4));
+    const layoutSpy = vi.spyOn(layoutClient, "layoutGraph");
+    render(<GraphView />);
+    await waitFor(() => expect(drawnNodes()).toHaveLength(4));
+    const svg = canvas();
+    const scene = svg.querySelector("g.scene")!;
+    Object.defineProperties(svg, {
+      clientWidth: { configurable: true, value: 400 },
+      clientHeight: { configurable: true, value: 300 },
+    });
+    fireEvent.click(svg.querySelector('g.node[data-id="n2"]')!);
+    expect(svg.querySelector('g.node[data-id="n2"]')).toHaveClass("node--selected");
+
+    fireEvent.mouseDown(svg, { button: 0, clientX: 50, clientY: 50 });
+    fireEvent.mouseMove(svg, { clientX: 52, clientY: 52 });
+    expect(scene).toHaveAttribute("transform", "translate(40 40) scale(1)");
+    fireEvent.mouseMove(svg, { clientX: 75, clientY: 35 });
+    expect(scene).toHaveAttribute("transform", "translate(65 25) scale(1)");
+    fireEvent.mouseUp(svg, { clientX: 75, clientY: 35 });
+    expect(svg.querySelector('g.node[data-id="n2"]')).toHaveClass("node--selected");
+
+    const laid = await layoutSpy.mock.results[0]!.value;
+    const k = Math.min(1, 320 / laid.width!, 220 / laid.height!);
+    fireEvent.click(screen.getByRole("button", { name: "Fit" }));
+    expect(scene).toHaveAttribute(
+      "transform",
+      `translate(${(400 - laid.width! * k) / 2} ${(300 - laid.height! * k) / 2}) scale(${k})`,
+    );
+  });
+
   it("refetches on corpus-changed and keeps the selection", async () => {
     let fire: () => void = () => {};
     mocked.onCorpusChanged.mockImplementation(async (handler) => {
@@ -301,11 +348,16 @@ describe("GraphView", () => {
     fireEvent.click(canvas().querySelector('g.node[data-id="n4"]')!);
     await screen.findByRole("complementary", { name: "Node" });
 
+    fireEvent.wheel(canvas(), { deltaX: 12, deltaY: 30 });
+    const viewport = canvas().querySelector("g.scene")!.getAttribute("transform");
+    expect(viewport).toBe("translate(28 10) scale(1)");
+
     mocked.graph.mockResolvedValue(synthetic(6));
     act(() => fire());
     await waitFor(() => expect(drawnNodes()).toHaveLength(6));
     expect(mocked.graph).toHaveBeenCalledTimes(2);
     expect(canvas().querySelector('g.node[data-id="n4"]')).toHaveClass("node--selected");
+    expect(canvas().querySelector("g.scene")).toHaveAttribute("transform", viewport);
     expect(screen.getByRole("complementary", { name: "Node" })).toBeInTheDocument();
     // The panel re-reads its node, in case the body changed.
     expect(mocked.node).toHaveBeenCalledTimes(2);
@@ -326,6 +378,26 @@ describe("GraphView", () => {
     // jsdom is slower than the webview; this is a ceiling, not the number.
     console.info(`200 nodes: layout + render in jsdom took ${Math.round(ms)} ms`);
     expect(ms).toBeLessThan(5000);
+  });
+
+  it("lays out 500 nodes and preserves their positions on refetch", async () => {
+    let fire: () => void = () => {};
+    mocked.onCorpusChanged.mockImplementation(async (handler) => {
+      fire = handler;
+      return () => {};
+    });
+    mocked.graph.mockResolvedValueOnce(synthetic(500)).mockResolvedValueOnce(synthetic(500));
+    const layoutSpy = vi.spyOn(layoutClient, "layoutGraph");
+    render(<GraphView />);
+    await waitFor(() => expect(drawnNodes()).toHaveLength(500), { timeout: 20_000 });
+    const positions = [...drawnNodes()].map((node) => [node.getAttribute("data-id"), node.getAttribute("transform")]);
+    expect(layoutSpy).toHaveBeenCalledTimes(1);
+
+    act(() => fire());
+    await waitFor(() => expect(layoutSpy).toHaveBeenCalledTimes(2));
+    await act(async () => { await layoutSpy.mock.results[1]!.value; });
+    expect(drawnNodes()).toHaveLength(500);
+    expect([...drawnNodes()].map((node) => [node.getAttribute("data-id"), node.getAttribute("transform")])).toEqual(positions);
   });
 });
 
