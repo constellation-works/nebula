@@ -490,6 +490,23 @@ shows. Reverses if a legacy stamp is found that was not written in the
 machine's local time often enough to mislead, in which case legacy `at`
 should pass through as written with a separate field for the reading.
 
+## A date in `show --at` is the day `log` prints
+
+`neb show <id> --at <YYYY-MM-DD>` resolves to the last commit that touched
+the node whose own date, the calendar day in the offset the commit was
+recorded with, is on or before the date. That is the date `neb log` prints,
+so a date copied from `log` names the commit beside it. It was
+`git rev-list --before="<date> 23:59:59"`, which git reads in the reader's
+timezone: at UTC+14 the end of a day falls before noon UTC on it, and at
+UTC-11 after the early hours of the next UTC day, so the same corpus
+answered the same date with different revisions by where it was read, and
+disagreed with `log` (ORB-13209). The end of the day in the reader's local
+time was considered and rejected: it cannot be timezone-independent, and a
+note someone wrote late at night abroad would move to a different day for
+every reader. The cost is that a commit recorded far ahead of UTC is on a
+day that has not started yet for a reader far behind it. Reverses if `log`
+comes to print dates in the reader's zone, in which case both move together.
+
 ## Owner-only modes are set on Unix only
 
 This departs from STD-05@1 §R8, a MUST, on platforms without Unix modes.

@@ -8850,12 +8850,18 @@ fn git_init(dir: &Path) {
 /// Commit the current index at a fixed date, independent of machine config
 /// and wall-clock time, so date-based history assertions are deterministic.
 fn git_commit_at(dir: &Path, date: &str, message: &str) {
+    git_commit_stamped(dir, &format!("{date}T12:00:00Z"), message);
+}
+
+/// Commit everything with `stamp`, a full ISO 8601 date and time with its
+/// offset, as both author and committer date.
+fn git_commit_stamped(dir: &Path, stamp: &str, message: &str) {
     git(dir, &["add", "-A"]);
     let out = output(
         git_command(dir, support::home())
             .args(["commit", "-q", "-m", message])
-            .env("GIT_AUTHOR_DATE", format!("{date}T12:00:00Z"))
-            .env("GIT_COMMITTER_DATE", format!("{date}T12:00:00Z")),
+            .env("GIT_AUTHOR_DATE", stamp)
+            .env("GIT_COMMITTER_DATE", stamp),
     );
     assert!(
         out.status.success(),
@@ -9025,6 +9031,75 @@ fn show_at_unknown_revision_is_not_no_node_at_revision() {
 
     let absent = c.run(&["--json", "show", &id, "--at", &before]).refusal();
     assert_eq!(absent["code"], "no_node_at_revision", "{absent}");
+}
+
+/// A date given to `show --at` names the day `log` prints, which is each
+/// commit's own day in the offset it was recorded with, so the reader's
+/// timezone never moves it. The commits sit where the end of a day in the
+/// reader's zone used to cut them wrongly: at UTC+14 the end of 2020-01-01
+/// falls before its noon-UTC commit, and at UTC-11 or UTC-12 it falls after
+/// the early-morning commit dated 2020-01-02.
+#[test]
+fn show_at_a_date_is_timezone_independent() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "Days are the log's", "--id", "days-are-the-logs"])
+        .assert_ok()
+        .stdout_trim();
+    git_init(&c.root);
+    git_commit_stamped(&c.root, "2020-01-01T12:00:00Z", &format!("neb new {id}"));
+    let created = git(&c.root, &["rev-parse", "HEAD"]).trim().to_string();
+    c.run(&["sharpen", &id, "--kill", "a zone moves the day"])
+        .assert_ok();
+    git_commit_stamped(
+        &c.root,
+        "2020-01-02T05:00:00Z",
+        &format!("neb sharpen {id}"),
+    );
+    let sharpened = git(&c.root, &["rev-parse", "HEAD"]).trim().to_string();
+    // A commit recorded in its author's own far-east offset is dated by it:
+    // 2020-01-03 at UTC+14, which is still 2020-01-02 in UTC.
+    c.run(&["note", &id, "written a day ahead"]).assert_ok();
+    git_commit_stamped(
+        &c.root,
+        "2020-01-03T08:00:00+14:00",
+        &format!("neb note {id}"),
+    );
+    let noted = git(&c.root, &["rev-parse", "HEAD"]).trim().to_string();
+
+    let log: Vec<serde_json::Value> =
+        serde_json::from_str(&c.run(&["--json", "log", &id]).assert_ok().stdout()).unwrap();
+    let dates: Vec<_> = log.iter().map(|entry| entry["date"].clone()).collect();
+    assert_eq!(dates, ["2020-01-03", "2020-01-02", "2020-01-01"], "{log:?}");
+
+    // POSIX zones, so the offsets hold without tz data: UTC+14, UTC-11,
+    // UTC-12 and UTC itself.
+    let zones = ["XYZ-14", "XYZ+11", "XYZ+12", "UTC0"];
+    for (date, revision) in [
+        ("2020-01-01", &created),
+        ("2020-01-02", &sharpened),
+        ("2020-01-03", &noted),
+    ] {
+        let by_hash = c
+            .run(&["--json", "show", &id, "--at", revision])
+            .assert_ok()
+            .stdout();
+        for zone in zones {
+            let by_date = c
+                .run_with_env(&["--json", "show", &id, "--at", date], &[("TZ", zone)])
+                .assert_ok()
+                .stdout();
+            assert_eq!(
+                by_date, by_hash,
+                "`--at {date}` under TZ={zone} is not the revision `log` dates {date}"
+            );
+        }
+    }
+    for zone in zones {
+        c.run_with_env(&["show", &id, "--at", "2019-12-31"], &[("TZ", zone)])
+            .assert_fails()
+            .says("no node `days-are-the-logs` at `2019-12-31`");
+    }
 }
 
 #[test]

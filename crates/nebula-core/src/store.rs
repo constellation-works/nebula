@@ -611,7 +611,8 @@ impl Corpus {
             .collect())
     }
 
-    /// Read one node as it existed at a commit hash or at the end of a date.
+    /// Read one node as it existed at a commit hash, or on a date: after the
+    /// last commit that day, dated the way [`Self::history`] dates it.
     pub fn load_at(&self, id: &str, at: &str) -> Result<Doc> {
         // The id becomes half of a git pathspec here rather than a path on
         // disk, and `git show <rev>:nodes/../../x.md` reads outside the
@@ -621,20 +622,8 @@ impl Corpus {
         self.require_git()?;
         let path = format!("nodes/{id}.md");
         let revision = if model::is_iso_date(at) {
-            let before = format!("{at} 23:59:59");
-            git_ok(
-                &self.root,
-                &[
-                    "rev-list",
-                    "-1",
-                    &format!("--before={before}"),
-                    "HEAD",
-                    "--",
-                    &path,
-                ],
-            )?
-            .trim()
-            .to_string()
+            self.last_commit_on_or_before(&path, at)?
+                .unwrap_or_default()
         } else if at.len() >= 4 && at.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             at.to_string()
         } else {
@@ -693,6 +682,42 @@ impl Corpus {
             Some(1) => Ok(false),
             _ => Err(git_failed(&self.root, "rev-parse", &out.stderr.text())),
         }
+    }
+
+    /// The newest commit reachable from `HEAD` that touched `path` on or
+    /// before `date`, taking each commit's date as [`Self::history`] prints
+    /// it: the calendar day in the offset the commit was recorded with.
+    ///
+    /// Not `rev-list --before=<date> 23:59:59`: git reads a date without an
+    /// offset in the reader's timezone, so the same corpus answered the same
+    /// date differently by where it was read. At UTC+14 the end of a day falls
+    /// before noon UTC on it, and a commit `log` dated that day was missed.
+    /// The commit's own day is fixed when it is written, so every reader gets
+    /// the revision that `log` shows for the date.
+    fn last_commit_on_or_before(&self, path: &str, date: &str) -> Result<Option<String>> {
+        let listed = git_ok(
+            &self.root,
+            &[
+                "rev-list",
+                "--no-commit-header",
+                "--format=%H %cs",
+                "HEAD",
+                "--",
+                path,
+            ],
+        )?;
+        for line in listed.lines() {
+            let Some((hash, day)) = line.split_once(' ') else {
+                return Err(Error::corpus(
+                    "git rev-list returned a malformed commit record",
+                ));
+            };
+            // Both sides are `YYYY-MM-DD`, so text order is date order.
+            if day <= date {
+                return Ok(Some(hash.to_string()));
+            }
+        }
+        Ok(None)
     }
 
     fn require_git(&self) -> Result<()> {

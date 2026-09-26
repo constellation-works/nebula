@@ -641,9 +641,11 @@ kill: a corpus of 50+ nodes needs a cross-cutting query that tags cannot answer
 ```
 
 `neb show <NODE> --at <HASH|YYYY-MM-DD>` has exactly the same text and JSON
-shape as current `show`; a date means the final commit on that date. A date
-before the node existed is refused. `neb log <NODE>` prints short hash, date,
-and message. When no commit has touched the node, text output says `no commits
+shape as current `show`; a date means the final commit on that date as
+`neb log` dates it, which is the commit's own day in the offset it was
+recorded with. The reader's timezone never changes which revision a date
+names. A date before the node existed is refused. `neb log <NODE>` prints
+short hash, date, and message. When no commit has touched the node, text output says `no commits
 touched this node`; its JSON stays `[]`. Otherwise its JSON keeps the full hash:
 
 ```json
