@@ -105,6 +105,8 @@ Then `neb check` one last time and report it.
 
 Fixture: three nodes, one hypothesis with a kill and a reference, one seed,
 one refuted; one live inbox entry.
+This transcript uses `agent:session` as the example agent label; use your own
+session or crew label after `agent:` in a real session.
 
 > **human:** let's clear the inbox
 
@@ -133,7 +135,7 @@ $ neb list --json | jq -c '.[] | {id, status, tags}'
 > **human:** promote it as the claim, parent tags-beat-domains
 
 ```sh
-$ neb promote a6e8 --title "Review as a weekly Orbit routine" --parent tags-beat-domains --tag design --task DANI-10348 --run jrun-20260913-0113-c3
+$ neb promote a6e8 --title "Review as a weekly Orbit routine" --parent tags-beat-domains --tag design --by agent:session --task DANI-10348 --run jrun-20260913-0113-c3
 review-as-a-weekly-orbit-routine /…/nodes/review-as-a-weekly-orbit-routine.md
 $ neb check
 4 nodes, 0 errors, 0 warnings

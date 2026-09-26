@@ -1,6 +1,6 @@
 ---
 name: nebula
-description: nebula — the idea lineage graph and its `neb` CLI. Use when a human says "capture that", "that's a nebula seed", asks to triage the inbox, sharpen, link, cite, close or hand off an idea, trace where an idea came from, run `neb review`, or when an Orbit routine reads a nebula corpus unattended. Covers the corpus location, every verb and its `--json` shape, the rules in invariants.md and their refusals, and the two operating modes.
+description: nebula — the idea lineage graph and its `neb` CLI. Use when a human says "capture that", "that's a nebula seed", asks to triage the inbox, sharpen, link, cite, close or hand off an idea, asks "where did this idea come from?" (trace) or "have I thought about this before?" (near), runs `neb review`, or when an Orbit routine reads a nebula corpus unattended. Covers the corpus location, every verb and its `--json` shape, the rules in invariants.md and their refusals, and the two operating modes.
 ---
 
 # nebula
@@ -16,9 +16,9 @@ think. **The human is the author; the agent is the hands.**
 | | Session mode | Routine mode |
 |---|---|---|
 | When | A human is present and directing | Unattended: an Orbit routine, a cron, a sweep |
-| Writes | Yes — run the verbs directly | **Never.** Reads only |
+| Corpus writes | Yes — run the verbs directly | **Never.** Read only |
 | After every write | `neb check`; report the result and the changed ids | — |
-| Output | The changed node ids and the check result | Proposals in `<root>/review.md`, one line of reasoning each |
+| Output | The changed node ids and the check result | `nebula-review.md` attached to the Orbit task, or an explicit path outside the corpus for other routine jobs |
 
 If you cannot tell, you are in routine mode. A mutating verb in routine mode
 is the one thing this skill forbids outright. Read
@@ -48,15 +48,16 @@ scratch corpus always use `neb --root <scratch-dir> init` and never pass
 
 ## The verbs
 
-Mutating: `capture`, `promote`, `drop`, `new`, `sharpen`, `status`, `link`,
-`tag`, `note`, `cite`, `handoff`, `migrate`, `config`. Read-only: `inbox`, `show`, `list`, `near`, `trace`,
-`impact`, `graph --json`, `review` (and `review --short`), `check`, `tag list`. Every corpus
-verb listed here (plus `init`) emits JSON on stdout under `--json`;
-[verbs.md](references/verbs.md) has each one's flags and its real shape. Shell
-`completions` is the one exception. Prefer `--json` for anything you will
-reason over. `neb triage` is the human's interactive loop over the inbox, a
-key per entry; it refuses `--json`, so an agent triages with `inbox`, `near`,
-`promote` and `drop` instead.
+Mutating corpus commands: `init`, `migrate`, `config`, `capture`, `promote`,
+`drop`, `new`, `edit`, `sharpen`, `status`, `link`, `tag`, `note`, `cite`,
+and `handoff`. Read-only corpus commands: `check`, `inbox`, `show`, `log`, `list`, `near`,
+`trace`, `impact`, `graph`, `open`, and `review` (including `review --short`),
+plus `tag list`. Every corpus command listed here emits JSON on stdout under
+`--json`; [verbs.md](references/verbs.md) has each one's flags and its real
+shape. `completions` generates shell scripts and is not a corpus command.
+Prefer `--json` for anything you will reason over. `neb triage` is the human's
+interactive loop over the inbox, a key per entry; it refuses `--json`, so an
+agent triages with `inbox`, `near`, `promote` and `drop` instead.
 
 ## Linking to Observatory
 
@@ -151,4 +152,4 @@ enforces each, and the move that resolves it.
 | [verbs.md](references/verbs.md) | Every verb, its flags, and its `--json` shape from a real corpus. |
 | [invariants.md](references/invariants.md) | The rules, which verb refuses what, and what to do instead. |
 | [session-mode.md](references/session-mode.md) | The directed flow: triage with the human, sharpen, link, cite, close; check after every write. Worked transcript. |
-| [routine-mode.md](references/routine-mode.md) | The unattended flow: read, then write proposals to `review.md`. Format and worked transcript. |
+| [routine-mode.md](references/routine-mode.md) | The unattended flow: read, then attach proposals as `nebula-review.md` to the Orbit task or save them outside the corpus. Format and worked transcript. |
