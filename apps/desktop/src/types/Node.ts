@@ -49,7 +49,8 @@ kill?: string | null,
 kill_by?: string | null, 
 /**
  * Free-form labels, lowercase kebab-case, normalised on every write.
- * No declared list: `check` warns on drift instead of walling it off.
+ * No declared list: a write notes drift and `check` warns on it instead
+ * of walling it off.
  */
 tags?: Array<string>, 
 /**

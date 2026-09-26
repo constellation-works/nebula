@@ -107,7 +107,8 @@ falsifier.
   the candidates with `neb show` and `neb trace`, pass one as `--parent`
   only if you can say why in a line, otherwise promote as a root, and reuse
   the parent's tags. `near` suggests and never links; an empty answer means
-  a root, not a failure. Never invent a new tag without saying so.
+  a root, not a failure. Never invent a new tag without saying so, and when
+  a write notes `tag X is close to Y`, retag to `Y` unless `X` is meant.
 - **Drop** when it duplicates a node (say which) or is an action item, not an
   idea. Dropping is a normal outcome, not a failure.
 - **Sharpen** the moment a seed has a falsifier: `--kill` is written before

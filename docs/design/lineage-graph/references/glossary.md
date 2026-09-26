@@ -45,8 +45,9 @@ you stopped caring. Both persist forever.
 closed. Absent on every other status.
 
 **Tag.** A free-form label, normalised to lowercase kebab-case on every write.
-No declared list; `check` warns when two tags differ only by case or a
-trailing `s`. `tag list` shows every tag in the corpus with its node count.
+No declared list; a write that introduces a tag differing from one in use
+only by case or a trailing `s` notes it on stderr, and `check` warns on every
+such pair, naming the nodes carrying each. `tag list` shows every tag in the corpus with its node count.
 
 **Graph.** The whole corpus as one `{nodes, edges}` export: what
 [docs/design/v0.2/1_spec.md](../../v0.2/1_spec.md) specifies as `neb graph

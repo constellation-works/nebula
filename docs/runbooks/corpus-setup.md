@@ -143,7 +143,9 @@ What it does, and does not do:
 
 A fresh corpus has no declared structure to set up: tags are free-form,
 normalised to lowercase kebab-case on write, and there is nothing to
-initialize before using them.
+initialize before using them. A new tag that differs from one already in use
+only by case or a trailing `s` is still written, with a note on stderr
+naming the existing one; reuse that one unless the difference is meant.
 
 ```sh
 neb new "Shear law from scarcity" --tag principia --kill "..."

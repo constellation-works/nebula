@@ -67,7 +67,8 @@ out to be one more decision standing between a person and capturing the idea. `l
 `review --short` narrow with `--tag` (repeatable, every one required); `trace` and
 `impact` always walk the whole corpus regardless of tags, because an
 observation in one field feeding a hypothesis in another is precisely the link
-the graph exists to surface. `neb tag list` and `check`'s drift warning (two
+the graph exists to surface. `neb tag list`, the note a write prints when it
+introduces a near variant of a tag in use, and `check`'s drift warning (two
 tags differing only by case or a trailing `s`) are what keep free-form tags
 from rotting the way a closed list was meant to prevent. See
 [docs/design/v0.2/1_spec.md](../v0.2/1_spec.md) ("What is removed") for why the

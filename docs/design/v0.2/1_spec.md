@@ -106,13 +106,16 @@ Field rules:
   since the kill stays; it reopens as a `hypothesis`.
 - `tags`: free strings, lowercase kebab-case enforced on write (`Physics` →
   `physics`), using the same Unicode letter-and-digit rule as ids. No declared
-  list. `check` warns on two tags that differ only by case or a trailing `s`,
-  so drift is visible without a wall.
+  list. A write that introduces a tag differing from one in use only by case
+  or a trailing `s` succeeds with a note on stderr, and `check` warns on every
+  such pair, naming the nodes carrying each, so drift is visible without a
+  wall.
 - `edges`: genealogy `derives-from | refines | generalizes | reopens`, enforced
   acyclic; `contradicts`, symmetric, written on both nodes by `link`.
 - `references`: `id, kind, uri, title, note, added`; `kind` is one of `paper |
   study | article | note | discussion | book | dataset | thread | observatory |
-  other`. `cite` refuses other values; `check` warns about unexpected values in
+  other`. `cite` lowercases the kind it is given and refuses anything still
+  outside the list; `check` warns about unexpected values in
   an existing corpus so older or hand-edited files still load. `note` is the
   field that matters; `check` warns when it is empty.
   A `verdict` or `strength` key is a parse error (`deny_unknown_fields`).
@@ -171,7 +174,7 @@ return type serialised; see [2_architecture.md](2_architecture.md).
 | 8 | Non-discussion references have a URI; local URIs resolve relative to `nodes/` and are never absolute | error; warn for an absolute path already in the corpus | `cite` refuses both; `check` reports both |
 | 9 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`) |
 | 10 | Every reference has a note | warn | `check` |
-| 11 | No two tags differ only by case or a trailing `s` | warn | `check` |
+| 11 | No two tags differ only by case or a trailing `s` | warn | `check`; noted at `new`/`promote`/`tag` |
 | 12 | `closed` is set only on a `refuted`/`abandoned` node, never an open one | error | `check` |
 | 13 | A `seed` does not carry a `kill` condition | warn | `status` refuses the move to `seed`; `check` |
 | 14 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |

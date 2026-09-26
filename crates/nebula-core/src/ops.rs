@@ -17,16 +17,17 @@
 //! A caller that wants one critical section over a verb *and* the [`commit`]
 //! that records it takes [`Corpus::lock`] itself and holds it across both;
 //! the lock is re-entrant on one thread, so the op still taking it underneath
-//! costs nothing. Queries take nothing: [`suggest`] and everything in
-//! [`crate::graph`] read a corpus that a writer may be part-way through, and
-//! that is the trade the lock exists to make — writers wait, readers never do.
+//! costs nothing. Queries take nothing: [`suggest`], [`close_tags`] and
+//! everything in [`crate::graph`] read a corpus that a writer may be part-way
+//! through, and that is the trade the lock exists to make — writers wait,
+//! readers never do.
 //!
 //! Which invariants live here rather than in `check` is a deliberate choice
 //! per rule. See `docs/design/lineage-graph/specs/invariants.md`.
 
 use crate::check::{
-    OBSERVATORY, is_absolute_local, is_local_path, is_observatory_id, is_reference_kind,
-    resolve_local,
+    self, OBSERVATORY, is_absolute_local, is_local_path, is_observatory_id, is_reference_kind,
+    normalize_reference_kind, resolve_local,
 };
 use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
@@ -83,6 +84,19 @@ pub struct Cited {
     pub doc: Doc,
     /// The id of the reference that was added.
     pub reference: String,
+}
+
+/// A tag a write has just introduced that reads as a variant of one already
+/// in use: the same label but for case or a trailing `s`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct CloseTag {
+    /// The tag as the write stored it.
+    pub tag: String,
+    /// The tag already in use that it collides with, as written there.
+    pub near: String,
+    /// How many nodes carry `near`.
+    pub nodes: usize,
 }
 
 /// A node that has moved along its lifecycle.
@@ -155,7 +169,8 @@ pub struct Citation {
     /// only for a discussion.
     pub uri: Option<String>,
     /// `paper`, `study`, `article`, `note`, `discussion`, `book`, `dataset`,
-    /// `thread`, `observatory` or `other`.
+    /// `thread`, `observatory` or `other`, in any case: it is lowercased
+    /// before it is checked.
     pub kind: String,
     /// Human-readable name.
     pub title: Option<String>,
@@ -662,24 +677,27 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     let _lock = corpus.lock()?;
     let by = model::author(args.by.as_deref())?;
     let mut doc = corpus.load(id)?;
+    // Case is normalised the way tags are: `Paper` is a spelling of `paper`,
+    // not a new kind. Anything still outside the vocabulary is refused.
+    let kind = normalize_reference_kind(&args.kind);
     let uri = args
         .uri
         .as_deref()
         .map(str::trim)
         .filter(|uri| !uri.is_empty())
         .map(str::to_owned);
-    if uri.is_none() && args.kind != "discussion" {
+    if uri.is_none() && kind != "discussion" {
         return Err(Error::corpus(
             "--uri is required unless --kind is discussion",
         ));
     }
-    if !is_reference_kind(&args.kind) {
+    if !is_reference_kind(&kind) {
         return Err(Error::UnknownReferenceKind(args.kind.clone()));
     }
     // An Observatory record id is checked for its shape at the point of
     // action, because a path or a slug stored here would never resolve and
     // the mistake is obvious now and cryptic later.
-    let uri = match (args.kind.as_str(), uri.as_deref()) {
+    let uri = match (kind.as_str(), uri.as_deref()) {
         (OBSERVATORY, Some(record)) => {
             let record = record.trim().to_ascii_uppercase();
             if !is_observatory_id(&record) {
@@ -701,7 +719,7 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     // in `check` after the context of why it was attached has gone.
     if let Some(uri) = uri
         .as_deref()
-        .filter(|_| args.kind != OBSERVATORY)
+        .filter(|_| kind != OBSERVATORY)
         .filter(|uri| is_local_path(uri) && !resolve_local(corpus, uri).exists())
     {
         return Err(Error::UnresolvedUri {
@@ -712,7 +730,7 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     let reference = doc.node.next_reference_id();
     doc.node.references.push(Reference {
         id: reference.clone(),
-        kind: args.kind.clone(),
+        kind,
         uri,
         title: args.title.clone(),
         note: args.note.clone(),
@@ -846,6 +864,46 @@ pub fn tag_add(corpus: &Corpus, id: &str, tags: &[String]) -> Result<Doc> {
 /// the same label, because both are normalised first.
 pub fn tag_remove(corpus: &Corpus, id: &str, tags: &[String]) -> Result<Doc> {
     edit_tags(corpus, id, &[], &model::normalize_tags(tags))
+}
+
+/// Which of `tags` on node `id` read as a variant of a tag already in use.
+///
+/// A tag counts only when this write introduced it to the corpus: no node
+/// but `id` carries it. It is then compared with every other tag in the
+/// corpus, by the rule `check` warns on (case, or a trailing `s`), and each
+/// collision is returned with the number of nodes carrying the existing
+/// variant. `tags` are normalised first, so a caller passes what it was
+/// given.
+///
+/// Run after the write, over the corpus as it now is. A read, not a guard:
+/// there is no declared list to refuse against, so nothing here stops a
+/// write, and an empty result says only that nothing collided.
+pub fn close_tags(corpus: &Corpus, id: &str, tags: &[String]) -> Result<Vec<CloseTag>> {
+    let tags = model::normalize_tags(tags);
+    if tags.is_empty() {
+        return Ok(Vec::new());
+    }
+    let docs = corpus.load_all()?;
+    let carriers = check::tag_carriers(&docs);
+    let mut close = Vec::new();
+    for tag in &tags {
+        let introduced = carriers
+            .get(tag.as_str())
+            .is_none_or(|ids| ids.iter().all(|carrier| *carrier == id));
+        if !introduced {
+            continue;
+        }
+        for (existing, ids) in &carriers {
+            if *existing != tag.as_str() && check::tag_drift(tag, existing).is_some() {
+                close.push(CloseTag {
+                    tag: tag.clone(),
+                    near: (*existing).to_string(),
+                    nodes: ids.len(),
+                });
+            }
+        }
+    }
+    Ok(close)
 }
 
 fn edit_tags(corpus: &Corpus, id: &str, add: &[String], remove: &[String]) -> Result<Doc> {

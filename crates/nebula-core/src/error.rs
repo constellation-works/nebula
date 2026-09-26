@@ -219,9 +219,10 @@ pub enum Error {
     #[error("title `{0}` does not reduce to a usable id")]
     UnusableTitle(String),
 
-    /// A new reference's `kind` is not in [`crate::check::REFERENCE_KINDS`].
-    /// Only new writes are held to the vocabulary; `check` reports an
-    /// unexpected kind already on disk as a warning instead.
+    /// A new reference's `kind` is not in [`crate::check::REFERENCE_KINDS`],
+    /// even lowercased. Carries the kind as it was given. Only new writes
+    /// are held to the vocabulary; `check` reports an unexpected kind already
+    /// on disk as a warning instead.
     #[error(
         "`{0}` is not an accepted reference kind; accepted kinds: {accepted}",
         accepted = crate::check::REFERENCE_KINDS.join(", ")
