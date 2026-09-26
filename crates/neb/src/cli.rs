@@ -1519,8 +1519,15 @@ fn run(cli: Cli) -> Outcome {
         } => {
             let mut corpus = Corpus::open(root)?;
             // Setting the root writes this machine's file and nothing in the
-            // corpus, so only `--drop-legacy` takes the corpus lock. Reading
-            // it back takes none and so never waits on a writer.
+            // corpus, so it takes the machine-setting lock and only
+            // `--drop-legacy` takes the corpus lock. Both are taken here, in
+            // the order `lock.rs` documents, before either write, so a busy
+            // lock refuses with nothing written. Reading the setting back
+            // takes neither and so never waits on a writer.
+            let _settings = dir
+                .is_some()
+                .then(Corpus::lock_machine_settings)
+                .transpose()?;
             let _lock = drop_legacy.then(|| corpus.lock()).transpose()?;
             if let Some(dir) = &dir {
                 ops::set_observatory_root(&corpus, dir)?;
@@ -2267,6 +2274,11 @@ fn out_json<T: serde::Serialize>(v: &T) -> std::result::Result<(), Failure> {
 }
 
 /// Send a rendered report to a file, or print it, per `--out`.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "`--out` names a report file of the user's choosing, not nebula state, so it is \
+              written where and how they asked rather than through the private durable helper"
+)]
 fn write_report(out: Option<&Path>, text: &str) -> std::result::Result<(), Failure> {
     match out {
         Some(path) => std::fs::write(path, format!("{text}\n"))

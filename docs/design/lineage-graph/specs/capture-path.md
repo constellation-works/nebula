@@ -108,7 +108,10 @@ four-hex-character space across every live entry in the inbox. Capture tries
 hash-derived candidates, then the remaining space; if every id is occupied, it
 refuses the capture rather than reusing an id. It reads the inbox to enforce
 that corpus-wide uniqueness, then appends one new line to the current month's
-file; it never rewrites an existing line.
+file; it never rewrites an existing line. The line, with a newline first when a
+hand edit left the file without its last one, goes to the file in a single
+write that is then flushed, so a crash can lose a capture but never leave half
+of one.
 
 ## Settling an entry
 

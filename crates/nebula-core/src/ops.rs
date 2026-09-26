@@ -32,6 +32,7 @@ use crate::check::{
 };
 use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
+use crate::fs::create_private_dir_all;
 use crate::graph::{self, Graph, Neighbour};
 use crate::lock::CorpusLock;
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
@@ -214,6 +215,11 @@ pub struct Citation {
 /// Create an empty corpus, at `path` if given and the resolved root otherwise.
 /// Optionally make it the machine-local default, refusing to replace a
 /// different setting unless `force` is set.
+///
+/// With `set_root`, the machine-setting lock is held from before the check
+/// until after the write, so two of these cannot both find the setting free
+/// and then both write it. It is taken first, before anything is created,
+/// and the corpus lock inside it: the order `lock.rs` documents.
 pub fn init(
     root: Option<PathBuf>,
     path: Option<PathBuf>,
@@ -221,12 +227,13 @@ pub fn init(
     force: bool,
 ) -> Result<Initialized> {
     let target = Corpus::resolve_root(path.or(root))?;
+    let _settings = set_root.then(Corpus::lock_machine_settings).transpose()?;
     if set_root {
         Corpus::check_root_config(&target, force)?;
     }
     // The lock lives inside the root, so the root has to exist before it can
     // be taken. `Corpus::init` would create it a moment later anyway.
-    std::fs::create_dir_all(&target).map_err(|error| Error::io_at("creating", &target, error))?;
+    create_private_dir_all(&target)?;
     let _lock = CorpusLock::acquire(&target)?;
     Corpus::init(&target)?;
     if set_root {
@@ -861,12 +868,14 @@ pub fn handoff(
 
 /// Record where the Observatory checkout is on this machine, in
 /// `~/.config/nebula/observatory-root`. Nothing under the corpus changes, so
-/// no lock is taken: the checkout's path belongs to the machine, and the
-/// corpus travels between machines.
+/// no corpus lock is taken: the checkout's path belongs to the machine, and
+/// the corpus travels between machines. The machine-setting lock is, so this
+/// write is serialized with every other one to `~/.config/nebula`.
 ///
 /// Returns the setting as `corpus` now resolves it, which is the machine
 /// setting unless `$OBSERVATORY_ROOT` outranks it.
 pub fn set_observatory_root(corpus: &Corpus, dir: &Path) -> Result<ObservatoryRoot> {
+    let _settings = Corpus::lock_machine_settings()?;
     Corpus::write_observatory_root_config(dir)?;
     corpus.observatory_root()
 }

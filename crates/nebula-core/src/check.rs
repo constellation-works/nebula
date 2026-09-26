@@ -645,6 +645,10 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "fixtures plant an Observatory tree directly"
+)]
 mod tests {
     use super::{
         Rule, is_absolute_local, is_local_path, is_observatory_id, resolve_observatory, tag_drift,

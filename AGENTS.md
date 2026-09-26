@@ -63,6 +63,13 @@ macOS temporary directories sit under a symlink, so path handling that resolves
 or canonicalizes will pass on one platform and fail on the other. Use paths as
 given.
 
+Every file nebula writes goes through `nebula_core::fs`: `write_private_atomic`
+(temp file, fsync, rename, directory fsync, `0600`) and `create_private_dir_all`
+(`0700`). `clippy.toml` refuses `std::fs::write` and `std::fs::create_dir_all`
+elsewhere; test fixtures opt out with an `#[allow]` that gives a reason. Take
+the machine-setting lock (`Corpus::lock_machine_settings`) before any corpus
+lock, never after one.
+
 In `crates/nebula-core/src/{model,ops,check}.rs`, invariants live in three
 places by design: deserialization, the point of action, and the checker.
 Moving a rule between them changes its strength. See

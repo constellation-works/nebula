@@ -3,14 +3,16 @@
 //!
 //! Lives in `settings.json` under the app's config directory
 //! (`~/Library/Application Support/works.constellation.nebula` on macOS).
-//! Written with its defaults on first launch.
+//! Written with its defaults on first launch, and always through nebula-core's
+//! durable write helper: replaced whole, flushed with its directory, and
+//! owner-only, exactly as the CLI writes the corpus.
 
 use fs4::{FileExt, TryLockError};
+use nebula_core::fs::{create_private_dir_all, private_open_options, write_private_atomic};
 use serde::{Deserialize, Serialize};
-use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -97,35 +99,27 @@ pub fn save(dir: &Path, settings: &Settings) -> Result<(), String> {
 }
 
 fn write_file(dir: &Path, settings: &Settings) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let mut temporary = tempfile::NamedTempFile::new_in(dir).map_err(|e| e.to_string())?;
+    create_private_dir_all(dir).map_err(|e| e.to_string())?;
     let mut json = serde_json::to_vec_pretty(settings).map_err(|e| e.to_string())?;
     json.push(b'\n');
-    temporary.write_all(&json).map_err(|e| e.to_string())?;
-    temporary.as_file().sync_all().map_err(|e| e.to_string())?;
-    temporary
-        .persist(dir.join(FILE_NAME))
-        .map_err(|e| e.to_string())?;
-    #[cfg(unix)]
-    std::fs::File::open(dir)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    write_private_atomic(&dir.join(FILE_NAME), json).map_err(|e| e.to_string())
 }
 
 /// A process-level lock keeps separate app instances from writing settings at
 /// once. Its persistent holder text makes a bounded wait actionable.
 fn with_lock<T>(dir: &Path, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    create_private_dir_all(dir).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
         .map_err(|e| e.to_string())?;
     let lock_path = dir.join("settings.lock");
-    let mut options = OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    options.mode(0o600);
-    let mut file = options.open(&lock_path).map_err(|e| e.to_string())?;
+    let mut file = private_open_options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| e.to_string())?;
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match FileExt::try_lock(&file) {
@@ -167,6 +161,10 @@ fn with_lock<T>(dir: &Path, f: impl FnOnce() -> Result<T, String>) -> Result<T, 
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "fixtures are planted directly, beside the settings code under test"
+)]
 mod tests {
     use super::*;
 
@@ -178,6 +176,29 @@ mod tests {
         assert_eq!(warn, None);
         let on_disk = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
         assert!(on_disk.contains("\"capture_shortcut\": \"Alt+Space\""));
+    }
+
+    /// A first run creates the config directory itself, so it is the
+    /// owner's alone, and the defaults land through the durable helper: no
+    /// temporary file is left beside them.
+    #[cfg(unix)]
+    #[test]
+    fn first_load_writes_owner_only_defaults_atomically() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("app-config");
+
+        let (s, warn) = load(&dir);
+
+        assert_eq!((s, warn), (Settings::default(), None));
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&dir.join(FILE_NAME)), 0o600);
+        let debris: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .filter(|name| name.to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(debris.is_empty(), "temporary files left behind: {debris:?}");
     }
 
     #[test]

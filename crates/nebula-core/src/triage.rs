@@ -288,6 +288,10 @@ pub fn settled_elsewhere(e: &Error) -> bool {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "fixtures hand-write inbox month files, not nebula state"
+)]
 mod tests {
     use super::*;
 

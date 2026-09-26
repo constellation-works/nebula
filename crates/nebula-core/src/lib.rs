@@ -17,6 +17,7 @@
 //!
 //! - [`model`]  the file format: [`Node`], [`Status`], [`Edge`], [`Reference`], [`Note`]
 //! - [`store`]  [`Corpus`]: where it lives, loading, saving, the inbox
+//! - [`fs`]     the one durable write path: fsync, rename, owner-only modes
 //! - `lock`    [`CorpusLock`]: the advisory `.lock` every write holds, and reads never do
 //! - [`graph`]  [`Graph`] and the pure queries over it, `near` included
 //! - [`ops`]    the mutations, each enforcing its point-of-action invariants
@@ -44,6 +45,7 @@ mod error;
 mod lock;
 
 pub mod check;
+pub mod fs;
 pub mod graph;
 pub mod migrate;
 pub mod model;
