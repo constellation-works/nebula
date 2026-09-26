@@ -168,7 +168,7 @@ pub fn inbox(inbox: &Inbox) -> String {
 }
 
 /// One neighbour as a line: score, status, id, title.
-fn neighbour(n: &Neighbour) -> String {
+pub(super) fn neighbour(n: &Neighbour) -> String {
     format!(
         "{} {} {} {}",
         dim(&format!("{:.2}", n.score)),

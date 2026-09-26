@@ -101,7 +101,8 @@ neb config commit on
 This writes `commit: true` to `config.yaml` (off by default, and absent from
 the file until turned on). From then on every mutating verb — `capture`,
 `promote`, `drop`, `new`, `sharpen`, `status`, `link`, `tag`, `cite`, `note`,
-`migrate`, `config` — ends with one commit of the corpus paths, and prints
+`migrate`, `config` — ends with one commit of the corpus paths (`triage`
+makes one per promote or drop it carries out), and prints
 `committed <hash>` under its usual output:
 
 ```

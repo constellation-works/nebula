@@ -6,6 +6,7 @@
 mod error;
 mod report;
 mod tree;
+mod triage;
 
 use nebula_core::{EdgeType, GraphExport, HistoryEntry, Node, Status};
 use std::collections::HashSet;
@@ -19,6 +20,7 @@ pub use report::{
     suggestions, tags,
 };
 pub use tree::draw as tree;
+pub use triage::{step, tally, triage_keys, waiting};
 
 fn colour() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();

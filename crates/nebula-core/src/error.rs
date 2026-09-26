@@ -173,6 +173,21 @@ pub enum Error {
     #[error("a node with a kill condition cannot go back to seed")]
     SeedWithKill,
 
+    /// A triage action named a candidate parent by a number the current
+    /// entry was not shown. Candidates count from 1, best first.
+    #[error("there is no candidate {number}; {}", shown_candidates(*.shown))]
+    NoSuchCandidate {
+        /// The number asked for.
+        number: usize,
+        /// How many candidates the entry has.
+        shown: usize,
+    },
+
+    /// A verb that takes its decisions one at a time from a person was asked
+    /// for a machine-readable answer it has no way to give.
+    #[error("`{0}` is interactive and has no JSON form")]
+    Interactive(String),
+
     /// Two nodes claim the same id.
     #[error("duplicate node id `{0}`")]
     DuplicateId(String),
@@ -345,6 +360,15 @@ pub enum Error {
     },
 }
 
+/// How many candidate parents an entry has, as [`Error::NoSuchCandidate`] says it.
+fn shown_candidates(shown: usize) -> String {
+    match shown {
+        0 => "this entry has no candidates".to_string(),
+        1 => "this entry has only candidate 1".to_string(),
+        n => format!("this entry has candidates 1 to {n}"),
+    }
+}
+
 impl Error {
     /// The variant's name, as a stable string for a consumer that is not
     /// Rust: `neb --json` reports it as the refusal's `kind`, so a script
@@ -376,6 +400,8 @@ impl Error {
             Self::RefutedNeedsWhy => "RefutedNeedsWhy",
             Self::RefutedCannotReopen => "RefutedCannotReopen",
             Self::SeedWithKill => "SeedWithKill",
+            Self::NoSuchCandidate { .. } => "NoSuchCandidate",
+            Self::Interactive(_) => "Interactive",
             Self::DuplicateId(_) => "DuplicateId",
             Self::NodeExists(_) => "NodeExists",
             Self::UnresolvedUri { .. } => "UnresolvedUri",

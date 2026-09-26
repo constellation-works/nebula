@@ -3,8 +3,10 @@
 Every corpus verb below takes `--root <DIR>`, `--json` and `--no-commit`, and
 those flags may appear anywhere on the line — before the verb, after it, or
 after the free text of `capture`, `note` and `near`. Under `--json`, each emits
-one JSON value on stdout. The separate `completions` command is the sole
-exception: it always emits a shell script. Ids are slugs of the title
+one JSON value on stdout. Two commands are the exceptions: `completions`
+always emits a shell script, and `triage`, which takes its decisions from a
+person one key at a time, refuses `--json` (`Interactive`) and names the
+scriptable verbs instead. Ids are slugs of the title
 (`"Tags beat domains"` → `tags-beat-domains`); inbox ids are four hex chars. A
 slug over 60 characters is cut at the last `-` at or before the limit, never
 mid-word. `promote` without `--title` or `--id` keeps the captured sentence
@@ -35,7 +37,7 @@ on `message`:
 
 | field | type | what it is |
 |---|---|---|
-| `error.kind` | string | The refusal's stable name. For a core refusal it is the `nebula-core` variant: `NoSuchNode`, `Cycle`, `SelfLoop`, `NeedsKill`, `RefutedNeedsWhy`, `RefutedCannotReopen`, `UnknownReferenceKind`, `UnresolvedUri`, `SchemaMismatch`, `StagedElsewhere`, `CorpusIgnored`, `Locked`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `Usage` (arguments that parse but ask for nothing, such as an empty `capture`), `EditorNotConfigured`, `EditorInvalidCommand`, `EditorStart`, `EditorUnsuccessful`, `NotesChanged`, `Json` and `IoAt`. |
+| `error.kind` | string | The refusal's stable name. For a core refusal it is the `nebula-core` variant: `NoSuchNode`, `Cycle`, `SelfLoop`, `NeedsKill`, `RefutedNeedsWhy`, `RefutedCannotReopen`, `UnknownReferenceKind`, `UnresolvedUri`, `SchemaMismatch`, `StagedElsewhere`, `CorpusIgnored`, `Locked`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `Usage` (arguments that parse but ask for nothing, such as an empty `capture`), `EditorNotConfigured`, `EditorInvalidCommand`, `EditorStart`, `EditorUnsuccessful`, `NotesChanged`, `TriageKey` (a `triage` input line that is not a key), `Json` and `IoAt`. |
 | `error.message` | string | What is wrong, in the words the text output uses before its hint. |
 | `error.hint` | string or `null` | What to do about it, as the text output words it: often a command to run, such as `neb sharpen <id> --kill "..."`. `null` when the CLI has nothing to add. |
 
@@ -125,11 +127,38 @@ for one invocation.
 | `neb inbox` | live entries (not promoted, not dropped) | — |
 | `neb promote <ENTRY>` | inbox entry → seed node; without `--parent`, prints the three nearest nodes and proceeds as a root | `--title`, `--body <TEXT\|->`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run`, `--quiet`/`-q` |
 | `neb drop <ENTRY>` | strike an entry through; never deleted | — |
+| `neb triage` | walk the waiting entries oldest first and decide each with one key, through `promote` and `drop` | `--by <LABEL>` |
 
 ```json
 // neb inbox --json
 [ { "id": "a6e8", "at": "2026-09-12T18:16", "text": "nebula review as a weekly orbit routine" } ]
 ```
+
+`triage` is for a human at a terminal. It snapshots the inbox, then shows
+each entry in turn, oldest capture first, with its position, stamp and age
+and its `near` candidates numbered from 1. One line decides it:
+
+| key | does | the same as |
+|---|---|---|
+| `p` | promote as a root | `neb promote <entry>` |
+| `1`–`3` | promote under that numbered candidate | `neb promote <entry> --parent <id>` |
+| `t <title>`, or `t` then the title on the next line | title the promotion that follows; a blank title goes back to the captured text | `--title` |
+| `d` | drop | `neb drop <entry>` |
+| `s` | leave it waiting and move on | — |
+| `q` | stop; everything undecided stays waiting | — |
+| `?` | list the keys | — |
+
+Nothing is linked unless a number is chosen. Each promote or drop is the
+single verb, with its refusals and `--by`, and with `commit` on it makes the
+single verb's commit — `neb promote <entry> <id>`, `neb drop <entry>` — one
+per decision; `--no-commit` waives them for the session. The session ends
+with `promoted N, dropped N, skipped N; N still waiting`. On a terminal a
+refused key or decision is reported and the same entry is asked about again.
+With standard input piped, keys are read one per line with no prompt, and the
+first refusal ends the session with exit 1, because the lines after it were
+written for an entry that did not move; end of input stops as `q` does. An
+agent does not use `triage`: run `inbox`, `near`, `promote` and `drop` with
+`--json`, which is what it is made of.
 
 `capture`, `note` and `near` take remaining words as the thought, so a flag
 after the text is still a flag: `neb capture "an idea" --quiet` quiets and

@@ -192,6 +192,12 @@ fn hint(e: &Error) -> Option<String> {
              pass the checkout's absolute path."
                 .to_owned()
         }
+        Error::Interactive(_) => "Script the same steps with:\n  \
+             neb inbox --json\n  \
+             neb near <text> --json\n  \
+             neb promote <entry> [--title <title>] [--parent <id>]\n  \
+             neb drop <entry>"
+            .to_owned(),
         _ => return None,
     })
 }
