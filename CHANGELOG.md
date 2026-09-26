@@ -17,7 +17,8 @@ habit. This cut keeps what a person actually uses.
 - `tasks`: the node field, `TaskLink`, and `neb task`. Orbit provenance stays
   in `origin`; forward links to work are a reference.
 - `graduate`: the verb, the `graduated` status, and `graduated_to`.
-  Downstream hand-off happens by the downstream artifact referencing the node.
+  Downstream hand-off happens by the downstream artifact referencing the node,
+  or in one step with `neb handoff` for an Observatory record.
 - Statuses `testing` and `supported`; `Status` is now exactly `seed`,
   `hypothesis`, `refuted`, `abandoned`.
 - Edge types `supports`, `undermines`, `depends-on`; `EdgeType` is now exactly
@@ -27,7 +28,8 @@ habit. This cut keeps what a person actually uses.
   [the spec](docs/design/v0.2/1_spec.md#invariants); local reference URIs now
   resolve as an **error** and are refused at `cite`.
 - `new --status`. `new --kill "..."` starts a hypothesis; without it, a seed.
-- `open` no longer reports references without a note; that is `check` rule 10.
+- The quick glance (`open` in v0.1, now `review --short`) no longer reports
+  references without a note; that is `check` rule 10.
 
 ### Added
 
@@ -35,11 +37,22 @@ habit. This cut keeps what a person actually uses.
   required and writes it; `neb status <id> abandoned [--why "..."]` writes it
   when given. Moving back to an open status clears it. Refuted is final: the
   only way back is a new node with a `reopens` edge.
+- `new --reopens <id>` and a repeatable `new --contradicts <id>` write those
+  edges with the node, under `link`'s guards: every end must exist, no edge
+  twice, no genealogy loop, and `contradicts` recorded on both nodes. Any
+  refusal writes nothing. Naming one node as both `--parent` and `--reopens`
+  is refused, since `reopens` is already genealogy. Trying to reopen a
+  refuted node with `status` now hints the one command that does it,
+  `neb new "..." --reopens <id>`.
 - Tags are normalised to lowercase kebab-case on every write path (`new`,
   `promote`, `tag`, `migrate`). `neb tag <id> --add <tag> --remove <tag>`
   edits them; `neb tag list` shows every tag with its node count; `--tag` on
-  `list` and `open` is repeatable and requires every tag named.
-- `check` rule 11 warns when two tags differ only by case or a trailing `s`.
+  `list` and `review --short` is repeatable and requires every tag named.
+- `check` rule 11 warns when two tags differ only by case or a trailing `s`,
+  and names the nodes carrying each variant. `new`, `promote` and `tag --add`
+  catch it at write time: a tag new to the corpus that is that close to one
+  in use prints `note: tag physic is close to physics (2 nodes)` on stderr,
+  in every output mode. It is a note, never a refusal; the write has landed.
 - `neb migrate`: one-shot, idempotent conversion of a v1 corpus. Refuses when
   the corpus is a git repository with a dirty tree. Reads nodes with a lenient
   private v1 model and re-labels losslessly: `domain` becomes a tag; each
@@ -50,61 +63,123 @@ habit. This cut keeps what a person actually uses.
   `testing`/`supported` become `hypothesis`; `graduated` becomes `abandoned`
   with `closed.why: "graduated to <uri>"`; a v1 `refuted` node gains a
   `closed` block saying no reason was recorded. `config.yaml` is rewritten to
-  `schema_version: 2` with only `corpus_id` and `schema_version`. Prints a
+  `schema_version: 2` with only `corpus_id` and `schema_version`, plus
+  `observatory_root` and `commit` when they were set. Prints a
   per-node summary of what changed; a second run rewrites nothing.
 - `config.yaml` is `schema_version: 2`; a v1 corpus refuses to open with a
   hint to run `neb migrate`.
 - `cite --kind observatory --uri Q002`: a portable link to an Observatory
   record. The `uri` is the bare record id (`Q###`, `H###`, `T###`, `R###`),
   normalised to upper case and refused at `cite` when it is not one; nothing
-  machine-specific reaches the corpus. Where the record is comes from
-  `observatory_root` in `config.yaml`, set by the new
-  `neb config observatory-root [DIR]` (which reads the effective root and its
-  source when given no directory), else `$OBSERVATORY_ROOT`. `check` rule 9
-  *warns* rather than errors when the root is unset or the id does not
-  resolve, since that judges the machine rather than the corpus. `show`
-  prints the resolved path, and `show --json` carries
-  `observatory: [{reference, record, path}]`. `config.yaml` stays
-  machine-written and `migrate` preserves the setting.
+  machine-specific reaches the corpus. Where the record is comes from the
+  machine: `$OBSERVATORY_ROOT`, else `~/.config/nebula/observatory-root`,
+  written by the new `neb config observatory-root DIR`. That verb requires an
+  absolute path and writes nothing in the corpus, so it commits nothing; with
+  no directory it prints the effective root and which setting supplied it
+  (`--json`: `{root, source, legacy}`, `source` one of `env`, `machine`,
+  `config`, `unset`). `check` rule 9 *warns* rather than errors when the
+  root is unset or the id does not resolve, since that judges the machine
+  rather than the corpus. `show` prints the resolved path, and `show --json`
+  carries `observatory: [{reference, record, path}]`. Earlier 0.2 builds
+  stored the root as `observatory_root` in `config.yaml`, one machine's path
+  in a file every machine shares. That key is still read, as the last
+  fallback, and `migrate` keeps it, but `check` warns (rule 9) while it is
+  there, and `neb config observatory-root --drop-legacy` removes it (a corpus
+  write, committed when `commit` is on). Run that once every machine sharing
+  the corpus has its own setting.
+- `neb handoff <id> <record> --note "..."`: the one-step form of "this idea
+  became Observatory record `H012`". One save adds an `observatory` reference
+  to the record and closes the node `abandoned` with
+  `closed.why: handed off to <record>`. It refuses, writing nothing, an
+  unknown node, a node already refuted or abandoned (`already_closed`), a
+  record id of the wrong shape, and, when this machine has an observatory
+  root, a record that does not resolve under it
+  (`unresolved_observatory_record`); with no root set it accepts the id and
+  says the record cannot be located. `show` prints the record's location
+  under `closed:`, `trace` ends the node's line with `handed off to <record>`,
+  and both `--json` forms carry `handed_off_to`, omitted for every other
+  node. `handoff --json` is `{doc, reference, record, from}`.
 - `neb config commit on|off`: with `commit: true` in `config.yaml` (off by
   default, absent from the file until set) and the corpus root inside a git
-  work tree, every mutating verb (`capture`, `promote`, `drop`, `new`,
-  `sharpen`, `status`, `link`, `tag`, `cite`, `note`, `migrate`, `config`)
-  ends with one commit of `nodes/`, `inbox/` and `config.yaml` under the
-  root, as `neb <verb> <ids>`, and prints `committed <hash>`. Never pushes,
-  never stages a path outside the corpus. Something staged elsewhere in the
-  repository is a typed refusal (`StagedElsewhere`) that leaves the write in
-  place: a write is never rolled back because of git. A corpus the
-  containing repository ignores is refused too (`CorpusIgnored`), with the
-  fix — a repository at the corpus root — in the hint. `--no-commit` on any
-  verb skips the commit once. `neb config commit` reads the setting
-  (`--json`: `{ "enabled": bool }`); `migrate` preserves it and commits
-  itself. The runbooks now recommend a private repository at the corpus
-  root and cover restoring from it.
-- `neb near <TEXT>... | <NODE>` (`--limit K`, default 3): the existing nodes
-  closest to free text, or to a node (left out of its own answer), scored
-  `0..=1` and best first. Word overlap only — BM25 over title, tags and
-  body, title and tags weighted up, plurals and `-ing` folded — with no
-  embeddings, no network and no new dependency. Nodes sharing no word are
-  left out, so `[]` means the thought is unlike anything in the corpus.
-  `capture` prints the same top three under the entry id, and `promote`
-  without `--parent` prints them and proceeds as a root; `--quiet`/`-q` on
-  either prints the id alone. Suggestion only: nothing here ever writes an
-  edge, by the v0.2 rule against automatic linking. `--json` shapes:
-  `near` is a bare list of `{id, title, status, tags, score}`; `capture`
+  work tree, every verb that writes (`capture`, `promote`, `drop`, `triage`,
+  `new`, `edit`, `sharpen`, `status`, `link`, `tag`, `note`, `cite`,
+  `handoff`, `migrate`, `config`) ends with one commit of `nodes/`, `inbox/`,
+  `config.yaml` and the generated `.gitignore` under the root, as
+  `neb <verb> <ids>`, and prints `committed <hash>`; `triage` makes one per
+  decision. Never pushes, never stages a path outside the corpus. Something
+  staged elsewhere in the repository is a typed refusal (`StagedElsewhere`)
+  that leaves the write in place: a write is never rolled back because of
+  git. A corpus the containing repository ignores is refused too
+  (`CorpusIgnored`), with the fix — a repository at the corpus root — in the
+  hint. `--no-commit` after any of those verbs skips the commit once. Only
+  their `--help` offers it, and a verb that only reads refuses it as an
+  unknown argument (exit 2); written before the verb, the spelling from when
+  the flag was global, it is still honoured but hidden. `neb config commit`
+  reads the setting (`--json`: `{ "enabled": bool }`); `migrate` preserves it
+  and commits itself. The runbooks now recommend a private repository at the
+  corpus root and cover restoring from it.
+- `neb near <TEXT>... | <NODE>` (`--limit K`/`-k`, default 3): the existing
+  nodes closest to free text, or to a node (left out of its own answer), best
+  first. Word overlap only — BM25 over title, tags and body, title and tags
+  weighted up, plurals and `-ing` folded — with no embeddings, no network and
+  no new dependency. The score is uncalibrated (a word-for-word copy of a node
+  scores about 0.35 to 0.6 against it), so text output prints a band instead:
+  `strong` from 0.25, `some` from 0.07, `weak` below. Given a node, a
+  neighbour already joined to it by an edge, either way round, ends
+  `linked: parent (<kinds>)`, `linked: child (<kinds>)` or
+  `linked: contradicts`. Nodes sharing no word are left out, so `[]` means
+  the thought is unlike anything in the corpus. `capture` prints the same top
+  three under the entry id, and `promote` without `--parent` prints them and
+  proceeds as a root; `--quiet`/`-q` on either leaves them out. Suggestion
+  only: nothing here ever writes an edge, by the v0.2 rule against automatic
+  linking. `--json` shapes: `near` is a bare list of
+  `{id, title, status, tags, score, band, linked}`, where `linked` is a list
+  of `{from, type, to}` or `null`, and always `null` for free text; `capture`
   is `{entry, near}`; `promote` is `{doc, path, near}`, `near` omitted when
   empty. The skill's triage heuristic now runs `near`, picks a parent only
   when one is defensible, and otherwise promotes as a root.
-- `open` reports hypotheses with no references, seeds untouched for ninety
-  days or more, and inbox entries waiting fourteen days or more.
+- `neb capture -` reads the thought from standard input. Text over several
+  lines, piped or quoted, is joined onto one inbox line, each line break a
+  single space and blank lines dropped; only whitespace-only text is refused.
+  The joining is in `nebula-core`, so the desktop capture box stores the same
+  line.
+- `neb triage`: the inbox worked through at a terminal, oldest entry first.
+  Each entry is shown with its age and its `near` candidates numbered 1 to 3,
+  and one key decides it: `p` promotes it as a root, `1`–`3` under that
+  candidate, `t` titles the promotion that follows, `d` drops it, `s` leaves
+  it waiting, `q` stops, `?` lists the keys. Nothing is linked unless a
+  number is chosen. Every decision is the single `promote` or `drop`, with
+  the same refusals and `--by`, and the session ends with a tally. With
+  standard input piped, keys are read one per line and the first refusal ends
+  the session with exit 1. `--json` is refused (`interactive`), and the hint
+  names the scriptable verbs.
 - `impact` reports every descendant (reverse genealogy) plus the node's
   `contradicts` neighbours.
 - `review`'s stale-hypothesis section is "untouched for N days" rather than
-  "no evidence for N days"; the other three sections are unchanged. Day
-  thresholds are inclusive (`>=`) throughout.
-- `neb --help` groups are Corpus (`init`, `check`, `migrate`, `completions`),
-  Inbox, Nodes (`new`, `sharpen`, `status`, `link`, `tag`), References
-  (`cite`), Query, Maintenance.
+  "no evidence for N days". The no-references section counts only hypotheses
+  created fourteen or more days ago, and a new section lists agent-authored
+  kill conditions no human has confirmed. Day thresholds are inclusive (`>=`)
+  throughout.
+- `--limit N` on `list`, `inbox` and `review` (per section, or lines with
+  `--short`) and `trace --depth N` bound long output; without them everything
+  is printed, as before. Text says what was left out (`2 of 5 nodes shown;
+  raise --limit for more`, `(1 more beyond --depth)`); under `--json` the
+  arrays are cut to N (per `rule` for `review`) in the same shape, with no
+  marker.
+- Refusals under `--json` are data: one line on stderr,
+  `{"error": "...", "code": "...", "hint": ...}`. `error` is the message,
+  `code` a stable `snake_case` name (for a core refusal, the `nebula-core`
+  variant's name: `no_such_node`, `needs_kill`, `staged_elsewhere`, …), and
+  `hint` the remedy or `null`. Stdout stays empty, except when a write landed
+  and only its commit was refused. A refusal exits 1 and a command line clap
+  rejects exits 2, with clap's prose even under `--json`. Without `--json`
+  every refusal prints what it printed before. An unknown `cite` kind is now a
+  typed refusal (`unknown_reference_kind`). `skills/nebula/references/verbs.md`
+  documents the envelope and the exit codes.
+- `neb --help` groups are Corpus (`init`, `check`, `migrate`, `config`,
+  `completions`), Inbox (`capture`, `inbox`, `promote`, `drop`, `triage`),
+  Nodes (`new`, `edit`, `sharpen`, `status`, `link`, `tag`, `note`),
+  References (`cite`, `handoff`), Query, Maintenance.
 - `neb graph --json`: the whole corpus as `{nodes, edges}`, for a tool that
   draws it. JSON only; without `--json` it prints a hint and exits 2.
 - `skills/nebula/`: the agent skill. `SKILL.md` states the two modes (session:
@@ -117,11 +192,16 @@ habit. This cut keeps what a person actually uses.
 - `apps/desktop`: a menu-bar app (Tauri 2, React, TypeScript) on
   `nebula-core` directly, no sidecar. The tray shows the unsettled inbox
   count; `Alt+Space` (configurable in the app's `settings.json`) opens a
-  floating capture box that writes the same line `neb capture` writes; the
-  window has an Inbox view (capture box, unsettled entries) and a Graph view.
-  A `notify` watcher on `nodes/` and `inbox/` refreshes both on outside
-  changes. A missing corpus shows the path tried and a reload button.
-  `make desktop-dev`, `make desktop` (unsigned `.app`) and
+  floating capture box that writes the same line `neb capture` writes, and
+  commits it when `commit` is on; a multi-line paste is joined with spaces.
+  The window has an Inbox view and a Graph view. The Inbox view is a capture
+  box and the unsettled entries, each with *Promote as root* and *Drop*,
+  which run the same core operations, lock and commit as `neb promote` and
+  `neb drop`; a refusal stays on the entry, and entries waiting fourteen days
+  or more are marked stale. A `notify` watcher on `nodes/` and `inbox/`
+  refreshes both on outside changes. A missing corpus shows the path tried
+  and a reload button. `make desktop-dev`, `make desktop` (unsigned `.app`
+  and `.dmg`, with install steps in `apps/desktop/README.md`) and
   `make desktop-check`; CI gains a `desktop` job (types drift, tsc, vitest,
   clippy). The workspace's `rust-version` moves to 1.88 for the desktop's
   dependency tree.
@@ -132,15 +212,17 @@ habit. This cut keeps what a person actually uses.
 - The desktop's Graph view: the whole corpus from one `graph()` call as a
   layered DAG (`elkjs`, in a web worker, plain SVG; genealogy edges layer the
   drawing, `contradicts` is dashed and drawn afterwards). Status is the card
-  colour; tag chips with `+n`; a marker on nodes that `reopens`. Drag to pan,
-  wheel to zoom, click to select and light ancestry and descent in two tints,
-  Escape to clear, double-click to open the file. A title search and a
-  multi-select tag filter apply before layout. The right-hand panel shows
-  the node read-only: frontmatter, `closed.why`, the body via
-  `react-markdown` + `remark-gfm` with raw HTML shown as text, edges as two
-  clickable lists, references as a table whose `http(s)`/`mailto` URIs open
-  through the opener plugin. `corpus-changed` refetches and re-lays out
-  without losing the selection or the viewport.
+  colour; tag chips with `+n`; a marker on nodes that `reopens`. Drag or
+  scroll to pan, Ctrl+wheel to zoom, click to select and light ancestry and
+  descent in two tints, Escape to clear, double-click to open the file. A
+  title search (applied once typing pauses) and a multi-select tag filter
+  apply before layout. The right-hand panel shows the node read-only:
+  frontmatter, `closed.why`, the body via `react-markdown` + `remark-gfm`
+  with raw HTML shown as text and images loaded only from `https:` URLs,
+  edges as two clickable lists, references as a table whose `http(s)`/`mailto`
+  URIs open through the opener plugin. `corpus-changed` refetches and
+  re-lays out without losing the selection or the viewport, and so does
+  switching to the Inbox tab and back.
 
 ### Changed
 
@@ -163,6 +245,100 @@ habit. This cut keeps what a person actually uses.
   `Error::IdMismatch`). Ids are judged as written and nothing is
   canonicalized, so a symlinked root behaves as before, and the rule is about
   path structure rather than alphabet: `ünïcode-título-ok` is still an id.
+- `neb open` is merged into `neb review --short`, which prints what `open`
+  did, one line each: hypotheses created fourteen or more days ago with no
+  references, seeds untouched for ninety days or more, and inbox entries
+  waiting fourteen days or more (`--json`: an array of `{id, why}`).
+  `--short` takes `--tag` and `--limit`, and refuses `--since` and `--out`.
+  `open` still works in this release as a hidden alias that forwards to
+  `review --short` and prints `` warning: `neb open` is deprecated; use
+  `neb review --short` `` on stderr; the release after this one removes it.
+  The skill, spec, design docs and runbooks name `review` only.
+- The corpus is found from the working directory. Resolution is `--root`,
+  else `$NEBULA_ROOT`, else the nearest corpus at or above the current
+  directory, else `~/.config/nebula/root`, else `~/.nebula`. A corpus is a
+  `nodes/` directory beside a `config.yaml` that names a `corpus_id`, and
+  only an existing one is found, so `capture` never creates a corpus because
+  of where it ran. The innermost of nested corpora wins, and the walk follows
+  `$PWD` as written, without resolving symlinks.
+- `promote` with neither `--title` nor `--id` keeps the captured sentence as
+  the title but, for a capture over five words, mints the id from its first
+  five words after dropping stop-words (never negations): `gravity might be a
+  scarcity gradient in some shared resource` becomes
+  `gravity-scarcity-gradient-shared-resource`. An id held by a different idea
+  takes one more such word at a time, then falls back to the full slug; a
+  node already titled with the same text is refused (`node_exists`) rather
+  than duplicated. Explicit `--title`/`--id` and short captures are
+  unchanged.
+- A capture that repeats a thought still waiting in the inbox (equal after
+  folding case and whitespace) is still captured, and stderr says
+  `note: same as <id>, still waiting`; stdout and the `--json` payload are
+  unchanged. `promote` and `drop` on an entry already settled say how:
+  `` `<id>` was already promoted to `<node>` `` or
+  `` `<id>` was already dropped `` (`inbox_entry_settled`).
+- `trace` and `trace --down` name, on every line below the start, the
+  genealogy edge kind(s) joining it to the line above. Two edges between the
+  same pair (`derives-from` plus a later `reopens`) draw as one line naming
+  both, instead of a second line ending `(shown above)`; a true diamond keeps
+  that marker. `trace --json` gains `via: {from, kinds}` per node (`null` for
+  the start), and `parents` names each parent once.
+- `show` opens with a header: the status and id; the title, followed by
+  `(<label>)` when a non-human author wrote it; `tags: a, b`; and
+  `created: <date>  updated: <date>`. The kill condition, each edge and each
+  reference likewise end in `(<label>)` when their author is not `human`.
+  Counts in text output agree with their nouns (`1 node`, `2 nodes`).
+- `cite` lowercases `--kind` before checking it, so `--kind Paper` stores
+  `paper`; anything still outside the vocabulary is refused, naming the kind
+  as given.
+- `check` numbers its rules 1 to 16, each once, from one list in
+  `nebula-core`. The number `check` prints, and `check --json` carries as
+  `rule`, is the one in the spec's table and the skill's `invariants.md`.
+  Earlier 0.2 builds gave two rules the number 11 and reported Observatory
+  resolution as rule 8.
+- The repository adopts the constellation engineering standards, vendored
+  read-only under `docs/standards/` with a managed block in `AGENTS.md`:
+  STD-01 (CLI surface), STD-02 (Rust architecture and errors) and STD-03
+  (concurrency and process safety) at version 2, and STD-04 (testing and
+  verification) and STD-05 (security boundaries) at version 1. A deviation
+  is recorded as a design decision, never as an edit to the copies.
+  `make standards-check` (`sh docs/standards/check.sh`) fails on any edit to
+  them and runs in `make ci` and GitHub CI; `make help` now lists what
+  `make ci` runs.
+
+### Fixed
+
+- `neb edit` splits `$VISUAL` or `$EDITOR` into words as a shell would, so
+  `code --wait` works; the whole value used to be taken as the program's
+  name. A value with unmatched quotes, or with no words, is refused
+  (`editor_invalid_command`).
+- `capture` at a root with no corpus still creates one rather than refuse,
+  but now says so on stderr, `note: created a new corpus at <absolute path>`,
+  in text and `--json` alike, so a mistyped `--root` or `$NEBULA_ROOT` shows.
+  A root that cannot be created, or a lock file that cannot be opened, is
+  refused naming the path it tried (`io_at`).
+- `status <id> seed` refuses a node that names a kill condition
+  (`seed_with_kill`). It used to move the node and keep the kill, leaving a
+  seed that `check` rule 13 blamed on a hand edit. `status <id> hypothesis`
+  reopens such a node, from `abandoned` too.
+- `cite` refuses an absolute path or `file:` URI (`absolute_uri`) even when
+  it exists on this machine, with a hint at a path relative to `nodes/` or an
+  Observatory id. `check` reports one already in the corpus as a rule-8
+  warning instead of resolving it.
+- `neb --json graph --mermaid`, and `--from`, exit 2 with clap's conflict
+  error, as `neb graph --mermaid --json` always did. `--json` written before
+  the verb used to be missed, and the Mermaid path ran.
+- Desktop: a capture no longer freezes the window while another writer holds
+  the corpus lock. Every corpus command runs off the webview thread, and a
+  capture waits at most 150 ms for the lock, retries twice, then says
+  `Corpus busy. Press Enter to retry.` The watcher ignores the app's own
+  reads, forwarding only creations, modifications and removals, and refreshes
+  at least once a second during a continuous run of changes. A capture
+  shortcut that cannot be registered, or a `settings.json` that cannot be
+  read or parsed, is shown in the tray menu and as a startup warning in the
+  main window, naming the shortcut or the file, rather than only on stderr.
+  A failure to open a file or link, load the graph or load the inbox is shown
+  where it happened; the graph's offers a Reload button and points at
+  `neb check`, and an inbox error no longer replaces the whole window.
 
 ## 0.1.0 — unreleased
 
