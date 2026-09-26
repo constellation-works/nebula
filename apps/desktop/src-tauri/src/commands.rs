@@ -10,9 +10,10 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use crate::state::AppState;
-use crate::{session, tray, watcher};
+use crate::{session, shortcut, tray, watcher};
 use nebula_core::{Created, Error, GraphExport, InboxEntry, NodeView};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -96,6 +97,43 @@ pub async fn graph_search(app: AppHandle, query: String) -> Result<Vec<String>, 
 #[tauri::command]
 pub fn capture_shortcut(app: AppHandle) -> String {
     app.state::<AppState>().capture_shortcut()
+}
+
+/// Replace the global capture shortcut without restarting the app.
+#[tauri::command]
+pub async fn set_capture_shortcut(app: AppHandle, shortcut: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || shortcut::change(&app, &shortcut))
+        .await
+        .map_err(err)?
+}
+
+/// Read the OS login registration, which persists outside settings.json.
+#[tauri::command]
+pub async fn launch_at_login(app: AppHandle) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || app.autolaunch().is_enabled().map_err(err))
+        .await
+        .map_err(err)?
+}
+
+/// Enable or disable OS login registration and return the resulting state.
+#[tauri::command]
+pub async fn set_launch_at_login(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let manager = app.autolaunch();
+        if enabled {
+            manager.enable()
+        } else {
+            manager.disable()
+        }
+        .map_err(err)?;
+        let actual = manager.is_enabled().map_err(err)?;
+        if actual != enabled {
+            return Err("The OS did not apply the launch-at-login change".to_string());
+        }
+        Ok(actual)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// One node in full.

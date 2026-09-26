@@ -42,6 +42,7 @@ beforeEach(() => {
   mocked.onCorpusChanged.mockResolvedValue(() => {});
   mocked.corpusPath.mockResolvedValue("/tmp/nowhere/.nebula");
   mocked.startupWarnings.mockResolvedValue([]);
+  mocked.onOpenSettings.mockResolvedValue(() => {});
   mocked.reload.mockResolvedValue(undefined);
   mocked.captureShortcut.mockResolvedValue("Alt+Space");
   mocked.graphSearch.mockResolvedValue(["n1"]);

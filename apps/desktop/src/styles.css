@@ -138,6 +138,63 @@ code {
   overflow: hidden;
 }
 
+/* Settings --------------------------------------------------------------- */
+
+.settings {
+  max-width: 34rem;
+}
+
+.settings h1 {
+  font-size: 1.25rem;
+  margin: 0 0 20px;
+}
+
+.settings form {
+  margin-bottom: 24px;
+}
+
+.settings__shortcut {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.settings__shortcut input {
+  flex: 1;
+  min-width: 12rem;
+  padding: 7px 9px;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.settings button {
+  padding: 7px 12px;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.settings__hint {
+  color: var(--fg-muted);
+  margin: 8px 0 0;
+}
+
+.settings__login {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings__message {
+  overflow-wrap: anywhere;
+}
+
 /* Capture box ------------------------------------------------------------ */
 
 .capture {

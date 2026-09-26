@@ -7,7 +7,7 @@
 //! - [`watcher`]  `corpus-changed` on `nodes/` and `inbox/` writes
 //! - [`tray`]     the menu-bar item with the inbox count
 //! - [`shortcut`] the global shortcut and the capture window it toggles
-//! - [`settings`] the one settings file, for the shortcut
+//! - [`settings`] the capture shortcut settings file
 //!
 //! The pieces that need a running app (tray, shortcut, watcher) are wired in
 //! [`run`]; everything else is plain and tested without one.
@@ -33,6 +33,10 @@ use tauri::{Manager, WindowEvent};
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(shortcut::plugin())
         .manage(AppState::new());
 
@@ -49,6 +53,9 @@ pub fn run() {
             commands::graph,
             commands::graph_search,
             commands::capture_shortcut,
+            commands::set_capture_shortcut,
+            commands::launch_at_login,
+            commands::set_launch_at_login,
             commands::node,
             commands::open_in_editor,
             commands::corpus_path,
