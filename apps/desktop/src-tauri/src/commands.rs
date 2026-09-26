@@ -11,7 +11,7 @@
 
 use crate::state::AppState;
 use crate::{session, tray, watcher};
-use nebula_core::{Error, GraphExport, InboxEntry, NodeView};
+use nebula_core::{Created, Error, GraphExport, InboxEntry, NodeView};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -39,6 +39,32 @@ pub async fn inbox(app: AppHandle) -> Result<Vec<InboxEntry>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
         session::inbox(&corpus).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Drop one unsettled entry without blocking the webview on the corpus lock.
+#[tauri::command]
+pub async fn drop_entry(app: AppHandle, entry: String) -> Result<InboxEntry, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let corpus = app.state::<AppState>().corpus()?;
+        let dropped = session::drop_entry(&corpus, &entry).map_err(err)?;
+        tray::refresh(&app);
+        Ok(dropped)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Promote one entry as an unlinked root node.
+#[tauri::command]
+pub async fn promote_root(app: AppHandle, entry: String) -> Result<Created, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let corpus = app.state::<AppState>().corpus()?;
+        let created = session::promote_root(&corpus, &entry).map_err(err)?;
+        tray::refresh(&app);
+        Ok(created)
     })
     .await
     .map_err(err)?

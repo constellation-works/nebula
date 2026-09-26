@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl as pluginOpenUrl } from "@tauri-apps/plugin-opener";
+import type { Created } from "./types/Created";
 import type { GraphExport } from "./types/GraphExport";
 import type { Inbox } from "./types/Inbox";
 import type { InboxEntry } from "./types/InboxEntry";
@@ -16,6 +17,14 @@ export const capture = (text: string): Promise<InboxEntry> =>
 
 /** Every unsettled capture, oldest first. */
 export const inbox = (): Promise<Inbox> => invoke<Inbox>("inbox");
+
+/** Settle one entry as dropped through nebula-core. */
+export const dropEntry = (entry: string): Promise<InboxEntry> =>
+  invoke<InboxEntry>("drop_entry", { entry });
+
+/** Promote captured text to an unlinked root node through nebula-core. */
+export const promoteRoot = (entry: string): Promise<Created> =>
+  invoke<Created>("promote_root", { entry });
 
 /** The whole corpus as nodes and edges. */
 export const graph = (): Promise<GraphExport> => invoke<GraphExport>("graph");

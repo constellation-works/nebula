@@ -1,4 +1,4 @@
-import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { App } from "./App";
@@ -101,6 +101,56 @@ describe("InboxView", () => {
     // The list is asked again once the confirmation has been shown.
     expect(mocked.inbox).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+
+  it("drops one entry and refreshes the list and Inbox badge", async () => {
+    mocked.inbox.mockResolvedValueOnce(entries).mockResolvedValueOnce([entries[1]]);
+    mocked.dropEntry.mockResolvedValue(entries[0]);
+    render(<App />);
+    expect(await screen.findByRole("tab", { name: "Inbox2" })).toBeInTheDocument();
+
+    fireEvent.click(within(screen.getAllByRole("listitem")[0]).getByRole("button", { name: "Drop" }));
+    await waitFor(() => expect(mocked.dropEntry).toHaveBeenCalledWith("a1b2"));
+    expect(await screen.findByRole("tab", { name: "Inbox1" })).toBeInTheDocument();
+    expect(screen.queryByText("a1b2")).not.toBeInTheDocument();
+    expect(screen.getByText("c3d4")).toBeInTheDocument();
+  });
+
+  it("promotes one entry as a root and refreshes the list and Inbox badge", async () => {
+    mocked.inbox.mockResolvedValueOnce(entries).mockResolvedValueOnce([entries[1]]);
+    mocked.promoteRoot.mockResolvedValue({ doc: { node: { id: "capture-must-stay" } } } as never);
+    render(<App />);
+    expect(await screen.findByRole("tab", { name: "Inbox2" })).toBeInTheDocument();
+
+    fireEvent.click(within(screen.getAllByRole("listitem")[0]).getByRole("button", { name: "Promote as root" }));
+    await waitFor(() => expect(mocked.promoteRoot).toHaveBeenCalledWith("a1b2"));
+    expect(await screen.findByRole("tab", { name: "Inbox1" })).toBeInTheDocument();
+    expect(screen.queryByText("a1b2")).not.toBeInTheDocument();
+  });
+
+  it("keeps a failed entry in place with its error and allows a retry", async () => {
+    mocked.dropEntry.mockRejectedValueOnce("corpus busy").mockRejectedValueOnce("already dropped");
+    render(<Harness />);
+    await screen.findByText("a1b2");
+    const first = screen.getAllByRole("listitem")[0];
+
+    fireEvent.click(within(first).getByRole("button", { name: "Drop" }));
+    expect(await within(first).findByRole("alert")).toHaveTextContent("corpus busy");
+    expect(mocked.inbox).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+
+    fireEvent.click(within(first).getByRole("button", { name: "Drop" }));
+    expect(await within(first).findByRole("alert")).toHaveTextContent("already dropped");
+    expect(mocked.inbox).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the stale marker at fourteen calendar days", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 8, 27, 0, 1).getTime());
+    mocked.inbox.mockResolvedValueOnce([entries[0], { ...entries[1], at: "2026-09-14T00:00" }]);
+    render(<Harness />);
+    await screen.findByText("a1b2");
+    expect(within(screen.getAllByRole("listitem")[0]).getByText("stale")).toBeInTheDocument();
+    expect(within(screen.getAllByRole("listitem")[1]).queryByText("stale")).not.toBeInTheDocument();
   });
 });
 

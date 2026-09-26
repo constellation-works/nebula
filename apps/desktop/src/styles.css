@@ -186,7 +186,7 @@ code {
 
 .entry {
   display: grid;
-  grid-template-columns: 4.5em 3em 1fr;
+  grid-template-columns: 4.5em 3em minmax(0, 1fr) auto;
   gap: 10px;
   padding: 8px 4px;
   border-bottom: 1px solid var(--line);
@@ -201,6 +201,44 @@ code {
 
 .entry__text {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.entry__stale {
+  color: var(--danger);
+  font-size: 0.85em;
+  font-weight: 600;
+}
+
+.entry__actions,
+.entry__error {
+  grid-column: 3 / -1;
+}
+
+.entry__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.entry__actions button {
+  font: inherit;
+  color: var(--accent);
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.entry__actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.entry__error {
+  margin: 0;
+  color: var(--danger);
   overflow-wrap: anywhere;
 }
 

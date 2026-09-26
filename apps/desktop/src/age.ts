@@ -23,3 +23,12 @@ export function formatAge(at: string, now: number = Date.now()): string {
   if (weeks < 9) return `${weeks}w`;
   return `${Math.floor(days / 30)}mo`;
 }
+
+/** Match core's inbox threshold: fourteen calendar dates since capture. */
+export function isStale(at: string, now: number = Date.now()): boolean {
+  const then = parseStamp(at);
+  if (!then) return false;
+  const today = new Date(now);
+  const date = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+  return (date(today) - date(then)) / 86_400_000 >= 14;
+}

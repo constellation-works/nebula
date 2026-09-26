@@ -5,12 +5,12 @@
 //! file can be exercised by a test without a window. Nothing here shells out
 //! to `neb`: the desktop links the library and sees exactly what the CLI sees.
 
-use nebula_core::{Corpus, Graph, GraphExport, InboxEntry, NodeView, Result, graph, ops};
+use nebula_core::{Corpus, Created, Graph, GraphExport, InboxEntry, NodeView, Result, graph, ops};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// A capture should tell the UI promptly when another writer is busy.
-pub const CAPTURE_LOCK_WAIT: Duration = Duration::from_millis(150);
+/// A desktop write should tell the UI promptly when another writer is busy.
+pub const WRITE_LOCK_WAIT: Duration = Duration::from_millis(150);
 
 /// Where the corpus is expected: `$NEBULA_ROOT`, else the corpus the working
 /// directory is in, else `~/.config/nebula/root`, else `~/.nebula`. The CLI's
@@ -30,7 +30,7 @@ pub fn open(root: &Path) -> Result<Corpus> {
 pub fn capture(corpus: &Corpus, text: &str) -> Result<InboxEntry> {
     // Hold the lock across the write and commit, just as the CLI does. Both
     // core operations re-enter it on this thread without waiting again.
-    let _lock = corpus.lock_within(CAPTURE_LOCK_WAIT)?;
+    let _lock = corpus.lock_within(WRITE_LOCK_WAIT)?;
     let entry = ops::capture(corpus, text)?;
     ops::commit(corpus, "capture", &[&entry.id])?;
     Ok(entry)
@@ -39,6 +39,22 @@ pub fn capture(corpus: &Corpus, text: &str) -> Result<InboxEntry> {
 /// Every capture not yet promoted or dropped.
 pub fn inbox(corpus: &Corpus) -> Result<Vec<InboxEntry>> {
     Ok(corpus.inbox()?.0)
+}
+
+/// Settle one entry through the same core op and commit as `neb drop`.
+pub fn drop_entry(corpus: &Corpus, entry: &str) -> Result<InboxEntry> {
+    let _lock = corpus.lock_within(WRITE_LOCK_WAIT)?;
+    let dropped = ops::drop(corpus, entry)?;
+    ops::commit(corpus, "drop", &[entry])?;
+    Ok(dropped)
+}
+
+/// Promote the captured text as an unlinked root, like `neb promote --quiet`.
+pub fn promote_root(corpus: &Corpus, entry: &str) -> Result<Created> {
+    let _lock = corpus.lock_within(WRITE_LOCK_WAIT)?;
+    let created = ops::promote(corpus, entry, &ops::Promotion::default(), 0)?;
+    ops::commit(corpus, "promote", &[entry, &created.doc.node.id])?;
+    Ok(created)
 }
 
 /// The whole corpus as nodes and edges, for the Graph view.
