@@ -83,6 +83,20 @@ Field rules:
   joining runs with a single `-`; other characters are separators. It is at
   most 60 characters and is cut only at a word boundary. The same rule
   validates an explicit `--id`, so non-ASCII scripts are preserved.
+  `promote` with neither `--title` nor `--id` titles the node with the whole
+  captured sentence, and an id is permanent, so it does not slug the whole
+  sentence: a capture of more than five words drops stop-words (articles,
+  auxiliaries, pronouns, common prepositions; never a negation such as `not`)
+  and keeps the first five words left, so `gravity might be a scarcity
+  gradient in some shared resource` becomes
+  `gravity-scarcity-gradient-shared-resource`. If that id belongs to a
+  different idea, the next one adds one more significant word at a time, then
+  falls back to the full slug. A node already titled with the same text is
+  that thought promoted before, so the promotion is refused as `NodeExists`
+  for its id rather than duplicated, as it is when every candidate is taken. A
+  capture of five words or fewer, an explicit `--title`, and an explicit
+  `--id` keep the rules above unchanged, and an existing id is never
+  rewritten.
 - `status`: `seed → hypothesis → refuted | abandoned`. `hypothesis` requires a
   non-empty `kill`. `refuted` requires `closed.why` (you are asserting the kill
   condition fired; the reference that convinced you goes in `references`).

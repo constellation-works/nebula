@@ -1198,6 +1198,12 @@ fn fnv(s: &str) -> u64 {
 /// word) cuts to nothing; the empty-id check at the call site turns that into
 /// a refusal rather than a truncated word standing in for the whole title.
 pub(crate) fn slugify(s: &str) -> String {
+    cap(&dashed(s))
+}
+
+/// Lowercase Unicode letters and digits, every other run a single `-`, with
+/// no leading or trailing dash. A slug before [`cap`] is applied.
+fn dashed(s: &str) -> String {
     let mut out = String::new();
     let mut dash = false;
     for c in s.chars() {
@@ -1209,15 +1215,76 @@ pub(crate) fn slugify(s: &str) -> String {
             dash = true;
         }
     }
-    let out = out.trim_end_matches('-');
-    if out.chars().count() <= 60 {
-        return out.to_string();
+    out.trim_end_matches('-').to_string()
+}
+
+/// Cut a dashed slug to 60 characters at the last `-` at or before the limit.
+fn cap(dashed: &str) -> String {
+    if dashed.chars().count() <= 60 {
+        return dashed.to_string();
     }
-    let cut: String = out.chars().take(60).collect();
+    let cut: String = dashed.chars().take(60).collect();
     match cut.rfind('-') {
         Some(i) => cut[..i].to_string(),
         None => String::new(),
     }
+}
+
+/// How many words an id minted from a raw capture keeps.
+pub(crate) const CAPTURE_ID_WORDS: usize = 5;
+
+/// Words that carry grammar rather than the idea, dropped from an id minted
+/// from a raw capture. Negations (`not`, `no`, `never`, `without`) and
+/// quantifiers (`all`, `only`, `every`) are deliberately absent: dropping one
+/// would name the opposite idea.
+const STOP_WORDS: &[&str] = &[
+    "a", "about", "am", "an", "and", "any", "are", "as", "at", "be", "been", "being", "but", "by",
+    "can", "could", "did", "do", "does", "for", "from", "had", "has", "have", "he", "how", "i",
+    "if", "in", "into", "is", "it", "its", "just", "may", "maybe", "might", "must", "of", "on",
+    "onto", "or", "perhaps", "really", "s", "shall", "she", "should", "so", "some", "than", "that",
+    "the", "their", "then", "there", "these", "they", "this", "those", "to", "very", "was", "we",
+    "were", "what", "when", "where", "which", "who", "why", "will", "with", "would", "you",
+];
+
+/// The ids a capture promoted without `--title` or `--id` may take, most
+/// preferred first. Empty when the text reduces to no usable id.
+///
+/// The title is then the whole captured sentence, and an id is permanent, so
+/// the sentence's slug would be carried by every trace, link and edge. A
+/// capture of [`CAPTURE_ID_WORDS`] words or fewer keeps exactly that slug.
+/// A longer one drops [`STOP_WORDS`] and keeps the first
+/// [`CAPTURE_ID_WORDS`] words left (or the first words of the sentence, when
+/// every word is a stop word). The later candidates are fallbacks for a
+/// collision, still derived from the text: one more significant word at a
+/// time, then the full slug [`slugify`] would give. Every candidate follows
+/// the slug rules, so it passes [`is_slug`].
+pub(crate) fn capture_ids(text: &str) -> Vec<String> {
+    let full = dashed(text);
+    let words: Vec<&str> = full.split('-').filter(|w| !w.is_empty()).collect();
+    let mut out: Vec<String> = Vec::new();
+    if words.len() > CAPTURE_ID_WORDS {
+        let significant: Vec<&str> = words
+            .iter()
+            .copied()
+            .filter(|w| !STOP_WORDS.contains(w))
+            .collect();
+        let significant = if significant.is_empty() {
+            &words
+        } else {
+            &significant
+        };
+        for n in CAPTURE_ID_WORDS.min(significant.len())..=significant.len() {
+            let id = cap(&significant[..n].join("-"));
+            if !id.is_empty() && !out.contains(&id) {
+                out.push(id);
+            }
+        }
+    }
+    let full = cap(&full);
+    if !full.is_empty() && !out.contains(&full) {
+        out.push(full);
+    }
+    out
 }
 
 /// Whether `s` is already exactly what [`slugify`] would turn it into:
@@ -1520,6 +1587,75 @@ mod tests {
                 "fragment `{part}` is not a whole word from the title"
             );
         }
+    }
+
+    /// The capture from the v0.2 evaluation: a 60-character sentence slug
+    /// becomes five significant words, with longer fallbacks behind it.
+    #[test]
+    fn a_long_capture_mints_a_short_id_from_its_significant_words() {
+        let text = "gravity might be a scarcity gradient in some shared resource";
+        let ids = capture_ids(text);
+        assert_eq!(
+            ids,
+            [
+                "gravity-scarcity-gradient-shared-resource",
+                "gravity-might-be-a-scarcity-gradient-in-some-shared-resource",
+            ]
+        );
+        assert_eq!(ids.last().unwrap(), &slugify(text), "the full slug is last");
+        for id in &ids {
+            assert!(is_slug(id) && is_path_safe_id(id), "{id}");
+        }
+    }
+
+    #[test]
+    fn collision_fallbacks_add_one_significant_word_at_a_time() {
+        let ids = capture_ids("the map is not the territory but the atlas is a map of maps");
+        assert_eq!(
+            ids,
+            [
+                "map-not-territory-atlas-map",
+                "map-not-territory-atlas-map-maps",
+                "the-map-is-not-the-territory-but-the-atlas-is-a-map-of-maps",
+            ]
+        );
+        assert!(
+            ids[0].split('-').count() <= CAPTURE_ID_WORDS,
+            "the first choice is within the bound: {}",
+            ids[0]
+        );
+    }
+
+    #[test]
+    fn a_short_capture_keeps_the_slug_it_always_had() {
+        for text in [
+            "search ranking decays with age",
+            "the human's own words",
+            "a thought",
+            "시간은 프레임의 수다",
+        ] {
+            assert_eq!(capture_ids(text), [slugify(text)], "{text}");
+        }
+    }
+
+    /// Words past the 60-character cut of the full slug still count: the
+    /// short id is built from the whole sentence, then capped.
+    #[test]
+    fn a_capture_id_draws_on_words_past_the_full_slugs_cut() {
+        let text = "it is what it is and it was what it was and so it goes on and on forever";
+        // Every word but `goes` and `forever` is a stop word, so those two
+        // and nothing else carry the id.
+        assert_eq!(capture_ids(text)[0], "goes-forever");
+        assert!(!slugify(text).contains("forever"), "{}", slugify(text));
+
+        let stop_only = "it is what it is and so it was";
+        assert_eq!(capture_ids(stop_only)[0], "it-is-what-it-is");
+    }
+
+    #[test]
+    fn a_capture_that_reduces_to_nothing_has_no_id() {
+        assert!(capture_ids("→ … !!").is_empty());
+        assert!(capture_ids(&"a".repeat(61)).is_empty());
     }
 
     #[test]

@@ -1082,6 +1082,186 @@ fn capture_and_promote_suggest_but_never_link() {
     );
 }
 
+/// The capture from the v0.2 evaluation, whose sentence slug is 60 characters.
+const LONG_CAPTURE: &str = "gravity might be a scarcity gradient in some shared resource";
+const LONG_CAPTURE_SLUG: &str = "gravity-might-be-a-scarcity-gradient-in-some-shared-resource";
+const LONG_CAPTURE_ID: &str = "gravity-scarcity-gradient-shared-resource";
+
+/// A capture promoted with neither a title nor an id keeps the sentence as
+/// its title but takes its id from the first five significant words.
+#[test]
+fn a_long_capture_promoted_as_captured_gets_a_short_id() {
+    let (_dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, LONG_CAPTURE).unwrap();
+    let created = ops::promote(&corpus, &entry.id, &Promotion::default(), 0).unwrap();
+
+    assert_eq!(created.doc.node.id, LONG_CAPTURE_ID);
+    assert!(created.doc.node.id.split('-').count() <= 5);
+    assert_eq!(
+        created.doc.node.title, LONG_CAPTURE,
+        "the title is untouched"
+    );
+    assert_eq!(created.path, corpus.node_path(LONG_CAPTURE_ID).unwrap());
+    assert_eq!(
+        corpus.load(LONG_CAPTURE_ID).unwrap().node.title,
+        LONG_CAPTURE
+    );
+    assert!(corpus.inbox().unwrap().0.is_empty(), "the entry is settled");
+}
+
+/// A taken short id falls back to a longer id from the same text, never
+/// onto the existing node. Once every candidate is taken, the promotion is
+/// refused as a duplicate exactly as before, and nothing is written.
+#[test]
+fn a_taken_capture_id_falls_back_and_never_touches_the_existing_node() {
+    let (_dir, corpus) = corpus();
+    let existing = ops::new_node(
+        &corpus,
+        &NewNode {
+            title: "An unrelated earlier idea".into(),
+            id: Some(LONG_CAPTURE_ID.into()),
+            ..NewNode::default()
+        },
+    )
+    .unwrap();
+    let before = std::fs::read(&existing.path).unwrap();
+
+    // One more significant word than the bound: the next candidate.
+    let longer = format!("{LONG_CAPTURE} pool");
+    let entry = ops::capture(&corpus, &longer).unwrap();
+    let created = ops::promote(&corpus, &entry.id, &Promotion::default(), 0).unwrap();
+    assert_eq!(
+        created.doc.node.id,
+        "gravity-scarcity-gradient-shared-resource-pool"
+    );
+
+    // Exactly five significant words: the fallback is the full slug.
+    let entry = ops::capture(&corpus, LONG_CAPTURE).unwrap();
+    let created = ops::promote(&corpus, &entry.id, &Promotion::default(), 0).unwrap();
+    assert_eq!(created.doc.node.id, LONG_CAPTURE_SLUG);
+
+    // The same sentence again: the short id is still another idea's, but the
+    // full slug holds this very thought, so it is refused by that id.
+    let entry = ops::capture(&corpus, LONG_CAPTURE).unwrap();
+    let error = ops::promote(&corpus, &entry.id, &Promotion::default(), 0).unwrap_err();
+    assert!(
+        matches!(&error, Error::NodeExists(id) if id == LONG_CAPTURE_SLUG),
+        "{error:?}"
+    );
+    assert_eq!(
+        corpus.inbox_entry(&entry.id).unwrap().text,
+        LONG_CAPTURE,
+        "a refused promotion leaves the capture waiting"
+    );
+
+    assert_eq!(
+        std::fs::read(&existing.path).unwrap(),
+        before,
+        "an existing node is never rewritten"
+    );
+    assert_eq!(corpus.load_all().unwrap().len(), 3);
+}
+
+/// A thought already promoted is refused, not promoted a second time under
+/// a fallback id: the collision names the node that already holds it.
+#[test]
+fn a_capture_already_promoted_is_refused_rather_than_duplicated() {
+    let (_dir, corpus) = corpus();
+    let first = ops::capture(&corpus, LONG_CAPTURE).unwrap();
+    let second = ops::capture(&corpus, LONG_CAPTURE).unwrap();
+    let created = ops::promote(&corpus, &first.id, &Promotion::default(), 0).unwrap();
+    assert_eq!(created.doc.node.id, LONG_CAPTURE_ID);
+    let before = std::fs::read(&created.path).unwrap();
+
+    let error = ops::promote(&corpus, &second.id, &Promotion::default(), 0).unwrap_err();
+    assert!(
+        matches!(&error, Error::NodeExists(id) if id == LONG_CAPTURE_ID),
+        "{error:?}"
+    );
+    assert_eq!(
+        corpus.inbox_entry(&second.id).unwrap().text,
+        LONG_CAPTURE,
+        "a refused promotion leaves the capture waiting"
+    );
+    assert_eq!(corpus.load_all().unwrap().len(), 1, "no duplicate node");
+    assert_eq!(std::fs::read(&created.path).unwrap(), before);
+}
+
+/// Every candidate held by some other idea: refused by the full slug, and
+/// nothing is written.
+#[test]
+fn a_capture_whose_every_candidate_is_another_idea_is_refused() {
+    let (_dir, corpus) = corpus();
+    for (title, id) in [
+        ("One unrelated idea", LONG_CAPTURE_ID),
+        ("Another unrelated idea", LONG_CAPTURE_SLUG),
+    ] {
+        ops::new_node(
+            &corpus,
+            &NewNode {
+                title: title.into(),
+                id: Some(id.into()),
+                ..NewNode::default()
+            },
+        )
+        .unwrap();
+    }
+    let entry = ops::capture(&corpus, LONG_CAPTURE).unwrap();
+    let error = ops::promote(&corpus, &entry.id, &Promotion::default(), 0).unwrap_err();
+    assert!(
+        matches!(&error, Error::NodeExists(id) if id == LONG_CAPTURE_SLUG),
+        "{error:?}"
+    );
+    assert!(corpus.inbox_entry(&entry.id).is_ok());
+    assert_eq!(corpus.load_all().unwrap().len(), 2);
+}
+
+/// Only the id minted from a raw capture is shortened: a title still
+/// slugifies whole, and an explicit id is taken as given.
+#[test]
+fn an_explicit_title_or_id_decides_the_promoted_id_as_before() {
+    let (_dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "a thought to retitle").unwrap();
+    let created = ops::promote(
+        &corpus,
+        &entry.id,
+        &Promotion {
+            title: Some(LONG_CAPTURE.into()),
+            ..Promotion::default()
+        },
+        0,
+    )
+    .unwrap();
+    assert_eq!(created.doc.node.id, LONG_CAPTURE_SLUG);
+
+    let entry = ops::capture(&corpus, LONG_CAPTURE).unwrap();
+    let created = ops::promote(
+        &corpus,
+        &entry.id,
+        &Promotion {
+            id: Some("gravity-as-scarcity".into()),
+            ..Promotion::default()
+        },
+        0,
+    )
+    .unwrap();
+    assert_eq!(created.doc.node.id, "gravity-as-scarcity");
+    assert_eq!(created.doc.node.title, LONG_CAPTURE);
+
+    // A capture of five words or fewer keeps the slug it always had.
+    let entry = ops::capture(&corpus, "the human's own words").unwrap();
+    let created = ops::promote(&corpus, &entry.id, &Promotion::default(), 0).unwrap();
+    assert_eq!(created.doc.node.id, "the-human-s-own-words");
+}
+
+#[test]
+fn a_capture_with_no_usable_id_is_refused_as_before() {
+    let (_dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "→ … !!").unwrap();
+    let error = ops::promote(&corpus, &entry.id, &Promotion::default(), 0).unwrap_err();
+    assert!(matches!(error, Error::UnusableTitle(_)), "{error:?}");
+}
+
 #[test]
 fn opening_a_missing_corpus_is_a_typed_error() {
     let dir = tempfile::tempdir().unwrap();
