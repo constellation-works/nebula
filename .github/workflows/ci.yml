@@ -7,6 +7,7 @@ permissions:
 jobs:
   deny:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
@@ -20,6 +21,9 @@ jobs:
         # that passes on one platform and fails on the other.
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # A wall clock outside the tests themselves (STD-03 §R22): a hung child
+    # ends the job, not the runner's six-hour default.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -41,10 +45,15 @@ jobs:
       # Rust change that forgot `make types` shows up here as a diff.
       - run: cargo test -p nebula-core --features ts --lib
       - run: git diff --exit-code -- apps/desktop/src/types
+      # The same suites under a hostile HOME, TMPDIR inside a git repository
+      # and GIT_DIR exported: no test may read or write the host's state.
+      - if: runner.os == 'Linux'
+        run: ./scripts/hostile-env-test.sh
   # The frontend, and the Tauri crate on the platform the app is for. No
   # `tauri build` here: the .app is unsigned and built locally.
   desktop:
     runs-on: macos-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: apps/desktop

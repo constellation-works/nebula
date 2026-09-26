@@ -37,6 +37,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 
 [dev-dependencies]
+ctor = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

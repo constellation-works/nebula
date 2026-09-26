@@ -79,6 +79,11 @@ To run the core and CLI tests without building the desktop app:
 cargo test -p nebula-core -p neb --all-targets
 ```
 
+`make hostile-env-test` runs the same suites under a hostile `HOME`, with
+`TMPDIR` inside a git repository and with `GIT_DIR` exported, and checks that
+no test touched the host; it includes the desktop crate where WebKitGTK is
+installed.
+
 `make test` runs `cargo test --workspace --all-targets`, which includes the
 Tauri desktop crate. On Linux, building that crate needs the desktop system
 development libraries, including GTK, WebKitGTK, and D-Bus.

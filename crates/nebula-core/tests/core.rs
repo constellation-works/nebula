@@ -13,6 +13,10 @@ use nebula_core::{
 };
 use std::fmt::Write as _;
 
+// This process runs with a temporary `HOME` and git environment, set before
+// any test thread starts, and every child comes from its builder.
+mod support;
+
 fn corpus() -> (tempfile::TempDir, Corpus) {
     let dir = tempfile::tempdir().expect("tempdir");
     let corpus = Corpus::init(&dir.path().join("corpus")).expect("init");
@@ -2645,12 +2649,11 @@ fn opening_a_configless_corpus_persists_its_synthesized_id() {
 
 /// Run git in `dir`, asserting it succeeded; stdout as text.
 fn git(dir: &std::path::Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("running git");
+    let out = support::output(
+        support::git_command(dir, support::home()).args(args),
+        support::DEADLINE,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
     assert!(
         out.status.success(),
         "git {args:?} failed in {}:\n{}",
@@ -2667,6 +2670,27 @@ fn git_init(dir: &std::path::Path) {
     git(dir, &["config", "user.name", "neb-test"]);
     git(dir, &["config", "user.email", "neb-test@example.invalid"]);
     git(dir, &["config", "commit.gpgsign", "false"]);
+}
+
+/// Every child this suite starts comes from the isolating builder in
+/// `support`, which is the one place a `Command` is created.
+#[test]
+fn every_child_command_comes_from_the_isolating_builder() {
+    for (file, source, allowed) in [
+        ("core.rs", include_str!("core.rs"), &[][..]),
+        (
+            "support/mod.rs",
+            include_str!("support/mod.rs"),
+            &["command"][..],
+        ),
+    ] {
+        let strays = support::commands_outside(source, allowed);
+        assert!(
+            strays.is_empty(),
+            "{file} creates a child outside `support::command`:\n{}",
+            strays.join("\n")
+        );
+    }
 }
 
 /// The paths a commit touched, relative to the repository's top level.
@@ -2958,6 +2982,14 @@ fn a_relative_observatory_root_is_refused_before_it_is_written() {
         ops::set_observatory_root(&corpus, relative),
         Err(Error::RelativeObservatoryRoot { root, setting: None }) if root == relative
     ));
+    // The machine setting lives under `HOME`, which here is this process's
+    // temporary one, never the developer's.
+    assert_eq!(std::env::var_os("HOME"), Some(support::home().into()));
+    assert!(
+        !support::home()
+            .join(".config/nebula/observatory-root")
+            .exists()
+    );
 }
 
 // -------------------------------------------- settings written under a lock --

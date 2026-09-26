@@ -5,8 +5,32 @@
 use nebula_core::{Corpus, Error, ops};
 use nebula_desktop::session;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Command, Stdio};
+use std::path::Path;
+use std::process::Stdio;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
+
+// This process runs with a temporary `HOME` and git environment, set before
+// any test thread starts, and every child comes from its builder.
+#[path = "../../../../crates/nebula-core/tests/support/mod.rs"]
+mod support;
+
+use support::ChildGuard;
+
+/// Run git in `root`, asserting it succeeded; stdout as text.
+fn git_in(root: &Path, args: &[&str]) -> String {
+    let output = support::output(
+        support::git_command(root, support::home()).args(args),
+        support::DEADLINE,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
 
 #[test]
 fn capture_then_inbox_round_trips() {
@@ -43,20 +67,7 @@ fn capture_commits_each_entry_when_enabled() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
     let mut corpus = Corpus::init(&root).unwrap();
-    let git = |args: &[&str]| {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap()
-    };
+    let git = |args: &[&str]| git_in(&root, args);
     git(&["init", "-q"]);
     git(&["config", "user.name", "neb-test"]);
     git(&["config", "user.email", "neb-test@example.invalid"]);
@@ -86,20 +97,7 @@ fn drop_and_promote_use_core_settlement_and_cli_commit_messages() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
     let mut corpus = Corpus::init(&root).unwrap();
-    let git = |args: &[&str]| {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap()
-    };
+    let git = |args: &[&str]| git_in(&root, args);
     git(&["init", "-q"]);
     git(&["config", "user.name", "neb-test"]);
     git(&["config", "user.email", "neb-test@example.invalid"]);
@@ -170,24 +168,38 @@ fn capture_refuses_a_busy_writer_quickly_and_can_be_retried() {
     let root = dir.path().join("corpus");
     let corpus = Corpus::init(&root).unwrap();
     let pending = session::capture(&corpus, "settle me").unwrap();
-    let mut holder = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "hold_capture_lock_in_child", "--nocapture"])
-        .env("NEBULA_TEST_CAPTURE_LOCK_ROOT", &root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut output = BufReader::new(holder.stdout.take().unwrap());
-    let mut line = String::new();
+    let mut holder = ChildGuard::spawn(
+        support::command(std::env::current_exe().unwrap(), support::home())
+            .args(["--exact", "hold_capture_lock_in_child", "--nocapture"])
+            .env("NEBULA_TEST_CAPTURE_LOCK_ROOT", &root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped()),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    // Lines are read on a thread so the wait for the holder's signal has a
+    // deadline; the guard kills the holder if it never comes.
+    let (send, lines) = mpsc::channel();
+    let stdout = BufReader::new(holder.take_stdout());
+    std::thread::spawn(move || {
+        for line in stdout.lines().map_while(Result::ok) {
+            if send.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let until = Instant::now() + support::DEADLINE;
     loop {
-        line.clear();
-        assert_ne!(
-            output.read_line(&mut line).unwrap(),
-            0,
-            "lock holder exited early"
-        );
-        if line.contains("CAPTURE_LOCK_HELD") {
-            break;
+        let left = until.saturating_duration_since(Instant::now());
+        match lines.recv_timeout(left) {
+            Ok(line) if line.contains("CAPTURE_LOCK_HELD") => break,
+            Ok(_) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => panic!("lock holder exited early"),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!(
+                    "lock holder did not take the lock within {:?}",
+                    support::DEADLINE
+                )
+            }
         }
     }
 
@@ -209,14 +221,31 @@ fn capture_refuses_a_busy_writer_quickly_and_can_be_retried() {
     ));
     assert!(start.elapsed() < Duration::from_secs(1));
 
-    drop(holder.stdin.take());
-    assert!(holder.wait().unwrap().success());
+    drop(holder.take_stdin());
+    assert!(
+        holder
+            .wait(support::DEADLINE)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .success()
+    );
     let corpus = session::open(&root).unwrap();
     assert_eq!(session::inbox(&corpus).unwrap()[0].id, pending.id);
     session::drop_entry(&corpus, &pending.id).unwrap();
     assert!(session::inbox(&corpus).unwrap().is_empty());
     let entry = session::capture(&corpus, "retry me").unwrap();
     assert_eq!(session::inbox(&corpus).unwrap()[0].id, entry.id);
+}
+
+/// Every child this suite starts comes from the isolating builder in
+/// `support`.
+#[test]
+fn every_child_command_comes_from_the_isolating_builder() {
+    let strays = support::commands_outside(include_str!("roundtrip.rs"), &[]);
+    assert!(
+        strays.is_empty(),
+        "roundtrip.rs creates a child outside `support::command`:\n{}",
+        strays.join("\n")
+    );
 }
 
 // This helper is a no-op in the regular test run. The contention test starts
