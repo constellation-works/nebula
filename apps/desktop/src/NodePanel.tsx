@@ -31,6 +31,9 @@ const RESIZE_STEP = 20;
 /** Only these leave the app; a repo path or almanac wikilink is shown as text. */
 const isExternal = (uri: string): boolean => /^(https?:|mailto:)/i.test(uri);
 
+/** An image on the web: fetching it would tell its host the node was opened. */
+const isRemote = (uri: string): boolean => /^https?:/i.test(uri);
+
 /** An `<a>` that hands the URL to the OS instead of navigating the webview. */
 function ExternalLink({
   href,
@@ -54,6 +57,32 @@ function ExternalLink({
       {children}
     </a>
   );
+}
+
+/**
+ * A markdown image. A remote one is never fetched (STD-05 §R20): bodies are
+ * often agent-written or synced, so opening a node must not contact a host
+ * the operator never chose. It shows as a link, by its alt text, that opens
+ * in the OS browser; anything else stays an `<img>`, left to the CSP's
+ * `img-src 'self' data:`.
+ */
+function MarkdownImage({
+  src,
+  alt,
+  onOpenError,
+}: {
+  src?: string | Blob;
+  alt?: string;
+  onOpenError: (message: string) => void;
+}) {
+  if (typeof src === "string" && isRemote(src)) {
+    return (
+      <ExternalLink href={src} onOpenError={onOpenError}>
+        {alt || src}
+      </ExternalLink>
+    );
+  }
+  return <img src={typeof src === "string" ? src : undefined} alt={alt} />;
 }
 
 /** Human authorship is the default; call out only claims made by somebody else. */
@@ -245,7 +274,10 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
               <section className="panel__section markdown">
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
-                  components={{ a: (props) => <ExternalLink {...props} onOpenError={setOpenError} /> }}
+                  components={{
+                    a: (props) => <ExternalLink {...props} onOpenError={setOpenError} />,
+                    img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} onOpenError={setOpenError} />,
+                  }}
                 >
                   {view.body}
                 </ReactMarkdown>

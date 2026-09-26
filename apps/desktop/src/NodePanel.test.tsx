@@ -194,6 +194,19 @@ describe("NodePanel", () => {
     await waitFor(() => expect(mocked.openUrl).toHaveBeenCalledWith("https://example.org/menu-bar-apps"));
   });
 
+  it("a remote image in a body renders as a link, not an img", async () => {
+    mocked.node.mockResolvedValue(
+      nodeView(fixture.node.id, fixture.node.title, "Before ![alt](https://example.invalid/x.png) after"),
+    );
+    renderPanel();
+    const link = await screen.findByRole("link", { name: "alt" });
+    // Opening the node fetches nothing: no `<img>` points off the machine.
+    expect(document.querySelector('img[src^="http"]')).toBeNull();
+    expect(document.querySelector(".markdown img")).toBeNull();
+    fireEvent.click(link);
+    await waitFor(() => expect(mocked.openUrl).toHaveBeenCalledWith("https://example.invalid/x.png"));
+  });
+
   it("lists edges under genealogy and contradicts, each selecting its node", async () => {
     const { onSelect } = renderPanel();
     await screen.findByRole("heading", { level: 3, name: "Genealogy" });
