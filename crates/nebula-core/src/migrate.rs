@@ -173,6 +173,7 @@ pub struct NodeMigration {
 /// is exactly what refuses to open.
 pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
     let root = Corpus::resolve_root(root)?;
+    store::refuse_nodes_symlink(&root)?;
     if !root.join("nodes").is_dir() {
         return Err(Error::NoCorpus(root));
     }
@@ -187,6 +188,7 @@ pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
     let config = preflight_config(&root)?;
 
     let mut report = MigrationReport::default();
+    store::refuse_nodes_symlink(&root)?;
     let mut paths: Vec<PathBuf> = std::fs::read_dir(root.join("nodes"))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .filter(|p| p.extension().is_some_and(|e| e == "md"))
@@ -206,6 +208,7 @@ pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
         preflight_nodes(&paths, config.version)?;
     }
     for path in &paths {
+        store::refuse_nodes_symlink(&root)?;
         let raw = std::fs::read_to_string(path)?;
         let (front, body) = model::split_frontmatter(&raw).map_err(|e| in_file(e, path))?;
         let v1: V1Node = serde_yaml_ng::from_str(front)
@@ -221,6 +224,7 @@ pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
         if model::render(&doc)? == raw {
             continue;
         }
+        store::refuse_nodes_symlink(&root)?;
         model::write(path, &doc)?;
         report.rewritten.push(NodeMigration {
             id: doc.node.id,

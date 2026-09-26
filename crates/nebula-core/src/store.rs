@@ -164,6 +164,7 @@ impl Corpus {
     /// configured root, else `~/.nebula`.
     pub fn open(explicit: Option<PathBuf>) -> Result<Self> {
         let root = Self::resolve_root(explicit)?;
+        refuse_nodes_symlink(&root)?;
         if !root.join("nodes").is_dir() {
             return Err(Error::NoCorpus(root));
         }
@@ -175,6 +176,7 @@ impl Corpus {
 
     /// Create an empty corpus, or open an existing one without resetting it.
     pub fn init(root: &Path) -> Result<Self> {
+        refuse_nodes_symlink(root)?;
         // Re-running init on a corpus is an open, not a reset. In particular,
         // opening first validates an existing config before any directory or
         // file can be created. The one setup repair it may make afterwards is
@@ -431,6 +433,7 @@ impl Corpus {
         if !is_path_safe_id(id) {
             return Err(Error::UnsafeId(id.to_string()));
         }
+        refuse_nodes_symlink(&self.root)?;
         Ok(self.root.join("nodes").join(format!("{id}.md")))
     }
 
@@ -590,6 +593,7 @@ impl Corpus {
     pub fn load_all(&self) -> Result<Vec<Doc>> {
         let dir = self.root.join("nodes");
         let mut out = Vec::new();
+        refuse_nodes_symlink(&self.root)?;
         if !dir.is_dir() {
             return Ok(out);
         }
@@ -778,6 +782,22 @@ impl Corpus {
         refuse_inbox_symlink(&entry.file)?;
         write_atomic(&entry.file, lines.join("\n") + "\n")?;
         Ok(())
+    }
+}
+
+/// Check the nodes directory entry without resolving the corpus root. A root
+/// reached through a symlink is supported, but `nodes/` must be a real
+/// directory entry so node paths cannot reach a different tree.
+pub(crate) fn refuse_nodes_symlink(root: &Path) -> Result<()> {
+    let path = root.join("nodes");
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::corpus(format!(
+            "{} is a symlink; node operations require a real directory",
+            path.display()
+        ))),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(Error::io_at("inspecting", &path, error)),
     }
 }
 

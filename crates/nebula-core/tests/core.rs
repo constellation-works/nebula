@@ -1859,3 +1859,69 @@ fn a_corpus_reached_through_a_symlinked_root_still_writes_and_loads() {
     );
     assert_eq!(linked.load_all().unwrap().len(), 1);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_nodes_directory_refuses_open_init_reads_and_writes() {
+    let (dir, corpus) = corpus();
+    let id = seed(&corpus, "Victim", &[]);
+    let root = dir.path().join("corpus");
+    let nodes = root.join("nodes");
+    let outside = dir.path().join("outside-nodes");
+    std::fs::rename(&nodes, &outside).unwrap();
+    let outside_node = outside.join(format!("{id}.md"));
+    let before = std::fs::read(&outside_node).unwrap();
+    std::os::unix::fs::symlink(&outside, &nodes).unwrap();
+
+    for result in [
+        Corpus::open(Some(root.clone())),
+        Corpus::init(&root),
+        Corpus::open_or_init(Some(root.clone())),
+    ] {
+        assert!(matches!(result, Err(Error::Corpus(message)) if message.contains("symlink")));
+    }
+    assert!(matches!(corpus.load(&id), Err(Error::Corpus(message)) if message.contains("symlink")));
+    assert!(
+        matches!(corpus.load_all(), Err(Error::Corpus(message)) if message.contains("symlink"))
+    );
+    assert!(
+        matches!(ops::note(&corpus, &id, "escape", None), Err(Error::Corpus(message)) if message.contains("symlink"))
+    );
+    assert!(
+        matches!(ops::new_node(&corpus, &NewNode { title: "New".into(), ..NewNode::default() }), Err(Error::Corpus(message)) if message.contains("symlink"))
+    );
+    assert!(
+        matches!(nebula_core::migrate::run(Some(root)), Err(Error::Corpus(message)) if message.contains("symlink"))
+    );
+
+    assert_eq!(std::fs::read(&outside_node).unwrap(), before);
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1);
+    assert!(
+        std::fs::symlink_metadata(&nodes)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn init_refuses_a_dangling_nodes_symlink_without_creating_a_corpus() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("corpus");
+    std::fs::create_dir(&root).unwrap();
+    let nodes = root.join("nodes");
+    std::os::unix::fs::symlink(dir.path().join("missing"), &nodes).unwrap();
+
+    assert!(
+        matches!(Corpus::init(&root), Err(Error::Corpus(message)) if message.contains("symlink"))
+    );
+    assert!(
+        std::fs::symlink_metadata(&nodes)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(!root.join("config.yaml").exists());
+    assert!(!root.join("inbox").exists());
+}
