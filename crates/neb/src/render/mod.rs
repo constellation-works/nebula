@@ -23,7 +23,7 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use table::{Cell, Column, Table};
 
-pub use error::{Refusal, refusal, refusal_about};
+pub use error::{Refusal, refusal, refusal_about, refusal_for_new};
 pub use report::{
     check, check_tally, commit_setting, commit_setting_hint, impact, impact_notice, inbox,
     inbox_notice, migration, migration_notice, near, near_notice, node, observatory_root,

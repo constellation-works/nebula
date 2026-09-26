@@ -540,3 +540,128 @@ it — but only `neb edit`: no corpus lock is held while the editor runs, so
 every other writer carries on (STD-03@2 §R1). Scope: the editor child of `neb edit`. Reverses if nebula ever opens an
 editor with no person at the terminal, such as for an agent or a routine,
 which would then need a group and a deadline like git.
+
+## Verb-first grammar with domain verbs
+
+This departs from STD-01@2 §R1 and STD-01@2 §R2. nebula has one resource, the
+node, so it takes §R1's single-resource form, `neb <verb>`, and its verbs are
+the domain's own rather than a shared `add`/`list`/`show`/`update` set:
+`capture`, `promote`, `sharpen`, `trace` and `handoff` name what happens to an
+idea, and a user reads them as the workflow. `new`, `show` and `list` keep the
+shared meanings §R2 gives them.
+
+Three places read as a noun-verb order, and are the named exceptions:
+
+- **`config <setting>`** takes the setting as a subcommand, `config commit` or
+  `config observatory-root`, each reading its value with no argument and
+  setting it with one.
+- **`inbox`** is the inbox's `list`: the inbox is the one second collection,
+  and it is only ever listed, never shown one entry at a time.
+- **`tag list`** is a positional sentinel. `neb tag <id>` edits a node's tags
+  and `neb tag list` lists every tag, so the word is ambiguous: `neb new List`
+  writes `nodes/list.md`, and `neb tag list` cannot address that node's tags
+  except with `--add` or `--remove`, which make it the node again.
+
+What is given up: a user of another constellation CLI cannot guess the verbs,
+and has to read `neb --help`, whose sections are ordered by lifecycle stage for
+that reason. Reverses if nebula gains a second resource that needs its own
+verbs, when the tree becomes `neb <noun> <verb>` throughout and `tag list`
+becomes `tag`'s own noun.
+
+## `init --set-root --force` keeps its name, and two gates are not `--confirm`
+
+This departs from STD-01@2 §R5, which makes `--confirm` the one confirmation
+spelling. `init --set-root --force` replaces a machine default that names a
+different corpus (`RootConfigConflict`, "pass --force to replace it"), and is
+a second spelling of confirmation. It keeps its name because it is a setup
+flag in the one command that creates things, it is not a destructive
+operation on data (the replaced setting is a path, and the corpus it named is
+untouched), and `init`'s warning that a new corpus is shadowed names the whole
+command, `neb init <DIR> --set-root --force`. 0.2.0 is unreleased, so renaming
+it would cost only the courtesy alias; the rename was weighed and declined.
+
+Two gates that §R5 might be read to cover are recorded as not confirmations:
+
+- **`status <id> refuted`** is irreversible, since a refuted node reopens only
+  as a new node, and it is gated by the required `--why` rather than by
+  `--confirm`. Writing how the kill condition fired is the act, and a flag
+  that only said "yes" would add a keystroke and no record.
+- **`sharpen --confirm`** means "adopt the kill condition already on the node
+  as mine", which is an authorship claim, not consent to a destructive step.
+  It writes one label and nothing else.
+
+Reverses if a destructive verb is ever added, which takes `--confirm`, at
+which point `--force` is renamed to match, with a hidden alias for one release.
+
+## The help sections are a hand-written template
+
+This departs from STD-01@2 §R25, which declares each help string in one
+place. `neb --help` groups the verbs by lifecycle stage, and clap's derive has
+no per-subcommand heading, so `HELP_TEMPLATE` in `crates/neb/src/cli.rs`
+writes each row out by hand, copying the subcommand's one-liner. The copy is
+guarded rather than derived: `help_rows_match_the_variants` fails when a row
+and the variant's doc comment disagree or a visible subcommand has no row, and
+`variant_order_matches_the_template` keeps the declaration order in step.
+
+What is given up: adding a verb means editing two places, with a test failing
+until both are done. Reverses if clap gains subcommand headings, or if the
+rows are built at startup from a table of section and command names plus each
+subcommand's `about`.
+
+## `triage` stops at end of input
+
+This departs from STD-01@2 §R27, a SHOULD, which treats end of input at a
+prompt as an error. `triage` reads end of input as `q`: every decision already
+made stays applied, and the rest of the inbox stays waiting. A script that
+pipes a fixed list of keys (`printf 'd\ns\n' | neb triage`) and a person who
+presses Ctrl-D both mean "stop here", and nothing is lost by stopping, since
+an undecided entry is simply still in the inbox. There is no timeout on a
+non-terminal stdin either: a pipe that stays open is a writer still deciding.
+
+The one case where stopping would lose something is an error, as §R27 asks:
+end of input while a title is waiting to be used, after `t <title>` or after
+`t` alone, is refused (`triage_title_lost`, exit 1), naming the entry, the
+title, and the `neb promote <entry> --title …` that would use it.
+
+Reverses if `triage` ever gains a prompt whose answer cannot be left for
+later, which would then fail at end of input.
+
+## Machine settings are read and written under `--root`
+
+This departs from clause (d) of STD-01@2 §R28, which keeps an invocation
+scoped by `--root` from reading or writing state outside that root. Two
+machine settings are used under `--root` by design:
+
+- **`~/.config/nebula/observatory-root`** is read by `show`, `cite`,
+  `handoff` and `config observatory-root` whatever `--root` says, since where
+  the Observatory checkout is belongs to the machine, not to any corpus, and
+  the corpus is synced between machines.
+- **`~/.config/nebula/root`** is written by `init --set-root` under `--root`,
+  since making a corpus the machine default is the point of that flag.
+
+`--root` selects a corpus, and neither setting belongs to one. Clause (c), a
+flag accepted and then ignored, is met: `--no-commit` written before a verb
+that never commits is refused rather than ignored. Reverses if a corpus ever
+carries its own Observatory checkout, or if `--root` is ever used to sandbox a
+run, in which case both settings would need an override of their own.
+
+## Which refusals are usage errors
+
+STD-01@2 §R20 gives a usage error exit 2 and a failure exit 1. `neb` decides
+which in one place, `exit` in `crates/neb/src/render/error.rs`, per core
+variant, with no wildcard, and the CLI's own refusals are made as one or the
+other. A usage error is an argument no corpus could accept whatever it holds:
+a value of the wrong shape (`InvalidId`, `UnusableTitle`, `EmptyKill`,
+`AbsoluteUri`, `UnknownReferenceKind`, `InvalidObservatoryId`, an empty
+`--root`, a relative path given to `config observatory-root`), flags that rule
+each other out (`ParentAndReopens`, `SelfLoop`, `refuted` without `--why`), a
+verb asked for a form it has none of (`triage --json`), and the CLI's `usage`
+refusals. Everything that turns on the corpus, the machine or git is a failure.
+
+Two boundaries are drawn on purpose. `UnsafeId` stays a failure because the id
+may have come out of a node file somebody edited rather than off the command
+line. A refusal of a line `triage` read from piped input exits 1 whatever its
+code, because the command line was fine; `UnusableTitle` from `t !!!` there is
+a failure, and from `new "!!!"` a usage error. Reverses for any variant found
+to be raised by both an argument and the corpus's contents, which would then
+split into two.

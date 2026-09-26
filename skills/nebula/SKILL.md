@@ -64,7 +64,7 @@ agent triages with `inbox`, `near`, `promote` and `drop` instead.
 ## Linking to Observatory
 
 A node that became an Observatory record is cited by the record's id, never
-by a path: `neb cite <node> --kind observatory --uri Q002 --note "why"`.
+by a path: `neb cite <node> --kind observatory --uri <record-id> --note "why"`.
 Record ids are `Q###` (questions), `H###` (hypotheses), `T###` (theories) and
 `R###` (research). The path is reconstructed per machine: `$OBSERVATORY_ROOT`,
 else this machine's setting (`neb config observatory-root <DIR>`, stored in
@@ -73,17 +73,18 @@ else this machine's setting (`neb config observatory-root <DIR>`, stored in
 bug: it may resolve here and breaks everywhere else. `cite` refuses one, and
 `check` warns about any already in the corpus. An unresolved record is a
 warning about this machine, not something to rewrite. A `check` warning that
-`config.yaml` carries `observatory_root` means an older `neb` stored one
+`config.yaml` carries `observatory_root`, or the `warning:` a verb prints on
+stderr while that key is the root in effect, means an older `neb` stored one
 machine's path in the shared corpus: leave it to the human to set each
 machine's own and then run `neb config observatory-root --drop-legacy`.
 
 When the human says an idea has become an Observatory record, hand it off in
-one step: `neb handoff <node> H012 --note "why"`. It cites the record and
-closes the node as `abandoned` with `why: handed off to H012` in one write,
-and `show` and `trace` then say where the idea went. It refuses a node that
-is already closed and, when this machine has an observatory root, a record
-the checkout does not carry; never split it back into `cite` plus `status`
-to get past either refusal.
+one step: `neb handoff <node> <record-id> --note "why"`. It cites the record
+and closes the node as `abandoned` with `why: handed off to <record-id>` in
+one write, and `show` and `trace` then say where the idea went. It refuses a
+node that is already closed and, when this machine has an observatory root, a
+record the checkout does not carry; never split it back into `cite` plus
+`status` to get past either refusal.
 
 ## Capture from conversation
 
@@ -140,7 +141,8 @@ falsifier.
 
 `neb` refuses rather than warns at the point of action. Each refusal is typed
 and tells you what to do; do not retry the same command. Under `--json` it is
-one line of JSON on stderr, `{"error", "code", "hint"}`, with exit 1: match
+one line of JSON on stderr, `{"error", "code", "hint"}`, with exit 1, or
+exit 2 when the command line itself is wrong (a usage error): match
 on `code` (a `snake_case` name such as `needs_kill`) and act on `hint`
 ([verbs.md](references/verbs.md#refusals-under---json) has the envelope and
 the exit codes).

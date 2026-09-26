@@ -555,7 +555,11 @@ fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<
     let mut edges: Vec<Edge> = Vec::new();
     for (kind, to) in wanted {
         if edges.iter().any(|e| e.kind == kind && e.to == *to) {
-            return Err(Error::DuplicateEdge);
+            return Err(Error::DuplicateEdge {
+                from: id,
+                kind,
+                to: to.clone(),
+            });
         }
         edges.push(Edge {
             kind,
@@ -695,7 +699,11 @@ pub fn link(
     let mut doc = corpus.load(from)?;
     corpus.load(to)?;
     if doc.node.has_edge(kind, to) {
-        return Err(Error::DuplicateEdge);
+        return Err(Error::DuplicateEdge {
+            from: from.to_owned(),
+            kind,
+            to: to.to_owned(),
+        });
     }
     doc.node.edges.push(Edge {
         kind,

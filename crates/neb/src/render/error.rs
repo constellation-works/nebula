@@ -9,8 +9,30 @@
 //! Under `--json` the same refusal is one JSON object instead. Its `code` is
 //! [`Error::code`], so a new core variant arrives with its code and message
 //! and no hint; giving it advice is one more arm in [`hint`].
+//!
+//! How a refusal exits is decided here too, once: [`exit`] places every core
+//! variant, and the CLI's own refusals say which they are when they are made.
 
-use nebula_core::{Error, Settlement, Status};
+use nebula_core::{EdgeType, Error, Settlement, Status};
+
+/// How a refusal ends `neb` (STD-01 §R20).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exit {
+    /// Exit 1: the command ran and could not do what was asked.
+    Failure,
+    /// Exit 2: the command line asks for something no corpus could give, such
+    /// as a value of the wrong shape or two flags that contradict each other.
+    Usage,
+}
+
+impl From<Exit> for std::process::ExitCode {
+    fn from(exit: Exit) -> Self {
+        match exit {
+            Exit::Failure => Self::FAILURE,
+            Exit::Usage => Self::from(2),
+        }
+    }
+}
 
 /// A refusal as `neb` reports it: a code to match on, what is wrong, and what
 /// to do about it when the CLI knows.
@@ -23,19 +45,47 @@ pub struct Refusal {
     pub message: String,
     /// What to do about it, or `null` when there is nothing to add.
     pub hint: Option<String>,
+    /// How `neb` exits on it.
+    pub exit: Exit,
     /// The terminal wording, for the few refusals whose prose is not the
     /// message, a blank line, and the hint.
     prose: Option<String>,
 }
 
 impl Refusal {
-    /// A refusal with no hint.
+    /// A command failure with no hint.
     pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
             hint: None,
+            exit: Exit::Failure,
             prose: None,
+        }
+    }
+
+    /// A usage error with no hint.
+    pub fn usage(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            exit: Exit::Usage,
+            ..Self::new(code, message)
+        }
+    }
+
+    /// The same refusal, with `hint` as what to do about it.
+    #[must_use]
+    pub fn hinted(self, hint: Option<String>) -> Self {
+        Self { hint, ..self }
+    }
+
+    /// The same refusal as a command failure, however [`exit`] would class
+    /// its error: for a refusal of input read from somewhere other than the
+    /// command line, which no usage error is about.
+    #[must_use]
+    pub fn failed(self) -> Self {
+        Self {
+            exit: Exit::Failure,
+            ..self
         }
     }
 
@@ -91,7 +141,28 @@ impl Refusal {
 pub fn refusal(e: &Error) -> Refusal {
     Refusal {
         hint: hint(e),
+        exit: exit(e),
         ..Refusal::new(e.code(), e.to_string())
+    }
+}
+
+/// The refusal for an error from `new`, whose edges all come from its own
+/// flags: a repeated edge there is a flag given twice, not an edge the corpus
+/// already has, so there is no node to show yet.
+pub fn refusal_for_new(e: &Error) -> Refusal {
+    match e {
+        Error::DuplicateEdge { kind, to, .. } => {
+            let flag = match kind {
+                EdgeType::Reopens => "--reopens",
+                EdgeType::Contradicts => "--contradicts",
+                EdgeType::DerivesFrom | EdgeType::Refines | EdgeType::Generalizes => "--parent",
+            };
+            Refusal {
+                hint: Some(format!("`{flag} {to}` is given twice; give it once.")),
+                ..refusal(e)
+            }
+        }
+        other => refusal(other),
     }
 }
 
@@ -114,8 +185,9 @@ pub fn refusal_about(e: &Error, node: &str) -> Refusal {
             let hint = format!("neb status {node} refuted --why \"...\"");
             let prose = format!("{message}\n\n  {hint}");
             Refusal {
+                message: message.to_owned(),
                 hint: Some(hint),
-                ..Refusal::new(e.code(), message)
+                ..refusal(e)
             }
             .worded(prose)
         }
@@ -129,8 +201,9 @@ pub fn refusal_about(e: &Error, node: &str) -> Refusal {
             );
             let prose = format!("{message}.\n\n{hint}");
             Refusal {
+                message,
                 hint: Some(hint),
-                ..Refusal::new(e.code(), message)
+                ..refusal(e)
             }
             .worded(prose)
         }
@@ -141,8 +214,9 @@ pub fn refusal_about(e: &Error, node: &str) -> Refusal {
             let hint = format!("neb new \"...\" --reopens {node}");
             let prose = format!("{message}.\n\nRevive it as a new node that reopens it:\n  {hint}");
             Refusal {
+                message,
                 hint: Some(hint),
-                ..Refusal::new(e.code(), message)
+                ..refusal(e)
             }
             .worded(prose)
         }
@@ -150,11 +224,81 @@ pub fn refusal_about(e: &Error, node: &str) -> Refusal {
             hint: Some(format!(
                 "Cite it by a path relative to nodes/, such as ../../studies/x.md, or \
                  an Observatory record by its id:\n  \
-                 neb cite {node} --kind observatory --uri Q002"
+                 neb cite {node} --kind observatory --uri <record-id>"
             )),
             ..refusal(e)
         },
         other => refusal(other),
+    }
+}
+
+/// How a core refusal exits: the one place that is decided.
+///
+/// A usage error is an argument no corpus could accept, whatever it holds: a
+/// value of the wrong shape, a flag the verb's other arguments rule out, or a
+/// verb asked for a form it has none of. Everything that turns on what the
+/// corpus, the machine or git holds is a failure. No wildcard: a new variant
+/// does not compile until it is placed.
+fn exit(e: &Error) -> Exit {
+    match e {
+        Error::EmptyRoot
+        | Error::RelativeObservatoryRoot { setting: None, .. }
+        | Error::SelfLoop
+        | Error::ParentAndReopens(_)
+        | Error::EmptyKill
+        | Error::RefutedNeedsWhy
+        | Error::Interactive(_)
+        | Error::AbsoluteUri(_)
+        | Error::UnusableTitle(_)
+        | Error::UnknownReferenceKind(_)
+        | Error::InvalidObservatoryId(_)
+        | Error::InvalidId(_) => Exit::Usage,
+        // `UnsafeId` stays here: the id may have come out of a node file
+        // somebody edited, not off the command line.
+        Error::NoSuchNode(_)
+        | Error::NoSuchInboxEntry(_)
+        | Error::InboxEntrySettled { .. }
+        | Error::NoCorpus(_)
+        | Error::NotGitWorkTree(_)
+        | Error::NoNodeAtRevision { .. }
+        | Error::UnknownRevision { .. }
+        | Error::RootConfigConflict { .. }
+        | Error::RelativeObservatoryRoot {
+            setting: Some(_), ..
+        }
+        | Error::MissingConfig { .. }
+        | Error::SchemaMismatch { .. }
+        | Error::CurrentSchemaUnreadable { .. }
+        | Error::V1NodeUnderCurrentSchema { .. }
+        | Error::Cycle { .. }
+        | Error::DuplicateEdge { .. }
+        | Error::NeedsKill(_)
+        | Error::KillAlreadySet(_)
+        | Error::RefutedCannotReopen
+        | Error::AlreadyClosed { .. }
+        | Error::SeedWithKill
+        | Error::NoSuchCandidate { .. }
+        | Error::DuplicateId(_)
+        | Error::NodeExists(_)
+        | Error::UnresolvedUri { .. }
+        | Error::InvalidTransition { .. }
+        | Error::MissingParent(_)
+        | Error::UnresolvedObservatoryRecord { .. }
+        | Error::UnsafeId(_)
+        | Error::IdMismatch { .. }
+        | Error::Locked { .. }
+        | Error::EditConflict(_)
+        // Stdin is data, not an argument: too much of it is refused like
+        // any other input the corpus will not take.
+        | Error::InputTooLarge { .. }
+        | Error::CorpusIgnored(_)
+        | Error::Git { .. }
+        | Error::GitTimedOut { .. }
+        | Error::Corpus(_)
+        | Error::Io(_)
+        | Error::IoAt { .. }
+        | Error::Yaml { .. }
+        | Error::Json { .. } => Exit::Failure,
     }
 }
 
@@ -175,6 +319,12 @@ fn hint(e: &Error) -> Option<String> {
              `neb log <id>` lists, or a date as YYYY-MM-DD."
             .to_owned(),
         Error::NoCorpus(root) => format!("Create one with:  neb init {}", root.display()),
+        Error::NotGitWorkTree(root) => format!(
+            "History comes from git. Make the corpus a repository, then have each \
+             write committed:\n  git -C {} init\n  neb config commit on",
+            root.display()
+        ),
+        Error::DuplicateEdge { from, .. } => format!("See its edges with:  neb show {from}"),
         Error::Locked { .. } => {
             "Another `neb`, an agent session, or the desktop app is mid-write. \
              Nothing changed, so run it again in a moment.\n\n\
@@ -313,6 +463,93 @@ mod tests {
         let refused = refusal(&Error::SelfLoop);
         assert_eq!(refused.prose(), "a node cannot link to itself");
         assert_eq!(refused.hint, None);
+    }
+
+    /// The argument-shape refusals exit 2 and a refusal about what the
+    /// corpus holds exits 1; a refusal the CLI makes itself says which.
+    #[test]
+    fn the_exit_is_usage_only_for_what_no_corpus_could_accept() {
+        for usage in [
+            Error::EmptyRoot,
+            Error::RelativeObservatoryRoot {
+                root: PathBuf::from("rel"),
+                setting: None,
+            },
+            Error::SelfLoop,
+            Error::ParentAndReopens("a".into()),
+            Error::EmptyKill,
+            Error::RefutedNeedsWhy,
+            Error::Interactive("triage".into()),
+            Error::AbsoluteUri("/x".into()),
+            Error::UnusableTitle("!!!".into()),
+            Error::UnknownReferenceKind("bogus".into()),
+            Error::InvalidObservatoryId("NONSENSE".into()),
+            Error::InvalidId("Bad Id".into()),
+        ] {
+            assert_eq!(refusal(&usage).exit, Exit::Usage, "{usage:?}");
+            assert_eq!(refusal_about(&usage, "n").exit, Exit::Usage, "{usage:?}");
+        }
+        for failure in [
+            Error::NoSuchNode("x".into()),
+            Error::RelativeObservatoryRoot {
+                root: PathBuf::from("rel"),
+                setting: Some(PathBuf::from("/h/observatory-root")),
+            },
+            Error::UnsafeId("../x".into()),
+            Error::SeedWithKill,
+            Error::RefutedCannotReopen,
+        ] {
+            assert_eq!(refusal(&failure).exit, Exit::Failure, "{failure:?}");
+            assert_eq!(
+                refusal_about(&failure, "n").exit,
+                Exit::Failure,
+                "{failure:?}"
+            );
+        }
+        assert_eq!(Refusal::new("json", "x").exit, Exit::Failure);
+        assert_eq!(Refusal::usage("usage", "x").exit, Exit::Usage);
+        assert_eq!(refusal(&Error::EmptyKill).failed().exit, Exit::Failure);
+    }
+
+    /// A repeated edge names both ends and the kind. From `link` the hint
+    /// shows the node that has it; from `new` there is no node yet, and the
+    /// flag given twice is the fix.
+    #[test]
+    fn a_duplicate_edge_names_the_edge_and_where_to_look() {
+        let e = Error::DuplicateEdge {
+            from: "b".into(),
+            kind: EdgeType::DerivesFrom,
+            to: "a".into(),
+        };
+        let refused = refusal(&e);
+        assert_eq!(refused.code, "duplicate_edge");
+        assert_eq!(
+            refused.message,
+            "the edge `b` derives-from `a` already exists"
+        );
+        assert_eq!(
+            refused.hint.as_deref(),
+            Some("See its edges with:  neb show b")
+        );
+        assert_eq!(refused.exit, Exit::Failure);
+        let new = refusal_for_new(&Error::DuplicateEdge {
+            from: "take-two".into(),
+            kind: EdgeType::Contradicts,
+            to: "rival".into(),
+        });
+        assert_eq!(
+            new.hint.as_deref(),
+            Some("`--contradicts rival` is given twice; give it once.")
+        );
+    }
+
+    #[test]
+    fn a_corpus_outside_git_is_told_how_to_start_its_history() {
+        let hint = refusal(&Error::NotGitWorkTree(PathBuf::from("/c")))
+            .hint
+            .expect("a hint");
+        assert!(hint.contains("git -C /c init"), "{hint}");
+        assert!(hint.contains("neb config commit on"), "{hint}");
     }
 
     #[test]

@@ -10,7 +10,7 @@
 //! you which command to run next is presentation, so it lives in the consumer
 //! that has commands to suggest.
 
-use crate::model::Status;
+use crate::model::{EdgeType, Status};
 use crate::store::Settlement;
 use std::path::PathBuf;
 
@@ -189,9 +189,16 @@ pub enum Error {
     #[error("a node cannot link to itself")]
     SelfLoop,
 
-    /// That exact edge is already recorded.
-    #[error("that edge already exists")]
-    DuplicateEdge,
+    /// That exact edge is already recorded, or a new node names it twice.
+    #[error("the edge `{from}` {kind} `{to}` already exists")]
+    DuplicateEdge {
+        /// The node the edge starts at.
+        from: String,
+        /// The relation.
+        kind: EdgeType,
+        /// The node the edge points at.
+        to: String,
+    },
 
     /// A new node names the same node as a parent and as the refuted idea it
     /// reopens. `reopens` is genealogy already, so the pair would be two
@@ -310,7 +317,7 @@ pub enum Error {
 
     /// An `observatory` reference's `uri` is not a bare record id.
     #[error(
-        "`{0}` is not an Observatory record id: one of Q, H, T or R followed by digits, such as `Q002`"
+        "`{0}` is not an Observatory record id: one of Q, H, T or R followed by digits, such as `Q<nnn>`"
     )]
     InvalidObservatoryId(String),
 

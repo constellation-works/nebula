@@ -24,8 +24,9 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use nebula_core::triage::{Action, Step};
 use nebula_core::{
     Citation, CommitOutcome, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, Handoff,
-    InboxEntry, NEAR_DEFAULT, NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, ObservatoryRoot, Origin,
-    Promotion, Severity, Status, Triage, check, graph, migrate, model, ops,
+    InboxEntry, NEAR_DEFAULT, NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, ObservatoryRoot,
+    ObservatorySource, Origin, Promotion, Severity, Status, Triage, check, graph, migrate, model,
+    ops,
 };
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -107,14 +108,20 @@ struct Cli {
     json: bool,
 
     /// `--no-commit` written before the verb, the spelling from when it was
-    /// global. Still honoured so existing scripts keep working, but hidden:
-    /// each verb that writes offers the flag itself, and a verb that only
-    /// reads has nothing to skip.
+    /// global. Deprecated and hidden: each verb that writes offers the flag
+    /// itself. Before one of those it still skips the commit, with a warning
+    /// (STD-01 §R35); before a verb that never commits it is refused, since
+    /// there is nothing for it to skip (STD-01 §R28).
     #[arg(long = "no-commit", hide = true)]
     no_commit: bool,
 
     #[command(subcommand)]
     command: Command,
+
+    /// The verb as typed, a setting's name included (`config commit`), for
+    /// the messages that name it. Filled in by [`parse_from`].
+    #[arg(skip)]
+    verb: String,
 }
 
 /// `--no-commit`, flattened into each verb that writes so its `--help` offers
@@ -257,6 +264,10 @@ enum Command {
     /// existing nodes it reads closest to are printed afterwards, so a parent
     /// that was defensible can still be linked; no edge is ever written from
     /// that list.
+    #[command(after_long_help = "Examples:
+  neb promote <entry>
+  neb promote <entry> --title \"A sharper title\" --parent <id>
+  neb promote <entry> --parent <id> --parent <id> --tag <tag>")]
     Promote {
         /// Inbox entry id, from `neb inbox`.
         entry: String,
@@ -321,8 +332,14 @@ enum Command {
     /// standard input piped the keys are read one per line, and the first
     /// refusal ends the session non-zero, because the lines after it were
     /// written for an entry that did not move. End of input stops as `q`
-    /// does. There is no `--json` form; a script runs `inbox`, `near`,
-    /// `promote` and `drop` itself.
+    /// does, except while a title is waiting to be used: then it is a
+    /// refusal naming the title, so it is never lost without a word. There
+    /// is no `--json` form; a script runs `inbox`, `near`, `promote` and
+    /// `drop` itself.
+    #[command(after_long_help = "Examples:
+  neb triage
+  printf 'd\\ns\\nq\\n' | neb triage --no-commit
+  printf 't A sharper title\\n1\\n' | neb triage --by <label>")]
     Triage {
         /// Who wrote the titles and chose the parents: `human`, or the
         /// agent's session or crew label. Free text; defaults to `human`.
@@ -430,6 +447,10 @@ enum Command {
     },
 
     /// Add a typed edge between two nodes.
+    #[command(after_long_help = "Examples:
+  neb link <id> derives-from <parent-id>
+  neb link <id> refines <broader-id>
+  neb link <id> contradicts <rival-id> --by <label>")]
     Link {
         /// Node the edge starts at.
         from: String,
@@ -488,6 +509,10 @@ enum Command {
     },
 
     /// Attach context, with a note saying why it is here.
+    #[command(after_long_help = "Examples:
+  neb cite <id> --kind paper --uri https://doi.org/<doi> --note \"why it is here\"
+  neb cite <id> --kind note --uri ../notes/<file>.md --note \"why it is here\"
+  neb cite <id> --kind observatory --uri <record-id> --note \"why it is here\"")]
     Cite {
         /// Node id.
         node: String,
@@ -497,7 +522,7 @@ enum Command {
         uri: Option<String>,
         /// paper, study, article, note, discussion, book, dataset, thread,
         /// observatory, other, in any case (stored lowercase). With
-        /// `observatory`, `--uri` is a bare record id (`Q002`) resolved
+        /// `observatory`, `--uri` is a bare record id (`Q<nnn>`) resolved
         /// through the configured observatory root.
         #[arg(long, default_value = "other")]
         kind: String,
@@ -528,11 +553,14 @@ enum Command {
     /// already closed node is refused. When this machine has an observatory
     /// root, the record must resolve under it; with none, the id is accepted
     /// and cannot be located yet, as with `cite --kind observatory`.
+    #[command(after_long_help = "Examples:
+  neb handoff <id> <record-id> --note \"the question this became\"
+  neb handoff <id> <record-id> --note \"why it goes there\" --by <label>")]
     Handoff {
         /// Node id.
         node: String,
-        /// The Observatory record id: Q, H, T or R followed by digits, such
-        /// as `H012`.
+        /// The Observatory record id: Q, H, T or R followed by digits, as in
+        /// `H<nnn>`.
         record: String,
         /// Why it goes there. The reference's note, and the only field that
         /// matters in a year.
@@ -595,6 +623,10 @@ enum Command {
     /// triage: run it on a capture, pick a parent if one is defensible,
     /// otherwise promote as a root. It suggests; `link` and `--parent` are
     /// still yours to run.
+    #[command(after_long_help = "Examples:
+  neb near gravity as a scarcity gradient
+  neb near <id> -k 5
+  neb near <id> --json")]
     Near {
         /// How many to return.
         #[arg(long, short = 'k', value_name = "K", default_value_t = NEAR_DEFAULT)]
@@ -610,6 +642,10 @@ enum Command {
     },
 
     /// Walk ancestry. The feature the whole system exists for.
+    #[command(after_long_help = "Examples:
+  neb trace <id>
+  neb trace <id> --down
+  neb trace <id> --depth 1 --json")]
     Trace {
         /// Node id.
         node: String,
@@ -631,7 +667,8 @@ enum Command {
     /// The whole corpus as nodes and edges, for a tool that draws it.
     ///
     /// Use `--json` for structured data or `--mermaid` for a diagram that can
-    /// be pasted into a document. Without either, this prints a short hint.
+    /// be pasted into a document. Without either, it is refused as a usage
+    /// error.
     Graph {
         /// Emit a Mermaid `graph BT` diagram.
         #[arg(long, conflicts_with = "json")]
@@ -685,10 +722,10 @@ enum Command {
 #[derive(Subcommand)]
 enum ConfigSetting {
     /// Where the Observatory checkout is on this machine, so
-    /// `cite --kind observatory Q002` resolves. A directory is saved to
-    /// `~/.config/nebula/observatory-root`, never into the corpus, which
-    /// travels between machines. Without one, prints the effective root and
-    /// which setting supplied it: `$OBSERVATORY_ROOT`, else this machine's
+    /// `cite --kind observatory --uri <record-id>` resolves. A directory is
+    /// saved to `~/.config/nebula/observatory-root`, never into the corpus,
+    /// which travels between machines. Without one, prints the effective root
+    /// and which setting supplied it: `$OBSERVATORY_ROOT`, else this machine's
     /// setting, else a legacy `observatory_root` key in `config.yaml`.
     ObservatoryRoot {
         /// The checkout, as an absolute path. Omit to read the current
@@ -717,12 +754,13 @@ enum ConfigSetting {
 }
 
 impl Command {
-    /// Whether `--no-commit` was passed after the verb.
+    /// The verb's `--no-commit`, when it offers one: `None` for a verb that
+    /// never commits.
     ///
     /// No wildcard arm, so a new verb has to say here whether it writes: one
-    /// that does flattens a [`CommitArg`] and reads it here, one that does
-    /// not is listed as `false`.
-    fn no_commit(&self) -> bool {
+    /// that does flattens a [`CommitArg`] and returns it here, one that does
+    /// not is listed as `None`.
+    fn commit_arg(&self) -> Option<CommitArg> {
         match self {
             Self::Migrate { commit }
             | Self::Config {
@@ -741,7 +779,7 @@ impl Command {
             | Self::Tag { commit, .. }
             | Self::Note { commit, .. }
             | Self::Cite { commit, .. }
-            | Self::Handoff { commit, .. } => commit.no_commit,
+            | Self::Handoff { commit, .. } => Some(*commit),
             Self::Init { .. }
             | Self::Check
             | Self::Completions { .. }
@@ -754,7 +792,7 @@ impl Command {
             | Self::Impact { .. }
             | Self::Graph { .. }
             | Self::Review { .. }
-            | Self::Open { .. } => false,
+            | Self::Open { .. } => None,
         }
     }
 }
@@ -843,10 +881,17 @@ impl From<output::StdoutFailed> for Failure {
     }
 }
 
-/// A line `neb triage` cannot read as a key.
+/// Input `neb triage` cannot act on.
 #[derive(Debug)]
 enum KeyError {
+    /// A line that is not a triage key.
     Unknown(String),
+    /// Input ended while a title for `entry` was waiting to be used: after
+    /// `t <title>`, or after `t` alone, before its line (STD-01 §R27).
+    TitleLost {
+        entry: String,
+        title: Option<String>,
+    },
 }
 
 impl std::fmt::Display for KeyError {
@@ -855,6 +900,17 @@ impl std::fmt::Display for KeyError {
             Self::Unknown(line) => write!(
                 f,
                 "`{line}` is not a triage key; use p, a candidate number, t, d, s or q (? lists them)"
+            ),
+            Self::TitleLost {
+                entry,
+                title: Some(title),
+            } => write!(
+                f,
+                "input ended before the title `{title}` was used for `{entry}`; nothing was promoted"
+            ),
+            Self::TitleLost { entry, title: None } => write!(
+                f,
+                "input ended before the title for `{entry}` was given; nothing was promoted"
             ),
         }
     }
@@ -865,14 +921,34 @@ impl KeyError {
     fn code(&self) -> &'static str {
         match self {
             Self::Unknown(_) => "triage_key",
+            Self::TitleLost { .. } => "triage_title_lost",
+        }
+    }
+
+    /// The single verb that does what the lost input was for.
+    fn hint(&self) -> Option<String> {
+        match self {
+            Self::Unknown(_) => None,
+            Self::TitleLost { entry, title } => Some(format!(
+                "Promote it with that title without triage:\n  neb promote {entry} --title {}",
+                title
+                    .as_deref()
+                    .map_or_else(|| "\"...\"".to_owned(), shell_word)
+            )),
         }
     }
 }
 
 impl From<KeyError> for Failure {
     fn from(e: KeyError) -> Self {
-        Self::of(e.code(), e.to_string())
+        Self(render::Refusal::new(e.code(), e.to_string()).hinted(e.hint()))
     }
+}
+
+/// `word` as one shell word: quoted when it needs quoting, so a command
+/// printed for pasting runs as shown.
+fn shell_word(word: &str) -> String {
+    shlex::try_quote(word).map_or_else(|_| word.to_owned(), std::borrow::Cow::into_owned)
 }
 
 impl From<EditorError> for Failure {
@@ -887,10 +963,11 @@ impl Failure {
         Self(render::refusal_about(e, node))
     }
 
-    /// Arguments that parsed but ask for nothing that can be done. Clap's
-    /// own usage errors never get here: they exit 2, in prose, before `run`.
+    /// Arguments that parsed but ask for nothing that can be done: a usage
+    /// error, which exits 2 as clap's own do (STD-01 §R20). Clap's never get
+    /// here: they exit 2, in prose, before `run`.
     fn say(message: impl Into<String>) -> Self {
-        Self::of("usage", message)
+        Self(render::Refusal::usage("usage", message))
     }
 
     /// A refusal of the CLI's own, with its `snake_case` `code` under
@@ -922,7 +999,12 @@ where
     if let Some(conflict) = global_conflict(&cmd, &matches) {
         return Err(conflict.error(&argv));
     }
-    Cli::from_arg_matches(&matches).map_err(|e| e.format(&mut cmd))
+    let mut cli = Cli::from_arg_matches(&matches).map_err(|e| e.format(&mut cmd))?;
+    cli.verb = std::iter::successors(matches.subcommand(), |(_, sub)| sub.subcommand())
+        .map(|(name, _)| name)
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok(cli)
 }
 
 /// A verb's argument and a global flag it declares a conflict with, both
@@ -1006,9 +1088,10 @@ impl GlobalConflict {
 
 /// Parse the command line, run it, and turn the outcome into an exit code.
 ///
-/// A refusal exits 1 either way. Under `--json` it is one line of JSON on
-/// stderr, so stdout still holds nothing but a verb's payload; without, it
-/// is the prose it always was.
+/// A refusal exits 2 when it is a usage error and 1 otherwise, as
+/// [`render::Refusal::exit`] says, in either mode. Under `--json` it is one
+/// line of JSON on stderr, so stdout still holds nothing but a verb's
+/// payload; without, it is the prose it always was.
 ///
 /// A stdout that closed under the verb changes nothing here: the verb ran to
 /// its end, and exits as it decided (see [`output`]). A write to stdout that
@@ -1027,7 +1110,7 @@ pub fn main() -> ExitCode {
             } else {
                 errln!("{} {}", render::error_label(), refused.prose());
             }
-            ExitCode::FAILURE
+            refused.exit.into()
         }
     }
 }
@@ -1266,6 +1349,22 @@ fn print_record_location(setting: &ObservatoryRoot, record: &str) {
     }
 }
 
+/// Say on stderr, in every mode, when the observatory root a verb resolves
+/// records against is the legacy `observatory_root` key in `config.yaml`.
+///
+/// The key is deprecated (STD-01 §R35): it is one machine's path in a file
+/// every machine shares, and it answers only while neither
+/// `$OBSERVATORY_ROOT` nor this machine's setting does.
+fn warn_legacy_observatory_root(corpus: &Corpus, setting: &ObservatoryRoot) {
+    if setting.source == ObservatorySource::Config {
+        errln!(
+            "warning: `observatory_root` in {} is deprecated, and the release after 0.2.0 stops \
+             reading it; set this machine's own with `neb config observatory-root <DIR>`",
+            corpus.root().join("config.yaml").display()
+        );
+    }
+}
+
 /// The nudge after a reference written without `--note`, on stderr.
 fn print_bare_note() {
     errln!(
@@ -1383,7 +1482,9 @@ fn triage(
             errln!("{} {}", render::error_label(), failure.0.prose());
             Ok(())
         } else {
-            Err(failure)
+            // A line of input was refused, not the command line, so it ends
+            // the session as a failure whatever the verb would call it.
+            Err(Failure(failure.0.failed()))
         }
     };
     let mut session = Triage::start(corpus, by)?;
@@ -1408,6 +1509,16 @@ fn triage(
         if input.read_line(&mut line).map_err(Error::from)? == 0 {
             if interactive {
                 say(out, "\n")?;
+            }
+            // End of input stops as `q` does, unless a title is waiting to
+            // be used: stopping then would drop it without a word (STD-01
+            // §R27, recorded in docs/design/lineage-graph/4_decisions.md).
+            if titling || waiting.title.is_some() {
+                return Err(KeyError::TitleLost {
+                    entry: waiting.entry.id.clone(),
+                    title: waiting.title.clone().filter(|_| !titling),
+                }
+                .into());
             }
             break;
         }
@@ -1475,8 +1586,23 @@ fn run(cli: Cli) -> Outcome {
     let ok = ExitCode::SUCCESS;
     let root = cli.root.clone();
     let json = cli.json;
+    let offered = cli.command.commit_arg();
+    if cli.no_commit {
+        // The spelling from when the flag was global (STD-01 §R35): still a
+        // skip before a verb that commits, and refused before any work
+        // elsewhere, where it would be accepted and do nothing (§R28).
+        let verb = &cli.verb;
+        if offered.is_none() {
+            return Err(Failure::say(format!(
+                "`{verb}` never commits, so `--no-commit` before it has nothing to skip; drop it"
+            )));
+        }
+        errln!(
+            "warning: `--no-commit` before the verb is deprecated; write `neb {verb} … --no-commit`"
+        );
+    }
     let commits = CommitOpts {
-        skip: cli.no_commit || cli.command.no_commit(),
+        skip: cli.no_commit || offered.is_some_and(|c| c.no_commit),
         json,
     };
 
@@ -1524,14 +1650,17 @@ fn run(cli: Cli) -> Outcome {
                 );
             }
             if let Some(configured) = shadowing_warning {
-                let config_path = Corpus::root_config_path()?;
+                // The command that repoints the machine default, never a
+                // hand edit: absolute, since the setting is read from every
+                // directory, and quoted, so it runs as printed (STD-02
+                // §R26). Made absolute lexically, as capture's note is.
+                let target = std::path::absolute(&target).unwrap_or(target);
                 errln!(
-                    "warning: {} still points to {}, not {}; run `echo {} > {}` to point commands at this corpus",
-                    config_path.display(),
+                    "warning: {} still points to {}, not {}; run `neb init {} --set-root --force` to point commands at this corpus",
+                    Corpus::root_config_path()?.display(),
                     configured.display(),
                     target.display(),
-                    target.display(),
-                    config_path.display()
+                    shell_word(&target.to_string_lossy())
                 );
             }
             Ok(ok)
@@ -1830,7 +1959,8 @@ fn run(cli: Cli) -> Outcome {
                     id,
                     by,
                 },
-            )?;
+            )
+            .map_err(|e| Failure(render::refusal_for_new(&e)))?;
             if json {
                 out_json(&json::Created::from(&created))?;
             } else {
@@ -2084,6 +2214,9 @@ fn run(cli: Cli) -> Outcome {
             let observatory = (!json && check::normalize_reference_kind(&kind) == OBSERVATORY)
                 .then(|| corpus.observatory_root())
                 .transpose()?;
+            if let Some(setting) = &observatory {
+                warn_legacy_observatory_root(&corpus, setting);
+            }
             let cited = ops::cite(
                 &corpus,
                 &node,
@@ -2135,6 +2268,7 @@ fn run(cli: Cli) -> Outcome {
             // resolve under this root, and a broken machine setting refuses
             // the hand-off rather than failing it after the node has closed.
             let setting = corpus.observatory_root()?;
+            warn_legacy_observatory_root(&corpus, &setting);
             let done = ops::handoff(
                 &corpus,
                 &node,
@@ -2178,9 +2312,10 @@ fn run(cli: Cli) -> Outcome {
                     .ok_or_else(|| Error::NoSuchNode(node.clone()))?;
                 *current = historical;
             }
-            let observatory = corpus.observatory_root()?.root;
-            let view =
-                graph::node(&Graph::build(&docs)?, &node)?.with_observatory(observatory.as_deref());
+            let observatory = corpus.observatory_root()?;
+            warn_legacy_observatory_root(&corpus, &observatory);
+            let view = graph::node(&Graph::build(&docs)?, &node)?
+                .with_observatory(observatory.root.as_deref());
             if json {
                 out_json(&json::NodeView::from(&view))?;
             } else {
@@ -2284,10 +2419,9 @@ fn run(cli: Cli) -> Outcome {
 
         Command::Graph { mermaid, from } => {
             if !json && !mermaid {
-                outln!(
-                    "neb graph needs an output format; run:  neb graph --json  or  neb graph --mermaid"
-                );
-                return Ok(ExitCode::from(2));
+                return Err(Failure::say(
+                    "neb graph needs an output format; pass --json or --mermaid",
+                ));
             }
             let corpus = Corpus::open(root)?;
             let docs = corpus.load_all()?;
@@ -2557,19 +2691,30 @@ mod tests {
         assert_eq!(writes.len() - 2 + reads.len(), visible);
     }
 
+    /// Whether the verb's own `--no-commit` was given.
+    fn skips(command: &Command) -> bool {
+        command.commit_arg().is_some_and(|c| c.no_commit)
+    }
+
     /// After a writing verb the flag is that verb's; before any verb it is
-    /// the old global spelling, still honoured; after a read-only verb it is
-    /// an unknown argument rather than a silent no-op.
+    /// the old global spelling, which `run` warns about or refuses; after a
+    /// read-only verb it is an unknown argument rather than a silent no-op.
     #[test]
     fn no_commit_parses_where_it_means_something() {
         let after = parse_cli(&["drop", "i1", "--no-commit"]).expect("drop --no-commit");
-        assert!(!after.no_commit && after.command.no_commit());
+        assert!(!after.no_commit && skips(&after.command));
         let config = parse_cli(&["config", "commit", "on", "--no-commit"]).expect("config");
-        assert!(config.command.no_commit());
+        assert!(skips(&config.command));
         let before = parse_cli(&["--no-commit", "drop", "i1"]).expect("--no-commit drop");
-        assert!(before.no_commit && !before.command.no_commit());
+        assert!(before.no_commit && !skips(&before.command));
         let plain = parse_cli(&["drop", "i1"]).expect("drop");
-        assert!(!plain.no_commit && !plain.command.no_commit());
+        assert!(!plain.no_commit && !skips(&plain.command));
+        // What `run` names in its warning or its refusal.
+        assert_eq!(before.verb, "drop");
+        assert_eq!(config.verb, "config commit");
+        let read = parse_cli(&["--no-commit", "list"]).expect("--no-commit list");
+        assert!(read.no_commit && read.command.commit_arg().is_none());
+        assert_eq!(read.verb, "list");
         // Neither spelling is global, so `parse_from`'s check for a verb
         // argument conflicting with a global before the verb never sees one,
         // alone or beside `--json`.
@@ -2587,7 +2732,7 @@ mod tests {
         ] {
             let cli = parse_cli(args).unwrap_or_else(|e| panic!("{args:?}: {e}"));
             assert!(
-                cli.json && (cli.no_commit || cli.command.no_commit()),
+                cli.json && (cli.no_commit || skips(&cli.command)),
                 "{args:?}"
             );
         }
@@ -2775,7 +2920,7 @@ mod tests {
     #[test]
     fn trailing_flags_after_free_text_are_flags() {
         let cli = parse_cli(&["capture", "an idea", "--quiet"]).expect("capture --quiet");
-        assert!(!cli.command.no_commit());
+        assert!(!skips(&cli.command));
         match cli.command {
             Command::Capture { quiet, text, .. } => {
                 assert!(quiet);
@@ -2786,7 +2931,7 @@ mod tests {
 
         let cli =
             parse_cli(&["capture", "an", "idea", "--no-commit"]).expect("capture --no-commit");
-        assert!(cli.command.no_commit());
+        assert!(skips(&cli.command));
         match cli.command {
             Command::Capture { quiet, text, .. } => {
                 assert!(!quiet);
@@ -2797,7 +2942,7 @@ mod tests {
 
         let cli = parse_cli(&["note", "alpha-beta", "a thought", "--no-commit"])
             .expect("note --no-commit");
-        assert!(cli.command.no_commit());
+        assert!(skips(&cli.command));
         match cli.command {
             Command::Note { node, by, text, .. } => {
                 assert_eq!(node, "alpha-beta");
@@ -2825,7 +2970,7 @@ mod tests {
         );
 
         let cli = parse_cli(&["capture", "--", "an idea", "--quiet"]).expect("capture -- escape");
-        assert!(!cli.command.no_commit());
+        assert!(!skips(&cli.command));
         match cli.command {
             Command::Capture { quiet, text, .. } => {
                 assert!(!quiet);

@@ -299,11 +299,18 @@ impl Run {
     /// holding `{"error", "code", "hint"}` and nothing else, with a
     /// `snake_case` code. Returns the envelope.
     fn refusal(&self) -> serde_json::Value {
+        self.refusal_exiting(1)
+    }
+    /// [`Run::refusal`] for a usage error, which exits 2 (STD-01 §R20).
+    fn usage_refusal(&self) -> serde_json::Value {
+        self.refusal_exiting(2)
+    }
+    fn refusal_exiting(&self, exit: i32) -> serde_json::Value {
         let stderr = self.stderr();
         assert_eq!(
             self.out.status.code(),
-            Some(1),
-            "`neb {}` should refuse with exit 1:\n{stderr}",
+            Some(exit),
+            "`neb {}` should refuse with exit {exit}:\n{stderr}",
             self.args
         );
         assert!(
@@ -2226,6 +2233,64 @@ fn init_warns_when_a_third_directory_would_orphan_the_configured_root() {
     );
 }
 
+/// The shadowing warning's remedy is the documented command, with the target
+/// absolute and quoted as a shell word, never a hand edit of the setting file
+/// and never the relative spelling that would resolve per directory.
+#[test]
+fn init_shadowing_warning_names_the_set_root_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let configured = dir.path().join("corpus");
+    let config_path = home.join(".config/nebula/root");
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(&config_path, format!("{}\n", configured.display())).unwrap();
+    let setting = std::fs::read(&config_path).unwrap();
+    let cwd = dir.path().join("w");
+    std::fs::create_dir_all(&cwd).unwrap();
+
+    let run = run_in(&cwd, &home, None, &["init", "rel"], None).assert_ok();
+    let stderr = run.stderr();
+    let Some(warning) = stderr.lines().find(|l| l.starts_with("warning: ")) else {
+        panic!("no warning in:\n{stderr}");
+    };
+    let absolute = cwd.join("rel");
+    assert!(
+        warning.contains(&format!(
+            "run `neb init {} --set-root --force`",
+            absolute.display()
+        )),
+        "{warning}"
+    );
+    assert!(
+        warning.contains(&config_path.display().to_string()),
+        "{warning}"
+    );
+    assert!(
+        warning.contains(&configured.display().to_string()),
+        "{warning}"
+    );
+    assert!(!warning.contains("echo"), "{warning}");
+    assert!(
+        !warning.contains(" rel ") && !warning.contains("`rel") && !warning.contains(" rel;"),
+        "the relative spelling: {warning}"
+    );
+    assert_eq!(std::fs::read(&config_path).unwrap(), setting, "unchanged");
+
+    // A target that needs quoting is quoted, so the command runs as printed.
+    let run = run_in(&cwd, &home, None, &["init", "my corpus"], None).assert_ok();
+    let spaced = cwd.join("my corpus").display().to_string();
+    assert!(
+        run.stderr()
+            .contains(&format!("run `neb init '{spaced}' --set-root --force`"))
+            || run
+                .stderr()
+                .contains(&format!("run `neb init \"{spaced}\" --set-root --force`")),
+        "{}",
+        run.stderr()
+    );
+    assert_eq!(std::fs::read(&config_path).unwrap(), setting, "unchanged");
+}
+
 #[test]
 fn zsh_completions_include_the_cli_commands() {
     let c = Corpus::new();
@@ -2233,6 +2298,132 @@ fn zsh_completions_include_the_cli_commands() {
         .assert_ok()
         .says("#compdef neb")
         .says("capture");
+}
+
+// -------------------------------------------------------------------- help --
+
+/// The command names listed under `heading:` in a rendered help page, up to
+/// the next blank-line-separated heading.
+fn listed_commands(help: &str, headings: &[&str]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut listing = false;
+    for line in help.lines() {
+        if !line.starts_with(' ') && line.ends_with(':') {
+            listing = headings.contains(&line.trim_end_matches(':'));
+            continue;
+        }
+        if listing
+            && line.starts_with("  ")
+            && !line.starts_with("   ")
+            && let Some(name) = line.split_whitespace().next()
+        {
+            names.push(name.to_owned());
+        }
+    }
+    names
+}
+
+/// Every help page the built binary renders: the top level, each command
+/// it lists, each `config` setting, and the hidden `open`.
+fn every_help_page(c: &Corpus) -> Vec<(String, String)> {
+    let top = c.run(&["--help"]).assert_ok().stdout();
+    let sections = [
+        "Corpus",
+        "Inbox",
+        "Nodes",
+        "References",
+        "Query",
+        "Maintenance",
+    ];
+    let mut paths: Vec<Vec<String>> = listed_commands(&top, &sections)
+        .into_iter()
+        .map(|name| vec![name])
+        .collect();
+    let config = c.run(&["config", "--help"]).assert_ok().stdout();
+    paths.extend(
+        listed_commands(&config, &["Commands"])
+            .into_iter()
+            .map(|name| vec!["config".to_owned(), name]),
+    );
+    paths.push(vec!["open".to_owned()]);
+    assert!(paths.len() >= 30, "{paths:?}");
+    let mut pages = vec![("neb".to_owned(), top)];
+    for path in paths {
+        let mut args: Vec<&str> = path.iter().map(String::as_str).collect();
+        args.push("--help");
+        pages.push((
+            format!("neb {}", path.join(" ")),
+            c.run(&args).assert_ok().stdout(),
+        ));
+    }
+    pages
+}
+
+/// Every word shaped like an Observatory record id: Q, H, T or R and three
+/// digits, standing alone.
+fn record_ids(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| {
+            w.len() == 4
+                && w.starts_with(['Q', 'H', 'T', 'R'])
+                && w[1..].bytes().all(|b| b.is_ascii_digit())
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A command whose use is not obvious ends its help with examples (STD-01
+/// §R22), written with placeholders.
+#[test]
+fn help_has_examples_for_non_obvious_commands() {
+    let c = Corpus::new();
+    for verb in [
+        "promote", "triage", "link", "cite", "handoff", "near", "trace",
+    ] {
+        let help = c.run(&[verb, "--help"]).assert_ok().stdout();
+        let Some((_, examples)) = help.split_once("\nExamples:\n") else {
+            panic!("`neb {verb} --help` has no Examples:\n{help}");
+        };
+        assert!(
+            examples
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .all(|l| l.contains(&format!("neb {verb}"))),
+            "each example runs `neb {verb}`:\n{examples}"
+        );
+    }
+}
+
+/// No help page and no refusal names a real record: the examples use
+/// placeholders (STD-01 §R23).
+#[test]
+fn no_real_record_ids_in_help_or_refusals() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    for (page, help) in every_help_page(&c) {
+        assert_eq!(record_ids(&help), Vec::<String>::new(), "`{page} --help`");
+    }
+    for args in [
+        vec!["cite", &id, "--uri", "/abs/x", "--note", "n"],
+        vec!["handoff", &id, "nonsense"],
+    ] {
+        let run = c.run(&args).assert_fails();
+        assert_eq!(
+            record_ids(&run.stderr()),
+            Vec::<String>::new(),
+            "{}",
+            run.stderr()
+        );
+        let mut with_json = vec!["--json"];
+        with_json.extend_from_slice(&args);
+        let refused = c.run(&with_json).usage_refusal().to_string();
+        assert_eq!(record_ids(&refused), Vec::<String>::new(), "{refused}");
+    }
+    assert_eq!(
+        record_ids("Q002, H012 and `T123`"),
+        ["Q002", "H012", "T123"]
+    );
+    assert!(record_ids("Q<nnn> Q0021 XQ002 q002").is_empty());
 }
 
 // -------------------------------------------------------------------- near --
@@ -3110,6 +3301,53 @@ fn triage_skip_quit_and_end_of_input_leave_the_rest_waiting() {
     assert!(out.contains(&second) || out.contains(&first), "{out}");
     assert!(out.contains("skipped 0; 2 still waiting"), "{out}");
     assert_eq!(c.run(&["inbox"]).stdout(), before);
+    let out = c.run_with_stdin(&["triage"], "").assert_ok().stdout();
+    assert!(out.contains("skipped 0; 2 still waiting"), "{out}");
+}
+
+/// End of input stops as `q` does, except while a title waits to be used:
+/// then the title would be lost without a word, so it is a refusal naming it
+/// and the single verb that does the same without triage (STD-01 §R27).
+#[test]
+fn triage_eof_with_a_pending_title_is_an_error() {
+    let c = Corpus::new();
+    let first = c.run(&["capture", "-q", "first thought"]).stdout_trim();
+    c.run(&["capture", "-q", "second thought"]).assert_ok();
+    let before = c.run(&["inbox"]).assert_ok().stdout();
+
+    // `t` alone asks for the title on the next line, which never comes.
+    let run = c.run_with_stdin(&["triage"], "t\n");
+    assert_eq!(run.out.status.code(), Some(1));
+    let stderr = run.stderr();
+    assert!(
+        stderr.starts_with(&format!(
+            "error: input ended before the title for `{first}` was given; nothing was promoted"
+        )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("neb promote {first} --title \"...\"")),
+        "{stderr}"
+    );
+    assert!(!run.stdout().contains("still waiting"), "{}", run.stdout());
+    assert_eq!(c.run(&["inbox"]).stdout(), before);
+
+    // A title set and never used is named, quoted for the shell.
+    let run = c.run_with_stdin(&["triage"], "t A lost title\n");
+    assert_eq!(run.out.status.code(), Some(1));
+    let stderr = run.stderr();
+    assert!(
+        stderr.contains(&format!("the title `A lost title` was used for `{first}`"))
+            && stderr.contains(&format!("neb promote {first} --title 'A lost title'")),
+        "{stderr}"
+    );
+    assert_eq!(c.run(&["inbox"]).stdout(), before);
+
+    // A title that was used is not pending, so end of input is `q` again.
+    let run = c
+        .run_with_stdin(&["triage"], "t A kept title\np\n")
+        .assert_ok();
+    assert!(run.stdout().contains("promoted 1"), "{}", run.stdout());
 }
 
 #[test]
@@ -3233,15 +3471,25 @@ fn graph_exports_the_whole_corpus_as_json() {
     // `--json` is global, so it may come before the verb too.
     let before = c.run(&["--json", "graph"]).assert_ok().stdout();
     assert_eq!(before, json);
+}
 
-    // There is no default text form: without a format it explains and exits 2.
+/// There is no default text form, so `graph` without a format is refused as
+/// a usage error, on stderr like every other (STD-01 §R19, §R20).
+#[test]
+fn graph_without_a_format_is_a_usage_error_on_stderr() {
+    let c = Corpus::new();
+    c.seed("base", "Base");
     let run = c.run(&["graph"]);
     assert_eq!(run.out.status.code(), Some(2));
-    assert!(
-        run.stdout().contains("neb graph --json") && run.stdout().contains("neb graph --mermaid"),
-        "{}",
-        run.stdout()
+    assert_eq!(run.stdout(), "");
+    let stderr = run.stderr();
+    assert_eq!(
+        stderr,
+        "error: neb graph needs an output format; pass --json or --mermaid\n"
     );
+    for format in ["--json", "--mermaid"] {
+        assert!(stderr.contains(format), "{stderr}");
+    }
 }
 
 /// `--json` is a global flag, so `graph`'s formats conflict with it on either
@@ -3294,10 +3542,16 @@ fn graph_formats_refuse_json_before_or_after_the_verb() {
     assert_eq!(run.out.status.code(), Some(2));
     assert!(!run.stderr().contains("NoSuchNode"), "{}", run.stderr());
 
-    // Global flags that `graph` does not conflict with still pass either way.
-    let mermaid = c.run(&["graph", "--mermaid"]).assert_ok().stdout();
-    let run = c.run(&["--no-commit", "graph", "--mermaid"]).assert_ok();
-    assert_eq!(run.stdout(), mermaid);
+    // `--no-commit` before the verb is not global, so it is no conflict
+    // either: `graph` never commits, and that is what refuses it.
+    let run = c.run(&["--no-commit", "graph", "--mermaid"]);
+    assert_eq!(run.out.status.code(), Some(2));
+    assert_eq!(run.stdout(), "");
+    assert!(
+        run.stderr().contains("`graph` never commits"),
+        "{}",
+        run.stderr()
+    );
 }
 
 #[test]
@@ -3866,6 +4120,47 @@ fn genealogy_cycles_are_refused_at_the_point_of_linking() {
     c.run(&["check"]).assert_ok().says("0 errors");
 }
 
+/// A repeated edge is refused by name, both ends and the kind, so the
+/// refusal says which edge; from `link` it points at the node that has it.
+#[test]
+fn duplicate_edge_refusal_names_the_edge() {
+    let c = Corpus::new();
+    let a = c.seed("alpha", "Alpha");
+    let b = c.seed("beta", "Beta");
+    c.run(&["link", &b, "derives-from", &a]).assert_ok();
+    let run = c.run(&["link", &b, "derives-from", &a]);
+    assert_eq!(run.out.status.code(), Some(1));
+    assert_eq!(
+        run.stderr(),
+        format!(
+            "error: the edge `{b}` derives-from `{a}` already exists\n\n\
+             See its edges with:  neb show {b}\n"
+        )
+    );
+    let refused = c.run(&["--json", "link", &b, "derives-from", &a]).refusal();
+    assert_eq!(refused["code"], "duplicate_edge");
+    assert_eq!(
+        refused["hint"],
+        format!("See its edges with:  neb show {b}")
+    );
+
+    // From `new` the repeat is a flag given twice, and nothing is written.
+    let run = c.run(&["new", "X", "--parent", &a, "--parent", &a]);
+    assert_eq!(run.out.status.code(), Some(1));
+    let stderr = run.stderr();
+    assert!(
+        stderr.starts_with(&format!(
+            "error: the edge `x` derives-from `{a}` already exists\n"
+        )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("`--parent {a}` is given twice")),
+        "{stderr}"
+    );
+    assert!(!c.node_file("x").exists());
+}
+
 #[test]
 fn contradicts_is_recorded_on_both_nodes() {
     let c = Corpus::new();
@@ -4158,7 +4453,7 @@ fn new_writes_reopens_and_contradicts_edges_with_the_node() {
         ),
         (
             vec!["--contradicts", &rival, "--contradicts", &rival],
-            "that edge already exists",
+            &format!("the edge `take-two` contradicts `{rival}` already exists"),
         ),
     ] {
         let mut argv = vec!["new", "Take two"];
@@ -4563,7 +4858,9 @@ fn cite_refuses_an_absolute_local_path_even_when_it_exists() {
                 "`{uri}` is an absolute local path; local references are relative to nodes/"
             ))
             .says("Cite it by a path relative to nodes/")
-            .says(&format!("neb cite {id} --kind observatory --uri Q002"));
+            .says(&format!(
+                "neb cite {id} --kind observatory --uri <record-id>"
+            ));
     }
     assert_eq!(
         before,
@@ -4917,7 +5214,9 @@ fn json_refusals_name_the_link_or_cite_that_was_refused() {
         .assert_ok()
         .stdout_trim();
 
-    let self_loop = c.run(&["--json", "link", &a, "refines", &a]).refusal();
+    let self_loop = c
+        .run(&["--json", "link", &a, "refines", &a])
+        .usage_refusal();
     assert_eq!(self_loop["code"], "self_loop");
     assert_eq!(self_loop["error"], "a node cannot link to itself");
     assert_eq!(self_loop["hint"], serde_json::Value::Null);
@@ -4941,7 +5240,7 @@ fn json_refusals_name_the_link_or_cite_that_was_refused() {
             "--note",
             "n",
         ])
-        .refusal();
+        .usage_refusal();
     assert_eq!(unknown["code"], "unknown_reference_kind");
     assert_eq!(
         unknown["error"],
@@ -4972,6 +5271,8 @@ fn json_refusals_name_the_link_or_cite_that_was_refused() {
 /// under `--json`, and keep their prose exactly without it.
 #[test]
 fn json_refusals_about_a_node_split_message_and_hint() {
+    // (arguments, exit, code, message, hint, the prose without --json)
+    type Guard<'a> = (&'a [&'a str], i32, &'a str, String, String, String);
     let c = Corpus::new();
     let a = c.seed("an idea", "An idea");
     let b = c.seed("a child", "A child");
@@ -4980,10 +5281,10 @@ fn json_refusals_about_a_node_split_message_and_hint() {
     c.run(&["sharpen", &dead, "--kill", "if Y"]).assert_ok();
     c.run(&["status", &dead, "refuted", "--why", "Y happened"])
         .assert_ok();
-    // (arguments, code, message, hint, the prose without --json)
-    let guards: [(&[&str], &str, String, String, String); 3] = [
+    let guards: [Guard; 3] = [
         (
             &["status", &a, "hypothesis"],
+            1,
             "needs_kill",
             "`hypothesis` needs a kill condition first".to_string(),
             format!("neb sharpen {a} --kill \"...\""),
@@ -4993,6 +5294,7 @@ fn json_refusals_about_a_node_split_message_and_hint() {
         ),
         (
             &["status", &b, "refuted"],
+            2,
             "refuted_needs_why",
             "refuted needs --why: say how the kill condition fired".to_string(),
             format!("neb status {b} refuted --why \"...\""),
@@ -5002,6 +5304,7 @@ fn json_refusals_about_a_node_split_message_and_hint() {
         ),
         (
             &["status", &dead, "seed"],
+            1,
             "refuted_cannot_reopen",
             format!("`{dead}` is refuted and cannot simply reopen"),
             // The hint is the one command to run, and nothing else.
@@ -5011,10 +5314,10 @@ fn json_refusals_about_a_node_split_message_and_hint() {
             ),
         ),
     ];
-    for (args, code, message, hint, prose) in guards {
+    for (args, exit, code, message, hint, prose) in guards {
         let mut with_json = vec!["--json"];
         with_json.extend_from_slice(args);
-        let refused = c.run(&with_json).refusal();
+        let refused = c.run(&with_json).refusal_exiting(exit);
         assert_eq!(
             refused,
             serde_json::json!({"error": message, "code": code, "hint": hint}),
@@ -5022,7 +5325,7 @@ fn json_refusals_about_a_node_split_message_and_hint() {
             args.join(" ")
         );
         let run = c.run(args).assert_fails();
-        assert_eq!(run.out.status.code(), Some(1));
+        assert_eq!(run.out.status.code(), Some(exit));
         assert_eq!(run.stderr(), prose);
     }
 }
@@ -5150,12 +5453,13 @@ fn json_commit_refusals_leave_the_payload_on_stdout() {
         .expect("the setting's payload is still JSON");
 }
 
-/// The CLI's own refusals use the same envelope; only clap's usage errors,
-/// raised before `neb` knows it was asked for JSON, stay prose with exit 2.
+/// The CLI's own refusals use the same envelope, a usage error among them
+/// exiting 2; only clap's usage errors, raised before `neb` knows it was
+/// asked for JSON, stay prose, with the same exit 2.
 #[test]
 fn json_covers_the_clis_own_refusals_but_not_clap_usage_errors() {
     let c = Corpus::new();
-    let empty = c.run(&["capture", "  ", "--json"]).refusal();
+    let empty = c.run(&["capture", "  ", "--json"]).usage_refusal();
     assert_eq!(
         empty,
         serde_json::json!({"error": "nothing to capture", "code": "usage", "hint": null})
@@ -5173,6 +5477,119 @@ fn json_covers_the_clis_own_refusals_but_not_clap_usage_errors() {
         "{}",
         run.stderr()
     );
+}
+
+/// `args` refused as a usage error in both modes: exit 2 and nothing on
+/// stdout, `error:` prose on stderr without `--json` and the envelope with
+/// `code` under it. Returns the envelope.
+fn assert_usage_error(c: &Corpus, args: &[&str], code: &str) -> serde_json::Value {
+    let run = c.run(args);
+    assert_eq!(run.out.status.code(), Some(2), "neb {}", run.args);
+    assert_eq!(run.stdout(), "", "neb {}", run.args);
+    assert!(
+        run.stderr().starts_with("error: "),
+        "neb {}: {}",
+        run.args,
+        run.stderr()
+    );
+    let mut with_json = vec!["--json"];
+    with_json.extend_from_slice(args);
+    let run = c.run(&with_json);
+    let refused = run.usage_refusal();
+    assert_eq!(run.stdout(), "", "neb {}", run.args);
+    assert_eq!(refused["code"], code, "neb {}", run.args);
+    refused
+}
+
+/// Each refusal the CLI makes of arguments that parsed but ask for nothing
+/// is a usage error, exit 2, like clap's own (STD-01 §R20).
+#[test]
+fn usage_refusals_exit_two() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let before = snapshot_corpus_files(&c.root);
+    for (args, message) in [
+        (
+            vec!["status", &id, "seed", "--why", "x"],
+            "--why only applies to refuted or abandoned",
+        ),
+        (
+            vec!["tag", &id],
+            "nothing to do; pass --add <tag> or --remove <tag>",
+        ),
+        (vec!["capture", "  "], "nothing to capture"),
+        (vec!["note", &id, "  "], "nothing to note"),
+        (vec!["near", "  "], "nothing to look near"),
+    ] {
+        let refused = assert_usage_error(&c, &args, "usage");
+        assert_eq!(refused["error"], message, "neb {}", args.join(" "));
+    }
+    // `triage` has no JSON form: `--json` is a flag the verb does not take.
+    let run = c.run_with_stdin(&["--json", "triage"], "d\n");
+    assert_eq!(run.usage_refusal()["code"], "interactive");
+    assert_eq!(run.stdout(), "");
+    // `sharpen`'s `--kill`-or-`--confirm` is clap's to refuse, first.
+    let run = c.run(&["sharpen", &id]);
+    assert_eq!(run.out.status.code(), Some(2));
+    assert_eq!(run.stdout(), "");
+    assert_eq!(
+        snapshot_corpus_files(&c.root),
+        before,
+        "nothing was written"
+    );
+}
+
+/// A core refusal of an argument no corpus could accept, whatever it holds,
+/// is a usage error too, decided per variant in one place.
+#[test]
+fn core_argument_shape_refusals_have_a_decided_exit_code() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let hypothesis = c.seed("a hypothesis", "A hypothesis");
+    c.run(&["sharpen", &hypothesis, "--kill", "if X"])
+        .assert_ok();
+    let dead = c.seed("a dead idea", "A dead idea");
+    c.run(&["sharpen", &dead, "--kill", "if Y"]).assert_ok();
+    c.run(&["status", &dead, "refuted", "--why", "Y happened"])
+        .assert_ok();
+    let before = snapshot_corpus_files(&c.root);
+    for (args, code) in [
+        (vec!["handoff", &id, "nonsense"], "invalid_observatory_id"),
+        (
+            vec![
+                "cite",
+                &id,
+                "--kind",
+                "bogus",
+                "--uri",
+                "https://example.org",
+                "--note",
+                "n",
+            ],
+            "unknown_reference_kind",
+        ),
+        (vec!["new", "X", "--id", "Bad Id"], "invalid_id"),
+        (vec!["new", "X", "--kill", "  "], "empty_kill"),
+        (
+            vec!["new", "X", "--parent", &dead, "--reopens", &dead],
+            "parent_and_reopens",
+        ),
+        (vec!["status", &hypothesis, "refuted"], "refuted_needs_why"),
+        (vec!["new", "   "], "unusable_title"),
+        (
+            vec!["cite", &id, "--uri", "/abs/x", "--note", "n"],
+            "absolute_uri",
+        ),
+    ] {
+        assert_usage_error(&c, &args, code);
+    }
+    assert_eq!(
+        snapshot_corpus_files(&c.root),
+        before,
+        "nothing was written"
+    );
+    // What the corpus holds decides a failure, which stays exit 1.
+    c.run(&["--json", "show", "nope"]).refusal();
 }
 
 // ------------------------------------------------------------------ triage --
@@ -7880,7 +8297,7 @@ fn the_observatory_root_is_a_machine_setting_that_never_reaches_the_corpus() {
         .says("pass the checkout's absolute path");
     let refused = c
         .run(&["--json", "config", "observatory-root", "observatory"])
-        .refusal();
+        .usage_refusal();
     assert_eq!(refused["code"], "relative_observatory_root");
     assert_eq!(
         refused["error"],
@@ -8030,6 +8447,82 @@ fn a_foreign_legacy_observatory_root_yields_to_this_machines_setting() {
     assert!(raw.contains("corpus_id:"), "{raw}");
     assert!(!raw.contains("observatory_root"), "{raw}");
     c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
+}
+
+/// The legacy key still answers when nothing else does, and every verb that
+/// resolves a record through it says so on stderr, in every mode, naming the
+/// key and its replacement (STD-01 §R35). What it resolves, on stdout, is
+/// what the machine setting pointing at the same checkout gives.
+#[test]
+fn legacy_observatory_root_warns_on_use() {
+    let dir = tempfile::tempdir().unwrap();
+    let obs = observatory(dir.path());
+    let fixture = || {
+        let c = Corpus::new();
+        let id = c.seed("an idea", "An idea");
+        let other = c.seed("another idea", "Another idea");
+        (c, id, other)
+    };
+    let (legacy, id, other) = fixture();
+    let config = legacy.root.join("config.yaml");
+    let raw = std::fs::read_to_string(&config).unwrap();
+    write(
+        &config,
+        &format!("{raw}observatory_root: {}\n", obs.display()),
+    );
+    let (machine, _, _) = fixture();
+    machine
+        .run(&["config", "observatory-root", obs.to_str().unwrap()])
+        .assert_ok();
+
+    for json in [false, true] {
+        let mode = |args: &[&str]| {
+            let mut argv: Vec<String> = args.iter().map(ToString::to_string).collect();
+            if json {
+                argv.insert(0, "--json".into());
+            }
+            argv
+        };
+        let mut verbs = vec![mode(&["show", &id])];
+        if !json {
+            // `cite --json` never reads the root: its payload has no path.
+            verbs.push(mode(&[
+                "cite",
+                &id,
+                "--kind",
+                "observatory",
+                "--uri",
+                "Q002",
+                "--note",
+                "n",
+            ]));
+        }
+        let record = if json { "R012" } else { "T003" };
+        let target = if json { id.as_str() } else { other.as_str() };
+        verbs.push(mode(&["handoff", target, record, "--note", "n"]));
+        for args in verbs {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let warned = legacy.run(&args).assert_ok();
+            let stderr = warned.stderr();
+            let warning = stderr
+                .lines()
+                .find(|l| l.contains("observatory_root"))
+                .unwrap_or_else(|| panic!("neb {}: no warning in:\n{stderr}", warned.args));
+            assert!(
+                warning.starts_with("warning: ")
+                    && warning.contains(&config.display().to_string())
+                    && warning.contains("neb config observatory-root <DIR>"),
+                "{warning}"
+            );
+            let plain = machine.run(&args).assert_ok();
+            assert!(
+                !plain.stderr().contains("observatory_root"),
+                "{}",
+                plain.stderr()
+            );
+            assert_eq!(warned.stdout(), plain.stdout(), "neb {}", warned.args);
+        }
+    }
 }
 
 /// `migrate` rewrites `config.yaml` whole, so a legacy key the file carries
@@ -8411,7 +8904,7 @@ fn handoff_refuses_a_closed_node_an_unknown_one_and_an_unresolved_record() {
 
     let refused = c
         .run(&["--json", "handoff", &open, "hypotheses/H012.md"])
-        .refusal();
+        .usage_refusal();
     assert_eq!(refused["code"], "invalid_observatory_id");
 
     assert_eq!(snapshot(&c), before, "no refusal wrote anything");
@@ -9712,12 +10205,37 @@ fn commit_on_outside_a_repository_says_it_did_not_commit() {
     assert_eq!(run.stderr(), "");
 }
 
+/// History needs git, and the refusal says how to start one for this corpus
+/// and have later writes recorded in it.
+#[test]
+fn log_outside_git_hints_init() {
+    let c = Corpus::new();
+    let id = c.seed("an uncommitted past", "An uncommitted past");
+    let run = c.run(&["log", &id]);
+    assert_eq!(run.out.status.code(), Some(1));
+    let stderr = run.stderr();
+    assert!(
+        stderr.contains(&format!("git -C {} init", c.root.display())),
+        "{stderr}"
+    );
+    assert!(stderr.contains("neb config commit on"), "{stderr}");
+    let refused = c.run(&["--json", "log", &id]).refusal();
+    assert_eq!(refused["code"], "not_git_work_tree");
+    assert!(
+        refused["hint"]
+            .as_str()
+            .is_some_and(|h| h.contains(&format!("git -C {} init", c.root.display()))),
+        "{refused}"
+    );
+}
+
 /// The setting is off by default and the verbs behave as they always did;
 /// `neb config commit` reads and writes it, turning it on is itself the
 /// first commit, and turning it off leaves that rewrite for you.
 /// `--no-commit` is on the help of the verbs that write and nowhere else, as
-/// the built binary renders it. Before the verb it still parses, as it did
-/// when it was global; after a read-only verb it is a usage error.
+/// the built binary renders it. Before a writing verb it still parses, as it
+/// did when it was global, and warns (see below); after a read-only verb it
+/// is a usage error.
 #[test]
 fn no_commit_is_offered_by_writing_verbs_only() {
     let c = Corpus::new();
@@ -9744,6 +10262,78 @@ fn no_commit_is_offered_by_writing_verbs_only() {
         .assert_ok();
     c.run(&["capture", "--quiet", "and after", "--no-commit"])
         .assert_ok();
+}
+
+const PRE_VERB_WARNING: &str = "warning: `--no-commit` before the verb is deprecated";
+
+/// The spelling from when `--no-commit` was global still skips the commit
+/// before a verb that makes one, and says, once, in every mode, that it is
+/// deprecated and how to write it now (STD-01 §R35).
+#[test]
+fn pre_verb_no_commit_warns_before_a_writing_verb() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let id = c.seed("an idea", "An idea");
+    let other = c.seed("another idea", "Another idea");
+    let commits = log(&c.root).len();
+    for (args, verb) in [
+        (vec!["--no-commit", "capture", "x"], "capture"),
+        (vec!["--no-commit", "--json", "capture", "y"], "capture"),
+        (vec!["--no-commit", "handoff", &id, "H001"], "handoff"),
+        (
+            vec!["--no-commit", "--json", "handoff", &other, "H002"],
+            "handoff",
+        ),
+    ] {
+        let run = c.run(&args).assert_ok();
+        let stderr = run.stderr();
+        let warnings: Vec<_> = stderr
+            .lines()
+            .filter(|l| l.contains("deprecated"))
+            .collect();
+        assert_eq!(
+            warnings,
+            [format!(
+                "{PRE_VERB_WARNING}; write `neb {verb} … --no-commit`"
+            )],
+            "neb {}",
+            run.args
+        );
+        assert_eq!(log(&c.root).len(), commits, "neb {} committed", run.args);
+    }
+    assert!(!dirt(&c.root).is_empty(), "the writes landed, uncommitted");
+    // Written after the verb, it is the verb's own flag and says nothing.
+    let run = c.run(&["capture", "z", "--no-commit"]).assert_ok();
+    assert!(!run.stderr().contains("deprecated"), "{}", run.stderr());
+}
+
+/// Before a verb that never commits there is nothing for it to skip, so it
+/// is refused, before any work, rather than accepted and ignored (STD-01
+/// §R28).
+#[test]
+fn pre_verb_no_commit_is_refused_before_a_verb_that_does_not_commit() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let fresh = c.workdir().join("fresh");
+    let fresh_arg = fresh.to_str().unwrap();
+    for (args, verb) in [
+        (vec!["list"], "list"),
+        (vec!["show", &id], "show"),
+        (vec!["review"], "review"),
+        (vec!["completions", "bash"], "completions"),
+        (vec!["init", fresh_arg], "init"),
+    ] {
+        let mut argv = vec!["--no-commit"];
+        argv.extend_from_slice(&args);
+        let refused = assert_usage_error(&c, &argv, "usage");
+        assert_eq!(
+            refused["error"],
+            format!(
+                "`{verb}` never commits, so `--no-commit` before it has nothing to skip; drop it"
+            ),
+        );
+    }
+    assert!(!fresh.exists(), "the refused init created nothing");
 }
 
 #[test]
