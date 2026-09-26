@@ -1,5 +1,6 @@
 import { useState } from "react";
 import * as api from "./api";
+import type { Written } from "./api";
 import { CaptureBox } from "./CaptureBox";
 import { CorpusError } from "./CorpusError";
 import { formatAge, isStale } from "./age";
@@ -13,10 +14,13 @@ interface Props {
 
 /**
  * The capture box, then every unsettled entry oldest first: id, age, text,
- * and the two decisions the desktop can make without further details.
+ * and the two decisions the desktop can make without further details. A
+ * settle whose commit was refused still settled: the entry leaves the list,
+ * and a note above it says the change is not committed.
  */
 export function InboxView({ inbox }: Props) {
   const { entries, error, loaded, refresh } = inbox;
+  const [warning, setWarning] = useState<string | null>(null);
   return (
     <section className="inbox" aria-label="Inbox">
       {error !== null ? (
@@ -24,12 +28,13 @@ export function InboxView({ inbox }: Props) {
       ) : (
         <>
           <CaptureBox onCaptured={() => void refresh()} />
+          {warning && <p className="inbox__warning" role="status">{warning}</p>}
           {loaded && entries.length === 0 ? (
             <p className="inbox__empty">Nothing waiting.</p>
           ) : (
             <ul className="inbox__list">
               {entries.map((entry) => (
-                <InboxItem key={`${entry.at}-${entry.id}`} entry={entry} refresh={refresh} />
+                <InboxItem key={`${entry.at}-${entry.id}`} entry={entry} refresh={refresh} onWarning={setWarning} />
               ))}
             </ul>
           )}
@@ -39,16 +44,28 @@ export function InboxView({ inbox }: Props) {
   );
 }
 
-function InboxItem({ entry, refresh }: { entry: InboxEntry; refresh: () => Promise<void> }) {
+interface ItemProps {
+  entry: InboxEntry;
+  refresh: () => Promise<void>;
+  /** Say, above the list, that a settle landed but was not committed. */
+  onWarning: (warning: string | null) => void;
+}
+
+function InboxItem({ entry, refresh, onWarning }: ItemProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function settle(action: (id: string) => Promise<unknown>) {
+  async function settle(action: (id: string) => Promise<Written<unknown>>, done: string) {
     if (busy) return;
     setBusy(true);
     setError(null);
+    onWarning(null);
     try {
-      await action(entry.id);
+      const written = await action(entry.id);
+      // Settled either way; only the commit is missing, so no retry.
+      if (written.commit.status === "refused") {
+        onWarning(`${done} ${entry.id} (not committed: ${errorMessage(written.commit.error)})`);
+      }
       await refresh();
     } catch (cause) {
       setError(isIpcError(cause) && cause.code === LOCKED ? "Corpus busy; nothing was changed. Try again." : errorMessage(cause));
@@ -66,10 +83,10 @@ function InboxItem({ entry, refresh }: { entry: InboxEntry; refresh: () => Promi
       <span className="entry__text">{entry.text}</span>
       {isStale(entry.at) && <span className="entry__stale">stale</span>}
       <div className="entry__actions">
-        <button type="button" disabled={busy} onClick={() => void settle(api.promoteRoot)}>
+        <button type="button" disabled={busy} onClick={() => void settle(api.promoteRoot, "promoted")}>
           Promote as root
         </button>
-        <button type="button" disabled={busy} onClick={() => void settle(api.dropEntry)}>
+        <button type="button" disabled={busy} onClick={() => void settle(api.dropEntry, "dropped")}>
           Drop
         </button>
       </div>

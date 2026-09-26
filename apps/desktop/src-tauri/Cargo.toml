@@ -35,6 +35,10 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 thiserror = { workspace = true }
+# Diagnostics (STD-02 §R15): `run()` installs the one subscriber, on stderr.
+# `fmt` only: no ANSI colour, no environment filter, no `log` bridge.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 
 [dev-dependencies]
 ctor = { workspace = true }

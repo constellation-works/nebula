@@ -12,7 +12,8 @@
 # `CLICOLOR[_FORCE]`, `TERM`, `COLUMNS` or the terminal size, is banned
 # everywhere else too.
 #
-# `crates/` only: the desktop shell under apps/ has its own stderr lines.
+# `crates/` only. The desktop shell under apps/ logs through `tracing`, whose
+# one subscriber (`run()` in apps/desktop/src-tauri/src/lib.rs) names stderr.
 # Integration tests (`tests/`) are exempt, as is a `//` comment line.
 set -euo pipefail
 cd "$(dirname "$0")/.."

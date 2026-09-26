@@ -4,7 +4,8 @@ import { CaptureBox } from "./CaptureBox";
 
 /**
  * The floating window the global shortcut opens: one input and nothing else.
- * Escape hides it; Enter captures, shows the confirmation, then hides it.
+ * Escape hides it; Enter captures, shows the confirmation, then hides it. A
+ * capture whose commit was refused stays up with its warning until Escape.
  * Hiding is the frontend's job here; showing is the shortcut's, in Rust.
  */
 export function CaptureWindow() {
@@ -36,8 +37,8 @@ export function CaptureWindow() {
         autoFocus
         resetErrorKey={openCount}
         placeholder="Capture… (Enter to save, Esc to close)"
-        onCaptured={(_, hasActiveDraft) => {
-          if (!hasActiveDraft) hide();
+        onCaptured={(written, hasActiveDraft) => {
+          if (!hasActiveDraft && written.commit.status !== "refused") hide();
         }}
         onEscape={hide}
       />

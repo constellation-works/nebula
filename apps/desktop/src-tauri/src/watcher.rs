@@ -6,10 +6,10 @@
 //! save (create, write, rename), so bursts are collapsed: one event after the
 //! directory has been quiet for [`DEBOUNCE`], capped at [`MAX_LATENCY`].
 
-use crate::tray;
+use crate::{fail_open, tray};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::Path;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Runtime};
 
@@ -26,14 +26,20 @@ pub const EVENT: &str = "corpus-changed";
 /// Watch `root/nodes` and `root/inbox`. The returned watcher stops when
 /// dropped, so the caller keeps it for the life of the app.
 pub fn start<R: Runtime>(app: AppHandle<R>, root: &Path) -> notify::Result<RecommendedWatcher> {
-    let (tx, rx) = channel::<()>();
+    // Bounded at one (STD-03 §R2). When the queue is full, `signal` drops the
+    // new signal: a signal carries no payload, so a second says nothing the
+    // first does not, and the one already waiting guarantees a refresh that
+    // reads the corpus after this event. A burst costs one slot, however
+    // slow the consumer.
+    let (tx, rx) = sync_channel::<()>(1);
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-        if let Ok(event) = res {
-            if !is_change_event(&event) {
-                return;
-            }
-            // A closed receiver means the app is gone; nothing to do.
-            let _ = tx.send(());
+        // Fail open: an error from the OS watcher is logged; the next event
+        // that does arrive refreshes everything anyway.
+        let Some(event) = fail_open("watching the corpus", res) else {
+            return;
+        };
+        if is_change_event(&event) {
+            signal(&tx);
         }
     })?;
     // `Corpus::open` requires `nodes/`; `inbox/` appears on first capture, and
@@ -49,11 +55,22 @@ pub fn start<R: Runtime>(app: AppHandle<R>, root: &Path) -> notify::Result<Recom
         .name("corpus-watcher".into())
         .spawn(move || {
             for () in debounced(&rx, DEBOUNCE, MAX_LATENCY) {
-                let _ = app.emit(EVENT, ());
+                // Fail open: a window that misses one event refetches on the
+                // next, and the tray is refreshed regardless.
+                fail_open("emitting corpus-changed", app.emit(EVENT, ()));
                 tray::refresh(&app);
             }
         })?;
     Ok(watcher)
+}
+
+/// Ask for one refresh without ever waiting. A full queue already holds a
+/// signal, so this one is dropped (see [`start`]); a closed one means the app
+/// is shutting down.
+pub fn signal(tx: &SyncSender<()>) {
+    match tx.try_send(()) {
+        Ok(()) | Err(TrySendError::Full(()) | TrySendError::Disconnected(())) => {}
+    }
 }
 
 fn is_change_event(event: &Event) -> bool {
@@ -92,7 +109,6 @@ pub fn debounced(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc::channel;
 
     const WINDOW: Duration = Duration::from_millis(40);
     const MAX_LATENCY: Duration = Duration::from_millis(120);
@@ -120,7 +136,7 @@ mod tests {
 
     #[test]
     fn a_burst_is_one_change() {
-        let (tx, rx) = channel();
+        let (tx, rx) = sync_channel(5);
         for _ in 0..5 {
             tx.send(()).unwrap();
         }
@@ -134,7 +150,7 @@ mod tests {
         // a late wake-up would find the next event already queued. The first
         // change can only come after a quiet window, so an event sent after it
         // is by construction a second burst.
-        let (tx, rx) = channel();
+        let (tx, rx) = sync_channel(2);
         tx.send(()).unwrap();
         tx.send(()).unwrap();
         let mut changes = debounced(&rx, WINDOW, MAX_LATENCY);
@@ -147,7 +163,9 @@ mod tests {
 
     #[test]
     fn continuous_events_yield_by_the_maximum_latency() {
-        let (tx, rx) = channel();
+        // Room for every send, so the producer never blocks on a consumer
+        // that stops after the first change.
+        let (tx, rx) = sync_channel(128);
         let producer = std::thread::spawn(move || {
             let end = Instant::now() + Duration::from_millis(400);
             while Instant::now() < end {
@@ -166,8 +184,34 @@ mod tests {
     }
 
     #[test]
+    fn a_full_queue_coalesces_rather_than_grows() {
+        let (tx, rx) = sync_channel(1);
+        let started = Instant::now();
+        for _ in 0..10_000 {
+            signal(&tx);
+        }
+        // Nothing consumed, and nothing waited: an unbounded queue would hold
+        // all 10,000, and a blocking send would never return.
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(rx.try_iter().count(), 1);
+
+        for _ in 0..10_000 {
+            signal(&tx);
+        }
+        drop(tx);
+        assert_eq!(debounced(&rx, WINDOW, MAX_LATENCY).count(), 1);
+    }
+
+    #[test]
+    fn a_signal_after_the_app_is_gone_is_dropped() {
+        let (tx, rx) = sync_channel(1);
+        drop(rx);
+        signal(&tx);
+    }
+
+    #[test]
     fn nothing_in_means_nothing_out() {
-        let (tx, rx) = channel::<()>();
+        let (tx, rx) = sync_channel::<()>(1);
         drop(tx);
         assert_eq!(debounced(&rx, WINDOW, MAX_LATENCY).count(), 0);
     }

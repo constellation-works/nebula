@@ -1,6 +1,7 @@
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
+import type { Written } from "./api";
 import { App } from "./App";
 import { CaptureBox, CONFIRM_MS } from "./CaptureBox";
 import { CaptureWindow } from "./CaptureWindow";
@@ -24,6 +25,11 @@ const entries: InboxEntry[] = [
   { id: "a1b2", at: "2026-09-13T09:00", text: "capture must stay under five seconds" },
   { id: "c3d4", at: "2026-09-13T10:30", text: "the tray count is the whole status bar" },
 ];
+
+/** A write that landed, with commits off, as the backend answers it. */
+function landed<T>(value: T): Written<T> {
+  return { value, commit: { status: "disabled" } };
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -56,6 +62,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // A test that failed while its fake timers were installed must not leave
+  // them to the next one.
+  vi.useRealTimers();
 });
 
 describe("InboxView", () => {
@@ -123,7 +132,7 @@ describe("InboxView", () => {
 
   it("captures on Enter and shows the confirmation", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    mocked.capture.mockResolvedValue({ id: "9999", at: "2026-09-13T12:00", text: "new" });
+    mocked.capture.mockResolvedValue(landed({ id: "9999", at: "2026-09-13T12:00", text: "new" }));
     render(<Harness />);
     await screen.findByText("a1b2");
     const input = screen.getByLabelText("Capture");
@@ -143,7 +152,7 @@ describe("InboxView", () => {
 
   it("drops one entry and refreshes the list and Inbox badge", async () => {
     mocked.inbox.mockResolvedValueOnce(entries).mockResolvedValueOnce([entries[1]]);
-    mocked.dropEntry.mockResolvedValue(entries[0]);
+    mocked.dropEntry.mockResolvedValue(landed(entries[0]));
     render(<App />);
     expect(await screen.findByRole("tab", { name: "Inbox2" })).toBeInTheDocument();
 
@@ -156,7 +165,7 @@ describe("InboxView", () => {
 
   it("promotes one entry as a root and refreshes the list and Inbox badge", async () => {
     mocked.inbox.mockResolvedValueOnce(entries).mockResolvedValueOnce([entries[1]]);
-    mocked.promoteRoot.mockResolvedValue({ doc: { node: { id: "capture-must-stay" } } } as never);
+    mocked.promoteRoot.mockResolvedValue(landed({ doc: { node: { id: "capture-must-stay" } } } as never));
     render(<App />);
     expect(await screen.findByRole("tab", { name: "Inbox2" })).toBeInTheDocument();
 
@@ -184,6 +193,28 @@ describe("InboxView", () => {
     fireEvent.click(within(first).getByRole("button", { name: "Drop" }));
     expect(await within(first).findByRole("alert")).toHaveTextContent("`a1b2` was already dropped");
     expect(mocked.inbox).toHaveBeenCalledTimes(1);
+  });
+
+  it("a settle whose commit was refused refreshes the list and warns instead of offering a retry", async () => {
+    mocked.inbox.mockResolvedValueOnce(entries).mockResolvedValueOnce([entries[1]]);
+    mocked.dropEntry.mockResolvedValue({
+      value: entries[0],
+      commit: {
+        status: "refused",
+        error: { code: "corpus_ignored", message: "/corpus is ignored by the git repository that contains it; nothing can be committed" },
+      },
+    });
+    render(<Harness />);
+    await screen.findByText("a1b2");
+
+    fireEvent.click(within(screen.getAllByRole("listitem")[0]).getByRole("button", { name: "Drop" }));
+    await waitFor(() => expect(mocked.inbox).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText("a1b2")).not.toBeInTheDocument());
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const note = screen.getByText(/^dropped a1b2 \(not committed:/);
+    expect(note).toHaveTextContent("dropped a1b2 (not committed: /corpus is ignored by the git repository that contains it; nothing can be committed)");
+    expect(mocked.dropEntry).toHaveBeenCalledTimes(1);
   });
 
   it("a busy settle says the corpus is busy", async () => {
@@ -316,7 +347,7 @@ describe("useInbox", () => {
 
 describe("CaptureBox", () => {
   it("pastes line breaks as spaces at the cursor and submits the normalized line", async () => {
-    mocked.capture.mockResolvedValue({ id: "9999", at: "2026-09-13T12:00", text: "before a b c after" });
+    mocked.capture.mockResolvedValue(landed({ id: "9999", at: "2026-09-13T12:00", text: "before a b c after" }));
     render(<CaptureBox />);
     const input = screen.getByLabelText("Capture") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "before after" } });
@@ -345,7 +376,7 @@ describe("CaptureBox", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Corpus busy. Press Enter to retry.");
     expect(input).toHaveValue("keep this thought!");
 
-    mocked.capture.mockResolvedValueOnce({ id: "9999", at: "2026-09-13T12:00", text: "keep this thought!" });
+    mocked.capture.mockResolvedValueOnce(landed({ id: "9999", at: "2026-09-13T12:00", text: "keep this thought!" }));
     fireEvent.keyDown(input, { key: "Enter" });
     expect(await screen.findByText("captured")).toBeInTheDocument();
     expect(mocked.capture).toHaveBeenLastCalledWith("keep this thought!");
@@ -367,7 +398,7 @@ describe("CaptureBox", () => {
 
   it("keeps a new thought typed while capture is pending and does not dismiss it", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const capture = deferred<InboxEntry>();
+    const capture = deferred<Written<InboxEntry>>();
     const hide = vi.fn();
     mocked.capture.mockReturnValue(capture.promise);
     render(
@@ -384,7 +415,7 @@ describe("CaptureBox", () => {
     await waitFor(() => expect(mocked.capture).toHaveBeenCalledWith("first thought"));
     fireEvent.change(input, { target: { value: "second thought" } });
     await act(async () => {
-      capture.resolve({ id: "9999", at: "2026-09-13T12:00", text: "first thought" });
+      capture.resolve(landed({ id: "9999", at: "2026-09-13T12:00", text: "first thought" }));
       await capture.promise;
     });
 
@@ -399,7 +430,7 @@ describe("CaptureBox", () => {
   });
 
   it("keeps the current text retryable when a pending capture fails", async () => {
-    const capture = deferred<InboxEntry>();
+    const capture = deferred<Written<InboxEntry>>();
     mocked.capture.mockReturnValue(capture.promise);
     render(<CaptureBox />);
     const input = screen.getByLabelText("Capture");
@@ -421,7 +452,7 @@ describe("CaptureBox", () => {
   });
 
   it("does not replace newer text when an earlier capture fails", async () => {
-    const capture = deferred<InboxEntry>();
+    const capture = deferred<Written<InboxEntry>>();
     mocked.capture.mockReturnValue(capture.promise);
     render(<CaptureBox />);
     const input = screen.getByLabelText("Capture");
@@ -475,7 +506,7 @@ describe("CaptureWindow", () => {
 
   it("hides after confirmation, but keeps a new draft open", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    mocked.capture.mockResolvedValue({ id: "9999", at: "2026-09-13T12:00", text: "saved" });
+    mocked.capture.mockResolvedValue(landed({ id: "9999", at: "2026-09-13T12:00", text: "saved" }));
     render(<CaptureWindow />);
     const input = screen.getByLabelText("Capture");
     fireEvent.change(input, { target: { value: "saved" } });

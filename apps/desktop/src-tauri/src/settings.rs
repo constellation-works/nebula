@@ -7,6 +7,7 @@
 //! durable write helper: replaced whole, flushed with its directory, and
 //! owner-only, exactly as the CLI writes the corpus.
 
+use crate::fail_open;
 use fs4::{FileExt, TryLockError};
 use nebula_core::fs::{create_private_dir_all, private_open_options, write_private_atomic};
 use serde::{Deserialize, Serialize};
@@ -175,9 +176,13 @@ fn with_lock<T>(
             }
             Err(TryLockError::WouldBlock) => {
                 let mut holder = String::new();
-                let _ = file
-                    .seek(SeekFrom::Start(0))
-                    .and_then(|_| file.read_to_string(&mut holder));
+                // Fail open: the holder's name only improves the message; the
+                // refusal is `Busy` whether or not it can be read.
+                fail_open(
+                    "reading who holds the settings lock",
+                    file.seek(SeekFrom::Start(0))
+                        .and_then(|_| file.read_to_string(&mut holder)),
+                );
                 return Err(SettingsError::Busy {
                     lock: lock_path,
                     holder: holder.trim().to_string(),

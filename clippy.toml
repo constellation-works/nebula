@@ -5,4 +5,7 @@ disallowed-methods = [
     { path = "std::fs::write", reason = "use nebula_core::fs::write_private_atomic, the durable write helper" },
     # STD-05 §R8: every directory nebula creates is 0700, never the umask's.
     { path = "std::fs::create_dir_all", reason = "use nebula_core::fs::create_private_dir_all, which creates directories 0700" },
+    # STD-03 §R2: every queue between threads is bounded, and its construction
+    # site says what a producer does when it is full.
+    { path = "std::sync::mpsc::channel", reason = "unbounded (STD-03 §R2): use std::sync::mpsc::sync_channel and state the full-queue policy" },
 ]

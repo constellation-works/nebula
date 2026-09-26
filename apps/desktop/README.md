@@ -69,6 +69,16 @@ shortcut is read from `settings.json` under the app's config directory
 (`~/Library/Application Support/works.constellation.nebula/` on macOS), which
 is written with the default on first launch.
 
+With commits on (`neb config commit on`), each capture, drop and promote is
+committed as `neb` commits it. When git refuses that commit (for example the
+repository around the corpus ignores it), the write has still happened: the
+capture box clears and says `captured (not committed: <why>)`, and the
+floating window stays open with that warning until Escape; a drop or promote
+removes the entry from the list and notes above it that the change is not
+committed. Nothing offers a retry, since retrying would write it twice.
+Once the cause is fixed, the next commit records it: a `neb` commit takes the
+whole corpus, not just the last write.
+
 The menu-bar item shows the unsettled inbox count and updates when the corpus
 changes on disk, whoever changed it.
 
