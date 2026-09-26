@@ -47,7 +47,7 @@ For each inbox entry, in order:
 - Say which of **promote** (with the proposed `--title`, `--parent`, `--tag`)
   or **drop** (with the reason: duplicates `<id>`, or an action item) you
   recommend, and wait for the human unless they have said "just do it".
-  Passing `near`'s first line to `--parent` unread is the automatic linking
+  Passing `near`'s top candidate to `--parent` unread is the automatic linking
   the spec rules out.
 - Promote with the parent's tags (`near` lists each candidate's). A new tag
   is a decision: name it as one.

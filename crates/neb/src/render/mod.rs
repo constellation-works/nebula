@@ -6,10 +6,14 @@
 //!
 //! stdout carries the payload alone (STD-01 §R12). Counts, cut notices and
 //! empty-state lines are [`Notice`]s, which the caller writes to stderr.
+//!
+//! A list-shaped result is a [`table`]: aligned under a header on a
+//! terminal, one tab-separated line per record anywhere else.
 
 mod error;
 pub mod json;
 mod report;
+mod table;
 mod tree;
 mod triage;
 
@@ -17,6 +21,7 @@ use crate::output::{self, Role, Stream};
 use nebula_core::{EdgeType, GraphExport, HistoryEntry, Node, Status};
 use std::collections::HashSet;
 use std::fmt::Write as _;
+use table::{Cell, Column, Table};
 
 pub use error::{Refusal, refusal, refusal_about};
 pub use report::{
@@ -25,6 +30,7 @@ pub use report::{
     observatory_root_notes, open, open_notice, review, review_notice, suggestions, tags,
     tags_notice,
 };
+pub use table::Target;
 pub use tree::{draw as tree, tabbed as trace_lines, trace_notice};
 pub use triage::{step, tally, triage_keys, waiting};
 
@@ -114,28 +120,30 @@ pub fn status_badge(s: Status) -> String {
     paint(Role::of("status", &s.to_string()), &format!("{s:<10}"))
 }
 
-/// One node as a single line.
-pub fn line(n: &Node) -> String {
-    let tags = if n.tags.is_empty() {
-        String::new()
-    } else {
-        format!(" {}", dim(&format!("[{}]", n.tags.join(", "))))
-    };
-    format!(
-        "{} {}{tags} {}",
-        status_badge(n.status),
-        bold(&n.id),
-        dim(&n.title)
-    )
+/// A status as a table cell, coloured by whether the node still asks
+/// anything of you.
+fn status_cell(s: Status) -> Cell {
+    Cell::new(Role::of("status", &s.to_string()), s.to_string())
 }
 
-/// A listing of nodes, one line each, and nothing when there are none.
-pub fn list(nodes: &[Node]) -> String {
-    let mut out = String::new();
+/// A listing of nodes as a table, one record each, and nothing when there
+/// are none. The tags are one cell, comma-joined, and `-` for none.
+pub fn list(nodes: &[Node], to: Target) -> String {
+    let mut table = Table::new([
+        Column::left("STATUS"),
+        Column::left("ID"),
+        Column::left("TAGS"),
+        Column::left("TITLE"),
+    ]);
     for n in nodes {
-        let _ = writeln!(out, "{}", line(n));
+        table.row([
+            status_cell(n.status),
+            Cell::bold(&n.id),
+            Cell::muted(n.tags.join(",")),
+            Cell::muted(&n.title),
+        ]);
     }
-    out
+    table.render(to)
 }
 
 /// What a listing is of the corpus. `matched` is how many the filter kept,
@@ -158,20 +166,22 @@ pub fn list_notice(shown: usize, matched: usize, total: usize) -> Notice {
     }
 }
 
-/// Commits that changed a node, newest first.
-pub fn history(entries: &[HistoryEntry]) -> String {
-    let mut out = String::new();
+/// Commits that changed a node, newest first, as a table.
+pub fn history(entries: &[HistoryEntry], to: Target) -> String {
+    let mut table = Table::new([
+        Column::left("HASH"),
+        Column::left("DATE"),
+        Column::left("MESSAGE"),
+    ]);
     for entry in entries {
         let short = entry.hash.get(..7).unwrap_or(&entry.hash);
-        let _ = writeln!(
-            out,
-            "{} {} {}",
-            bold(short),
-            dim(&entry.date),
-            entry.message
-        );
+        table.row([
+            Cell::bold(short),
+            Cell::muted(&entry.date),
+            Cell::plain(&entry.message),
+        ]);
     }
-    out
+    table.render(to)
 }
 
 /// The notice for a node no commit touched.

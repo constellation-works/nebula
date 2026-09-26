@@ -2271,18 +2271,18 @@ fn near_ranks_existing_nodes_against_free_text() {
     }
     assert_eq!(first["band"], "strong", "{json}");
 
-    // Text mode: one line per neighbour, band first, the best on top, and
-    // no bare number to misread.
+    // Text mode, piped: one line per neighbour, band first, the best on
+    // top, and no bare number to misread.
     let text = c
         .run(&["near", "tags and domains beat a taxonomy"])
         .assert_ok()
         .stdout();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 2, "{text}");
-    assert!(lines[0].contains("tags-beat-domains"), "{text}");
-    assert!(lines[1].contains("a-single-global-taxonomy"), "{text}");
+    assert!(lines[0].contains("\ttags-beat-domains\t"), "{text}");
+    assert!(lines[1].contains("\ta-single-global-taxonomy\t"), "{text}");
     assert!(
-        lines[0].starts_with("strong "),
+        lines[0].starts_with("strong\t"),
         "band leads the line: {text}"
     );
     let band = out[1]["band"].as_str().unwrap();
@@ -2346,11 +2346,11 @@ fn near_marks_candidates_already_linked_to_the_node() {
             .to_string()
     };
     assert!(
-        line("tags-beat-domains-in-corpus-design").ends_with("linked: child (derives-from)"),
+        line("tags-beat-domains-in-corpus-design").ends_with("\tchild (derives-from)"),
         "{text}"
     );
     assert!(
-        line("a-single-global-taxonomy").ends_with("linked: contradicts"),
+        line("a-single-global-taxonomy").ends_with("\tcontradicts"),
         "one mark for a contradiction stored on both ends: {text}"
     );
 
@@ -2360,14 +2360,14 @@ fn near_marks_candidates_already_linked_to_the_node() {
         .stdout();
     let parent = text
         .lines()
-        .find(|l| l.contains(" tags-beat-domains "))
+        .find(|l| l.contains("\ttags-beat-domains\t"))
         .unwrap_or_else(|| panic!("{text}"));
-    assert!(parent.ends_with("linked: parent (derives-from)"), "{text}");
+    assert!(parent.ends_with("\tparent (derives-from)"), "{text}");
     let unlinked = text
         .lines()
         .find(|l| l.contains("a-single-global-taxonomy"))
         .unwrap_or_else(|| panic!("{text}"));
-    assert!(!unlinked.contains("linked"), "{text}");
+    assert!(unlinked.ends_with("\t-"), "nothing linked is `-`: {text}");
 
     let json = c
         .run(&["near", "--json", "tags-beat-domains-in-corpus-design"])
@@ -6763,8 +6763,8 @@ fn tags_are_normalised_on_every_write_path() {
 
     c.run(&["tag", "list"])
         .assert_ok()
-        .says("machine-learning 1")
-        .says("physics 2");
+        .says("machine-learning\t1\n")
+        .says("physics\t2\n");
     let json = c.run(&["--json", "tag", "list"]).assert_ok().stdout();
     let items: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
     assert!(
@@ -7060,20 +7060,91 @@ fn review_out_writes_the_report_and_prints_nothing_else() {
     assert!(report.contains("## Nodes with no references"));
 }
 
-/// Status badges are one width, so the ids after them form a column.
+/// Piped, a listing is one tab-separated line per node with no header, and
+/// every line has every field: an untagged node's tags are `-`, so `cut -f`
+/// never shifts (STD-01 §R9).
 #[test]
-fn list_lines_up_its_ids_after_the_status() {
+fn piped_list_is_tab_separated() {
     let c = Corpus::new();
-    c.run(&["new", "A seed"]).assert_ok();
+    c.run(&["new", "A seed", "--tag", "physics", "--tag", "design"])
+        .assert_ok();
     c.run(&["new", "A hypothesis", "--kill", "if X"])
         .assert_ok();
+    c.run(&["new", "Untagged idea"]).assert_ok();
     let out = c.run(&["list"]).assert_ok().stdout();
-    let starts: Vec<usize> = out
-        .lines()
-        .filter(|l| l.starts_with("seed") || l.starts_with("hypothesis"))
-        .map(|l| l.find("a-").expect("an id"))
-        .collect();
-    assert_eq!(starts, [11, 11], "{out}");
+    let rows: Vec<Vec<&str>> = out.lines().map(|l| l.split('\t').collect()).collect();
+    assert_eq!(rows.len(), 3, "one line per node, no header: {out}");
+    assert!(rows.iter().all(|r| r.len() == 4), "{out}");
+    assert!(!out.contains("STATUS") && !out.contains('\x1b'), "{out}");
+    let row = |id: &str| {
+        rows.iter()
+            .find(|r| r[1] == id)
+            .unwrap_or_else(|| panic!("{id} in: {out}"))
+    };
+    assert_eq!(
+        row("a-seed")[..],
+        ["seed", "a-seed", "physics,design", "A seed"]
+    );
+    assert_eq!(
+        row("a-hypothesis")[..3],
+        ["hypothesis", "a-hypothesis", "-"]
+    );
+    assert_eq!(
+        row("untagged-idea")[..],
+        ["seed", "untagged-idea", "-", "Untagged idea"]
+    );
+}
+
+/// Every other list-shaped verb pipes as `list` does: one tab-separated line
+/// per record, the same number of fields on every line, and no header.
+#[test]
+fn piped_list_shaped_outputs_are_tab_separated() {
+    let c = Corpus::new();
+    // A hypothesis fourteen days old with no references, so `review --short`
+    // has a finding, beside nodes with and without tags.
+    let hyp = c.seed("gravity carries information", "Gravity carries information");
+    c.run(&["sharpen", &hyp, "--kill", "if X"]).assert_ok();
+    c.run(&["tag", &hyp, "--add", "physics"]).assert_ok();
+    set_created(&c.node_file(&hyp), &date_days_ago(14));
+    c.run(&[
+        "new",
+        "Gravity is information",
+        "--tag",
+        "physics",
+        "--tag",
+        "zz",
+    ])
+    .assert_ok();
+    c.run(&["new", "Untagged gravity idea", "--parent", &hyp])
+        .assert_ok();
+    c.run(&["capture", "--quiet", "a thought about gravity"])
+        .assert_ok();
+    c.run(&["capture", "--quiet", "another thought"])
+        .assert_ok();
+    git_init(&c.root);
+    git_commit_at(&c.root, "2020-01-01", "first");
+    c.run(&["note", &hyp, "a second thought"]).assert_ok();
+    git_commit_at(&c.root, "2020-01-02", "second");
+
+    for (args, header, fields, records) in [
+        (vec!["inbox"], "ID", 3, 2),
+        (vec!["near", "gravity information"], "BAND", 5, 3),
+        (vec!["near", hyp.as_str()], "BAND", 5, 2),
+        (vec!["tag", "list"], "TAG", 2, 2),
+        (vec!["review", "--short"], "ID", 2, 1),
+        (vec!["log", hyp.as_str()], "HASH", 3, 2),
+    ] {
+        let out = c.run(&args).assert_ok().stdout();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), records, "{args:?}: {out}");
+        for line in &lines {
+            let cut: Vec<&str> = line.split('\t').collect();
+            assert_eq!(cut.len(), fields, "{args:?}: {out}");
+            assert!(cut.iter().all(|f| !f.is_empty()), "{args:?}: {out}");
+            assert_ne!(cut[0], header, "no header: {out}");
+        }
+        assert!(!out.contains("\x1b["), "{args:?}: {out}");
+    }
 }
 
 /// `--limit` cuts `list` to its first N matches and says on stderr how many
@@ -7148,7 +7219,7 @@ fn piped_list_has_one_line_per_record() {
     let listed = c.run(&["list", "--tag", "t"]).assert_ok();
     let out = listed.stdout();
     assert_eq!(out.lines().count(), 150, "{out}");
-    assert!(out.lines().all(|l| l.starts_with("seed ")), "{out}");
+    assert!(out.lines().all(|l| l.starts_with("seed\t")), "{out}");
     assert_eq!(listed.stderr(), "150 of 151 nodes\n");
 }
 
@@ -9324,14 +9395,14 @@ fn log_and_show_at_read_a_node_sharpened_across_two_commits() {
     let mut lines = text.lines();
     let newest = lines.next().expect("sharpen history line");
     let oldest = lines.next().expect("creation history line");
-    assert!(newest.starts_with(&sharpened[..7]), "{text}");
-    assert!(
-        newest.contains("2020-01-02 neb sharpen history-shape"),
+    assert_eq!(
+        newest,
+        format!("{}\t2020-01-02\tneb sharpen history-shape", &sharpened[..7]),
         "{text}"
     );
-    assert!(oldest.starts_with(&created[..7]), "{text}");
-    assert!(
-        oldest.contains("2020-01-01 neb new history-shape"),
+    assert_eq!(
+        oldest,
+        format!("{}\t2020-01-01\tneb new history-shape", &created[..7]),
         "{text}"
     );
     assert!(lines.next().is_none(), "{text}");

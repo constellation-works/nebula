@@ -1,6 +1,7 @@
 //! The multi-line renderings: one function per report the core returns.
 
-use super::{Notice, bold, count, dim, paint, status_badge};
+use super::table::{Cell, Column, Table, Target};
+use super::{Notice, bold, count, dim, paint, status_badge, status_cell};
 use crate::output::Role;
 use nebula_core::{
     Band, CommitSetting, EdgeType, HUMAN, INBOX_DAYS, Impact, Inbox, MigrationReport, Near,
@@ -174,13 +175,13 @@ pub fn commit_setting_hint(setting: CommitSetting) -> Option<Notice> {
     })
 }
 
-/// Captures waiting to be promoted or dropped, one line each.
-pub fn inbox(inbox: &Inbox) -> String {
-    let mut out = String::new();
+/// Captures waiting to be promoted or dropped, as a table.
+pub fn inbox(inbox: &Inbox, to: Target) -> String {
+    let mut table = Table::new([Column::left("ID"), Column::left("AT"), Column::left("TEXT")]);
     for e in &inbox.0 {
-        let _ = writeln!(out, "{} {} {}", bold(&e.id), dim(&e.at), e.text);
+        table.row([Cell::bold(&e.id), Cell::muted(&e.at), Cell::plain(&e.text)]);
     }
-    out
+    table.render(to)
 }
 
 /// How many captures wait. `waiting` is how many there are in all, which is
@@ -200,6 +201,9 @@ pub fn inbox_notice(shown: usize, waiting: usize) -> Notice {
 /// One neighbour as a line: band, status, id, title, and any link it
 /// already has to the node asked about. The raw score stays in `--json`:
 /// printed bare, it reads as a percentage it is not.
+///
+/// This is the `near:` block under `capture` and `promote`, and `triage`'s
+/// candidates; `near` itself prints a table.
 pub(super) fn neighbour(n: &Neighbour) -> String {
     let mut line = format!(
         "{} {} {} {}",
@@ -209,7 +213,7 @@ pub(super) fn neighbour(n: &Neighbour) -> String {
         dim(&n.title)
     );
     if let Some(linked) = linked(n) {
-        let _ = write!(line, "  {linked}");
+        let _ = write!(line, "  linked: {linked}");
     }
     line
 }
@@ -220,8 +224,8 @@ fn band(b: Band) -> String {
 }
 
 /// The edges a neighbour already shares with the node `near` was asked
-/// about, by what the neighbour is to that node: `linked: parent
-/// (derives-from)`, `linked: child (refines)`, `linked: contradicts`.
+/// about, by what the neighbour is to that node: `parent (derives-from)`,
+/// `child (refines)`, `contradicts`.
 fn linked(n: &Neighbour) -> Option<String> {
     let edges = n.linked.as_deref()?;
     // Kinds grouped by role, each role once, in the order first met.
@@ -248,16 +252,30 @@ fn linked(n: &Neighbour) -> Option<String> {
             }
         })
         .collect();
-    Some(format!("linked: {}", parts.join("; ")))
+    Some(parts.join("; "))
 }
 
-/// The nodes closest to a query, best first, as `near` prints them.
-pub fn near(near: &Near) -> String {
-    let mut out = String::new();
+/// The nodes closest to a query, best first, as a table. `LINKED` is the
+/// edges a node already shares with the one asked about, and `-` for none
+/// or for free text.
+pub fn near(near: &Near, to: Target) -> String {
+    let mut table = Table::new([
+        Column::left("BAND"),
+        Column::left("STATUS"),
+        Column::left("ID"),
+        Column::left("TITLE"),
+        Column::left("LINKED"),
+    ]);
     for n in &near.0 {
-        let _ = writeln!(out, "{}", neighbour(n));
+        table.row([
+            Cell::new(Role::of("band", &n.band.to_string()), n.band.to_string()),
+            status_cell(n.status),
+            Cell::bold(&n.id),
+            Cell::muted(&n.title),
+            Cell::plain(linked(n).unwrap_or_default()),
+        ]);
     }
-    out
+    table.render(to)
 }
 
 /// The notice for `near`: no node shares a word with the query, or `-k`
@@ -323,13 +341,13 @@ pub fn impact_notice(report: &Impact) -> Option<Notice> {
         .then(|| Notice::always("nothing descends from or contradicts this node"))
 }
 
-/// Nodes that need attention, one line each.
-pub fn open(report: &OpenReport) -> String {
-    let mut out = String::new();
+/// Nodes that need attention, as a table.
+pub fn open(report: &OpenReport, to: Target) -> String {
+    let mut table = Table::new([Column::left("ID"), Column::left("WHY")]);
     for item in &report.0 {
-        let _ = writeln!(out, "{} {}", bold(&item.id), item.why);
+        table.row([Cell::bold(&item.id), Cell::plain(&item.why)]);
     }
-    out
+    table.render(to)
 }
 
 /// The notice for `review --short`: nothing needs attention, or `--limit`
@@ -346,13 +364,13 @@ pub fn open_notice(shown: usize, all: usize) -> Option<Notice> {
     }
 }
 
-/// Every tag with the number of nodes carrying it.
-pub fn tags(counts: &TagCounts) -> String {
-    let mut out = String::new();
+/// Every tag with the number of nodes carrying it, as a table.
+pub fn tags(counts: &TagCounts, to: Target) -> String {
+    let mut table = Table::new([Column::left("TAG"), Column::right("COUNT")]);
     for t in &counts.0 {
-        let _ = writeln!(out, "{} {}", bold(&t.tag), dim(&t.count.to_string()));
+        table.row([Cell::bold(&t.tag), Cell::muted(t.count.to_string())]);
     }
-    out
+    table.render(to)
 }
 
 /// The notice for a corpus with no tags.
@@ -505,5 +523,33 @@ pub fn migration_notice(report: &MigrationReport) -> Notice {
             report.rewritten.len(),
             count(report.nodes, "node")
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nebula_core::TagCount;
+
+    #[test]
+    fn tag_list_counts_right_aligned() {
+        let counts = TagCounts(vec![
+            TagCount {
+                tag: "physics".into(),
+                count: 5,
+            },
+            TagCount {
+                tag: "filler".into(),
+                count: 150,
+            },
+        ]);
+        let drawn = tags(&counts, Target::Terminal { colour: false });
+        let lines: Vec<&str> = drawn.lines().collect();
+        assert_eq!(
+            lines,
+            ["TAG      COUNT", "physics      5", "filler     150"]
+        );
+        let end = lines[0].len();
+        assert!(lines.iter().all(|l| l.len() == end), "{lines:?}");
     }
 }

@@ -174,6 +174,17 @@ pub fn bold(stream: Stream, text: &str) -> String {
     painted(colours(stream), Some("1"), text)
 }
 
+/// `text` in `role`'s colour when `on`, else as it is: for a renderer handed
+/// the gate's answer rather than asking it, as a table is.
+pub fn paint_if(on: bool, role: Role, text: &str) -> String {
+    painted(on, role.sgr(), text)
+}
+
+/// `text` in bold when `on`, else as it is. See [`paint_if`].
+pub fn bold_if(on: bool, text: &str) -> String {
+    painted(on, Some("1"), text)
+}
+
 fn painted(on: bool, sgr: Option<&str>, text: &str) -> String {
     match sgr.filter(|_| on) {
         Some(code) => format!("\x1b[{code}m{text}\x1b[0m"),
