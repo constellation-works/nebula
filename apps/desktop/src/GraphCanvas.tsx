@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { MAX_CHIPS, truncate, type DrawnEdge, type Layout, type Lineage, type PlacedNode, type Point } from "./layout";
 
 /** Where the drawing sits in the canvas: a translate then a scale. */
@@ -222,8 +222,11 @@ export function GraphCanvas({ layout, selected, lineage, matches, isolatedIds, f
   const drag = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean } | null>(null);
 
   // Fit on the first layout that has size, then only when asked, so a refetch
-  // or a filter change leaves the viewport where the user put it.
-  useEffect(() => {
+  // or a filter change leaves the viewport where the user put it. A layout
+  // effect, so the fit lands in the commit that draws the layout: as a passive
+  // effect it ran a task later, after the unfitted frame was painted, and
+  // overwrote any wheel or drag handled in between.
+  useLayoutEffect(() => {
     if (fitted.current === fitRequest) return;
     if (layout.nodes.length === 0) return;
     fitted.current = fitRequest;
