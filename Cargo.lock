@@ -2380,6 +2380,7 @@ dependencies = [
  "nebula-core",
  "serde",
  "serde_json",
+ "shlex",
  "tempfile",
  "time",
 ]
