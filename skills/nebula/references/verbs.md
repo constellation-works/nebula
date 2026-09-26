@@ -596,8 +596,9 @@ kind between the two, in declared order. It is `null` for the start.
 status and every edge labelled by kind. Symmetric `contradicts` edges become
 one dotted, undirected line. Add `--from <ID>` to include only that node, its
 ancestors and its descendants; siblings and unrelated components stay out.
-`--from` requires `--mermaid` and conflicts with `--json`, so JSON always
-exports the whole corpus rather than silently ignoring a requested lineage.
+`--from` requires `--mermaid`, and both conflict with `--json` whether it is
+written before the verb or after it (exit 2), so JSON always exports the whole
+corpus rather than silently ignoring a requested lineage.
 Titles are escaped so quotes and brackets remain label text.
 
 ```mermaid

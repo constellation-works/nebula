@@ -2207,6 +2207,10 @@ fn graph_exports_the_whole_corpus_as_json() {
     run.assert_fails()
         .says("the argument '--from <ID>' cannot be used with '--json'");
 
+    // `--json` is global, so it may come before the verb too.
+    let before = c.run(&["--json", "graph"]).assert_ok().stdout();
+    assert_eq!(before, json);
+
     // There is no default text form: without a format it explains and exits 2.
     let run = c.run(&["graph"]);
     assert_eq!(run.out.status.code(), Some(2));
@@ -2215,6 +2219,62 @@ fn graph_exports_the_whole_corpus_as_json() {
         "{}",
         run.stdout()
     );
+}
+
+/// `--json` is a global flag, so `graph`'s formats conflict with it on either
+/// side of the verb: the same usage error, exit 2, and nothing on stdout.
+#[test]
+fn graph_formats_refuse_json_before_or_after_the_verb() {
+    let c = Corpus::new();
+    let base = c.seed("base", "Base");
+
+    for (before, after, says) in [
+        (
+            vec!["--json", "graph", "--mermaid"],
+            vec!["graph", "--mermaid", "--json"],
+            "the argument '--mermaid' cannot be used with '--json'",
+        ),
+        (
+            vec!["--json", "graph", "--mermaid", "--from", &base],
+            vec!["graph", "--mermaid", "--from", &base, "--json"],
+            "the argument '--mermaid' cannot be used with '--json'",
+        ),
+        (
+            vec!["--json", "graph", "--from", &base, "--mermaid"],
+            vec!["graph", "--from", &base, "--mermaid", "--json"],
+            "the argument '--from <ID>' cannot be used with '--json'",
+        ),
+    ] {
+        let first = c.run(&before);
+        let second = c.run(&after);
+        for run in [&first, &second] {
+            assert_eq!(run.out.status.code(), Some(2), "{}", run.args);
+            assert_eq!(run.stdout(), "", "{}", run.args);
+            assert!(
+                run.stderr().starts_with(&format!("error: {says}\n")),
+                "{}: {}",
+                run.args,
+                run.stderr()
+            );
+            assert!(
+                run.stderr().contains("\nUsage: neb graph "),
+                "{}",
+                run.stderr()
+            );
+        }
+        assert_eq!(first.stderr(), second.stderr(), "{}", first.args);
+    }
+
+    // A refused `--from` is a usage error before the verb too, never a
+    // lookup of the node under `--json`.
+    let run = c.run(&["--json", "graph", "--mermaid", "--from", "nope"]);
+    assert_eq!(run.out.status.code(), Some(2));
+    assert!(!run.stderr().contains("NoSuchNode"), "{}", run.stderr());
+
+    // Global flags that `graph` does not conflict with still pass either way.
+    let mermaid = c.run(&["graph", "--mermaid"]).assert_ok().stdout();
+    let run = c.run(&["--no-commit", "graph", "--mermaid"]).assert_ok();
+    assert_eq!(run.stdout(), mermaid);
 }
 
 #[test]

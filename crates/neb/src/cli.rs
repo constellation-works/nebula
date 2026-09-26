@@ -18,7 +18,7 @@
 //! add its row to the template; a `#[test]` below checks the two stay in sync.
 
 use crate::render;
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use nebula_core::triage::{Action, Step};
 use nebula_core::{
     Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, InboxEntry, NEAR_DEFAULT,
@@ -750,13 +750,117 @@ impl Failure {
     }
 }
 
+/// Parse a command line as [`Cli::parse`] does, except that a verb's
+/// `conflicts_with` a global flag holds wherever that flag is written.
+///
+/// Clap checks a subcommand's conflicts while it parses the subcommand's own
+/// arguments, and a global flag written before the verb joins those only
+/// afterwards. So `neb graph --mermaid --json` was refused while
+/// `neb --json graph --mermaid` ran the Mermaid path under `--json`. A global
+/// flag means the same on either side of the verb (STD-01 §R4), so a pair
+/// that slipped through that way is refused here, with the error clap gives
+/// when the flag follows the verb: same words, same usage line, exit 2.
+fn parse_from<I, T>(argv: I) -> std::result::Result<Cli, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString>,
+{
+    let argv: Vec<std::ffi::OsString> = argv.into_iter().map(Into::into).collect();
+    let mut cmd = Cli::command();
+    let matches = cmd.try_get_matches_from_mut(&argv)?;
+    cmd.build();
+    if let Some(conflict) = global_conflict(&cmd, &matches) {
+        return Err(conflict.error(&argv));
+    }
+    Cli::from_arg_matches(&matches).map_err(|e| e.format(&mut cmd))
+}
+
+/// A verb's argument and a global flag it declares a conflict with, both
+/// given, which clap let through because the global came before the verb.
+struct GlobalConflict {
+    /// The verb's argument as clap names it in errors, e.g. `--from <ID>`.
+    arg: String,
+    /// The global flag as clap names it in errors, e.g. `--json`.
+    global: String,
+    /// The global flag spelled as one token that can follow the verb, as
+    /// given; `None` when it has no long name to spell it with.
+    token: Option<std::ffi::OsString>,
+}
+
+/// The first declared conflict between a verb's argument and a global flag
+/// that are both on the command line.
+///
+/// Clap has already refused every declared conflict among arguments it saw
+/// together, so any pair found here straddles the verb. `cmd` must be built,
+/// so that each subcommand carries the global flags it inherits.
+fn global_conflict(cmd: &clap::Command, matches: &clap::ArgMatches) -> Option<GlobalConflict> {
+    use clap::parser::ValueSource;
+
+    let (mut cmd, mut matches) = (cmd, matches);
+    while let Some((name, sub)) = matches.subcommand() {
+        cmd = cmd.find_subcommand(name)?;
+        matches = sub;
+    }
+    let given = |arg: &clap::Arg| {
+        matches.value_source(arg.get_id().as_str()) == Some(ValueSource::CommandLine)
+    };
+    cmd.get_arguments()
+        .filter(|arg| !arg.is_global_set() && given(arg))
+        .find_map(|arg| {
+            let global = cmd
+                .get_arg_conflicts_with(arg)
+                .into_iter()
+                .find(|other| other.is_global_set() && given(other))?;
+            let token = global.get_long().and_then(|long| {
+                if !global.get_action().takes_values() {
+                    return Some(format!("--{long}").into());
+                }
+                let value = matches.get_raw(global.get_id().as_str())?.next()?;
+                let mut token = std::ffi::OsString::from(format!("--{long}="));
+                token.push(value);
+                Some(token)
+            });
+            Some(GlobalConflict {
+                arg: arg.to_string(),
+                global: global.to_string(),
+                token,
+            })
+        })
+}
+
+impl GlobalConflict {
+    /// The usage error clap gives for this command line with the global flag
+    /// repeated after the verb's arguments, where clap does check it.
+    ///
+    /// The flag goes before a `--`, if there is one, so it stays a flag.
+    /// Should the flag have no spelling, or that command line somehow parse,
+    /// the error is built by hand from the same words, without a usage line.
+    fn error(self, argv: &[std::ffi::OsString]) -> clap::Error {
+        if let Some(token) = self.token {
+            let mut moved = argv.to_vec();
+            let at = moved.iter().position(|t| t == "--").unwrap_or(moved.len());
+            moved.insert(at, token);
+            if let Err(e) = Cli::command().try_get_matches_from(moved) {
+                return e;
+            }
+        }
+        Cli::command().error(
+            clap::error::ErrorKind::ArgumentConflict,
+            format!(
+                "the argument '{}' cannot be used with '{}'",
+                self.arg, self.global
+            ),
+        )
+    }
+}
+
 /// Parse the command line, run it, and turn the outcome into an exit code.
 ///
 /// A refusal exits 1 either way. Under `--json` it is one line of JSON on
 /// stderr, so stdout still holds nothing but a verb's payload; without, it
 /// is the prose it always was.
 pub fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = parse_from(std::env::args_os()).unwrap_or_else(|e| e.exit());
     let json = cli.json;
     match run(cli) {
         Ok(code) => code,
@@ -1986,6 +2090,72 @@ mod tests {
         assert!(err.contains("--short"), "--tag without --short: {err}");
     }
 
+    /// `graph`'s formats conflict with the global `--json` on either side of
+    /// the verb, with the error clap gives when `--json` follows it.
+    #[test]
+    fn graph_formats_refuse_json_before_or_after_the_verb() {
+        for (before, after) in [
+            (
+                ["--json", "graph", "--mermaid"].as_slice(),
+                ["graph", "--mermaid", "--json"].as_slice(),
+            ),
+            (
+                &["--json", "graph", "--mermaid", "--from", "x"],
+                &["graph", "--mermaid", "--from", "x", "--json"],
+            ),
+            (
+                &["--json", "graph", "--from", "x", "--mermaid"],
+                &["graph", "--from", "x", "--mermaid", "--json"],
+            ),
+        ] {
+            let Err(refused) = parse_from(std::iter::once("neb").chain(before.iter().copied()))
+            else {
+                panic!("{before:?} parsed");
+            };
+            assert_eq!(
+                refused.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{before:?}"
+            );
+            let err = refused.render().to_string();
+            assert!(err.contains("cannot be used with '--json'"), "{err}");
+            assert_eq!(Err(err), parse_cli(after).map(|_| ()), "{after:?}");
+        }
+        assert!(parse_cli(&["--json", "graph"]).is_ok_and(|cli| cli.json));
+        assert!(matches!(
+            parse_cli(&["--no-commit", "graph", "--mermaid", "--from", "x"]).map(|c| c.command),
+            Ok(Command::Graph { mermaid: true, from: Some(from) }) if from == "x"
+        ));
+    }
+
+    /// The declared conflicts between a verb's argument and a global flag.
+    /// Clap checks these only when the flag follows the verb and
+    /// [`parse_from`] covers the other side; each one here needs a case in
+    /// the test above and in the CLI tests.
+    #[test]
+    fn global_conflicts_are_the_ones_tested() {
+        fn walk(cmd: &clap::Command, found: &mut Vec<String>) {
+            for sub in cmd.get_subcommands() {
+                for arg in sub.get_arguments().filter(|a| !a.is_global_set()) {
+                    for other in sub.get_arg_conflicts_with(arg) {
+                        if other.is_global_set() {
+                            found.push(format!("{} {} {}", sub.get_name(), arg, other));
+                        }
+                    }
+                }
+                walk(sub, found);
+            }
+        }
+        let mut cmd = Cli::command();
+        cmd.build();
+        let mut found = Vec::new();
+        walk(&cmd, &mut found);
+        assert_eq!(
+            found,
+            ["graph --mermaid --json", "graph --from <ID> --json"]
+        );
+    }
+
     /// The variant order mirrors the template's section order, so a command
     /// left out of the template would still surface next to its group.
     #[test]
@@ -2011,7 +2181,7 @@ mod tests {
     /// for the command line, so they have to agree with the core types they
     /// stand in for.
     fn parse_cli(args: &[&str]) -> Result<Cli, String> {
-        Cli::try_parse_from(std::iter::once("neb").chain(args.iter().copied()))
+        parse_from(std::iter::once("neb").chain(args.iter().copied()))
             .map_err(|e| e.render().to_string())
     }
 
