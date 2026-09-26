@@ -7,8 +7,8 @@
 
 use nebula_core::triage::{Action, Step, Tally};
 use nebula_core::{
-    Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, HUMAN, NEAR_DEFAULT, NewNode,
-    Promotion, ReviewRule, Settlement, Status, TraceHop, Triage, Via, graph, ops, store,
+    Band, Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, HUMAN, NEAR_DEFAULT,
+    NewNode, Promotion, ReviewRule, Settlement, Status, TraceHop, Triage, Via, graph, ops, store,
 };
 use std::fmt::Write as _;
 
@@ -1436,6 +1436,150 @@ fn near_takes_a_node_id_and_leaves_that_node_out() {
         Some(&"a-single-global-taxonomy"),
         "the other design node shares the `design` tag; nothing else does: {ids:?}"
     );
+}
+
+#[test]
+fn near_bands_every_score_and_a_word_for_word_copy_reads_strong() {
+    // The cut-offs, at and either side of each.
+    for (score, band) in [
+        (1.0, Band::Strong),
+        (graph::STRONG_FROM, Band::Strong),
+        (0.249, Band::Some),
+        (graph::SOME_FROM, Band::Some),
+        (0.069, Band::Weak),
+        (0.0, Band::Weak),
+    ] {
+        assert_eq!(Band::of(score), band, "{score}");
+    }
+
+    let (_dir, corpus) = corpus();
+    lexical_fixture(&corpus);
+    // The case the raw score misleads on: a copy of a node, word for word,
+    // scores well under `1` against it.
+    let original = corpus.load("ranking-decay-half-life").unwrap();
+    ops::new_node(
+        &corpus,
+        &NewNode {
+            title: original.node.title.clone(),
+            body: original.body.clone(),
+            tags: original.node.tags.clone(),
+            id: Some("ranking-decay-again".into()),
+            ..NewNode::default()
+        },
+    )
+    .unwrap();
+    let docs = corpus.load_all().unwrap();
+    let graph = Graph::build(&docs).unwrap();
+
+    let near = graph::near(&graph, "ranking-decay-again", NEAR_DEFAULT).unwrap();
+    let copy = &near.0[0];
+    assert_eq!(copy.id, "ranking-decay-half-life", "{near:?}");
+    assert!(copy.score < 0.7, "a copy is nowhere near 1: {near:?}");
+    assert_eq!(copy.band, Band::Strong, "but it reads as strong: {near:?}");
+
+    for query in ["ranking-decay-again", "tags taxonomy ranking", "a search"] {
+        let near = graph::near(&graph, query, NEAR_DEFAULT).unwrap();
+        assert!(
+            near.0.iter().all(|n| n.band == Band::of(n.score)),
+            "the band is the score's, as rounded: {near:?}"
+        );
+    }
+}
+
+/// One edge a neighbour is linked by, as `(from, kind, to)`.
+type Link = (String, EdgeType, String);
+
+/// `near <node>` names the edges a neighbour already has to that node, so
+/// a parent in the answer is not mistaken for a link still to make.
+#[test]
+fn near_marks_neighbours_already_linked_to_the_node() {
+    let (_dir, corpus) = corpus();
+    lexical_fixture(&corpus);
+    let parent = "tags-beat-domains";
+    let child = seed(&corpus, "Tags beat domains for corpus design", &[parent]);
+    // A second kind to the same parent: one neighbour, both kinds.
+    ops::link(&corpus, &child, EdgeType::Refines, parent, None).unwrap();
+    // Saved on both ends, so it is found from either.
+    ops::link(
+        &corpus,
+        parent,
+        EdgeType::Contradicts,
+        "a-single-global-taxonomy",
+        None,
+    )
+    .unwrap();
+    let before = corpus.load_all().unwrap();
+    let graph = Graph::build(&before).unwrap();
+
+    let links = |query: &str| -> Vec<(String, Option<Vec<Link>>)> {
+        graph::near(&graph, query, 10)
+            .unwrap()
+            .0
+            .into_iter()
+            .map(|n| {
+                let linked = n.linked.map(|es| {
+                    es.into_iter()
+                        .map(|e| (e.from, e.kind, e.to))
+                        .collect::<Vec<_>>()
+                });
+                (n.id, linked)
+            })
+            .collect()
+    };
+    let edge = |from: &str, kind, to: &str| (from.to_string(), kind, to.to_string());
+
+    let from_parent = links(parent);
+    assert!(
+        from_parent.contains(&(
+            child.clone(),
+            Some(vec![
+                edge(&child, EdgeType::DerivesFrom, parent),
+                edge(&child, EdgeType::Refines, parent),
+            ])
+        )),
+        "a child, with every kind it declares: {from_parent:?}"
+    );
+    assert!(
+        from_parent.contains(&(
+            "a-single-global-taxonomy".to_string(),
+            Some(vec![
+                edge(parent, EdgeType::Contradicts, "a-single-global-taxonomy"),
+                edge("a-single-global-taxonomy", EdgeType::Contradicts, parent),
+            ])
+        )),
+        "a contradiction, from both ends: {from_parent:?}"
+    );
+
+    let from_child = links(&child);
+    assert!(
+        from_child.contains(&(
+            parent.to_string(),
+            Some(vec![
+                edge(&child, EdgeType::DerivesFrom, parent),
+                edge(&child, EdgeType::Refines, parent),
+            ])
+        )),
+        "a parent, the same edges seen from the other end: {from_child:?}"
+    );
+    assert!(
+        from_child.contains(&("a-single-global-taxonomy".to_string(), None)),
+        "a neighbour with no edge to the node is not linked, whatever its \
+         edges to others: {from_child:?}"
+    );
+
+    // Free text is no node, so nothing is linked to it.
+    let free = links("tags beat domains taxonomy");
+    assert!(free.len() >= 3, "{free:?}");
+    assert!(free.iter().all(|(_, l)| l.is_none()), "{free:?}");
+
+    // Reading the links wrote none.
+    let after = corpus.load_all().unwrap();
+    let edges = |docs: &[nebula_core::Doc]| -> Vec<_> {
+        docs.iter()
+            .map(|d| (d.node.id.clone(), d.node.edges.clone()))
+            .collect()
+    };
+    assert_eq!(edges(&before), edges(&after), "near writes nothing");
 }
 
 #[test]

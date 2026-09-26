@@ -66,7 +66,7 @@ Query:
   show         Show one node in full
   log          List the commits that changed a node
   list         List nodes
-  near         The existing nodes closest to some text, or to a node, with a score
+  near         The existing nodes closest to some text, or to a node, and how close
   trace        Walk ancestry. The feature the whole system exists for
   impact       What descends from this node, and what contradicts it
   graph        The whole corpus as nodes and edges, for a tool that draws it
@@ -497,14 +497,19 @@ enum Command {
         tags: Vec<String>,
     },
 
-    /// The existing nodes closest to some text, or to a node, with a score.
+    /// The existing nodes closest to some text, or to a node, and how close.
     ///
     /// Word overlap over title, tags and body (BM25, title and tags weighted
-    /// up; no embeddings, no network), scored `0..=1` and best first. Nodes
-    /// sharing no word with the query are left out, so an empty answer means
-    /// the thought is unlike anything here. For triage: run it on a capture,
-    /// pick a parent if one is defensible, otherwise promote as a root. It
-    /// suggests; `link` and `--parent` are still yours to run.
+    /// up; no embeddings, no network), best first. Each is banded: `strong`
+    /// shares most of the query's distinctive words (a word-for-word copy is
+    /// here), `some` a few, `weak` a word or two in passing. `--json` keeps
+    /// the raw `score` beside the `band`. Asked about a node, a neighbour
+    /// already linked to it says so, with the edge: `linked: parent
+    /// (derives-from)`. Nodes sharing no word with the query are left out, so
+    /// an empty answer means the thought is unlike anything here. For
+    /// triage: run it on a capture, pick a parent if one is defensible,
+    /// otherwise promote as a root. It suggests; `link` and `--parent` are
+    /// still yours to run.
     Near {
         /// How many to return.
         #[arg(long, short = 'k', value_name = "K", default_value_t = NEAR_DEFAULT)]
