@@ -23,7 +23,8 @@ const HASH_CANDIDATES: usize = 64;
 
 fn corpus() -> (tempfile::TempDir, Corpus) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let corpus = Corpus::init(&dir.path().join("corpus")).expect("init");
+    let corpus =
+        Corpus::init(&crate::Locations::default(), &dir.path().join("corpus")).expect("init");
     (dir, corpus)
 }
 

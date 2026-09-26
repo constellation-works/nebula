@@ -4,7 +4,7 @@
 //! Nebula's menu-bar app: the corpus, read through `nebula-core` and drawn in
 //! a webview. The library is linked; nothing here shells out to `neb`.
 //!
-//! - [`session`]  one function per command, each a single core call
+//! - [`session`]  one function per command, each one core operation
 //! - [`state`]    the corpus root and the lazily opened corpus
 //! - [`commands`] the `#[tauri::command]` wrappers
 //! - [`error`]    the typed error, and the `{ code, message }` the webview gets

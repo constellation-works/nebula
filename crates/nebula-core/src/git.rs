@@ -16,7 +16,9 @@
 //! - has its stdout and stderr drained while it runs and captured up to a cap,
 //!   with a cut marked in text and refused for parsing (§R15);
 //! - runs with every variable that would point git at another repository
-//!   removed, so it acts on the root it was given (STD-05 §R7).
+//!   removed, so it acts on the root it was given (STD-05 §R7), and with the
+//!   `GIT_CEILING_DIRECTORIES` the surface resolved ([`GitAt`]), so git's
+//!   repository discovery and [`repository_expected`]'s are one walk.
 //!
 //! A timed-out git is [`Error::GitTimedOut`], never a plain failure or a
 //! success. A stop signal delivered to nebula while git runs stops the group
@@ -75,11 +77,21 @@ pub(crate) const REPOSITORY_ENV: [&str; 15] = [
     "GIT_COMMON_DIR",
 ];
 
-/// Debug builds only: every git command gets this many milliseconds instead
-/// of its named deadline, so an end-to-end test of the timeout does not wait
-/// two minutes. Never read by a release build.
-#[cfg(debug_assertions)]
-const DEADLINE_ENV: &str = "NEBULA_TEST_GIT_DEADLINE_MS";
+/// The variable that stops git's repository discovery, which
+/// [`crate::Locations`] carries and every git child is given.
+pub(crate) const CEILING_ENV: &str = "GIT_CEILING_DIRECTORIES";
+
+/// Where a git command runs: the corpus root it is pointed at, and the
+/// `GIT_CEILING_DIRECTORIES` value the surface resolved, which
+/// [`repository_expected`] reads and the child is given, so the two walks
+/// stop at the same place. `None` is no ceiling at all, for either.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct GitAt<'a> {
+    /// The directory git runs in, as `git -C <root>`.
+    pub(crate) root: &'a Path,
+    /// `GIT_CEILING_DIRECTORIES`, as given.
+    pub(crate) ceilings: Option<&'a OsStr>,
+}
 
 /// Run `git -C <root> <args>` under supervision.
 ///
@@ -87,17 +99,17 @@ const DEADLINE_ENV: &str = "NEBULA_TEST_GIT_DEADLINE_MS";
 /// non-zero exit is an answer for some callers. `Err` when there is no
 /// answer — git did not start, ran out of time, or was stopped by a signal
 /// to nebula — and by then nothing of git's process group is left.
-pub(crate) fn run_git(root: &Path, args: &[&str]) -> Result<GitOutput, RunError> {
+pub(crate) fn run_git(at: GitAt<'_>, args: &[&str]) -> Result<GitOutput, RunError> {
     let deadline = deadline_for(args);
     #[cfg(unix)]
     {
-        supervise::run(root, args, deadline)
+        supervise::run(at, args, deadline)
     }
     #[cfg(not(unix))]
     {
         // No process groups to stop git's hooks with, so no unsupervised
         // fallback either (STD-03 §R11): git is refused, not half-run.
-        let _ = (root, deadline);
+        let _ = (at, deadline);
         Err(RunError::Start(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "nebula runs git only where it can supervise it (Unix)",
@@ -107,24 +119,25 @@ pub(crate) fn run_git(root: &Path, args: &[&str]) -> Result<GitOutput, RunError>
 
 /// Whether git, run at `root`, has a repository to find: a `.git` directory,
 /// or a `.git` file naming one (`gitdir: …`), at the root or in a directory
-/// above it, stopping below the nearest of `GIT_CEILING_DIRECTORIES` as git
+/// above it, stopping below the nearest of the ceilings `at` carries, as git
 /// does.
 ///
 /// Decided from the file system and never from git's answer, so git failing
 /// inside a repository — a corrupt `HEAD`, a `safe.directory` refusal, git
 /// not starting — is never mistaken for there being no repository at all
 /// (STD-02 §R29). `GIT_DIR` and the rest of [`REPOSITORY_ENV`] are not
-/// consulted: [`run_git`] removes them, so git discovers the repository this
-/// same way. Where this finds a `.git` that git does not use — past a mount
-/// point, say — a caller that asks git gets git's own reason as an error,
-/// which is the safe side to be wrong on.
-pub(crate) fn repository_expected(root: &Path) -> bool {
+/// consulted: [`run_git`] removes them, and gives git these same ceilings,
+/// so git discovers the repository this same way. Where this finds a `.git`
+/// that git does not use — past a mount point, say — a caller that asks git
+/// gets git's own reason as an error, which is the safe side to be wrong on.
+pub(crate) fn repository_expected(at: GitAt<'_>) -> bool {
+    let root = at.root;
     // git walks up from the directory it was moved into, which it knows by
     // its resolved name; the ceilings are resolved the same way below.
     let start = std::fs::canonicalize(root)
         .or_else(|_| std::path::absolute(root))
         .unwrap_or_else(|_| root.to_path_buf());
-    let ceilings = ceiling_directories(std::env::var_os("GIT_CEILING_DIRECTORIES").as_deref());
+    let ceilings = ceiling_directories(at.ceilings);
     discovers(&start, &ceilings)
 }
 
@@ -138,7 +151,7 @@ fn ceiling_directories(value: Option<&OsStr>) -> Vec<PathBuf> {
     };
     let mut resolve = true;
     let mut ceilings = Vec::new();
-    for entry in std::env::split_paths(value) {
+    for entry in split_ceilings(value) {
         if entry.as_os_str().is_empty() {
             resolve = false;
             continue;
@@ -153,6 +166,23 @@ fn ceiling_directories(value: Option<&OsStr>) -> Vec<PathBuf> {
         }
     }
     ceilings
+}
+
+/// The entries of a `GIT_CEILING_DIRECTORIES` value: separated by `:`, as
+/// git separates them on the platforms it is run on here.
+#[cfg(unix)]
+fn split_ceilings(value: &OsStr) -> impl Iterator<Item = PathBuf> + '_ {
+    use std::os::unix::ffi::OsStrExt;
+    value
+        .as_bytes()
+        .split(|byte| *byte == b':')
+        .map(|entry| PathBuf::from(OsStr::from_bytes(entry)))
+}
+
+/// Git is never run off Unix (see [`run_git`]), so there is nothing to stop.
+#[cfg(not(unix))]
+fn split_ceilings(_: &OsStr) -> impl Iterator<Item = PathBuf> {
+    std::iter::empty()
 }
 
 /// Whether a repository is found from `start` upwards, never looking in a
@@ -327,16 +357,12 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
-/// A deadline a debug-build test set, on this thread or in the environment.
+/// A deadline a debug-build test set on this thread. A surface that offers
+/// the knob end to end (`neb`, for its timeout tests) reads it and installs a
+/// [`GitDeadlineOverride`] for the thread that runs the verb.
 #[cfg(debug_assertions)]
 fn test_deadline() -> Option<Duration> {
-    DEADLINE_OVERRIDE.with(std::cell::Cell::get).or_else(|| {
-        std::env::var(DEADLINE_ENV)
-            .ok()?
-            .parse()
-            .ok()
-            .map(Duration::from_millis)
-    })
+    DEADLINE_OVERRIDE.with(std::cell::Cell::get)
 }
 
 /// Test seam, debug builds only: while this guard lives, every git command
@@ -462,8 +488,12 @@ mod tests {
     #[test]
     fn every_repository_variable_git_names_is_scrubbed() {
         let _serial = serial();
-        let dir = std::env::temp_dir();
-        let out = run_git(&dir, &["rev-parse", "--local-env-vars"]).expect("git runs");
+        let dir = tempfile::tempdir().unwrap();
+        let at = GitAt {
+            root: dir.path(),
+            ceilings: Some(dir.path().as_os_str()),
+        };
+        let out = run_git(at, &["rev-parse", "--local-env-vars"]).expect("git runs");
         assert!(out.status.success(), "{}", out.stderr.text());
         let named = String::from_utf8(out.stdout.whole().unwrap().to_vec()).unwrap();
         let named: Vec<&str> = named.lines().collect();
@@ -521,7 +551,16 @@ mod tests {
     fn ceilings_are_read_as_git_reads_them() {
         let (_dir, outer, _root) = nested_repository();
         let missing = outer.join("missing");
-        let joined = |parts: &[&Path]| std::env::join_paths(parts).unwrap();
+        let joined = |parts: &[&Path]| {
+            let mut value = std::ffi::OsString::new();
+            for (i, part) in parts.iter().enumerate() {
+                if i > 0 {
+                    value.push(":");
+                }
+                value.push(part);
+            }
+            value
+        };
         // Relative and unresolvable entries are dropped; the rest resolve.
         assert_eq!(
             ceiling_directories(Some(

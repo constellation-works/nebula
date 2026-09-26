@@ -55,8 +55,13 @@ make types            # regenerate apps/desktop/src/types from nebula-core
 
 The workspace is `crates/nebula-core` (the corpus as a library: no terminal,
 no clap, typed errors, `Serialize` returns) and `crates/neb` (the CLI: one
-core call per verb, plus rendering). Anything that reads or writes the corpus
+core operation per verb, plus rendering). A write is one call into
+`nebula_core::verb`, which holds the lock across the write and its commit; a
+read is `Corpus::open` plus one query. Anything that reads or writes the corpus
 goes in core; the desktop app and the agent skill must see what the CLI sees.
+Core never reads the environment or the working directory: each surface
+builds one `nebula_core::Locations` at start and hands it down
+(`scripts/check-dependency-direction.sh` bans the reads in core).
 CI runs all of these on Linux and macOS, and fails if the generated TypeScript
 is stale (`make types-check`). Both matter: the checker walks paths, and
 macOS temporary directories sit under a symlink, so path handling that resolves

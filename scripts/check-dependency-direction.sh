@@ -138,10 +138,15 @@ for manifest in $members; do
 done
 
 # --- 2. grep bans ------------------------------------------------------------
-# ban <path…> -- <extended-regex> <message>: fail if the pattern appears in a
-# non-test, non-comment line of the Rust sources under the paths.
+# ban [--everywhere] <path…> -- <extended-regex> <message>: fail if the
+# pattern appears in a non-test, non-comment line of the Rust sources under
+# the paths. With --everywhere, test modules and comments count too.
 ban() {
-  local paths=() hits
+  local paths=() hits everywhere=0
+  if [[ "$1" == "--everywhere" ]]; then
+    everywhere=1
+    shift
+  fi
   while [[ "$1" != "--" ]]; do
     # A missing path would make grep find nothing and the ban pass silently.
     [[ -e "$1" ]] || err "ban path $1 does not exist"
@@ -149,8 +154,12 @@ ban() {
     shift
   done
   shift
-  hits=$(grep -rnHE --include='*.rs' --exclude-dir=tests "$1" "${paths[@]}" 2>/dev/null \
-    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+  if [[ "$everywhere" -eq 1 ]]; then
+    hits=$(grep -rnHE --include='*.rs' "$1" "${paths[@]}" 2>/dev/null || true)
+  else
+    hits=$(grep -rnHE --include='*.rs' --exclude-dir=tests "$1" "${paths[@]}" 2>/dev/null \
+      | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+  fi
   if [[ -n "$hits" ]]; then
     echo "$hits" >&2
     err "$2"
@@ -161,9 +170,11 @@ ban() {
 ban crates apps/desktop/src-tauri/src -- 'serde\(default *= *"[A-Za-z_:]*(now|now_utc)"' \
   "a persisted timestamp must not default to the current time"
 
-# The core-reads-no-environment ban (STD-02 §R3: `std::env::` and
-# `current_dir` in crates/nebula-core/src) joins this list with the change
-# that moves root discovery out of store.rs.
+# Core reads no environment (STD-02 §R3): each surface reads its own once,
+# into `Locations`, and hands it down. No exemption, not even a unit test or
+# a comment, so the spelling never creeps back as an example.
+ban --everywhere crates/nebula-core/src -- 'std::env::|env::var|current_dir|home_dir' \
+  "nebula-core must not read the environment or the working directory; take them from Locations"
 
 # Retired paths stay retired (STD-02 §R17). List a path here when you delete a
 # module, a script or a crate.

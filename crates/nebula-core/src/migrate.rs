@@ -20,6 +20,7 @@
 
 use crate::config::{self, Config, Declared};
 use crate::error::{Error, Result};
+use crate::locations::Locations;
 use crate::lock::{CorpusLock, LOCK_FILE};
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
 use crate::store::{self, Corpus};
@@ -305,8 +306,22 @@ impl Staged {
 /// memory, and every result is read back with the current model, before
 /// anything is written. Then the nodes that changed are written one by one,
 /// and `config.yaml` last, as the record that the corpus is at this schema.
-pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
-    let root = Corpus::resolve_root(root)?;
+///
+/// [`crate::verb::migrate`] is this and the commit that records it, under
+/// the one lock.
+pub fn run(locations: &Locations, root: Option<PathBuf>) -> Result<MigrationReport> {
+    run_then(locations, root, |_| ()).map(|(_, report, ())| report)
+}
+
+/// [`run`], then `after` on the migrated root while the lock is still held:
+/// the root, the report, and what `after` returned. `after` is not run when
+/// the migration refuses.
+pub(crate) fn run_then<T>(
+    locations: &Locations,
+    root: Option<PathBuf>,
+    after: impl FnOnce(&Path) -> T,
+) -> Result<(PathBuf, MigrationReport, T)> {
+    let root = Corpus::resolve_root(locations, root)?;
     store::refuse_nodes_symlink(&root)?;
     if !root.join("nodes").is_dir() {
         return Err(Error::NoCorpus(root));
@@ -315,7 +330,7 @@ pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
     // that should run beside another. Taken after the corpus is known to be
     // there, so a missing one still reports itself as missing.
     let _lock = CorpusLock::acquire(&root)?;
-    refuse_dirty_tree(&root)?;
+    refuse_dirty_tree(locations, &root)?;
     // Validate the config before touching a node. In particular, a future
     // schema may contain fields this build does not know how to preserve, so
     // treating it as v1 would turn migration into a destructive downgrade.
@@ -372,7 +387,8 @@ pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
         config.save(&root)?;
         report.config_rewritten = true;
     }
-    Ok(report)
+    let after = after(&root);
+    Ok((root, report, after))
 }
 
 /// Read back what the steps produced with the current model, in memory: each
@@ -467,8 +483,9 @@ pub(crate) fn v1_node_under_current_schema(
 /// Fails closed (integrity, STD-02 §R31): inside a repository, git that
 /// cannot say whether the tree is clean refuses the migration, because
 /// unknown is not clean and the rewrite that follows touches every node.
-fn refuse_dirty_tree(root: &Path) -> Result<()> {
-    if !store::inside_work_tree(root)? {
+fn refuse_dirty_tree(locations: &Locations, root: &Path) -> Result<()> {
+    let at = locations.git_at(root);
+    if !store::inside_work_tree(at)? {
         return Ok(());
     }
     // The write lock is a fact about which process is writing, not corpus
@@ -476,7 +493,7 @@ fn refuse_dirty_tree(root: &Path) -> Result<()> {
     // Without excluding it here the first `neb` write of the day would leave
     // `migrate` refusing for good.
     let exclude = format!(":(exclude){LOCK_FILE}");
-    let status = store::git(root, &["status", "--porcelain", "--", ".", &exclude])?;
+    let status = store::git(at, &["status", "--porcelain", "--", ".", &exclude])?;
     if !status.status.success() {
         return Err(Error::Git {
             root: root.to_path_buf(),

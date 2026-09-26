@@ -39,6 +39,18 @@ pub struct Graph<'a> {
 }
 
 impl<'a> Graph<'a> {
+    /// How many nodes the graph holds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.docs.len()
+    }
+
+    /// Whether it holds none.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.docs.is_empty()
+    }
+
     /// Index a set of loaded nodes.
     ///
     /// Ids are the corpus's primary key, so two nodes claiming one id is a

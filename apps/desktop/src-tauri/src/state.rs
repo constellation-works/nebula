@@ -2,7 +2,7 @@
 
 use crate::error::DesktopError;
 use crate::{session, settings};
-use nebula_core::Corpus;
+use nebula_core::{Corpus, Locations};
 use notify::RecommendedWatcher;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
@@ -13,6 +13,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 /// launch is picked up by the next command (or the "reload" button) without a
 /// restart. The watcher is held here only so it lives as long as the app.
 pub struct AppState {
+    /// The environment and working directory the app started with, read
+    /// once, here: every corpus it opens resolves against these.
+    locations: Locations,
     /// Where the corpus is looked for, resolved once at startup, or why it
     /// could not be resolved.
     corpus_root: Result<PathBuf, Arc<nebula_core::Error>>,
@@ -24,10 +27,14 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Resolve the root the way the CLI does and try to open it. A failure is
-    /// not fatal: it is reported by every command until it is fixed.
+    /// Read the environment once, resolve the root the way the CLI does and
+    /// try to open it. A failure is not fatal: it is reported by every
+    /// command until it is fixed.
     pub fn new() -> Self {
-        Self::with_root(session::resolve_root())
+        let locations =
+            Locations::from_reader(|name| std::env::var_os(name), std::env::current_dir().ok());
+        let root = session::resolve_root(&locations);
+        Self::with_root(locations, root)
     }
 
     /// Start from a root already resolved, or from the reason it could not
@@ -36,17 +43,18 @@ impl AppState {
     /// §R29). Resolution fails on a missing `HOME` and equally on an empty,
     /// relative or unreadable `~/.config/nebula/root`, so no single guess
     /// would be right.
-    pub fn with_root(root: nebula_core::Result<PathBuf>) -> Self {
+    pub fn with_root(locations: Locations, root: nebula_core::Result<PathBuf>) -> Self {
         let corpus_root = root.map_err(Arc::new);
         // Deliberately dropped: a corpus that will not open now is opened
         // again by the next command, which reports why it cannot be. Logged
         // at `debug` only, since that report is the one the user sees.
         let corpus = corpus_root.as_ref().ok().and_then(|root| {
-            session::open(root)
+            session::open(&locations, root)
                 .inspect_err(|e| tracing::debug!("corpus not opened at startup: {e}"))
                 .ok()
         });
         Self {
+            locations,
             corpus_root,
             corpus: Mutex::new(corpus),
             watcher: Mutex::new(None),
@@ -124,7 +132,7 @@ impl AppState {
         if let Some(c) = slot.as_ref() {
             return Ok(c.clone());
         }
-        let c = session::open(self.corpus_root()?)?;
+        let c = session::open(&self.locations, self.corpus_root()?)?;
         *slot = Some(c.clone());
         Ok(c)
     }

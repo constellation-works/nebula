@@ -1,10 +1,15 @@
 //! The command-line surface: the clap tree and the dispatch from parsed
 //! arguments to `nebula_core`. Nothing else in the crate knows about clap.
 //!
-//! Dispatch is a table. Each arm parses, makes one core call, and either
+//! Dispatch is a table. Each arm parses, makes one core operation, and either
 //! writes the returned value as JSON, through [`render::json`]'s view where
 //! core's serialisation would leave a field out, or hands it to `render`. A
-//! command that wants to do anything else belongs in core.
+//! write is one call into [`nebula_core::verb`], which takes the lock, writes,
+//! commits and reads the advice after; a read is [`Corpus::open`] plus one
+//! query. A command that wants to do anything else belongs in core.
+//!
+//! The environment and the working directory are read once, in [`main`],
+//! into the [`Locations`] every arm hands down: core never reads either.
 //!
 //! [`StatusArg`] and [`EdgeKindArg`] exist because core does not depend on
 //! clap: they are the `ValueEnum` wrappers that keep `--help` listing the
@@ -22,11 +27,11 @@ use crate::output::{self, errln, out, outln};
 use crate::render::{self, json};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use nebula_core::triage::{Action, Step};
+use nebula_core::verb::{self, CiteReport, CommitPolicy, RootWarning, WriteOptions};
 use nebula_core::{
-    Citation, CommitOutcome, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, Handoff,
-    InboxEntry, NEAR_DEFAULT, NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, ObservatoryLink,
-    ObservatoryRoot, ObservatorySource, Origin, Promotion, Severity, Status, Triage, check, graph,
-    migrate, model, ops, store,
+    Citation, CloseTag, CommitOutcome, Corpus, CorpusLock, Direction, EdgeType, Error, Handoff,
+    Locations, NEAR_DEFAULT, NewNode, OBSERVATORY_ROOT_ENV, ObservatoryLink, ObservatoryRoot,
+    ObservatorySource, Origin, Promotion, Severity, Status, Triage, graph, ops,
 };
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -898,10 +903,6 @@ enum EditorError {
     },
     #[error("editor `{0}` exited unsuccessfully; the node was not changed")]
     Unsuccessful(String),
-    #[error(
-        "an existing ## Notes section was removed, reordered, or changed; use `neb note` to append notes"
-    )]
-    NotesChanged,
 }
 
 impl EditorError {
@@ -913,7 +914,6 @@ impl EditorError {
             Self::InvalidCommand(_) => "editor_invalid_command",
             Self::Start { .. } => "editor_start",
             Self::Unsuccessful(_) => "editor_unsuccessful",
-            Self::NotesChanged => "notes_changed",
         }
     }
 }
@@ -1147,8 +1147,12 @@ impl GlobalConflict {
 pub fn main() -> ExitCode {
     let cli = parse_from(std::env::args_os()).unwrap_or_else(|e| e.exit());
     CorpusLock::label_process(&cli.lock_label());
+    let locations =
+        Locations::from_reader(|name| std::env::var_os(name), std::env::current_dir().ok());
+    #[cfg(debug_assertions)]
+    let _deadline = test_git_deadline();
     let json = cli.json;
-    let outcome = run(cli);
+    let outcome = run(cli, &locations);
     let flushed = output::finish();
     match outcome.and_then(|code| flushed.map(|()| code).map_err(Failure::from)) {
         Ok(code) => code,
@@ -1163,21 +1167,32 @@ pub fn main() -> ExitCode {
     }
 }
 
+/// Debug builds only: every git command this process runs gets
+/// `$NEBULA_TEST_GIT_DEADLINE_MS` milliseconds instead of its named deadline,
+/// so an end-to-end test of the timeout does not wait two minutes. Read here
+/// rather than in core, which never reads the environment; git runs on this
+/// thread, which the guard covers. Never read by a release build.
+#[cfg(debug_assertions)]
+fn test_git_deadline() -> Option<nebula_core::GitDeadlineOverride> {
+    let ms = std::env::var("NEBULA_TEST_GIT_DEADLINE_MS")
+        .ok()?
+        .parse()
+        .ok()?;
+    Some(nebula_core::GitDeadlineOverride::new(
+        std::time::Duration::from_millis(ms),
+    ))
+}
+
 type Outcome = std::result::Result<ExitCode, Failure>;
 
-/// After a write that added `tags` to `node`, say on stderr which of them
-/// read as a variant of a tag already in use, in every output mode.
+/// After a write that added tags, say on stderr which of them read as a
+/// variant of a tag already in use, in every output mode.
 ///
 /// Advice, never a refusal: there is no declared list to refuse against, and
-/// `check` rule 11 reports the same drift later. The write has landed by the
-/// time this runs, so a corpus that cannot be read for the comparison costs
-/// the note, not the command; `check` is where an unreadable node surfaces.
-/// It reads every node, so it runs once the write lock is released
-/// (STD-03 §R1).
-fn note_close_tags(corpus: &Corpus, node: &str, tags: &[String]) {
-    let Ok(close) = ops::close_tags(corpus, node, tags) else {
-        return;
-    };
+/// `check` rule 11 reports the same drift later. Core read them once the
+/// write lock was released, and a corpus it could not read for the
+/// comparison costs the note, not the command.
+fn note_close_tags(close: &[CloseTag]) {
     for c in close {
         errln!(
             "note: tag {} is close to {} ({} node{})",
@@ -1219,31 +1234,6 @@ fn read_stdin(what: &'static str, limit: usize) -> std::result::Result<String, F
     Ok(ops::read_bounded(std::io::stdin().lock(), what, limit)?)
 }
 
-/// Existing notes are immutable through `edit`; `note` is their append path.
-///
-/// A body can hold more than one `## Notes` section, because `note` opens a
-/// fresh one rather than reach back into a section some other prose already
-/// closed. Every section is checked, not just the last: an edit that rewrote
-/// an earlier dated note while leaving the final section alone would
-/// otherwise overwrite reasoning that was supposed to be append-only.
-/// Prose outside those sections stays editable, which is what `edit` is for.
-fn preserve_notes(before: &str, after: &str) -> std::result::Result<(), EditorError> {
-    let before_sections = model::notes_sections(before);
-    if before_sections.is_empty() {
-        return Ok(());
-    }
-    let after_sections = model::notes_sections(after);
-    if before_sections.len() != after_sections.len() {
-        return Err(EditorError::NotesChanged);
-    }
-    for (before, after) in before_sections.iter().zip(&after_sections) {
-        if before.trim_end() != after.trim_end() {
-            return Err(EditorError::NotesChanged);
-        }
-    }
-    Ok(())
-}
-
 /// The body as the editor left it, and the temporary file it is still in.
 ///
 /// The file is deleted when this drops, so a refusal keeps the text first
@@ -1256,8 +1246,8 @@ struct Edited {
 /// Let the configured editor rewrite body prose in a temporary file.
 ///
 /// No lock is held here: a person may type for as long as they like, and
-/// every other writer carries on meanwhile (STD-03 §R1). The caller checks
-/// the result and saves it with [`ops::set_body_if`].
+/// every other writer carries on meanwhile (STD-03 §R1). The caller saves
+/// the result with [`verb::edit`], which checks it.
 fn edit_body(body: &str) -> std::result::Result<Edited, Failure> {
     use std::io::Write;
 
@@ -1304,15 +1294,17 @@ fn edit_body(body: &str) -> std::result::Result<Edited, Failure> {
 /// the refusal names it. Should that fail, the temporary file is kept where it
 /// is instead. Only when both fail is the text lost, and the refusal says so
 /// and why.
-fn keep_refused(refused: Failure, node: &str, edited: Edited) -> Failure {
+fn keep_refused(refused: Failure, corpus: &Corpus, node: &str, edited: Edited) -> Failure {
     let Failure(refusal) = refused;
-    Failure(match Corpus::keep_edit(node, &edited.text) {
-        Ok(path) => refusal.kept_at(&path),
-        Err(not_kept) => match edited.file.keep() {
-            Ok((_, path)) => refusal.kept_at(&path),
-            Err(also) => refusal.not_kept(&format!("{not_kept}; {}", also.error)),
+    Failure(
+        match Corpus::keep_edit(corpus.locations(), node, &edited.text) {
+            Ok(path) => refusal.kept_at(&path),
+            Err(not_kept) => match edited.file.keep() {
+                Ok((_, path)) => refusal.kept_at(&path),
+                Err(also) => refusal.not_kept(&format!("{not_kept}; {}", also.error)),
+            },
         },
-    })
+    )
 }
 
 /// What every mutating arm needs to decide whether to commit and how to say
@@ -1324,55 +1316,52 @@ struct CommitOpts {
     json: bool,
 }
 
-/// Open the corpus and hold its write lock until the returned guard drops.
-///
-/// Every mutating arm holds the lock this way, so the verb and the [`commit`]
-/// that records it are one critical section and no other writer can land a
-/// verb between the two. The op underneath takes the same lock again, which
-/// costs nothing: it is re-entrant on one thread. A read-only arm opens with
-/// plain [`Corpus::open`] and waits for nobody.
-///
-/// Only the write and the commit: an arm drops the guard before any advice
-/// it reads afterwards (STD-03 §R1). `edit` and `promote` open without it and
-/// take it themselves, because the editor and the suggestions come first.
-fn open_locked(root: Option<PathBuf>) -> std::result::Result<(Corpus, CorpusLock), Failure> {
-    let corpus = Corpus::open(root)?;
-    let lock = corpus.lock()?;
-    Ok((corpus, lock))
-}
-
-/// Say on stderr when a capture repeats a thought still waiting in the inbox.
-///
-/// The capture has landed either way: capture never refuses for content, and
-/// the two entries are for the triage to settle. It goes to stderr so the id,
-/// or the `--json` payload, on stdout reads the same as for any capture.
-///
-/// A side channel, so it fails open (STD-02 §R31): an inbox that cannot be
-/// read back costs the note, said as a warning, and never the capture.
-fn note_same_as(corpus: &Corpus, entry: &InboxEntry) {
-    match corpus.inbox() {
-        Ok(inbox) => {
-            if let Some(earlier) = inbox.same_as(entry) {
-                errln!("note: same as {}, still waiting", earlier.id);
-            }
+impl CommitOpts {
+    /// How a verb writes: the default lock wait, and the commit unless
+    /// `--no-commit` waived it.
+    fn options(self) -> WriteOptions {
+        WriteOptions {
+            commit: if self.skip {
+                CommitPolicy::Skip
+            } else {
+                CommitPolicy::Configured
+            },
+            ..WriteOptions::default()
         }
-        Err(e) => errln!("warning: could not check the inbox for a repeat: {e}"),
     }
 }
 
-/// The `k` nodes closest to a capture just made, for the triage after it.
-///
-/// A side channel, so it fails open (STD-02 §R31): the capture is in the
-/// inbox and committed by the time this runs, and a `nodes/` that cannot be
-/// read for suggestions costs the suggestions, said on stderr with the
-/// reason, and never the capture's exit status. Run with the lock released.
-fn suggestions(corpus: &Corpus, text: &str, k: usize) -> Vec<nebula_core::Neighbour> {
-    ops::suggest(corpus, text, k).unwrap_or_else(|e| {
-        errln!("warning: suggestions unavailable: {e}");
-        Vec::new()
-    })
+/// Say on stderr, in every mode, when a machine setting will keep commands
+/// from finding the corpus about to be created at `target`.
+fn warn_root(warning: &RootWarning, target: &Path) {
+    match warning {
+        RootWarning::DefaultWhileConfigured {
+            setting,
+            configured,
+        } => errln!(
+            "warning: creating ~/.nebula while {} points to {}",
+            setting.display(),
+            configured.display()
+        ),
+        RootWarning::Shadowed {
+            setting,
+            configured,
+        } => {
+            // The command that repoints the machine default, never a hand
+            // edit: absolute, since the setting is read from every
+            // directory, and quoted, so it runs as printed (STD-02 §R26).
+            // Made absolute lexically, as capture's note is.
+            let target = std::path::absolute(target).unwrap_or_else(|_| target.to_path_buf());
+            errln!(
+                "warning: {} still points to {}, not {}; run `neb init {} --set-root --force` to point commands at this corpus",
+                setting.display(),
+                configured.display(),
+                target.display(),
+                shell_word(&target.to_string_lossy())
+            );
+        }
+    }
 }
-
 /// Say where an `observatory` reference's record is on this machine: the
 /// path on stdout, as part of what `cite --kind observatory` and `handoff`
 /// report, or why it cannot be located on stderr. The path is the payload's
@@ -1436,33 +1425,34 @@ fn notify(json: bool, notice: Option<render::Notice>) {
     }
 }
 
-/// Commit the corpus after a write, if `config.yaml` asks for it, and say
-/// so on stderr: the notice is not the verb's payload (STD-01 §R12), so
-/// `E=$(neb capture -q …)` holds the id alone. `--json` leaves it out.
+/// Say on stderr what the commit after a write did: the notice is not the
+/// verb's payload (STD-01 §R12), so `E=$(neb capture -q …)` holds the id
+/// alone. `--json` leaves the `committed` notice out.
 ///
-/// Runs after the verb has printed its own result, because the write has
-/// already landed and a refusal here must never read as the write failing.
-fn commit(
-    corpus: &Corpus,
+/// Called after the verb has printed its own result, because the write has
+/// already landed and a refused commit, returned here, must never read as
+/// the write failing. `root` names the corpus in the note a commit asked for
+/// and not made gets.
+fn report_commit(
+    root: &Path,
     opts: CommitOpts,
-    verb: &str,
-    ids: &[&str],
+    commit: Option<nebula_core::Result<CommitOutcome>>,
 ) -> std::result::Result<(), Failure> {
-    if opts.skip {
-        return Ok(());
-    }
-    match ops::commit(corpus, verb, ids)? {
-        CommitOutcome::Committed(done) if !opts.json => {
+    match commit.transpose()? {
+        Some(CommitOutcome::Committed(done)) if !opts.json => {
             let short = done.hash.get(..7).unwrap_or(&done.hash);
             errln!("{}", render::notice(&format!("committed {short}")));
         }
         // Asked for and not done: said on stderr in every mode, so the
         // payload on stdout reads the same either way.
-        CommitOutcome::NotARepository => errln!(
+        Some(CommitOutcome::NotARepository) => errln!(
             "note: not committed: {} is not inside a git work tree",
-            corpus.root().display()
+            root.display()
         ),
-        CommitOutcome::Committed(_) | CommitOutcome::Disabled | CommitOutcome::NothingToCommit => {}
+        Some(
+            CommitOutcome::Committed(_) | CommitOutcome::Disabled | CommitOutcome::NothingToCommit,
+        )
+        | None => {}
     }
     Ok(())
 }
@@ -1524,6 +1514,8 @@ fn parse_key(line: &str) -> std::result::Result<Key, KeyError> {
 ///
 /// When `out` closes, nobody can see the next entry, so the session ends as
 /// `q` ends it: every decision already made stays applied and committed.
+/// Each decision is one [`Triage::decide`]: the write and its commit under
+/// one lock, never held across the wait for the next line.
 fn triage(
     corpus: &Corpus,
     by: Option<String>,
@@ -1604,29 +1596,13 @@ fn triage(
                 }
             }
         };
-        // One critical section per decision, as the single verb has: the
-        // write and the commit that records it. Never across the wait for
-        // the next line, which would hold every other writer off meanwhile.
-        let writes = match action {
-            Action::Promote | Action::PromoteUnder(_) | Action::Drop => true,
-            Action::Title(_) | Action::Skip | Action::Quit => false,
-        };
-        let _lock = writes.then(|| corpus.lock()).transpose()?;
-        match session.apply(corpus, action) {
+        let decided = session.decide(corpus, action, &commits.options())?;
+        match decided.value {
             Ok(step) => {
                 say(out, &render::step(&step))?;
-                match &step {
-                    Step::Promoted { entry, created } => commit(
-                        corpus,
-                        commits,
-                        "promote",
-                        &[&entry.id, &created.doc.node.id],
-                    )?,
-                    Step::Dropped { entry } => {
-                        commit(corpus, commits, "drop", &[&entry.id])?;
-                    }
-                    Step::Titled { .. } => continue,
-                    Step::Skipped { .. } | Step::Quit => {}
+                report_commit(corpus.root(), commits, decided.commit)?;
+                if let Step::Titled { .. } = step {
+                    continue;
                 }
                 shown = false;
             }
@@ -1644,7 +1620,7 @@ fn triage(
 }
 
 #[allow(clippy::too_many_lines)] // A dispatch table is one arm per verb.
-fn run(cli: Cli) -> Outcome {
+fn run(cli: Cli, locations: &Locations) -> Outcome {
     let ok = ExitCode::SUCCESS;
     let root = cli.root.clone();
     let json = cli.json;
@@ -1674,29 +1650,15 @@ fn run(cli: Cli) -> Outcome {
             set_root,
             force,
         } => {
-            // Before any work: a `--root` that names another directory than
-            // the path is refused here, with neither created (STD-01 §R28).
-            let target = ops::init_target(root.clone(), path.clone())?;
-            let root_config_path = Corpus::root_config_path_if_absent(&target)?;
-            let default_root_warning = (!set_root)
-                .then(|| Corpus::warning_before_default_init(&target))
-                .transpose()?
-                .flatten();
-            let shadowing_warning = (!set_root)
-                .then(|| Corpus::warning_before_shadowing_init(&target))
-                .transpose()?
-                .flatten();
-            let done = ops::init(root, path, set_root, force)?;
+            let done = verb::init(locations, root, path, set_root, force)?;
+            let target = &done.initialized.root;
             if json {
-                out_json(&done)?;
+                out_json(&done.initialized)?;
             } else {
-                outln!("corpus ready at {}", done.root.display());
+                outln!("corpus ready at {}", target.display());
                 if set_root {
-                    outln!(
-                        "wrote {} so every command finds it",
-                        Corpus::root_config_path()?.display()
-                    );
-                } else if root_config_path.is_some() {
+                    outln!("wrote {} so every command finds it", done.setting.display());
+                } else if done.suggest_set_root {
                     errln!(
                         "{}",
                         render::notice(&format!(
@@ -1706,34 +1668,14 @@ fn run(cli: Cli) -> Outcome {
                     );
                 }
             }
-            if let Some(configured) = default_root_warning {
-                errln!(
-                    "warning: creating ~/.nebula while {} points to {}",
-                    Corpus::root_config_path()?.display(),
-                    configured.display()
-                );
-            }
-            if let Some(configured) = shadowing_warning {
-                // The command that repoints the machine default, never a
-                // hand edit: absolute, since the setting is read from every
-                // directory, and quoted, so it runs as printed (STD-02
-                // §R26). Made absolute lexically, as capture's note is.
-                let target = std::path::absolute(&target).unwrap_or(target);
-                errln!(
-                    "warning: {} still points to {}, not {}; run `neb init {} --set-root --force` to point commands at this corpus",
-                    Corpus::root_config_path()?.display(),
-                    configured.display(),
-                    target.display(),
-                    shell_word(&target.to_string_lossy())
-                );
+            for warning in &done.warnings {
+                warn_root(warning, target);
             }
             Ok(ok)
         }
 
         Command::Check => {
-            let corpus = Corpus::open(root)?;
-            let scan = corpus.scan()?;
-            let report = check::run_scanned(&scan, &corpus)?;
+            let report = verb::check(&Corpus::open(locations, root)?)?;
             if json {
                 out_json(&report)?;
             } else {
@@ -1752,26 +1694,15 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Migrate { .. } => {
-            // `migrate` takes this lock itself; held out here it also covers
-            // the commit that records the migration. Only once there is a
-            // corpus to lock: a missing one is `migrate`'s error to report,
-            // and it names the root it looked in.
-            let target = Corpus::resolve_root(root.clone())?;
-            let _lock = target
-                .join("nodes")
-                .is_dir()
-                .then(|| CorpusLock::acquire(&target))
-                .transpose()?;
-            let report = migrate::run(root.clone())?;
+            let done = verb::migrate(locations, root, &commits.options())?;
+            let report = &done.value.report;
             if json {
-                out_json(&report)?;
+                out_json(report)?;
             } else {
-                out!("{}", render::migration(&report));
+                out!("{}", render::migration(report));
             }
-            notify(json, Some(render::migration_notice(&report)));
-            // The corpus is at this build's schema now, so it opens; the
-            // migration lands as its own commit when the setting is on.
-            commit(&Corpus::open(root)?, commits, "migrate", &[])?;
+            notify(json, Some(render::migration_notice(report)));
+            report_commit(&done.value.root, commits, done.commit)?;
             Ok(ok)
         }
 
@@ -1781,54 +1712,45 @@ fn run(cli: Cli) -> Outcome {
                     dir, drop_legacy, ..
                 },
         } => {
-            let mut corpus = Corpus::open(root)?;
-            // Setting the root writes this machine's file and nothing in the
-            // corpus, so it takes the machine-setting lock and only
-            // `--drop-legacy` takes the corpus lock. Both are taken here, in
-            // the order `lock.rs` documents, before either write, so a busy
-            // lock refuses with nothing written. Reading the setting back
-            // takes neither and so never waits on a writer.
-            let _settings = dir
-                .is_some()
-                .then(Corpus::lock_machine_settings)
-                .transpose()?;
-            let _lock = drop_legacy.then(|| corpus.lock()).transpose()?;
-            if let Some(dir) = &dir {
-                ops::set_observatory_root(&corpus, dir)?;
-            }
-            let dropped = drop_legacy
-                .then(|| ops::drop_legacy_observatory_root(&mut corpus))
-                .transpose()?;
-            let setting = corpus.observatory_root()?;
+            // Without a change to make, this is a read and takes no lock.
+            let mut corpus = Corpus::open(locations, root)?;
+            let done = verb::set_observatory_root(
+                &mut corpus,
+                dir.as_deref(),
+                drop_legacy,
+                &commits.options(),
+            )?;
+            let setting = &done.value.setting;
             if json {
-                out_json(&setting)?;
+                out_json(setting)?;
             } else {
-                out!("{}", render::observatory_root(&setting));
+                out!("{}", render::observatory_root(setting));
             }
-            for note in render::observatory_root_notes(&setting, dir.is_some()) {
+            for note in render::observatory_root_notes(setting, dir.is_some()) {
                 notify(json, Some(note));
             }
             // Said in every mode, like a commit asked for and not made: the
             // file it names was rewritten, or was left alone (STD-01 §R30).
-            if let Some(dropped) = &dropped {
+            if let Some(dropped) = &done.value.dropped {
                 let config = corpus.root().join("config.yaml");
                 notify(json, Some(render::dropped_legacy(dropped, &config)));
             }
-            if dropped.is_some_and(|dropped| dropped.removed.is_some()) {
-                commit(&corpus, commits, "config", &["observatory-root"])?;
-            }
+            report_commit(corpus.root(), commits, done.commit)?;
             Ok(ok)
         }
 
         Command::Config {
             setting: ConfigSetting::Commit { state, .. },
         } => {
-            let mut corpus = Corpus::open(root)?;
-            // As above: reading the setting is a read.
-            let _lock = state.is_some().then(|| corpus.lock()).transpose()?;
-            let (setting, changed) = match state {
-                Some(state) => (ops::set_commit(&mut corpus, bool::from(state))?, true),
-                None => (corpus.commit_setting(), false),
+            let mut corpus = Corpus::open(locations, root)?;
+            // Reading the setting is a read, so it takes no lock.
+            let (setting, commit) = match state {
+                Some(state) => {
+                    let done =
+                        verb::set_commit(&mut corpus, bool::from(state), &commits.options())?;
+                    (done.value, done.commit)
+                }
+                None => (corpus.commit_setting(), None),
             };
             if json {
                 out_json(&setting)?;
@@ -1838,9 +1760,7 @@ fn run(cli: Cli) -> Outcome {
             notify(json, render::commit_setting_hint(setting));
             // Turning it on records itself; turning it off leaves the file
             // for the next commit you make by hand, because off means off.
-            if changed {
-                commit(&corpus, commits, "config", &["commit"])?;
-            }
+            report_commit(corpus.root(), commits, commit)?;
             Ok(ok)
         }
 
@@ -1856,51 +1776,45 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Capture { quiet, text, .. } => {
-            // Core's own emptiness rule, run before a corpus can be created
-            // for text that would be refused anyway.
             let text = capture_text(&text)?;
-            store::validate_capture(&text)?;
-            // Capture must work on a corpus that does not exist yet. Being
-            // told to run a setup command is precisely the friction that
-            // loses the thought. A root found from the working directory is
-            // one that already holds a corpus, so only an explicit or a
-            // configured root can ever be created here.
-            let resolved_root = Corpus::resolve_root(root)?;
-            let default_root_warning = Corpus::warning_before_default_init(&resolved_root)?;
-            let (corpus, created) = Corpus::open_or_init(Some(resolved_root.clone()))?;
-            if let Some(configured) = default_root_warning {
-                errln!(
-                    "warning: creating ~/.nebula while {} points to {}",
-                    Corpus::root_config_path()?.display(),
-                    configured.display()
-                );
+            let k = if quiet { 0 } else { NEAR_DEFAULT };
+            let done = verb::capture_at(locations, root, &text, k, &commits.options())?;
+            let captured = done.value;
+            if let Some(warning) = &captured.warning {
+                warn_root(warning, &captured.root);
             }
             // Never silent, never a question: a mistyped `--root` or
             // `$NEBULA_ROOT` would otherwise start a second corpus unnoticed.
             // Absolute so a relative typo shows where it landed; made so
             // lexically, because paths are used as given, never resolved.
-            if created {
-                let shown = std::path::absolute(&resolved_root).unwrap_or(resolved_root);
+            if captured.created {
+                let shown =
+                    std::path::absolute(&captured.root).unwrap_or_else(|_| captured.root.clone());
                 errln!("note: created a new corpus at {}", shown.display());
             }
-            let k = if quiet { 0 } else { NEAR_DEFAULT };
-            // The capture and its commit are the critical section. The
-            // suggestions are a read of every node, so they wait until the
-            // lock is released (STD-03 §R1), and the id goes out before
-            // them: the capture never depended on the rest of the corpus
-            // parsing, and a node file that will not must not read as a
-            // lost thought.
-            let lock = corpus.lock()?;
-            let entry = ops::capture(&corpus, &text)?;
+            // The id goes out before the advice: the capture never depended
+            // on the rest of the corpus parsing, and a node file that will
+            // not must not read as a lost thought.
             if !json {
-                outln!("{}", render::bold(&entry.id));
+                outln!("{}", render::bold(&captured.entry.id));
             }
-            let committed = commit(&corpus, commits, "capture", &[&entry.id]);
-            drop(lock);
-            note_same_as(&corpus, &entry);
-            let near = suggestions(&corpus, &entry.text, k);
+            let committed = report_commit(&captured.root, commits, done.commit);
+            // The capture has landed either way: the repeat is for the triage
+            // to settle, and an inbox that cannot be read back costs the note.
+            match &captured.same_as {
+                Ok(Some(earlier)) => errln!("note: same as {}, still waiting", earlier.id),
+                Ok(None) => {}
+                Err(e) => errln!("warning: could not check the inbox for a repeat: {e}"),
+            }
+            let near = captured.near.unwrap_or_else(|e| {
+                errln!("warning: suggestions unavailable: {e}");
+                Vec::new()
+            });
             if json {
-                out_json(&json::Captured::from(&ops::Captured { entry, near }))?;
+                out_json(&json::Captured::from(&ops::Captured {
+                    entry: captured.entry,
+                    near,
+                }))?;
             } else {
                 out!("{}", render::suggestions(&near));
             }
@@ -1909,7 +1823,7 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Inbox { limit } => {
-            let corpus = Corpus::open(root)?;
+            let corpus = Corpus::open(locations, root)?;
             let mut inbox = corpus.inbox()?;
             let cut = cap(&mut inbox.0, limit);
             let notice = render::inbox_notice(inbox.0.len(), cut.0);
@@ -1945,15 +1859,12 @@ fn run(cli: Cli) -> Outcome {
                 id,
                 by,
             };
-            // The suggestions are read before the lock is taken (STD-03 §R1);
-            // the promotion and its commit are the critical section.
-            let corpus = Corpus::open(root)?;
+            let corpus = Corpus::open(locations, root)?;
             let k = if quiet { 0 } else { NEAR_DEFAULT };
-            let near = ops::promotion_near(&corpus, &entry, &promotion, k)?;
-            let lock = corpus.lock()?;
-            let created = ops::promote_with(&corpus, &entry, &promotion, near)?;
+            let done = verb::promote(&corpus, &entry, &promotion, k, &commits.options())?;
+            let created = &done.value;
             if json {
-                out_json(&json::Created::from(&created))?;
+                out_json(&json::Created::from(created))?;
             } else if quiet {
                 outln!("{}", render::bold(&created.doc.node.id));
             } else {
@@ -1964,22 +1875,21 @@ fn run(cli: Cli) -> Outcome {
                 );
                 out!("{}", render::suggestions(&created.near));
             }
-            let committed = commit(&corpus, commits, "promote", &[&entry, &created.doc.node.id]);
-            drop(lock);
-            note_close_tags(&corpus, &created.doc.node.id, &created.doc.node.tags);
+            let committed = report_commit(corpus.root(), commits, done.commit);
+            note_close_tags(&done.close_tags);
             committed?;
             Ok(ok)
         }
 
         Command::Drop { entry, .. } => {
-            let (corpus, _lock) = open_locked(root)?;
-            let dropped = ops::drop(&corpus, &entry)?;
+            let corpus = Corpus::open(locations, root)?;
+            let done = verb::drop(&corpus, &entry, &commits.options())?;
             if json {
-                out_json(&dropped)?;
+                out_json(&done.value)?;
             } else {
                 outln!("dropped {}", render::bold(&entry));
             }
-            commit(&corpus, commits, "drop", &[&entry])?;
+            report_commit(corpus.root(), commits, done.commit)?;
             Ok(ok)
         }
 
@@ -1989,7 +1899,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 return Err(Error::Interactive("triage".into()).into());
             }
-            let corpus = Corpus::open(root)?;
+            let corpus = Corpus::open(locations, root)?;
             let interactive = output::stdin_on_terminal();
             triage(
                 &corpus,
@@ -2017,8 +1927,8 @@ fn run(cli: Cli) -> Outcome {
             ..
         } => {
             let body = body_value(body)?;
-            let (corpus, lock) = open_locked(root)?;
-            let created = ops::new_node(
+            let corpus = Corpus::open(locations, root)?;
+            let done = verb::new_node(
                 &corpus,
                 &NewNode {
                     title,
@@ -2032,10 +1942,12 @@ fn run(cli: Cli) -> Outcome {
                     id,
                     by,
                 },
+                &commits.options(),
             )
             .map_err(|e| Failure(render::refusal_for_new(&e)))?;
+            let created = &done.value;
             if json {
-                out_json(&json::Created::from(&created))?;
+                out_json(&json::Created::from(created))?;
             } else {
                 outln!(
                     "{} {}",
@@ -2043,14 +1955,8 @@ fn run(cli: Cli) -> Outcome {
                     render::dim(&created.path.display().to_string())
                 );
             }
-            // A contradicted node changed too, so the commit names it.
-            let node = &created.doc.node;
-            let ids: Vec<&str> = std::iter::once(node.id.as_str())
-                .chain(node.edges_of(EdgeType::Contradicts))
-                .collect();
-            let committed = commit(&corpus, commits, "new", &ids);
-            drop(lock);
-            note_close_tags(&corpus, &node.id, &node.tags);
+            let committed = report_commit(corpus.root(), commits, done.commit);
+            note_close_tags(&done.close_tags);
             committed?;
             Ok(ok)
         }
@@ -2059,39 +1965,37 @@ fn run(cli: Cli) -> Outcome {
             // No lock while the person types (STD-03 §R1). The body is
             // loaded now, edited for as long as it takes, and saved under
             // the lock only if nobody changed it meanwhile.
-            let corpus = Corpus::open(root)?;
+            let corpus = Corpus::open(locations, root)?;
             let before = corpus.load(&node).map_err(|e| Failure::about(&e, &node))?;
             let edited = edit_body(&before.body)?;
-            // Nothing typed is nothing to write: no lock, no save, no
-            // commit, and `updated` stays as it was (STD-01 §R30).
-            if ops::body_unchanged(&before.body, &edited.text) {
-                notify(json, Some(render::unchanged(&node)));
-                if json {
-                    out_node_view(&corpus, &node)?;
+            let done = match verb::edit(
+                &corpus,
+                &node,
+                &before.body,
+                &edited.text,
+                json,
+                &commits.options(),
+            ) {
+                Ok(done) => done,
+                Err(e) => {
+                    return Err(keep_refused(
+                        Failure::about(&e, &node),
+                        &corpus,
+                        &node,
+                        edited,
+                    ));
                 }
-                return Ok(ok);
-            }
-            if let Err(e) = preserve_notes(&before.body, &edited.text) {
-                return Err(keep_refused(e.into(), &node, edited));
-            }
-            let saved = corpus.lock().and_then(|lock| {
-                ops::set_body_if(&corpus, &node, &before.body, &edited.text).map(|_| lock)
-            });
-            let lock = match saved {
-                Ok(lock) => lock,
-                Err(e) => return Err(keep_refused(Failure::about(&e, &node), &node, edited)),
             };
             drop(edited);
-            if !json {
+            // Nothing typed was nothing to write, and is said so in every
+            // mode (STD-01 §R30).
+            if !done.value.changed {
+                notify(json, Some(render::unchanged(&node)));
+            } else if !json {
                 outln!("{}", render::bold(&node));
             }
-            let committed = commit(&corpus, commits, "edit", &[&node]);
-            drop(lock);
-            let shown = if json {
-                out_node_view(&corpus, &node)
-            } else {
-                Ok(())
-            };
+            let committed = report_commit(corpus.root(), commits, done.commit);
+            let shown = done.value.view.map_or(Ok(()), out_node_view);
             committed?;
             shown?;
             Ok(ok)
@@ -2104,14 +2008,15 @@ fn run(cli: Cli) -> Outcome {
         } => {
             // `--kill` and `--by` conflict with `--confirm` in the clap tree,
             // so there is no text here to reconcile: confirming changes none.
-            let (corpus, _lock) = open_locked(root)?;
-            let doc = ops::confirm_kill(&corpus, &node).map_err(|e| Failure::about(&e, &node))?;
+            let corpus = Corpus::open(locations, root)?;
+            let done = verb::confirm_kill(&corpus, &node, &commits.options())
+                .map_err(|e| Failure::about(&e, &node))?;
             if json {
-                out_json(&json::Doc::from(&doc))?;
+                out_json(&json::Doc::from(&done.value))?;
             } else {
                 outln!("{} kill condition confirmed as yours", render::bold(&node));
             }
-            commit(&corpus, commits, "sharpen", &[&node])?;
+            report_commit(corpus.root(), commits, done.commit)?;
             Ok(ok)
         }
 
@@ -2127,28 +2032,29 @@ fn run(cli: Cli) -> Outcome {
             let Some(kill) = kill else {
                 return Err(Failure::say("pass --kill <KILL>, or --confirm"));
             };
-            let (corpus, _lock) = open_locked(root)?;
-            let before = corpus.load(&node).map_err(|e| Failure::about(&e, &node))?;
-            let doc = ops::sharpen(&corpus, &node, &kill, by.as_deref())
+            let corpus = Corpus::open(locations, root)?;
+            let done = verb::sharpen(&corpus, &node, &kill, by.as_deref(), &commits.options())
                 .map_err(|e| Failure::about(&e, &node))?;
+            let sharpened = &done.value;
+            let status = sharpened.doc.node.status;
             if json {
-                out_json(&json::Doc::from(&doc))?;
-            } else if before.node.status != doc.node.status {
-                outln!("{} is now {}", render::bold(&node), doc.node.status);
-            } else if before.node.kill.is_some() {
+                out_json(&json::Doc::from(&sharpened.doc))?;
+            } else if sharpened.from != status {
+                outln!("{} is now {}", render::bold(&node), status);
+            } else if sharpened.replaced {
                 outln!(
                     "{} kill condition replaced; status remains {}",
                     render::bold(&node),
-                    doc.node.status
+                    status
                 );
             } else {
                 outln!(
                     "{} kill condition set; status remains {}",
                     render::bold(&node),
-                    doc.node.status
+                    status
                 );
             }
-            commit(&corpus, commits, "sharpen", &[&node])?;
+            report_commit(corpus.root(), commits, done.commit)?;
             Ok(ok)
         }
 
@@ -2156,11 +2062,12 @@ fn run(cli: Cli) -> Outcome {
             node, status, why, ..
         } => {
             let status = Status::from(status);
-            let (corpus, _lock) = open_locked(root)?;
-            let changed = ops::set_status(&corpus, &node, status, why.as_deref())
+            let corpus = Corpus::open(locations, root)?;
+            let done = verb::set_status(&corpus, &node, status, why.as_deref(), &commits.options())
                 .map_err(|e| Failure::about(&e, &node))?;
+            let changed = &done.value;
             if json {
-                out_json(&json::StatusChange::from(&changed))?;
+                out_json(&json::StatusChange::from(changed))?;
             } else {
                 outln!(
                     "{} {} -> {status}",
@@ -2168,18 +2075,18 @@ fn run(cli: Cli) -> Outcome {
                     render::dim(&changed.from.to_string())
                 );
             }
-            commit(&corpus, commits, "status", &[&node])?;
+            report_commit(corpus.root(), commits, done.commit)?;
             Ok(ok)
         }
 
         Command::Link {
             from, kind, to, by, ..
         } => {
-            let (corpus, _lock) = open_locked(root)?;
+            let corpus = Corpus::open(locations, root)?;
             let kind = EdgeType::from(kind);
-            let changed = ops::link(&corpus, &from, kind, &to, by.as_deref())?;
+            let done = verb::link(&corpus, &from, kind, &to, by.as_deref(), &commits.options())?;
             if json {
-                out_json(&changed.iter().map(json::Doc::from).collect::<Vec<_>>())?;
+                out_json(&done.value.iter().map(json::Doc::from).collect::<Vec<_>>())?;
             } else {
                 outln!(
                     "{} {} {}",
@@ -2188,7 +2095,7 @@ fn run(cli: Cli) -> Outcome {
                     render::bold(&to)
                 );
             }
-            commit(&corpus, commits, "link", &[&from, &to])?;
+            report_commit(corpus.root(), commits, done.commit)?;
             Ok(ok)
         }
 
@@ -2198,9 +2105,7 @@ fn run(cli: Cli) -> Outcome {
             remove,
             ..
         } if target == "list" && add.is_empty() && remove.is_empty() => {
-            let corpus = Corpus::open(root)?;
-            let docs = corpus.load_all()?;
-            let counts = graph::tags(&Graph::build(&docs)?)?;
+            let counts = Corpus::open(locations, root)?.query(graph::tags)?;
             if json {
                 out_json(&counts)?;
             } else {
@@ -2223,9 +2128,9 @@ fn run(cli: Cli) -> Outcome {
             }
             // One write under one lock: `--remove x --add y` is one change
             // to the node's tags, not two a second writer may split.
-            let (corpus, lock) = open_locked(root)?;
-            let done = ops::retag(&corpus, &target, &add, &remove)?;
-            let doc = &done.doc;
+            let corpus = Corpus::open(locations, root)?;
+            let done = verb::retag(&corpus, &target, &add, &remove, &commits.options())?;
+            let doc = &done.value.doc;
             if json {
                 out_json(&json::Doc::from(doc))?;
             } else {
@@ -2239,34 +2144,32 @@ fn run(cli: Cli) -> Outcome {
             // What changed nothing is said in every mode, and a node whose
             // tags came out as they were is neither written nor committed
             // (STD-01 §R30).
-            for note in render::retag_notes(&target, &done) {
+            for note in render::retag_notes(&target, &done.value) {
                 notify(json, Some(note));
             }
-            if !done.written {
-                return Ok(ok);
-            }
-            let committed = commit(&corpus, commits, "tag", &[&target]);
-            drop(lock);
-            note_close_tags(&corpus, &target, &add);
+            let committed = report_commit(corpus.root(), commits, done.commit);
+            note_close_tags(&done.close_tags);
             committed?;
             Ok(ok)
         }
 
         Command::Note { node, by, text, .. } => {
             let text = text.join(" ");
-            let (corpus, lock) = open_locked(root)?;
-            ops::note(&corpus, &node, &text, by.as_deref())
-                .map_err(|e| Failure::about(&e, &node))?;
+            let corpus = Corpus::open(locations, root)?;
+            let done = verb::note(
+                &corpus,
+                &node,
+                &text,
+                by.as_deref(),
+                json,
+                &commits.options(),
+            )
+            .map_err(|e| Failure::about(&e, &node))?;
             if !json {
                 outln!("{}", render::bold(&node));
             }
-            let committed = commit(&corpus, commits, "note", &[&node]);
-            drop(lock);
-            let shown = if json {
-                out_node_view(&corpus, &node)
-            } else {
-                Ok(())
-            };
+            let committed = report_commit(corpus.root(), commits, done.commit);
+            let shown = done.value.view.map_or(Ok(()), out_node_view);
             committed?;
             shown?;
             Ok(ok)
@@ -2283,20 +2186,11 @@ fn run(cli: Cli) -> Outcome {
             run,
             ..
         } => {
-            let (corpus, _lock) = open_locked(root)?;
+            let corpus = Corpus::open(locations, root)?;
             let bare = note.as_ref().is_none_or(|n| n.trim().is_empty());
-            // Read before the write, under `--json` too, whose payload says
-            // where the record is: a broken machine setting refuses the cite
-            // rather than failing it after the reference has landed. The kind
-            // is compared as the write will store it, so `--kind Observatory`
-            // is read here too.
-            let observatory = (check::normalize_reference_kind(&kind) == OBSERVATORY)
-                .then(|| corpus.observatory_root())
-                .transpose()?;
-            if let Some(setting) = &observatory {
-                warn_legacy_observatory_root(&corpus, setting);
-            }
-            let cited = ops::cite_with_observatory(
+            // Core reads the observatory setting before the write, under
+            // `--json` too, whose payload says where the record is.
+            let done = verb::cite(
                 &corpus,
                 &node,
                 &Citation {
@@ -2307,21 +2201,25 @@ fn run(cli: Cli) -> Outcome {
                     by,
                     origin: Origin::of(task, run),
                 },
-                observatory.as_ref().and_then(|s| s.root.as_deref()),
+                &commits.options(),
             )
             .map_err(|e| Failure::about(&e, &node))?;
+            let CiteReport { cited, setting } = &done.value;
+            if let Some(setting) = setting {
+                warn_legacy_observatory_root(&corpus, setting);
+            }
             if json {
-                out_json(&json::Cited::from(&cited))?;
+                out_json(&json::Cited::from(cited))?;
             } else {
                 outln!("{} {}", render::bold(&node), render::bold(&cited.reference));
-                if let (Some(setting), Some(link)) = (&observatory, &cited.observatory) {
+                if let (Some(setting), Some(link)) = (setting, &cited.observatory) {
                     print_record_location(setting, link);
                 }
                 if bare {
                     print_bare_note();
                 }
             }
-            commit(&corpus, commits, "cite", &[&node, &cited.reference])?;
+            report_commit(corpus.root(), commits, done.commit)?;
             Ok(ok)
         }
 
@@ -2334,14 +2232,11 @@ fn run(cli: Cli) -> Outcome {
             run,
             ..
         } => {
-            let (corpus, _lock) = open_locked(root)?;
+            let corpus = Corpus::open(locations, root)?;
             let bare = note.as_ref().is_none_or(|n| n.trim().is_empty());
-            // Read before the write, under `--json` too: the record has to
-            // resolve under this root, and a broken machine setting refuses
-            // the hand-off rather than failing it after the node has closed.
-            let setting = corpus.observatory_root()?;
-            warn_legacy_observatory_root(&corpus, &setting);
-            let done = ops::handoff(
+            // Core reads the setting before the write, under `--json` too:
+            // the record has to resolve under this root.
+            let done = verb::handoff(
                 &corpus,
                 &node,
                 &Handoff {
@@ -2350,54 +2245,46 @@ fn run(cli: Cli) -> Outcome {
                     by,
                     origin: Origin::of(task, run),
                 },
-                setting.root.as_deref(),
+                &commits.options(),
             )
             .map_err(|e| Failure::about(&e, &node))?;
+            let handed = &done.value.done;
+            let setting = &done.value.setting;
+            warn_legacy_observatory_root(&corpus, setting);
             if json {
-                out_json(&json::HandedOff::from(&done))?;
+                out_json(&json::HandedOff::from(handed))?;
             } else {
                 outln!(
                     "{} {} -> {}, handed off to {} {}",
                     render::bold(&node),
-                    render::dim(&done.from.to_string()),
-                    done.doc.node.status,
-                    render::bold(&done.record),
-                    render::dim(&format!("({})", done.reference))
+                    render::dim(&handed.from.to_string()),
+                    handed.doc.node.status,
+                    render::bold(&handed.record),
+                    render::dim(&format!("({})", handed.reference))
                 );
-                print_record_location(&setting, &done.observatory);
+                print_record_location(setting, &handed.observatory);
                 if bare {
                     print_bare_note();
                 }
             }
-            commit(&corpus, commits, "handoff", &[&node, &done.record])?;
+            report_commit(corpus.root(), commits, done.commit)?;
             Ok(ok)
         }
 
         Command::Show { node, at } => {
-            let corpus = Corpus::open(root)?;
-            let mut docs = corpus.load_all()?;
-            if let Some(at) = at {
-                let historical = corpus.load_at(&node, &at)?;
-                let current = docs
-                    .iter_mut()
-                    .find(|doc| doc.node.id == node)
-                    .ok_or_else(|| Error::NoSuchNode(node.clone()))?;
-                *current = historical;
-            }
-            let observatory = corpus.observatory_root()?;
-            warn_legacy_observatory_root(&corpus, &observatory);
-            let view = graph::node(&Graph::build(&docs)?, &node)?
-                .with_observatory(observatory.root.as_deref())?;
+            let corpus = Corpus::open(locations, root)?;
+            let shown = verb::show(&corpus, &node, at.as_deref())?;
+            warn_legacy_observatory_root(&corpus, &shown.setting);
             if json {
-                out_json(&json::NodeView::from(&view))?;
+                out_json(&json::NodeView::from(&shown.view))?;
             } else {
-                out!("{}", render::node(&view));
+                out!("{}", render::node(&shown.view));
             }
             Ok(ok)
         }
 
         Command::Log { node } => {
-            let corpus = Corpus::open(root)?;
+            let corpus = Corpus::open(locations, root)?;
             let history = corpus.history(&node)?;
             if json {
                 out_json(&history)?;
@@ -2413,9 +2300,10 @@ fn run(cli: Cli) -> Outcome {
             tags,
             limit,
         } => {
-            let corpus = Corpus::open(root)?;
-            let docs = corpus.load_all()?;
-            let mut listing = graph::list(&Graph::build(&docs)?, status.map(Status::from), &tags)?;
+            let (mut listing, nodes) = Corpus::open(locations, root)?.query(|graph| {
+                let listing = graph::list(graph, status.map(Status::from), &tags)?;
+                Ok((listing, graph.len()))
+            })?;
             let cut = cap(&mut listing.0, limit);
             if json {
                 let nodes = listing.0.iter().map(json::Node::from).collect();
@@ -2425,7 +2313,7 @@ fn run(cli: Cli) -> Outcome {
             }
             notify(
                 json,
-                Some(render::list_notice(listing.0.len(), cut.0, docs.len())),
+                Some(render::list_notice(listing.0.len(), cut.0, nodes)),
             );
             Ok(ok)
         }
@@ -2435,9 +2323,8 @@ fn run(cli: Cli) -> Outcome {
             if query.trim().is_empty() {
                 return Err(Failure::say("nothing to look near"));
             }
-            let corpus = Corpus::open(root)?;
-            let docs = corpus.load_all()?;
-            let (near, matched) = graph::near_counted(&Graph::build(&docs)?, &query, limit)?;
+            let (near, matched) = Corpus::open(locations, root)?
+                .query(|graph| graph::near_counted(graph, &query, limit))?;
             let truncated = near.0.len() < matched;
             // On stderr in every mode, so a capped answer never reads as
             // the whole one and the payload stays all stdout holds (STD-01
@@ -2453,16 +2340,16 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Trace { node, down, depth } => {
-            let corpus = Corpus::open(root)?;
-            let docs = corpus.load_all()?;
             let direction = if down { Direction::Down } else { Direction::Up };
-            let graph = Graph::build(&docs)?;
-            let walk = graph::trace_within(&graph, &node, direction, depth)?;
-            // A bounded walk's `total` is what the whole walk reaches.
-            let cut = depth
-                .map(|_| graph::trace(&graph, &node, direction))
-                .transpose()?
-                .map(|whole| (whole.0.len(), walk.0.len() < whole.0.len()));
+            let (walk, cut) = Corpus::open(locations, root)?.query(|graph| {
+                let walk = graph::trace_within(graph, &node, direction, depth)?;
+                // A bounded walk's `total` is what the whole walk reaches.
+                let cut = depth
+                    .map(|_| graph::trace(graph, &node, direction))
+                    .transpose()?
+                    .map(|whole| (whole.0.len(), walk.0.len() < whole.0.len()));
+                Ok((walk, cut))
+            })?;
             if json {
                 let steps = walk.0.iter().map(json::TraceNode::from).collect();
                 out_json(&json::List::new(steps, cut))?;
@@ -2477,9 +2364,8 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Impact { node } => {
-            let corpus = Corpus::open(root)?;
-            let docs = corpus.load_all()?;
-            let report = graph::impact(&Graph::build(&docs)?, &node)?;
+            let report =
+                Corpus::open(locations, root)?.query(|graph| graph::impact(graph, &node))?;
             if json {
                 out_json(&report)?;
             } else {
@@ -2495,9 +2381,7 @@ fn run(cli: Cli) -> Outcome {
                     "neb graph needs an output format; pass --json or --mermaid",
                 ));
             }
-            let corpus = Corpus::open(root)?;
-            let docs = corpus.load_all()?;
-            let exported = graph::export(&Graph::build(&docs)?)?;
+            let exported = Corpus::open(locations, root)?.query(graph::export)?;
             if mermaid {
                 out!("{}", render::mermaid(&exported, from.as_deref())?);
             } else {
@@ -2512,7 +2396,7 @@ fn run(cli: Cli) -> Outcome {
             limit,
             ..
         } => {
-            short_review(root, json, &tags, limit)?;
+            short_review(locations, root, json, &tags, limit)?;
             Ok(ok)
         }
 
@@ -2523,9 +2407,8 @@ fn run(cli: Cli) -> Outcome {
             limit,
             ..
         } => {
-            let corpus = Corpus::open(root)?;
-            let docs = corpus.load_all()?;
-            let mut report = graph::review(&Graph::build(&docs)?, &corpus.inbox()?, since)?;
+            let corpus = Corpus::open(locations, root)?;
+            let mut report = corpus.query(|graph| graph::review(graph, &corpus.inbox()?, since))?;
             // Every rule's findings, counted before the cut keeps each rule's first N.
             let found = report.0.len();
             let omitted = limit.map_or_else(Vec::new, |n| report.truncate_per_rule(n));
@@ -2547,7 +2430,7 @@ fn run(cli: Cli) -> Outcome {
 
         Command::Open { tags } => {
             errln!("warning: `neb open` is deprecated; use `neb review --short`");
-            short_review(root, json, &tags, None)?;
+            short_review(locations, root, json, &tags, None)?;
             Ok(ok)
         }
     }
@@ -2556,14 +2439,14 @@ fn run(cli: Cli) -> Outcome {
 /// `review --short`, and the deprecated `open` that now forwards to it:
 /// what needs attention now, one line per item.
 fn short_review(
+    locations: &Locations,
     root: Option<PathBuf>,
     json: bool,
     tags: &[String],
     limit: Option<usize>,
 ) -> std::result::Result<(), Failure> {
-    let corpus = Corpus::open(root)?;
-    let docs = corpus.load_all()?;
-    let mut report = graph::open(&Graph::build(&docs)?, &corpus.inbox()?, tags)?;
+    let corpus = Corpus::open(locations, root)?;
+    let mut report = corpus.query(|graph| graph::open(graph, &corpus.inbox()?, tags))?;
     let cut = cap(&mut report.0, limit);
     let notice = render::open_notice(report.0.len(), cut.0);
     if json {
@@ -2625,13 +2508,12 @@ fn out_json<T: serde::Serialize>(v: &T) -> std::result::Result<(), Failure> {
 }
 
 /// `node` as `show --json` prints it, over the corpus as it is now: what
-/// `edit --json` and `note --json` print once their write is committed. It
-/// builds the whole graph, so it runs with the lock released
-/// (STD-03 §R1).
-fn out_node_view(corpus: &Corpus, node: &str) -> std::result::Result<(), Failure> {
-    let docs = corpus.load_all()?;
-    let view = graph::node(&Graph::build(&docs)?, node)?;
-    out_json(&json::NodeView::from(&view))
+/// `edit --json` and `note --json` print once their write is committed.
+/// Core read it with the lock released (STD-03 §R1).
+fn out_node_view(
+    view: nebula_core::Result<nebula_core::NodeView>,
+) -> std::result::Result<(), Failure> {
+    out_json(&json::NodeView::from(&view?))
 }
 
 /// Send a rendered report to a file, or print it, per `--out`.
@@ -3341,7 +3223,11 @@ mod tests {
     #[test]
     fn interactive_triage_prompts_and_asks_again_after_a_refusal() {
         let dir = tempfile::tempdir().unwrap();
-        let corpus = Corpus::init(&dir.path().join("corpus")).unwrap();
+        let corpus = Corpus::init(
+            &nebula_core::Locations::default(),
+            &dir.path().join("corpus"),
+        )
+        .unwrap();
         let entry = ops::capture(&corpus, "a thought worth keeping").unwrap();
         let mut input = std::io::Cursor::new("x\n7\nt\n!!!\np\nt Worth keeping\np\n");
         let mut out = Vec::new();
@@ -3391,7 +3277,11 @@ mod tests {
     #[test]
     fn triage_ends_as_quit_does_when_its_screen_closes() {
         let dir = tempfile::tempdir().unwrap();
-        let corpus = Corpus::init(&dir.path().join("corpus")).unwrap();
+        let corpus = Corpus::init(
+            &nebula_core::Locations::default(),
+            &dir.path().join("corpus"),
+        )
+        .unwrap();
         let first = ops::capture(&corpus, "the first thought").unwrap();
         let second = ops::capture(&corpus, "the second thought").unwrap();
         let mut input = std::io::Cursor::new("d\nd\n");
