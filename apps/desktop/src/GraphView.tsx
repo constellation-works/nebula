@@ -8,15 +8,17 @@ import { useGraph } from "./useGraph";
 
 const EMPTY: Layout = { width: 0, height: 0, nodes: [], edges: [] };
 const PANEL_DEFAULT = 380;
+const FILTER_DEBOUNCE_MS = 250;
 
 /**
  * The whole corpus as a layered DAG, with a toolbar that narrows it and a
  * panel that shows one node. One `graph()` export feeds everything; the
  * selection and the viewport live here and outlast a refetch.
  */
-export function GraphView() {
+export function GraphView({ active = true }: { active?: boolean }) {
   const { graph, error, loaded, refresh } = useGraph();
   const [query, setQuery] = useState("");
+  const [appliedQuery, setAppliedQuery] = useState({ query: "", revision: 0 });
   const [tags, setTags] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [panelWidth, setPanelWidth] = useState(PANEL_DEFAULT);
@@ -28,9 +30,21 @@ export function GraphView() {
   const [timing, setTiming] = useState<{ layout: number; paint: number } | null>(null);
   const [fitRequest, setFitRequest] = useState(0);
   const started = useRef(0);
+  const layoutVersion = useRef(0);
+
+  useEffect(() => {
+    if (query === appliedQuery.query && layoutVersion.current === appliedQuery.revision) return;
+    const timer = setTimeout(() => {
+      setAppliedQuery({ query, revision: layoutVersion.current });
+    }, FILTER_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [query, appliedQuery]);
 
   const counts = useMemo(() => (graph === null ? [] : tagCounts(graph.nodes)), [graph]);
-  const filtered = useMemo(() => (graph === null ? null : filterGraph(graph, { query, tags })), [graph, query, tags]);
+  const filtered = useMemo(
+    () => (graph === null ? null : filterGraph(graph, { query: appliedQuery.query, tags })),
+    [graph, appliedQuery, tags],
+  );
 
   // Every change to what is drawn re-runs layout; the previous drawing stays
   // up until the new one lands, so the canvas never flashes empty.
@@ -42,11 +56,12 @@ export function GraphView() {
       return;
     }
     let live = true;
+    const version = layoutVersion.current;
     started.current = performance.now();
     setLaying(true);
     layoutGraph(toElkGraph(filtered)).then(
       (laid) => {
-        if (!live) return;
+        if (!live || version !== layoutVersion.current) return;
         const ms = performance.now() - started.current;
         setLayout(fromElkLayout(laid, filtered));
         setTiming({ layout: ms, paint: 0 });
@@ -54,7 +69,7 @@ export function GraphView() {
         setLaying(false);
       },
       (e: unknown) => {
-        if (!live) return;
+        if (!live || version !== layoutVersion.current) return;
         setLayoutError(String(e));
         setLaying(false);
       },
@@ -83,12 +98,13 @@ export function GraphView() {
   }, [filtered, selected]);
 
   useEffect(() => {
+    if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setSelected(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [active]);
 
   const lin = useMemo(
     () => (selected === null || filtered === null ? null : lineage(filtered.edges, selected)),
@@ -121,8 +137,16 @@ export function GraphView() {
       </button>
     </div>
   );
-  const toggleTag = (t: string) =>
+  const toggleTag = (t: string) => {
+    const revision = ++layoutVersion.current;
+    setAppliedQuery((cur) => ({ ...cur, revision }));
     setTags((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
+  };
+  const clearQuery = () => {
+    const revision = ++layoutVersion.current;
+    setQuery("");
+    setAppliedQuery({ query: "", revision });
+  };
 
   if (error !== null) {
     return (
@@ -168,12 +192,15 @@ export function GraphView() {
           placeholder="Filter by title"
           aria-label="Filter by title"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            layoutVersion.current += 1;
+            setQuery(e.target.value);
+          }}
           onKeyDown={(e) => {
             // Escape in the box clears the box, and only the box.
             if (e.key === "Escape" && query !== "") {
               e.stopPropagation();
-              setQuery("");
+              clearQuery();
             }
           }}
         />
@@ -199,7 +226,7 @@ export function GraphView() {
             type="button"
             className="toolbar__button"
             onClick={() => {
-              setQuery("");
+              clearQuery();
               setTags([]);
             }}
           >

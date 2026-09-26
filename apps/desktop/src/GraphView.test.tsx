@@ -1,7 +1,8 @@
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { GraphView } from "./GraphView";
+import * as layoutClient from "./layoutClient";
 import { useGraph } from "./useGraph";
 import type { GraphExport } from "./types/GraphExport";
 import type { NodeSummary } from "./types/NodeSummary";
@@ -62,6 +63,11 @@ beforeEach(() => {
     node: { id, title: `Idea ${id}`, status: "seed", created: "", updated: "" },
     body: "",
   }));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 describe("GraphView", () => {
@@ -170,6 +176,65 @@ describe("GraphView", () => {
     expect(await screen.findByText("No nodes match the filter.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Clear" }));
     await waitFor(() => expect(drawnNodes()).toHaveLength(10));
+  });
+
+  it("debounces title edits and discards a layout superseded by newer input", async () => {
+    mocked.graph.mockResolvedValue(synthetic(10));
+    const layout = layoutClient.layoutGraph;
+    const layoutSpy = vi.spyOn(layoutClient, "layoutGraph");
+    render(<GraphView />);
+    await waitFor(() => expect(drawnNodes()).toHaveLength(10));
+    expect(layoutSpy).toHaveBeenCalledTimes(1);
+
+    const stale = deferred<Awaited<ReturnType<typeof layoutClient.layoutGraph>>>();
+    layoutSpy.mockImplementationOnce(() => stale.promise).mockImplementation(layout);
+    vi.useFakeTimers();
+    const input = screen.getByLabelText("Filter by title");
+    fireEvent.change(input, { target: { value: "number" } });
+    await act(async () => vi.advanceTimersByTimeAsync(150));
+    fireEvent.change(input, { target: { value: "number 1" } });
+    await act(async () => vi.advanceTimersByTimeAsync(249));
+    expect(layoutSpy).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(layoutSpy).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
+    fireEvent.change(input, { target: { value: "number 2" } });
+    await act(async () => stale.resolve({} as Awaited<ReturnType<typeof layoutClient.layoutGraph>>));
+    expect(drawnNodes()).toHaveLength(10);
+    expect(screen.queryByRole("alert")).toBeNull();
+    await waitFor(() => expect(drawnNodes()).toHaveLength(1));
+    expect(canvas().querySelector('g.node[data-id="n2"]')).toBeInTheDocument();
+    expect(layoutSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("pans on plain wheel and zooms around the pointer on ctrl-wheel", async () => {
+    mocked.graph.mockResolvedValue(synthetic(2));
+    render(<GraphView />);
+    await waitFor(() => expect(drawnNodes()).toHaveLength(2));
+    const scene = canvas().querySelector("g.scene")!;
+    expect(scene).toHaveAttribute("transform", "translate(40 40) scale(1)");
+
+    const scroll = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: 12, deltaY: 30 });
+    fireEvent(canvas(), scroll);
+    expect(scroll.defaultPrevented).toBe(true);
+    expect(scene).toHaveAttribute("transform", "translate(28 10) scale(1)");
+
+    const pinch = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      clientX: 100,
+      clientY: 100,
+      deltaY: -100,
+    });
+    fireEvent(canvas(), pinch);
+    expect(pinch.defaultPrevented).toBe(true);
+    const zoom = Math.exp(0.25);
+    expect(scene).toHaveAttribute(
+      "transform",
+      `translate(${100 - (100 - 28) * zoom} ${100 - (100 - 10) * zoom}) scale(${zoom})`,
+    );
   });
 
   it("refetches on corpus-changed and keeps the selection", async () => {
