@@ -6,8 +6,8 @@
 //! is what a consumer that is not a terminal matches on.
 
 use nebula_core::{
-    Corpus, CorpusLock, Direction, EdgeType, Error, Graph, HUMAN, NEAR_DEFAULT, NewNode, Promotion,
-    ReviewRule, Status, Via, graph, ops,
+    Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, HUMAN, NEAR_DEFAULT, NewNode,
+    Promotion, ReviewRule, Status, Via, graph, ops,
 };
 use std::fmt::Write as _;
 
@@ -312,6 +312,57 @@ fn an_empty_kill_condition_is_refused() {
         ops::sharpen(&corpus, &a, "   ", None),
         Err(Error::EmptyKill)
     ));
+}
+
+fn citing(uri: &str) -> Citation {
+    Citation {
+        uri: Some(uri.to_string()),
+        kind: "study".to_string(),
+        note: Some("why".to_string()),
+        ..Citation::default()
+    }
+}
+
+/// Rule 8 at the point of action, as a typed refusal: an absolute path or a
+/// `file:` URI is refused even when it exists on this machine, before any
+/// resolving, and nothing is written. URLs and scheme handles pass.
+#[test]
+fn cite_refuses_an_absolute_local_path_as_a_typed_error() {
+    let (dir, corpus) = corpus();
+    let a = seed(&corpus, "A", &[]);
+    let existing = dir.path().join("corpus").join("config.yaml");
+    let existing = existing.to_str().unwrap();
+    let path = corpus.node_path(&a).unwrap();
+    let before = std::fs::read_to_string(&path).unwrap();
+
+    for uri in [
+        existing.to_string(),
+        format!("file://{existing}"),
+        "/nonexistent/x.md".to_string(),
+        "C:\\studies\\x.md".to_string(),
+    ] {
+        let refused = ops::cite(&corpus, &a, &citing(&uri));
+        assert!(
+            matches!(&refused, Err(Error::AbsoluteUri(written)) if *written == uri),
+            "{uri}: {refused:?}"
+        );
+    }
+    assert_eq!(before, std::fs::read_to_string(&path).unwrap());
+
+    assert!(matches!(
+        ops::cite(&corpus, &a, &citing("./missing.md")),
+        Err(Error::UnresolvedUri { .. })
+    ));
+    for uri in [
+        "https://example.org",
+        "http://example.org",
+        "mailto:someone@example.org",
+        "orbit:ORB-13049",
+        "neb:another-idea",
+        "../config.yaml",
+    ] {
+        ops::cite(&corpus, &a, &citing(uri)).unwrap_or_else(|e| panic!("{uri}: {e}"));
+    }
 }
 
 /// Authorship as a consumer that is not a terminal sees it: stored per field,

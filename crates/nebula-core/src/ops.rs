@@ -25,8 +25,8 @@
 //! per rule. See `docs/design/lineage-graph/specs/invariants.md`.
 
 use crate::check::{
-    OBSERVATORY, REFERENCE_KINDS, is_local_path, is_observatory_id, is_reference_kind,
-    resolve_local,
+    OBSERVATORY, REFERENCE_KINDS, is_absolute_local, is_local_path, is_observatory_id,
+    is_reference_kind, resolve_local,
 };
 use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
@@ -141,8 +141,9 @@ pub struct Promotion {
 /// Everything that goes into a reference.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Citation {
-    /// Where it lives: a URL, DOI, path, almanac wikilink, or — with kind
-    /// `observatory` — a bare record id. Optional only for a discussion.
+    /// Where it lives: a URL, DOI, path relative to `nodes/`, almanac
+    /// wikilink, or — with kind `observatory` — a bare record id. Optional
+    /// only for a discussion.
     pub uri: Option<String>,
     /// `paper`, `study`, `article`, `note`, `discussion`, `book`, `dataset`,
     /// `thread`, `observatory` or `other`.
@@ -527,6 +528,11 @@ pub fn set_body(corpus: &Corpus, id: &str, body: &str, by: Option<&str>) -> Resu
 /// that record is on *this* machine is a question for `check`, which warns
 /// rather than refuses: a checkout that is not there yet is not a broken
 /// citation.
+///
+/// A local reference is a path relative to `nodes/`, for the same reason:
+/// an absolute path or a `file:` URI is refused as [`Error::AbsoluteUri`]
+/// even when it exists here, and a relative one that does not resolve as
+/// [`Error::UnresolvedUri`].
 pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     let _lock = corpus.lock()?;
     let by = model::author(args.by.as_deref())?;
@@ -562,6 +568,13 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
         }
         _ => uri,
     };
+    // Rule 8, before resolving: an absolute path or a `file:` URI may well
+    // exist on this machine, and that is the trap. The corpus is synced, so
+    // on every other machine it names nothing, and it leaks this one's
+    // layout into the corpus. Refused whether or not it resolves here.
+    if let Some(uri) = uri.as_deref().filter(|uri| is_absolute_local(uri)) {
+        return Err(Error::AbsoluteUri(uri.to_string()));
+    }
     // Rule 8 at the point of action: a local path that does not resolve is a
     // citation to nothing, and refusing it here is cheaper than finding it
     // in `check` after the context of why it was attached has gone.

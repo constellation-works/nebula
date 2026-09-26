@@ -14,7 +14,7 @@ exit non-zero; `warn` findings do not.
 | 5 | `refuted` carries `closed.why` | error | `status`, `check` |
 | 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status`/`sharpen` |
 | 7 | A reference carries no `verdict`/`strength` | error | parse |
-| 8 | Non-discussion references have a URI; local URIs resolve relative to `nodes/` | error | `cite`, `check` |
+| 8 | Non-discussion references have a URI; local URIs resolve relative to `nodes/` and are never absolute | error; warn for an absolute path already in the corpus | `cite` refuses both; `check` reports both |
 | 9 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`) |
 | 10 | Every reference has a note | warn | `check` |
 | 11 | No two tags differ only by case or a trailing `s` | warn | `check` |
@@ -78,6 +78,7 @@ Refusals are typed. The message is what the CLI prints; the variant is what
 | `\`X\` cannot be a node id: an id names one file under nodes/, ...` | `UnsafeId` | 15 | The id **you passed** holds a path separator, a `.`/`..`, a root, or a control character, so it could not name a node file. Nothing was read or written. Get the real id from `neb list --json`; never rewrite an id into a path, and do not retry. |
 | `<file> stores the id \`X\`, which is not the node its file name names` | `IdMismatch {path, id}` | 15 | A node **file**'s name and its stored `id` disagree — because the id is another node's, because it is not a name a file can have at all (`../../escaped`), or because the file is a second name — a hard link or symlink under `nodes/` — for a node whose file is named for its id. A write derives its destination from the stored id, so this would land on some other node or outside the corpus; nothing was read or written. Report the path and the stored id; do not "fix" it by renaming the file or editing the id, and do not retry the verb. Only the human knows which of the two the node really is — or, for an alias, whether the second name should exist at all. |
 | `\`../x.md\` does not resolve from .../nodes` | `UnresolvedUri` | 8 | Local URIs are relative to `nodes/`. Fix the path (`../../studies/x.md`) or use a URL/wikilink. |
+| `\`X\` is an absolute local path; local references are relative to nodes/` | `AbsoluteUri` | 8 | An absolute path or `file:` URI names nothing on any other machine the corpus is synced to, so it is refused even when it exists here. Rewrite it relative to `nodes/` (`../../studies/x.md`), cite an Observatory record by its id with `--kind observatory`, or use a URL. |
 | `\`X\` is not an Observatory record id` | `InvalidObservatoryId` | 9 | `--kind observatory` takes the bare id (`Q002`, `H007`, `T003`, `R012`), never a path or a slug. Never fall back to `--uri <absolute path>`: it breaks on every other machine. |
 | `no open inbox entry \`X\`` | `NoSuchInboxEntry` | — | Already promoted or dropped, or the id is wrong. `neb inbox --json`. |
 | `node \`X\` already exists` | `NodeExists` | — | A node with that slug exists. Show it; the human decides whether this is a duplicate (drop) or a refinement (`new` with a different title + `refines`). |
@@ -98,6 +99,11 @@ Refusals are typed. The message is what the CLI prints; the variant is what
   Never "fix" this by rewriting the reference as a path. Tell the human to run
   `neb config observatory-root <DIR>` or export `$OBSERVATORY_ROOT`; if the
   root is right, the checkout simply does not carry that record yet.
+- **Rule 8, absolute path** — a reference whose URI is an absolute path or a
+  `file:` URI, written by hand or carried over by `neb migrate`. It may
+  resolve here and nowhere else. Propose rewriting it relative to `nodes/`, or
+  as an Observatory id if that is what it points at; the new reference goes in
+  with `neb cite`, since there is no verb that edits one in place.
 - **Rule 11** — `Design` next to `design`, or `study` next to `studies`. Tags
   are normalised on write, so this only arises from hand edits; propose
   `neb tag <id> --remove <bad> --add <good>` and name the node.

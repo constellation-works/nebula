@@ -157,6 +157,13 @@ pub enum Error {
         from: PathBuf,
     },
 
+    /// A local reference names a place on one machine's filesystem — an
+    /// absolute path or a `file:` URI — rather than a path relative to
+    /// `nodes/`. Refused whether or not it exists here: the corpus is
+    /// synced between machines, and on every other one it names nothing.
+    #[error("`{0}` is an absolute local path; local references are relative to nodes/")]
+    AbsoluteUri(String),
+
     /// A status move the lifecycle does not allow, judged from the pair of
     /// statuses alone. The refusals that exist today name themselves
     /// ([`Error::NeedsKill`], [`Error::RefutedCannotReopen`] and

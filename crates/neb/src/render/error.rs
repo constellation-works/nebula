@@ -69,6 +69,12 @@ pub fn message_about(e: &Error, node: &str) -> String {
              Create the new idea and link it:\n  \
              neb new \"...\" && neb link <new> reopens {node}"
         ),
+        Error::AbsoluteUri(_) => format!(
+            "{e}\n\n\
+             Cite it by a path relative to nodes/, such as ../../studies/x.md, or \
+             an Observatory record by its id:\n  \
+             neb cite {node} --kind observatory --uri Q002"
+        ),
         other => message(other),
     }
 }

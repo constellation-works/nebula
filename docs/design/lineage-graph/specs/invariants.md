@@ -1,8 +1,8 @@
 ---
 title: Invariants
 owner: claude
-last_updated: 2026-09-22
-last_validated: 2026-09-22
+last_updated: 2026-09-26
+last_validated: 2026-09-26
 status: Accepted
 feature: lineage-graph
 doc_role: spec
@@ -33,7 +33,7 @@ and its "What is removed" table for the rules this replaced.
 | 5 | `refuted` carries `closed.why` | error | `status`, `check` |
 | 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status` |
 | 7 | A reference carries no `verdict`/`strength` | error | parse |
-| 8 | Non-discussion references have a URI; local URIs resolve relative to `nodes/` | error | `cite`, `check` |
+| 8 | Non-discussion references have a URI; local URIs resolve relative to `nodes/` and are never absolute | error; warn for an absolute path already in the corpus | `cite` refuses both; `check` reports both |
 | 9 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`) |
 | 10 | Every reference has a note | warn | `check` |
 | 11 | No two tags differ only by case or a trailing `s` | warn | `check` |
@@ -81,6 +81,25 @@ corpus's business at all: an unset root or a checkout without the record says
 the machine is missing something, not that the citation is wrong, so `check`
 warns. Erroring would make one portable corpus fail on every machine that
 does not happen to have Observatory checked out.
+
+## Rule 8 and absolute paths
+
+A local reference is a path relative to `nodes/`. An absolute path, or a
+`file:` URI, is the one local reference that can resolve and still be wrong:
+`/etc/hostname` exists on the machine that cited it, so resolving it proves
+nothing, and on every other machine the corpus is synced to it names nothing
+while leaking this machine's layout into the corpus. So `cite` refuses one
+before resolving it, whether or not it exists here, and names the two things
+to write instead: a path relative to `nodes/`, or an Observatory record by its
+id. "Absolute" is judged as written and alike on every platform — a leading
+`/` or `\`, a drive letter, a `file:` scheme — because a path absolute on any
+machine is machine layout on all of them.
+
+`check` reports one already in the corpus, hand written or carried over from
+a v1 `evidence` source by `migrate`, as a warning rather than an error, and in
+place of the resolution error, since whether it resolves is again a fact about
+this machine. Warning keeps an older corpus loading and checking cleanly while
+leaving each such reference visible until it is rewritten.
 
 ## Rules 12–14: nothing a verb writes, only what a hand edit leaves
 
