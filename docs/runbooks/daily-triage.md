@@ -43,7 +43,7 @@ thought you discarded is still findable by grep a year later.
 ## Find what needs work
 
 ```sh
-neb open
+neb review --short
 ```
 
 This reports hypotheses with no references, seeds untouched for ninety days or
@@ -52,8 +52,12 @@ listed first. Narrow it to a slice of the corpus with `--tag` (repeatable,
 every one required):
 
 ```sh
-neb open --tag ranking
+neb review --short --tag ranking
 ```
+
+Drop `--short` for the full weekly report, which adds hypotheses nobody has
+touched in thirty days and kill conditions an agent wrote that no human has
+confirmed yet.
 
 The finding that matters most is a hypothesis with no references at all. That
 is an idea you committed to running down and then did not attach anything to.

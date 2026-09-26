@@ -146,9 +146,9 @@ and Orbit provenance, and suppress nearest-node suggestions; run
 | `tag <id> [--add ..] [--remove ..]` / `tag list` | edit tags; list tags with counts |
 | `trace <id> [--down]` | ancestry walk, or descent |
 | `impact <id>` | what `contradicts` or descends from this |
-| `open [--tag ..]` | hypotheses with no references; seeds untouched ≥ 90 d; inbox entries ≥ 14 d |
 | `show <id>` / `list [--tag ..] [--status ..]` | read |
 | `review [--since] [--out]` | weekly maintenance report; proposes, never mutates |
+| `review --short [--tag ..]` | the quick glance: hypotheses with no references; seeds untouched ≥ 90 d; inbox entries ≥ 14 d |
 | `graph` | `--json` emits `{nodes: [...], edges: [...]}`; `--mermaid [--from <id>]` emits a diagram |
 | `check` | the invariants |
 | `migrate` | v1 corpus → v2, see below |

@@ -17,7 +17,7 @@ a reference without a note), fix it in the same turn.
 ```sh
 neb check                 # root resolves, schema is v2, corpus is clean
 neb inbox --json          # what is waiting
-neb open --json           # what needs attention
+neb review --short --json # what needs attention
 ```
 
 Report all three in two or three lines. If the inbox is non-empty, offer to

@@ -1472,7 +1472,7 @@ fn every_corpus_reader_names_a_non_regular_node_and_preserves_the_os_cause() {
         vec!["graph", "--mermaid"],
         vec!["trace", healthy.as_str()],
         vec!["review"],
-        vec!["open"],
+        vec!["review", "--short"],
         vec!["near", "thing"],
         vec!["tag", "list"],
     ] {
@@ -2932,19 +2932,19 @@ fn an_unparsable_reference_added_date_is_a_rule_14_error() {
 // ------------------------------------------------------------------ triage --
 
 #[test]
-fn open_finds_the_hypothesis_with_no_references() {
+fn review_short_finds_the_hypothesis_with_no_references() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
     c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
     set_created(&c.node_file(&id), &date_days_ago(14));
-    c.run(&["open"])
+    c.run(&["review", "--short"])
         .assert_ok()
         .says(&id)
         .says("hypothesis with no references");
 
     c.run(&["cite", &id, "--uri", "https://example.org", "--note", "n"])
         .assert_ok();
-    let after = c.run(&["open"]).assert_ok().stdout();
+    let after = c.run(&["review", "--short"]).assert_ok().stdout();
     assert!(
         !after.contains("no references"),
         "a reference closes the gap:\n{after}"
@@ -2952,35 +2952,35 @@ fn open_finds_the_hypothesis_with_no_references() {
 }
 
 #[test]
-fn open_json_items_have_exactly_id_and_why_keys() {
+fn review_short_json_items_have_exactly_id_and_why_keys() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
     c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
     set_created(&c.node_file(&id), &date_days_ago(14));
 
-    let json = c.run(&["open", "--json"]).assert_ok().stdout();
+    let json = c.run(&["review", "--short", "--json"]).assert_ok().stdout();
     let items: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
     assert!(
         !items.is_empty(),
-        "expected at least one open item:\n{json}"
+        "expected at least one short-review item:\n{json}"
     );
     for item in &items {
         let keys: std::collections::BTreeSet<&str> = item
             .as_object()
-            .expect("open --json item is an object")
+            .expect("review --short --json item is an object")
             .keys()
             .map(String::as_str)
             .collect();
         assert_eq!(
             keys,
             std::collections::BTreeSet::from(["id", "why"]),
-            "open --json item key set drifted from {{id, why}}: {item}"
+            "review --short --json item key set drifted from {{id, why}}: {item}"
         );
     }
 }
 
 #[test]
-fn open_and_review_apply_the_no_references_grace_at_fourteen_days() {
+fn review_and_its_short_form_apply_the_no_references_grace_at_fourteen_days() {
     let c = Corpus::new();
     let grace = c.seed("still in grace", "Still in grace");
     c.run(&["sharpen", &grace, "--kill", "if X"]).assert_ok();
@@ -2992,21 +2992,21 @@ fn open_and_review_apply_the_no_references_grace_at_fourteen_days() {
         .assert_ok();
     set_created(&c.node_file(&due), &date_days_ago(14));
 
-    for verb in ["open", "review"] {
-        let out = c.run(&[verb]).assert_ok().stdout();
+    for args in [["review", "--short"].as_slice(), &["review"]] {
+        let out = c.run(args).assert_ok().stdout();
         assert!(
             !out.contains(&grace),
-            "{verb} raised a 13-day-old node:\n{out}"
+            "{args:?} raised a 13-day-old node:\n{out}"
         );
         assert!(
             out.contains(&due),
-            "{verb} missed a 14-day-old node:\n{out}"
+            "{args:?} missed a 14-day-old node:\n{out}"
         );
     }
 }
 
 #[test]
-fn open_finds_seeds_untouched_for_ninety_days_and_filters_by_tag() {
+fn review_short_finds_seeds_untouched_for_ninety_days_and_filters_by_tag() {
     let c = Corpus::new();
     let old = c.seed("an old seed", "An old seed");
     c.run(&["tag", &old, "--add", "physics"]).assert_ok();
@@ -3014,21 +3014,27 @@ fn open_finds_seeds_untouched_for_ninety_days_and_filters_by_tag() {
     let fresh = c.seed("a fresh seed", "A fresh seed");
     set_updated(&c.node_file(&fresh), &date_days_ago(89));
 
-    let out = c.run(&["open"]).assert_ok().stdout();
+    let out = c.run(&["review", "--short"]).assert_ok().stdout();
     assert!(
         out.contains(&old) && out.contains("seed untouched for ninety days"),
         "{out}"
     );
     assert!(!out.contains(&fresh), "{out}");
 
-    let out = c.run(&["open", "--tag", "physics"]).assert_ok().stdout();
+    let out = c
+        .run(&["review", "--short", "--tag", "physics"])
+        .assert_ok()
+        .stdout();
     assert!(out.contains(&old), "{out}");
-    let out = c.run(&["open", "--tag", "orrery"]).assert_ok().stdout();
+    let out = c
+        .run(&["review", "--short", "--tag", "orrery"])
+        .assert_ok()
+        .stdout();
     assert!(!out.contains(&old), "{out}");
 }
 
 #[test]
-fn open_finds_inbox_captures_waiting_over_fourteen_days() {
+fn review_short_finds_inbox_captures_waiting_over_fourteen_days() {
     let c = Corpus::new();
     c.run(&["capture", "an old capture"]);
 
@@ -3044,16 +3050,89 @@ fn open_finds_inbox_captures_waiting_over_fourteen_days() {
     raw.replace_range(stamp_start..stamp_end, "2020-01-01T00:00");
     std::fs::write(inbox_file, raw).unwrap();
 
-    c.run(&["open"])
+    c.run(&["review", "--short"])
         .assert_ok()
         .says("1 captures waiting over fourteen days; promote or drop them");
 
-    let json = c.run(&["open", "--json"]).assert_ok().stdout();
+    let json = c.run(&["review", "--short", "--json"]).assert_ok().stdout();
     let items: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
     assert!(
         items.iter().any(|item| item["id"] == "inbox"),
         "inbox finding missing: {json}"
     );
+}
+
+#[test]
+fn review_short_on_an_empty_corpus_says_nothing_needs_attention() {
+    let c = Corpus::new();
+    c.run(&["review", "--short"])
+        .assert_ok()
+        .says("nothing needs attention");
+    let json = c.run(&["review", "--short", "--json"]).assert_ok().stdout();
+    let items: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    assert!(items.is_empty(), "{json}");
+}
+
+#[test]
+fn review_short_refuses_the_full_reports_since_and_out_and_tag_needs_it() {
+    let c = Corpus::new();
+    let out_path = c.workdir().join("short.md");
+    for args in [
+        vec!["review", "--short", "--since", "7"],
+        vec!["review", "--short", "--out", out_path.to_str().unwrap()],
+    ] {
+        c.run(&args).assert_fails().says("cannot be used with");
+    }
+    assert!(!out_path.exists(), "a refused --out must not write a file");
+    c.run(&["review", "--tag", "physics"])
+        .assert_fails()
+        .says("--short");
+}
+
+/// `open` is kept for one release so routines that call it keep working: the
+/// same stdout as `review --short`, in text and JSON, plus one deprecation
+/// line on stderr, and no row in `--help`.
+#[test]
+fn deprecated_open_matches_review_short_and_warns_once_on_stderr() {
+    let c = Corpus::new();
+    let bare = c.seed("an idea", "An idea");
+    c.run(&["sharpen", &bare, "--kill", "if X"]).assert_ok();
+    c.run(&["tag", &bare, "--add", "physics"]).assert_ok();
+    set_created(&c.node_file(&bare), &date_days_ago(14));
+    let old = c.seed("an old seed", "An old seed");
+    set_updated(&c.node_file(&old), &date_days_ago(90));
+
+    for extra in [
+        [].as_slice(),
+        &["--json"],
+        &["--tag", "physics"],
+        &["--json", "--tag", "physics"],
+    ] {
+        let short = c
+            .run(&[["review", "--short"].as_slice(), extra].concat())
+            .assert_ok();
+        let open = c.run(&[["open"].as_slice(), extra].concat()).assert_ok();
+        assert!(
+            short.stdout().contains(&bare),
+            "{extra:?}: {}",
+            short.stdout()
+        );
+        assert_eq!(open.stdout(), short.stdout(), "{extra:?}");
+        assert_eq!(
+            short.stderr(),
+            "",
+            "{extra:?}: review --short is not deprecated"
+        );
+        assert_eq!(
+            open.stderr().lines().collect::<Vec<_>>(),
+            ["warning: `neb open` is deprecated; use `neb review --short`"],
+            "{extra:?}"
+        );
+    }
+
+    let help = c.run(&["--help"]).assert_ok().stdout();
+    assert!(!help.contains("\n  open "), "open is hidden:\n{help}");
+    assert!(help.contains("\n  review "), "{help}");
 }
 
 #[test]
@@ -3173,8 +3252,8 @@ fn every_documented_json_verb_emits_machine_readable_json() {
     json(&["trace", "--json", "child-idea"]);
     json(&["impact", "--json", "parent-idea"]);
     json(&["graph", "--json"]);
-    json(&["open", "--json"]);
     json(&["review", "--json"]);
+    json(&["review", "--short", "--json"]);
 
     let checked = json(&["check", "--json"]);
     assert!(checked["nodes"].as_u64().unwrap() >= 6);
@@ -4037,7 +4116,7 @@ fn review_reports_untouched_seeds_on_both_sides_of_ninety_days() {
 }
 
 #[test]
-fn open_and_review_report_only_aged_hypotheses_with_no_references() {
+fn review_and_its_short_form_report_only_aged_hypotheses_with_no_references() {
     let c = Corpus::new();
     let seed = c.seed("an old seed", "An old seed");
     set_created(&c.node_file(&seed), &date_days_ago(30));
@@ -4047,15 +4126,15 @@ fn open_and_review_report_only_aged_hypotheses_with_no_references() {
         .assert_ok();
     set_created(&c.node_file(&hypothesis), &date_days_ago(30));
 
-    for verb in ["open", "review"] {
-        let out = c.run(&[verb]).assert_ok().stdout();
+    for args in [["review", "--short"].as_slice(), &["review"]] {
+        let out = c.run(args).assert_ok().stdout();
         assert!(
             !out.contains(&seed),
-            "{verb} incorrectly reported an old seed with no references:\n{out}"
+            "{args:?} incorrectly reported an old seed with no references:\n{out}"
         );
         assert!(
             out.contains(&hypothesis),
-            "{verb} missed an old hypothesis with no references:\n{out}"
+            "{args:?} missed an old hypothesis with no references:\n{out}"
         );
     }
 }
