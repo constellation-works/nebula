@@ -129,15 +129,19 @@ mod tests {
 
     #[test]
     fn quiet_between_bursts_separates_them() {
+        // No producer thread: a sleep between bursts races the scheduler, and
+        // a late wake-up would find the next event already queued. The first
+        // change can only come after a quiet window, so an event sent after it
+        // is by construction a second burst.
         let (tx, rx) = channel();
-        let producer = std::thread::spawn(move || {
-            tx.send(()).unwrap();
-            tx.send(()).unwrap();
-            std::thread::sleep(WINDOW * 3);
-            tx.send(()).unwrap();
-        });
-        assert_eq!(debounced(&rx, WINDOW, MAX_LATENCY).count(), 2);
-        producer.join().unwrap();
+        tx.send(()).unwrap();
+        tx.send(()).unwrap();
+        let mut changes = debounced(&rx, WINDOW, MAX_LATENCY);
+        assert_eq!(changes.next(), Some(()));
+        tx.send(()).unwrap();
+        drop(tx);
+        assert_eq!(changes.next(), Some(()));
+        assert_eq!(changes.next(), None);
     }
 
     #[test]
@@ -153,7 +157,10 @@ mod tests {
 
         let started = Instant::now();
         assert!(debounced(&rx, WINDOW, MAX_LATENCY).next().is_some());
-        assert!(started.elapsed() < Duration::from_millis(250));
+        // Without the cap the first change would wait for the producer to stop
+        // and then a quiet window: at least 440 ms. The cap is 120 ms; the
+        // rest of the bound is slack for a loaded CI runner.
+        assert!(started.elapsed() < Duration::from_millis(400));
         producer.join().unwrap();
     }
 
