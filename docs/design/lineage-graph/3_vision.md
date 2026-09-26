@@ -2,7 +2,7 @@
 title: Lineage Graph — Vision
 owner: claude
 last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_validated: 2026-09-25
 status: Draft
 feature: lineage-graph
 doc_role: vision
@@ -40,20 +40,23 @@ its own, the graph stops being trustworthy, and an untrusted graph is worse
 than no graph. `--json` on every read command exists to make that loop cheap
 for the agent to build on.
 
-## Later, maybe — now in flight
+## Once hypotheticals, now implemented
 
-Two things this document once filed under "maybe" are now scoped, tracked
-tasks rather than hypotheticals:
+Two things this document once filed under "maybe" are now implemented in this
+repository:
 
 - A desktop app that draws the whole corpus as a graph and captures from a
   global shortcut, so lineage can be read and added to without a terminal.
 - An agent skill that teaches a session-mode or routine-mode agent the verbs,
   their `--json` shapes, and the invariants, so the maintenance loop above is
-  actually run rather than merely specified.
+  usable rather than merely specified.
 
-Both are scoped in [docs/design/v0.2/2_architecture.md](../v0.2/2_architecture.md)
-and staged in [docs/design/v0.2/3_plan.md](../v0.2/3_plan.md). Similarity
-search for proposing links remains a real "maybe": nothing today scopes it.
+Their design is documented in
+[docs/design/v0.2/2_architecture.md](../v0.2/2_architecture.md), and the
+delivery sequence is recorded in [docs/design/v0.2/3_plan.md](../v0.2/3_plan.md).
+`neb near` now ranks candidate nodes by word overlap for text or an existing
+node. It returns suggestions only; creating links remains a human-directed
+action.
 
 ## Deliberately out of scope
 

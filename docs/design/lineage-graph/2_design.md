@@ -2,7 +2,7 @@
 title: Lineage Graph — Design
 owner: claude
 last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_validated: 2026-09-25
 status: Accepted
 feature: lineage-graph
 doc_role: design
@@ -46,13 +46,14 @@ Every node write is rendered to a sibling temporary file and renamed, so an
 interrupted write cannot leave half a node behind.
 
 `config.yaml` at the corpus root holds `schema_version`, an opaque `corpus_id`,
-and — once set — `observatory_root`, the one thing that is about this machine
-rather than about the ideas: where the Observatory checkout is, so an
-`observatory` reference's bare record id resolves to a file. Nothing about the
-ideas is configured — tags on the nodes themselves are how the corpus is
-partitioned for a view. `neb init` writes the file, `neb config` rewrites it
-whole, and `neb migrate` bumps `schema_version` in place; it is never hand
-edited.
+the optional `observatory_root` that locates the Observatory checkout on this
+machine so an `observatory` reference's bare record id can resolve to a file,
+and the optional `commit` setting that enables a git commit after mutating
+verbs when the corpus is in a git work tree. Nothing about the ideas is
+configured — tags on the nodes themselves are how the corpus is partitioned
+for a view. `neb init` writes the file,
+`neb config` rewrites it whole, and `neb migrate` bumps `schema_version` in
+place; it is never hand edited.
 
 ## Tags, not a declared list
 

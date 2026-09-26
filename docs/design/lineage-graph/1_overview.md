@@ -2,7 +2,7 @@
 title: Lineage Graph — Overview
 owner: claude
 last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_validated: 2026-09-25
 status: Accepted
 feature: lineage-graph
 doc_role: overview
@@ -57,9 +57,10 @@ ancestor.
 
 Genealogy (`derives-from`, `refines`, `generalizes`, `reopens`) answers "where
 did this come from" and is enforced acyclic. `contradicts` sits beside it: a
-symmetric statement that two ideas cannot both be true, written on both nodes
-at once by `link`. It is not a graph to walk on its own, just a flag a node
-carries. A second, cycle-tolerant relation lived here in v0.1 and was cut in
+symmetric statement that two ideas cannot both be true, written symmetrically
+on both nodes by `link`. The relation is excluded from `trace`; `neb impact`
+reports contradictions separately, and `neb graph` exports them as edges. A
+second, cycle-tolerant relation lived here in v0.1 and was cut in
 the 2026-09-12 reduction; see [docs/design/v0.2/1_spec.md](../v0.2/1_spec.md)
 ("What is removed") for why.
 
