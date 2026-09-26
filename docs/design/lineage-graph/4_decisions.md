@@ -420,3 +420,38 @@ What is given up: these views cannot be cut or awk'd by column. Each one has a
 `--json` form carrying the same payload, and that is the form for a program.
 Reverses for any of them that turns out to be read as a list, which becomes a
 table.
+
+## The `--json` contract: every field, one author shape, capped lists say so
+
+Core's types serialise for two readers that want absence left out: the YAML
+frontmatter, which stores the human's authorship and every empty field by
+omission, and the desktop's generated TypeScript. A script reading
+`neb … --json` wants the opposite, so the CLI serialises through a view,
+`crates/neb/src/render/json.rs`, rather than changing core's serde
+attributes. Every documented field is present, an absent value `null` and an
+empty collection `[]` (`STD-01@2 §R11`), and every author label is stated
+through `Node::with_authorship_stated`, so a write verb's node has the key set
+and the labels `show` gives it (`STD-01@2 §R10`). Each view destructures its
+core type in full, so a field added to core does not compile until the view
+names it. The node files and `apps/desktop/src/types` are unchanged.
+
+A list a limit cut says so in its payload, as
+`{"items": [...], "total": N, "truncated": bool}` (`STD-01@2 §R34`), with
+`total` the number that matched before the cut:
+
+- **`near` always**, because it always has a limit (`-k`, default 3). A cut
+  also says `K of N shown; raise -k for more` on stderr in every mode. Core
+  returns the count beside `Near` (`graph::near_counted`), so the type the
+  desktop reads keeps its bare shape.
+- **`list`, `inbox`, `review` (full and `--short`) and `trace` only with the
+  flag.** Given `--limit` or `--depth`, the answer is the envelope whether or
+  not anything was cut, so its shape follows the flag and never the data;
+  without the flag it is the bare array `§R34` allows for an unbounded list,
+  which keeps `neb list --json | jq '.[]'` in the routine working. For
+  `review`, `total` counts every rule's findings before each kept its first N;
+  for `trace --depth`, it is the size of the unbounded walk.
+
+0.2.0 is unreleased, so these shape changes are made now, while they cost
+nothing; after the release each would be a breaking change (`STD-01@2 §R10`).
+Reverses only by the same route: a recorded breaking change to the machine
+contract.

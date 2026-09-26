@@ -74,7 +74,10 @@ Design rules for core:
 
 - **Return data, never text.** Every query and op returns a `serde::Serialize`
   struct. The CLI's `--json` output and the desktop's IPC payload are the same
-  value; there is no second schema to drift.
+  value; there is no second schema to drift. The CLI states that value in
+  full through `render::json`, an absent field `null` and every author
+  label spelled out, where core's own serialisation leaves them to the
+  file's defaults.
 - **Queries are pure over a `Graph`.** `Graph::from(&[Node])` is built once per
   command; `trace`, `impact`, `open`, `review`, `export` take `&Graph` and
   allocate nothing global. This is what lets the desktop keep a `Graph` in
@@ -146,7 +149,9 @@ neb/src/
 ```
 
 `cli.rs` dispatch is a table: parse args → call one core fn → either
-`serde_json::to_writer` (`--json`) or `render::*`. A command that does anything
+`--json` (through the `render::json` view where core would leave a field out,
+and the `{items, total, truncated}` envelope for a capped list) or
+`render::*`. A command that does anything
 else belongs in core. Shell completions stay.
 
 ## `apps/desktop`

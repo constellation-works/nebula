@@ -39,8 +39,9 @@ For each inbox entry, in order:
   parent in the answer is not a link still to make.
 - Pick a parent only if one is defensible: you can say in one line why the
   entry descends from, refines or generalizes that node. Otherwise promote
-  as a root. An empty `near` (`[]`) is a real finding — nothing in the corpus
-  shares a word with it — and a root is the honest answer, not a failure.
+  as a root. An empty `near` (`"items": []`) is a real finding — nothing in
+  the corpus shares a word with it — and a root is the honest answer, not a
+  failure.
   `promote` without `--parent` prints the same suggestions and proceeds;
   it never blocks and never links.
 - Say which of **promote** (with the proposed `--title`, `--parent`, `--tag`)
@@ -116,7 +117,7 @@ $ neb check
 $ neb inbox --json
 [ { "id": "a6e8", "at": "2026-09-12T18:16", "text": "nebula review as a weekly orbit routine" } ]
 $ neb near --json "nebula review as a weekly orbit routine"
-[]
+{ "items": [], "total": 0, "truncated": false }
 $ neb list --json | jq -c '.[] | {id, status, tags}'
 {"id":"a-single-global-taxonomy","status":"refuted","tags":["design"]}
 {"id":"required-categorical-fields-drift","status":"seed","tags":["design"]}

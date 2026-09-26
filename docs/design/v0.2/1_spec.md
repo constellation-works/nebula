@@ -167,10 +167,14 @@ and Orbit provenance, and suppress nearest-node suggestions; run
 | `review --short [--tag ..] [--limit ..]` | quick glance: hypotheses created at least 14 days ago with no references; seeds untouched for at least 90 days; inbox entries waiting at least 14 days |
 
 Every read verb keeps `--json`. The JSON shape **is** the core library's
-return type serialised; see [2_architecture.md](2_architecture.md).
-`--limit` and `--depth` bound the output and default to everything; under
-`--json` they cut the same array, whose shape does not change. Every verb that
-writes takes `--no-commit`; a read-only verb does not offer it.
+return type serialised, with every field present (an absent value `null`, an
+empty list `[]`) and every author label stated; see
+[2_architecture.md](2_architecture.md). `--limit` and `--depth` bound the
+output and default to everything; under `--json`, given either flag, the list
+is `{items, total, truncated}`, `total` counting the matches before the cut,
+and without it the bare array. `near` always has a limit, so it always
+answers in that envelope. Every verb that writes takes `--no-commit`; a
+read-only verb does not offer it.
 
 ## Invariants
 
@@ -214,7 +218,7 @@ the node to `abandoned` with `closed: {why: "handed off to <record>"}`.
   carries an `observatory` reference to that record. No field records it.
   `show` prints where the record is under the `closed:` line, and `trace`
   appends `handed off to <record>` to the node's line; both `--json` forms
-  carry `handed_off_to`, omitted when the node was not handed off.
+  carry `handed_off_to`, `null` when the node was not handed off.
 
 Decision (ORB-13077): nebula owns this verb; back-links from Observatory to
 the node (`nebula:<id>`) are Observatory's to write. The hand-off stays an

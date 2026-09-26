@@ -1870,10 +1870,12 @@ fn lexical_fixture(c: &Corpus) {
         .assert_ok();
 }
 
+/// The ids in `near --json`'s envelope, in order.
 fn ids(json: &str) -> Vec<String> {
     let out: serde_json::Value = serde_json::from_str(json).unwrap();
-    out.as_array()
-        .unwrap_or_else(|| panic!("a bare list: {json}"))
+    out["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("an envelope's items: {json}"))
         .iter()
         .map(|n| n["id"].as_str().unwrap().to_string())
         .collect()
@@ -1896,6 +1898,9 @@ fn near_ranks_existing_nodes_against_free_text() {
         "{json}"
     );
     let out: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(out["total"], 2, "{json}");
+    assert_eq!(out["truncated"], false, "{json}");
+    let out = &out["items"];
     let first = &out[0];
     assert_eq!(first["title"], "Tags beat domains");
     assert_eq!(first["status"], "hypothesis");
@@ -1941,6 +1946,8 @@ fn near_ranks_existing_nodes_against_free_text() {
         .assert_ok()
         .stdout();
     assert_eq!(ids(&json).len(), 1, "{json}");
+    let out: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(out["truncated"], true, "{json}");
 }
 
 #[test]
@@ -2019,7 +2026,8 @@ fn near_marks_candidates_already_linked_to_the_node() {
         .stdout();
     let out: serde_json::Value = serde_json::from_str(&json).unwrap();
     let by_id = |id: &str| {
-        out.as_array()
+        out["items"]
+            .as_array()
             .unwrap()
             .iter()
             .find(|n| n["id"] == id)
@@ -2055,10 +2063,56 @@ fn near_says_so_when_nothing_matches() {
         .run(&["near", "--json", "quantum", "gravity"])
         .assert_ok()
         .stdout();
-    assert_eq!(json.trim(), "[]");
+    let out: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        out,
+        serde_json::json!({"items": [], "total": 0, "truncated": false})
+    );
     c.run(&["near", "   "])
         .assert_fails()
         .says("nothing to look near");
+}
+
+/// `near` always has a limit, so `--json` is always the envelope: the
+/// neighbours kept, how many shared a word with the query, and whether `-k`
+/// cut any. A cut is named on stderr in every mode.
+#[test]
+fn near_json_reports_total_and_truncated() {
+    let c = Corpus::new();
+    for i in 0..150 {
+        let id = format!("lantern-{i:03}");
+        write(
+            &c.node_file(&id),
+            &format!(
+                "---\nid: {id}\ntitle: Lantern number {i}\nstatus: seed\n\
+                 created: 2026-09-01\nupdated: 2026-09-01\n---\n"
+            ),
+        );
+    }
+    c.run(&["new", "Unrelated idea"]).assert_ok();
+
+    let cut = c.run(&["near", "--json", "lantern"]).assert_ok();
+    let out: serde_json::Value = serde_json::from_str(&cut.stdout()).unwrap();
+    assert_eq!(out["items"].as_array().unwrap().len(), 3, "{out}");
+    assert_eq!(out["total"], 150, "{out}");
+    assert_eq!(out["truncated"], true, "{out}");
+    assert!(
+        cut.stderr().contains("3 of 150 shown; raise -k for more"),
+        "{}",
+        cut.stderr()
+    );
+    let text = c.run(&["near", "lantern"]).assert_ok();
+    assert!(text.stderr().contains("3 of 150"), "{}", text.stderr());
+    assert!(!text.stdout().contains("3 of 150"), "{}", text.stdout());
+
+    let whole = c
+        .run(&["near", "--json", "lantern", "-k", "500"])
+        .assert_ok();
+    let out: serde_json::Value = serde_json::from_str(&whole.stdout()).unwrap();
+    assert_eq!(out["truncated"], false, "{out}");
+    assert_eq!(out["total"], 150, "{out}");
+    assert_eq!(out["items"].as_array().unwrap().len(), 150, "{out}");
+    assert_eq!(whole.stderr(), "", "no notice for a whole answer");
 }
 
 /// `--limit` after the query is a flag; `--quiet` is not a near flag, and
@@ -2315,7 +2369,11 @@ fn capture_json_carries_the_entry_and_its_neighbours() {
         .assert_ok()
         .stdout();
     let out: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert!(out.get("near").is_none(), "quiet omits the list: {json}");
+    assert_eq!(
+        out["near"],
+        serde_json::json!([]),
+        "quiet empties it: {json}"
+    );
     assert!(out["entry"]["id"].is_string(), "{json}");
 }
 
@@ -2466,9 +2524,9 @@ fn promote_json_is_the_created_node_with_its_neighbours() {
         near.iter().all(|n| n["id"] != "taxonomies-decay"),
         "a promotion is not its own neighbour: {json}"
     );
-    assert!(out["doc"]["node"].get("edges").is_none(), "no edge: {json}");
+    assert_eq!(out["doc"]["node"]["edges"], serde_json::json!([]), "{json}");
 
-    // With a parent, `near` is omitted rather than empty.
+    // With a parent, `near` is empty: present, never omitted.
     let entry = c
         .run(&["capture", "-q", "another taxonomy"])
         .assert_ok()
@@ -2484,7 +2542,7 @@ fn promote_json_is_the_created_node_with_its_neighbours() {
         .assert_ok()
         .stdout();
     let out: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert!(out.get("near").is_none(), "{json}");
+    assert_eq!(out["near"], serde_json::json!([]), "{json}");
 }
 
 // ------------------------------------------------------------------ triage --
@@ -3191,7 +3249,9 @@ fn trace_depth_bounds_the_tree_and_the_json_alike() {
     let tree = |args: &[&str]| c.run(args).assert_ok().stdout();
     let walked = |args: &[&str]| -> Vec<String> {
         let json: serde_json::Value = serde_json::from_str(&tree(args)).unwrap();
-        json.as_array()
+        assert_eq!(json["total"], 4, "the whole walk: {json}");
+        json["items"]
+            .as_array()
             .unwrap()
             .iter()
             .map(|n| n["id"].as_str().unwrap().to_string())
@@ -3257,6 +3317,31 @@ fn trace_without_depth_is_unchanged_and_an_unreached_depth_matches_it() {
             .stdout();
         assert_eq!(bounded, whole);
     }
+}
+
+/// `trace --depth` answers in the envelope, with the size of the whole walk
+/// as `total`; without the flag it is the bare array.
+#[test]
+fn trace_depth_json_envelope() {
+    let c = Corpus::new();
+    shortcut(&c);
+    let cut = json_of(&c, &["trace", "--json", "root", "--down", "--depth", "1"]);
+    assert_envelope(&cut, 3, 4, true);
+    assert!(cut["items"][0]["handed_off_to"].is_null(), "{cut}");
+    assert_envelope(
+        &json_of(&c, &["trace", "--json", "root", "--down", "--depth", "10"]),
+        4,
+        4,
+        false,
+    );
+    assert_envelope(
+        &json_of(&c, &["trace", "--json", "deep", "--depth", "1"]),
+        2,
+        4,
+        true,
+    );
+    let bare = json_of(&c, &["trace", "--json", "root", "--down"]);
+    assert_eq!(bare.as_array().map(Vec::len), Some(4), "{bare}");
 }
 
 #[test]
@@ -4822,9 +4907,10 @@ fn every_documented_json_verb_emits_machine_readable_json() {
     ]);
     assert_eq!(sharpened["node"]["status"], "hypothesis");
     assert_eq!(sharpened["node"]["kill"], "the evidence changes");
+    assert_eq!(sharpened["node"]["kill_by"], "agent:test");
     let confirmed = json(&["sharpen", "--json", "idea-to-sharpen", "--confirm"]);
     assert_eq!(confirmed["node"]["kill"], "the evidence changes");
-    assert!(confirmed["node"].get("kill_by").is_none());
+    assert_eq!(confirmed["node"]["kill_by"], "human");
 
     json(&["new", "--json", "Idea to close"]);
     let changed = json(&[
@@ -4875,16 +4961,221 @@ fn every_documented_json_verb_emits_machine_readable_json() {
 
     let shown = json(&["show", "--json", "direct-idea"]);
     assert_eq!(shown["node"]["id"], "direct-idea");
-    json(&["list", "--json"]);
-    json(&["near", "--json", "direct design"]);
-    json(&["trace", "--json", "child-idea"]);
+    assert!(json(&["list", "--json"]).is_array());
+    let near = json(&["near", "--json", "direct design"]);
+    assert!(near["items"].is_array() && near["total"].is_u64(), "{near}");
+    assert!(near["truncated"].is_boolean(), "{near}");
+    assert!(json(&["trace", "--json", "child-idea"]).is_array());
     json(&["impact", "--json", "parent-idea"]);
     json(&["graph", "--json"]);
-    json(&["review", "--json"]);
-    json(&["review", "--short", "--json"]);
+    assert!(json(&["inbox", "--json"]).is_array());
+    assert!(json(&["review", "--json"]).is_array());
+    assert!(json(&["review", "--short", "--json"]).is_array());
 
     let checked = json(&["check", "--json"]);
     assert!(checked["nodes"].as_u64().unwrap() >= 6);
+}
+
+/// A JSON object's keys, sorted as `serde_json` keeps them.
+fn keys(v: &serde_json::Value) -> Vec<String> {
+    v.as_object()
+        .unwrap_or_else(|| panic!("an object: {v}"))
+        .keys()
+        .cloned()
+        .collect()
+}
+
+/// Every key of a node, whichever verb serialised it (STD-01 §R10, §R11).
+const NODE_KEYS: [&str; 13] = [
+    "closed",
+    "created",
+    "edges",
+    "id",
+    "kill",
+    "kill_by",
+    "origin",
+    "references",
+    "status",
+    "tags",
+    "title",
+    "title_by",
+    "updated",
+];
+
+/// An absent value is `null` and an empty collection `[]` on every node a
+/// `--json` verb returns, and a write, a `show` and a `list` agree on the
+/// key set.
+#[test]
+fn json_node_payload_has_every_field_with_null_for_absent() {
+    let c = Corpus::new();
+    let json = |args: &[&str]| -> serde_json::Value {
+        serde_json::from_str(&c.run(args).assert_ok().stdout()).unwrap()
+    };
+    let created = json(&["new", "--json", "X"])["doc"]["node"].clone();
+    let shown = json(&["show", "--json", "x"])["node"].clone();
+    let listed = json(&["list", "--json"])[0].clone();
+    for node in [&created, &shown, &listed] {
+        assert_eq!(keys(node), NODE_KEYS, "{node}");
+        for list in ["tags", "edges", "references"] {
+            assert_eq!(node[list], serde_json::json!([]), "`{list}`: {node}");
+        }
+        for absent in ["kill", "kill_by", "closed", "origin"] {
+            assert!(node[absent].is_null(), "`{absent}`: {node}");
+        }
+        assert_eq!(node["title_by"], "human", "{node}");
+    }
+}
+
+/// Every write verb's node is the shape `show` gives, authors stated: a
+/// field written without `--by` says `human` rather than leaving it out.
+#[test]
+fn json_write_payloads_match_the_read_shape() {
+    let c = Corpus::new();
+    let (obs, _) = observatory_with_h012(c.workdir());
+    let obs = obs.to_str().unwrap().to_owned();
+    let json = |args: &[&str]| -> serde_json::Value {
+        let out = c
+            .run_with_env(args, &[("OBSERVATORY_ROOT", &obs)])
+            .assert_ok()
+            .stdout();
+        serde_json::from_str(&out)
+            .unwrap_or_else(|e| panic!("`neb {}` did not emit JSON: {e}\n{out}", args.join(" ")))
+    };
+    // The node a write returned, against what `show` says of it now.
+    let same_as_show = |verb: &str, node: &serde_json::Value| {
+        let id = node["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{verb}: {node}"));
+        let shown = json(&["show", "--json", id])["node"].clone();
+        assert_eq!(keys(node), keys(&shown), "`{verb}` vs `show {id}`: {node}");
+        assert_eq!(keys(node), NODE_KEYS, "`{verb}`: {node}");
+        assert_eq!(node["title_by"], "human", "`{verb}`: {node}");
+        for list in ["edges", "references"] {
+            for item in node[list].as_array().unwrap() {
+                assert_eq!(item["by"], "human", "`{verb}` {list}: {node}");
+            }
+        }
+    };
+
+    json(&["new", "--json", "Parent"]);
+    let created = json(&["new", "--json", "Child", "--parent", "parent"]);
+    assert_eq!(created["doc"]["node"]["edges"][0]["by"], "human");
+    same_as_show("new", &created["doc"]["node"]);
+
+    let entry = json(&["capture", "--json", "-q", "a promoted thought"])["entry"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let promoted = json(&["promote", "--json", &entry, "--parent", "parent"]);
+    assert_eq!(promoted["doc"]["node"]["edges"][0]["by"], "human");
+    same_as_show("promote", &promoted["doc"]["node"]);
+
+    let changed = json(&["status", "--json", "child", "abandoned", "--why", "moot"]);
+    same_as_show("status", &changed["doc"]["node"]);
+
+    json(&["new", "--json", "Linked"]);
+    let linked = json(&["link", "--json", "linked", "derives-from", "parent"]);
+    assert_eq!(linked[0]["node"]["edges"][0]["by"], "human");
+    same_as_show("link", &linked[0]["node"]);
+
+    let tagged = json(&["tag", "--json", "linked", "--add", "t"]);
+    same_as_show("tag", &tagged["node"]);
+
+    let sharpened = json(&["sharpen", "--json", "parent", "--kill", "if not"]);
+    assert_eq!(sharpened["node"]["kill_by"], "human");
+    same_as_show("sharpen", &sharpened["node"]);
+
+    let cited = json(&[
+        "cite",
+        "--json",
+        "parent",
+        "--uri",
+        "https://example.org",
+        "--note",
+        "why",
+    ]);
+    assert_eq!(cited["doc"]["node"]["references"][0]["by"], "human");
+    same_as_show("cite", &cited["doc"]["node"]);
+
+    let handed = json(&["handoff", "--json", "linked", "H012", "--note", "n"]);
+    assert_eq!(handed["doc"]["node"]["references"][0]["by"], "human");
+    same_as_show("handoff", &handed["doc"]["node"]);
+}
+
+/// Optionals nested inside a node, and beside it in a payload, are `null`
+/// or `[]` rather than left out.
+#[test]
+fn json_nested_optionals_are_null_not_omitted() {
+    let c = Corpus::new();
+    let json = |args: &[&str]| -> serde_json::Value {
+        serde_json::from_str(&c.run(args).assert_ok().stdout()).unwrap()
+    };
+
+    json(&["new", "--json", "Plain"]);
+    let cited = json(&["cite", "--json", "plain", "--uri", "https://example.org"]);
+    let reference = &cited["doc"]["node"]["references"][0];
+    assert_eq!(
+        keys(reference),
+        [
+            "added", "by", "id", "kind", "note", "origin", "title", "uri"
+        ],
+        "{reference}"
+    );
+    for absent in ["title", "note", "origin"] {
+        assert!(reference[absent].is_null(), "`{absent}`: {reference}");
+    }
+
+    let tasked = json(&["new", "--json", "Tasked", "--task", "T"]);
+    assert_eq!(
+        tasked["doc"]["node"]["origin"],
+        serde_json::json!({
+            "task": "T",
+            "workspace": null,
+            "run": null,
+            "artifact": null,
+            "agent": null,
+            "at": null,
+        })
+    );
+
+    let shown = json(&["show", "--json", "tasked"]);
+    assert_eq!(
+        keys(&shown),
+        ["body", "handed_off_to", "node", "notes", "observatory"],
+        "{shown}"
+    );
+    assert_eq!(shown["notes"], serde_json::json!([]), "{shown}");
+    assert_eq!(shown["observatory"], serde_json::json!([]), "{shown}");
+    assert!(shown["handed_off_to"].is_null(), "{shown}");
+
+    // No observatory root on this machine, so the record cannot resolve.
+    c.run(&[
+        "cite",
+        "plain",
+        "--kind",
+        "observatory",
+        "--uri",
+        "H012",
+        "--note",
+        "n",
+    ])
+    .assert_ok();
+    let shown = json(&["show", "--json", "plain"]);
+    assert_eq!(
+        shown["observatory"],
+        serde_json::json!([{"reference": "r2", "record": "H012", "path": null}]),
+        "{shown}"
+    );
+
+    let walk = json(&["trace", "--json", "tasked"]);
+    assert!(walk[0]["handed_off_to"].is_null(), "{walk}");
+    assert!(walk[0].get("handed_off_to").is_some(), "{walk}");
+
+    let captured = json(&["capture", "--json", "-q", "plain again"]);
+    assert_eq!(captured["near"], serde_json::json!([]), "{captured}");
+    let entry = captured["entry"]["id"].as_str().unwrap();
+    let promoted = json(&["promote", "--json", entry, "-q"]);
+    assert_eq!(promoted["near"], serde_json::json!([]), "{promoted}");
 }
 
 #[test]
@@ -6030,7 +6321,7 @@ fn list_lines_up_its_ids_after_the_status() {
 
 /// `--limit` cuts `list` to its first N matches and says how many it left
 /// out; without it every match is listed, as before. `--json` gets the cut
-/// list alone.
+/// list in the envelope that says so.
 #[test]
 fn list_limit_bounds_the_listing_and_defaults_to_all() {
     let c = Corpus::new();
@@ -6073,7 +6364,8 @@ fn list_limit_bounds_the_listing_and_defaults_to_all() {
         .assert_ok()
         .stdout();
     let listed: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(listed.as_array().unwrap().len(), 1, "{json}");
+    assert_eq!(listed["items"].as_array().unwrap().len(), 1, "{json}");
+    assert_eq!(listed["total"], 4, "{json}");
 
     let single = Corpus::new();
     single.run(&["new", "Alone"]).assert_ok();
@@ -6109,8 +6401,9 @@ fn inbox_limit_shows_the_oldest_and_counts_the_rest() {
         .assert_ok()
         .stdout();
     let listed: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(listed.as_array().unwrap().len(), 1, "{json}");
-    assert_eq!(listed[0]["text"], "first thought", "{json}");
+    assert_eq!(listed["items"].as_array().unwrap().len(), 1, "{json}");
+    assert_eq!(listed["items"][0]["text"], "first thought", "{json}");
+    assert_eq!(listed["total"], 3, "{json}");
 }
 
 /// `review --limit` keeps the first N findings under each heading, so a
@@ -6147,7 +6440,8 @@ fn review_limit_cuts_each_section_and_the_short_form() {
         .assert_ok()
         .stdout();
     let items: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(items.as_array().unwrap().len(), 2, "{json}");
+    assert_eq!(items["items"].as_array().unwrap().len(), 2, "{json}");
+    assert_eq!(items["total"], 4, "every rule's findings: {json}");
 
     let short = c.run(&["review", "--short"]).assert_ok().stdout();
     assert_eq!(short.lines().count(), 4, "{short}");
@@ -6163,7 +6457,117 @@ fn review_limit_cuts_each_section_and_the_short_form() {
         .assert_ok()
         .stdout();
     let items: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(items.as_array().unwrap().len(), 2, "{json}");
+    assert_eq!(items["items"].as_array().unwrap().len(), 2, "{json}");
+    assert_eq!(items["total"], 4, "{json}");
+}
+
+/// Run a `--json` command and parse what it printed.
+fn json_of(c: &Corpus, args: &[&str]) -> serde_json::Value {
+    let out = c.run(args).assert_ok().stdout();
+    serde_json::from_str(&out)
+        .unwrap_or_else(|e| panic!("`neb {}` did not emit JSON: {e}\n{out}", args.join(" ")))
+}
+
+/// The STD-01 §R34 envelope: `items` of length `kept`, `total` and
+/// `truncated` as given, and no other key.
+fn assert_envelope(v: &serde_json::Value, kept: usize, total: usize, truncated: bool) {
+    assert_eq!(keys(v), ["items", "total", "truncated"], "{v}");
+    assert_eq!(v["items"].as_array().unwrap().len(), kept, "{v}");
+    assert_eq!(v["total"], total, "{v}");
+    assert_eq!(v["truncated"], truncated, "{v}");
+}
+
+/// `list --limit` answers in the envelope, cut or not, with the number the
+/// filter matched as `total`; without the flag it is the bare array.
+#[test]
+fn list_limit_json_envelope() {
+    let c = Corpus::new();
+    for title in ["One", "Two", "Three"] {
+        c.run(&["new", title, "--tag", "t"]).assert_ok();
+    }
+    c.run(&["new", "Untagged"]).assert_ok();
+
+    assert_envelope(
+        &json_of(&c, &["list", "--json", "--limit", "2"]),
+        2,
+        4,
+        true,
+    );
+    let tagged = json_of(&c, &["list", "--json", "--tag", "t", "--limit", "2"]);
+    assert_envelope(&tagged, 2, 3, true);
+    assert_eq!(keys(&tagged["items"][0]), NODE_KEYS, "{tagged}");
+    assert_envelope(
+        &json_of(&c, &["list", "--json", "--limit", "500"]),
+        4,
+        4,
+        false,
+    );
+    let bare = json_of(&c, &["list", "--json"]);
+    assert_eq!(bare.as_array().map(Vec::len), Some(4), "{bare}");
+}
+
+/// `inbox --limit` answers in the envelope, cut or not; without the flag it
+/// is the bare array.
+#[test]
+fn inbox_limit_json_envelope() {
+    let c = Corpus::new();
+    for text in ["first thought", "second thought", "third thought"] {
+        c.run(&["capture", "--quiet", text]).assert_ok();
+    }
+    let cut = json_of(&c, &["inbox", "--json", "--limit", "2"]);
+    assert_envelope(&cut, 2, 3, true);
+    assert_eq!(cut["items"][0]["text"], "first thought", "{cut}");
+    assert_envelope(
+        &json_of(&c, &["inbox", "--json", "--limit", "5"]),
+        3,
+        3,
+        false,
+    );
+    let bare = json_of(&c, &["inbox", "--json"]);
+    assert_eq!(bare.as_array().map(Vec::len), Some(3), "{bare}");
+}
+
+/// `review --limit`'s `total` counts every rule's findings before the cut
+/// kept each rule's first N; `review --short --limit` counts its lines. Both
+/// are envelopes with the flag, cut or not, and bare arrays without it.
+#[test]
+fn review_limit_json_envelope() {
+    let c = Corpus::new();
+    for title in ["Cold one", "Cold two", "Cold three"] {
+        c.run(&["new", title]).assert_ok();
+    }
+    for id in ["cold-one", "cold-two", "cold-three"] {
+        set_updated(&c.node_file(id), &date_days_ago(100));
+    }
+    c.run(&["capture", "--quiet", "an old capture"]).assert_ok();
+    set_inbox_stamp_for(&c.root, "an old capture", &stamp_days_ago(20));
+
+    // Three cold seeds under one rule and the stale capture under another.
+    let cut = json_of(&c, &["review", "--json", "--limit", "1"]);
+    assert_envelope(&cut, 2, 4, true);
+    assert_envelope(
+        &json_of(&c, &["review", "--json", "--limit", "10"]),
+        4,
+        4,
+        false,
+    );
+    let bare = json_of(&c, &["review", "--json"]);
+    assert_eq!(bare.as_array().map(Vec::len), Some(4), "{bare}");
+
+    assert_envelope(
+        &json_of(&c, &["review", "--short", "--json", "--limit", "1"]),
+        1,
+        4,
+        true,
+    );
+    assert_envelope(
+        &json_of(&c, &["review", "--short", "--json", "--limit", "10"]),
+        4,
+        4,
+        false,
+    );
+    let bare = json_of(&c, &["review", "--short", "--json"]);
+    assert_eq!(bare.as_array().map(Vec::len), Some(4), "{bare}");
 }
 
 /// Counts agree with their nouns wherever the reports print one.
@@ -6760,8 +7164,8 @@ fn handoff_cites_the_record_and_closes_the_node_in_one_write() {
         serde_json::from_str(&c.run(&["--json", "trace", &id]).assert_ok().stdout()).unwrap();
     assert_eq!(walk[0]["handed_off_to"], "H012");
     assert!(
-        walk[1].get("handed_off_to").is_none(),
-        "omitted for a node never handed off: {walk}"
+        walk[1]["handed_off_to"].is_null(),
+        "null for a node never handed off: {walk}"
     );
 }
 
@@ -7774,7 +8178,7 @@ fn log_and_show_at_read_a_node_sharpened_across_two_commits() {
         assert_eq!(view["node"]["status"], "seed");
         assert_eq!(view["node"]["title_by"], "human");
         assert_eq!(view["body"], "");
-        assert!(view.get("observatory").is_none());
+        assert_eq!(view["observatory"], serde_json::json!([]));
     }
     for at in [&sharpened, "2020-01-02"] {
         let shown = c
