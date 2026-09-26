@@ -2,7 +2,7 @@
 
 use crate::error::DesktopError;
 use crate::state::AppState;
-use crate::{session, shortcut};
+use crate::{fail_open, session, shortcut};
 use tauri::menu::{IsMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
@@ -46,7 +46,12 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, warnings: &[String]) -> tauri::Resu
             "open" => show_main(app),
             "settings" => {
                 show_main(app);
-                let _ = app.emit("show-settings", ());
+                // Fail open: a missed event is logged; the window is up for
+                // the user to open Settings in by hand.
+                fail_open(
+                    "asking the window to show Settings",
+                    app.emit("show-settings", ()),
+                );
             }
             "quit" => app.exit(0),
             _ => {}
@@ -57,30 +62,39 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, warnings: &[String]) -> tauri::Resu
 
 /// Recompute the count. Cheap enough to do on every corpus change: the inbox
 /// is a handful of small files.
+///
+/// Fail open: the count is a side channel of whatever changed the corpus,
+/// so a title that will not update is logged and never fails that change.
 pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
     if let Some(tray) = app.tray_by_id(ID) {
-        let _ = tray.set_title(Some(title(app)));
+        fail_open("updating the tray count", tray.set_title(Some(title(app))));
     }
 }
 
 /// Bring the main window forward, creating focus even though the app has no
 /// dock icon to click.
+///
+/// Fail open: a window the OS will not show or focus is logged; a menu click
+/// has no caller to hand the failure to.
 pub fn show_main<R: Runtime>(app: &AppHandle<R>) {
     if let Some(win) = app.get_webview_window("main") {
-        let _ = win.show();
-        let _ = win.set_focus();
+        fail_open("showing the main window", win.show());
+        fail_open("focusing the main window", win.set_focus());
     }
 }
 
 /// The unsettled count, or `!` when the corpus cannot be read so the error is
 /// visible from the menu bar too.
+///
+/// Fail open: the reason is logged, and the window's own commands report it
+/// in full.
 fn title<R: Runtime>(app: &AppHandle<R>) -> String {
     let state = app.state::<AppState>();
-    match state
+    let entries = state
         .corpus()
-        .and_then(|c| session::inbox(&c).map_err(DesktopError::from))
-    {
-        Ok(entries) => entries.len().to_string(),
-        Err(_) => "!".to_string(),
+        .and_then(|c| session::inbox(&c).map_err(DesktopError::from));
+    match fail_open("reading the inbox for the tray count", entries) {
+        Some(entries) => entries.len().to_string(),
+        None => "!".to_string(),
     }
 }

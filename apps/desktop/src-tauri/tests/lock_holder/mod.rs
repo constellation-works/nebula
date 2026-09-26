@@ -73,7 +73,10 @@ impl LockHolder {
         .unwrap_or_else(|e| panic!("{e}"));
         // Lines are read on a thread so the wait for the signal has a
         // deadline; the guard kills the holder if it never comes.
-        let (send, lines) = mpsc::channel();
+        // A full queue makes the reader wait (STD-03 §R2); once the signal
+        // is in, the receiver is dropped and the reader stops at its next
+        // send.
+        let (send, lines) = mpsc::sync_channel(8);
         let stdout = BufReader::new(child.take_stdout());
         std::thread::spawn(move || {
             for line in stdout.lines().map_while(Result::ok) {

@@ -3,7 +3,7 @@
 //! `neb capture` writes, so `neb inbox` lists it too.
 
 use nebula_core::{CommitOutcome, Corpus, Error, ops};
-use nebula_desktop::session;
+use nebula_desktop::session::{self, CommitReport};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -40,7 +40,14 @@ fn capture_then_inbox_round_trips() {
     let corpus = session::open(&root).unwrap();
     assert!(session::inbox(&corpus).unwrap().is_empty());
 
-    let entry = session::capture(&corpus, "  a thought from the menu bar  ").unwrap();
+    let written = session::capture(&corpus, "  a thought from the menu bar  ").unwrap();
+    // Commits are off by default: nothing was asked of git.
+    assert!(
+        matches!(written.commit, CommitReport::Disabled),
+        "{:?}",
+        written.commit
+    );
+    let entry = written.value;
     assert_eq!(entry.text, "a thought from the menu bar");
 
     let listed = session::inbox(&corpus).unwrap();
@@ -78,12 +85,18 @@ fn capture_commits_each_entry_when_enabled() {
     ));
 
     let first = session::capture(&corpus, "first thought").unwrap();
+    let CommitReport::Committed { commit } = &first.commit else {
+        panic!("not committed: {:?}", first.commit);
+    };
+    let first = first.value;
+    assert_eq!(commit.message, format!("neb capture {}", first.id));
+    assert_eq!(git(&["rev-parse", "HEAD"]).trim(), commit.hash);
     assert_eq!(
         git(&["log", "-1", "--format=%s"]).trim(),
         format!("neb capture {}", first.id)
     );
     assert_eq!(git(&["rev-list", "--count", "HEAD"]).trim(), "2");
-    let second = session::capture(&corpus, "second thought").unwrap();
+    let second = session::capture(&corpus, "second thought").unwrap().value;
     assert_eq!(
         git(&["log", "-1", "--format=%s"]).trim(),
         format!("neb capture {}", second.id)
@@ -108,10 +121,14 @@ fn drop_and_promote_use_core_settlement_and_cli_commit_messages() {
         CommitOutcome::Committed(_)
     ));
 
-    let dropped = session::capture(&corpus, "discard this").unwrap();
-    assert_eq!(
-        session::drop_entry(&corpus, &dropped.id).unwrap().id,
-        dropped.id
+    let dropped = session::capture(&corpus, "discard this").unwrap().value;
+    let settled = session::drop_entry(&corpus, &dropped.id).unwrap();
+    assert_eq!(settled.value.id, dropped.id);
+    assert!(
+        matches!(&settled.commit, CommitReport::Committed { commit }
+            if commit.message == format!("neb drop {}", dropped.id)),
+        "{:?}",
+        settled.commit
     );
     assert_eq!(
         git(&["log", "-1", "--format=%s"]).trim(),
@@ -119,8 +136,16 @@ fn drop_and_promote_use_core_settlement_and_cli_commit_messages() {
     );
     assert!(session::inbox(&corpus).unwrap().is_empty());
 
-    let promoted = session::capture(&corpus, "keep this thought").unwrap();
+    let promoted = session::capture(&corpus, "keep this thought")
+        .unwrap()
+        .value;
     let created = session::promote_root(&corpus, &promoted.id).unwrap();
+    assert!(
+        matches!(created.commit, CommitReport::Committed { .. }),
+        "{:?}",
+        created.commit
+    );
+    let created = created.value;
     assert!(created.doc.node.parents().next().is_none());
     assert_eq!(created.doc.node.title, promoted.text);
     assert_eq!(created.doc.body.trim(), promoted.text);
@@ -137,7 +162,9 @@ fn a_refused_settlement_leaves_the_inbox_unchanged() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
     let corpus = Corpus::init(&root).unwrap();
-    let entry = session::capture(&corpus, "keep this thought").unwrap();
+    let entry = session::capture(&corpus, "keep this thought")
+        .unwrap()
+        .value;
     let before = session::inbox(&corpus).unwrap();
     assert!(session::drop_entry(&corpus, "missing").is_err());
     assert!(session::promote_root(&corpus, "missing").is_err());
@@ -206,7 +233,7 @@ fn capture_refuses_a_busy_writer_quickly_and_can_be_retried() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
     let corpus = Corpus::init(&root).unwrap();
-    let pending = session::capture(&corpus, "settle me").unwrap();
+    let pending = session::capture(&corpus, "settle me").unwrap().value;
     let holder = LockHolder::start(&root);
 
     let start = Instant::now();
@@ -232,7 +259,7 @@ fn capture_refuses_a_busy_writer_quickly_and_can_be_retried() {
     assert_eq!(session::inbox(&corpus).unwrap()[0].id, pending.id);
     session::drop_entry(&corpus, &pending.id).unwrap();
     assert!(session::inbox(&corpus).unwrap().is_empty());
-    let entry = session::capture(&corpus, "retry me").unwrap();
+    let entry = session::capture(&corpus, "retry me").unwrap().value;
     assert_eq!(session::inbox(&corpus).unwrap()[0].id, entry.id);
 }
 

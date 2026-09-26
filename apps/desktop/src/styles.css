@@ -11,6 +11,7 @@
   --accent-fg: #ffffff;
   --danger: #b3261e;
   --ok: #2b7a4b;
+  --warn: #8a5a00;
   /* Status → colour on the graph; the same four in the panel's badge. */
   --seed: #8a8a96;
   --hypothesis: #3b6fd6;
@@ -37,6 +38,7 @@
     --accent-fg: #14142a;
     --danger: #ff8a80;
     --ok: #7bd39a;
+    --warn: #f0b95a;
     --seed: #8d8d9c;
     --hypothesis: #7ea2ff;
     --refuted: #ff7b71;
@@ -238,6 +240,10 @@ code {
   color: var(--danger);
 }
 
+.capture__status--warning {
+  color: var(--warn);
+}
+
 /* Inbox ------------------------------------------------------------------ */
 
 .inbox__list {
@@ -301,6 +307,12 @@ code {
 .entry__error {
   margin: 0;
   color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.inbox__warning {
+  margin: 0 0 0.5em;
+  color: var(--warn);
   overflow-wrap: anywhere;
 }
 

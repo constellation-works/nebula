@@ -12,6 +12,9 @@
 //!
 //! The pieces that need a running app (tray, shortcut, watcher) are wired in
 //! [`run`]; everything else is plain and tested without one.
+//!
+//! Diagnostics go through `tracing` (STD-02 §R15): [`run`] installs the one
+//! subscriber, and nothing else here writes to a standard stream.
 
 pub mod commands;
 pub mod error;
@@ -23,6 +26,7 @@ pub mod tray;
 pub mod watcher;
 
 use state::AppState;
+use std::fmt::Display;
 use std::path::Path;
 use tauri::ipc::Invoke;
 use tauri::{Manager, Runtime, WindowEvent};
@@ -57,6 +61,14 @@ pub fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'stat
 /// When Tauri cannot start at all (no webview, no event loop); there is
 /// nothing to show an error in at that point.
 pub fn run() {
+    // The one subscriber, and the one place allowed to name stderr
+    // (STD-02 §R15): a menu-bar app has nowhere else to say what went wrong
+    // outside its windows.
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(std::io::stderr)
+        .init();
+
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
@@ -96,32 +108,53 @@ pub fn run() {
             // Read back, so an unresolved corpus root is among them.
             let startup_warnings = state.startup_warnings();
             for warning in &startup_warnings {
-                eprintln!("startup: {warning}");
+                tracing::warn!("startup: {warning}");
             }
             tray::build(handle, &startup_warnings)?;
 
             // A missing corpus is reported by every command; the watcher
             // starts from `reload` once the user has put one there.
             if let Err(e) = commands::ensure_watching(handle, &state) {
-                eprintln!("not watching: {e}");
+                tracing::warn!("not watching: {e}");
             }
             Ok(())
         })
         .on_window_event(|window, event| match event {
             // Closing the main window hides it; the tray keeps the app alive.
+            // Fail open: a window that will not hide is logged, and the app
+            // stays running either way.
             WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
-                let _ = window.hide();
+                fail_open("hiding the main window", window.hide());
             }
             // The capture window is a launcher: it goes away when it loses
-            // focus, so a stray click never leaves it floating.
+            // focus, so a stray click never leaves it floating. Fail open, as
+            // above.
             WindowEvent::Focused(false) if window.label() == shortcut::CAPTURE_WINDOW => {
-                let _ = window.hide();
+                fail_open("hiding the capture window", window.hide());
             }
             _ => {}
         })
         .run(tauri::generate_context!())
         .expect("failed to start the Nebula desktop app");
+}
+
+/// Log a side channel's failure at `warn`, naming what failed and why, and
+/// carry on: the value when there is one, `None` when there is not.
+///
+/// For the calls no user action waits on: showing, hiding and placing a
+/// window, the tray title, the `corpus-changed` event, a lock holder's name
+/// in an error message. Each caller declares the choice with a "fail open"
+/// comment at the call (STD-02 §R31): such a failure is recorded, and never
+/// fails the operation it rides along with.
+pub(crate) fn fail_open<T, E: Display>(what: &str, result: Result<T, E>) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::warn!("{what} failed: {error}");
+            None
+        }
+    }
 }
 
 fn shortcut_warning(
@@ -137,8 +170,63 @@ fn shortcut_warning(
 
 #[cfg(test)]
 mod tests {
-    use super::{shortcut, shortcut_warning};
+    use super::{fail_open, shortcut, shortcut_warning};
+    use std::io::Write;
     use std::path::Path;
+    use std::sync::{Arc, Mutex, PoisonError};
+
+    /// What a test subscriber wrote.
+    #[derive(Clone, Default)]
+    struct Log(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Log {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Log {
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.0.lock().unwrap_or_else(PoisonError::into_inner))
+                .into_owned()
+        }
+    }
+
+    #[test]
+    fn side_channel_failures_are_logged_not_propagated() {
+        let log = Log::default();
+        let writer = log.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || writer.clone())
+            .finish();
+
+        let (failed, passed) = tracing::subscriber::with_default(subscriber, || {
+            (
+                fail_open::<(), _>("hiding the capture window", Err("no such window")),
+                fail_open::<u8, &str>("updating the tray count", Ok(7)),
+            )
+        });
+
+        assert_eq!(failed, None);
+        assert_eq!(passed, Some(7));
+        let text = log.text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 1, "one event, for the failure only: {text}");
+        assert!(lines[0].contains("WARN"), "{text}");
+        assert!(
+            lines[0].contains("hiding the capture window failed: no such window"),
+            "{text}"
+        );
+    }
 
     #[test]
     fn shortcut_registration_warning_names_shortcut_and_settings_path() {

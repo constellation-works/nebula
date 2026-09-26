@@ -192,6 +192,16 @@ that shows one of two views.
   `code` and shows `message`. A root that cannot be resolved is kept as that
   error: a startup warning, every corpus command's error, and a `null`
   `corpus_path()`, never a stand-in path.
+  The three write commands fail only when nothing was written. Once the write
+  is on disk they resolve with `{ value, commit }` (`Written<T>`), where
+  `commit.status` is `committed`, `disabled`, `not_a_repository`,
+  `nothing_to_commit` or `refused` with its `IpcError`: a commit git refused
+  never turns a landed write into a failure. Diagnostics go through
+  `tracing`, whose one subscriber writes to stderr; a failed side channel
+  (showing or hiding a window, the tray title, a watcher event) is logged at
+  `warn` and never fails the action it accompanies. The watcher's queue holds
+  one signal, and a full queue drops the new one, since the one waiting
+  already brings a refresh.
   Holds a `notify` watcher on `nodes/` and `inbox/` and emits a
   `corpus-changed` event; the frontend refetches on it. Global shortcut
   (`tauri-plugin-global-shortcut`) toggles a floating capture window; tray icon
@@ -201,7 +211,11 @@ that shows one of two views.
   operations, write lock, and optional git commit as `neb`; the commands run
   off the webview thread so a busy writer cannot freeze the window. The inbox
   and tray count refresh after a successful action, while a refusal stays on
-  the entry as an error. Entries waiting at least 14 days are marked stale.
+  the entry as an error. A write whose commit was refused landed all the
+  same, so it is a warning, not an error: a settle refreshes the list (the
+  entry leaves it) and notes above it that the change is not committed, and
+  the capture box clears the text and says `captured (not committed: …)`,
+  so Enter cannot write it again. Entries waiting at least 14 days are marked stale.
   Views: *Inbox* (capture box, list and individual settling actions)
   and *Graph* (whole-corpus DAG via `elkjs` layered layout, genealogy edges
   solid, `contradicts` dashed, status → colour, tag filter, click → side panel

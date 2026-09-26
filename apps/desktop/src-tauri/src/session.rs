@@ -5,9 +5,12 @@
 //! file can be exercised by a test without a window. Nothing here shells out
 //! to `neb`: the desktop links the library and sees exactly what the CLI sees.
 
+use crate::error::IpcError;
 use nebula_core::{
-    CommitOutcome, Corpus, Created, Graph, GraphExport, InboxEntry, NodeView, Result, graph, ops,
+    CommitOutcome, Committed, Corpus, Created, Graph, GraphExport, InboxEntry, NodeView, Result,
+    graph, ops,
 };
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -28,16 +31,77 @@ pub fn open(root: &Path) -> Result<Corpus> {
     Corpus::open(Some(root.to_path_buf()))
 }
 
+/// What a write command returns once the write is on disk: the written value,
+/// and what the commit after it did. Declared again as `Written<T>` in
+/// `apps/desktop/src/api.ts`.
+///
+/// The commit is reported, never raised (STD-02 §R30): a refused commit
+/// leaves the write in place, so an error here would tell the webview that a
+/// write failed when it did not, and invite a retry that writes it twice.
+#[derive(Debug, Clone, Serialize)]
+pub struct Written<T> {
+    /// What the write produced: the inbox entry, the settled entry, the node.
+    pub value: T,
+    /// Whether the write was committed, and why not when it was not.
+    pub commit: CommitReport,
+}
+
+/// What the commit after a desktop write did, as the webview reads it:
+/// core's [`CommitOutcome`], or the refusal, tagged by `status`. Declared
+/// again as `CommitReport` in `apps/desktop/src/api.ts`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum CommitReport {
+    /// The write was committed.
+    Committed {
+        /// The commit made.
+        commit: Committed,
+    },
+    /// `config.yaml` does not ask for commits.
+    Disabled,
+    /// Commits are on, but the corpus is not in a git repository.
+    NotARepository,
+    /// The write left nothing git would record.
+    NothingToCommit,
+    /// Commits are on and the commit was refused or failed. The write it was
+    /// meant to record is on disk regardless.
+    Refused {
+        /// Why, with the code `neb --json` reports for the same refusal.
+        error: IpcError,
+    },
+}
+
+impl CommitReport {
+    /// Report the commit that followed a write. A refusal is logged as well:
+    /// the write stands, and the corpus now holds an uncommitted change.
+    fn of(outcome: Result<CommitOutcome>) -> Self {
+        match outcome {
+            Ok(CommitOutcome::Committed(commit)) => Self::Committed { commit },
+            Ok(CommitOutcome::Disabled) => Self::Disabled,
+            Ok(CommitOutcome::NotARepository) => Self::NotARepository,
+            Ok(CommitOutcome::NothingToCommit) => Self::NothingToCommit,
+            Err(error) => {
+                tracing::warn!("the write landed, but its commit was refused: {error}");
+                Self::Refused {
+                    error: error.into(),
+                }
+            }
+        }
+    }
+}
+
 /// Append and, when configured, commit one line just as `neb capture` does.
-pub fn capture(corpus: &Corpus, text: &str) -> Result<InboxEntry> {
+/// Fails only when nothing was written; a refused commit is in the report.
+pub fn capture(corpus: &Corpus, text: &str) -> Result<Written<InboxEntry>> {
     // Hold the lock across the write and commit, just as the CLI does. Both
     // core operations re-enter it on this thread without waiting again.
     let _lock = corpus.lock_within(WRITE_LOCK_WAIT)?;
     let entry = ops::capture(corpus, text)?;
-    // Not surfaced yet: the desktop has no place to say a write went
-    // uncommitted. DSK1b maps the outcome onto its commit report.
-    let _: CommitOutcome = ops::commit(corpus, "capture", &[&entry.id])?;
-    Ok(entry)
+    let commit = CommitReport::of(ops::commit(corpus, "capture", &[&entry.id]));
+    Ok(Written {
+        value: entry,
+        commit,
+    })
 }
 
 /// Every capture not yet promoted or dropped.
@@ -45,22 +109,32 @@ pub fn inbox(corpus: &Corpus) -> Result<Vec<InboxEntry>> {
     Ok(corpus.inbox()?.0)
 }
 
-/// Settle one entry through the same core op and commit as `neb drop`.
-pub fn drop_entry(corpus: &Corpus, entry: &str) -> Result<InboxEntry> {
+/// Settle one entry through the same core op and commit as `neb drop`. As
+/// with [`capture`], a refused commit is reported, not raised.
+pub fn drop_entry(corpus: &Corpus, entry: &str) -> Result<Written<InboxEntry>> {
     let _lock = corpus.lock_within(WRITE_LOCK_WAIT)?;
     let dropped = ops::drop(corpus, entry)?;
-    // Discarded for now, as in [`capture`].
-    let _: CommitOutcome = ops::commit(corpus, "drop", &[entry])?;
-    Ok(dropped)
+    let commit = CommitReport::of(ops::commit(corpus, "drop", &[entry]));
+    Ok(Written {
+        value: dropped,
+        commit,
+    })
 }
 
 /// Promote the captured text as an unlinked root, like `neb promote --quiet`.
-pub fn promote_root(corpus: &Corpus, entry: &str) -> Result<Created> {
+/// As with [`capture`], a refused commit is reported, not raised.
+pub fn promote_root(corpus: &Corpus, entry: &str) -> Result<Written<Created>> {
     let _lock = corpus.lock_within(WRITE_LOCK_WAIT)?;
     let created = ops::promote(corpus, entry, &ops::Promotion::default(), 0)?;
-    // Discarded for now, as in [`capture`].
-    let _: CommitOutcome = ops::commit(corpus, "promote", &[entry, &created.doc.node.id])?;
-    Ok(created)
+    let commit = CommitReport::of(ops::commit(
+        corpus,
+        "promote",
+        &[entry, &created.doc.node.id],
+    ));
+    Ok(Written {
+        value: created,
+        commit,
+    })
 }
 
 /// The whole corpus as nodes and edges, for the Graph view.
@@ -95,9 +169,16 @@ fn matches_graph_query(id: &str, title: &str, body: &str, status: &str, needle: 
         .any(|value| value.to_lowercase().contains(needle))
 }
 
-/// One node in full: the `neb show --json` shape, body trimmed and ready for
-/// a markdown renderer. Observatory references are located the same way
-/// `neb show` locates them, so the panel and the terminal agree.
+/// One node in full, body trimmed and ready for a markdown renderer.
+/// Observatory references are located the same way `neb show` locates them,
+/// so the panel and the terminal agree on what they say.
+///
+/// The fields are `neb show --json`'s, but not its shape: this is core's
+/// [`NodeView`] as serde writes it, which leaves an absent value out (`kill`,
+/// `closed`, empty `notes`, …), where the CLI's `--json` view states every
+/// key, as `null` or `[]` (and every author label, as `"human"` where the
+/// file omits it). The generated `NodeView.ts` marks those fields optional
+/// to match.
 pub fn node(corpus: &Corpus, id: &str) -> Result<NodeView> {
     let docs = corpus.load_all()?;
     let observatory = corpus.observatory_root()?.root;
@@ -109,6 +190,28 @@ pub fn node(corpus: &Corpus, id: &str) -> Result<NodeView> {
 pub fn node_file(corpus: &Corpus, id: &str) -> Result<PathBuf> {
     corpus.load(id)?;
     corpus.node_path(id)
+}
+
+#[cfg(test)]
+mod commit_report_tests {
+    use super::CommitReport;
+    use std::path::PathBuf;
+
+    /// Git failing under commit-on is a refusal, never one of the outcomes
+    /// that mean nothing was asked of git.
+    #[test]
+    fn a_failed_git_is_refused_not_skipped() {
+        let failed = nebula_core::Error::Git {
+            root: PathBuf::from("/corpus"),
+            context: "commit".into(),
+            stderr: "fatal: unable to write new index file".into(),
+        };
+        let report = CommitReport::of(Err(failed));
+        assert!(
+            matches!(&report, CommitReport::Refused { error } if error.code == "git"),
+            "{report:?}"
+        );
+    }
 }
 
 #[cfg(test)]

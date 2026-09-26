@@ -4,15 +4,18 @@
 //!
 //! The names and shapes are the ones `apps/desktop/src/api.ts` wraps; the
 //! payload types are `nebula-core`'s own, so the TypeScript side imports the
-//! generated bindings rather than restating them. Every command is generic
-//! over the runtime so `tests/commands.rs` drives this same table through
-//! Tauri's mock runtime.
+//! generated bindings rather than restating them. The exceptions are the
+//! desktop's own [`IpcError`] and [`Written`] wrapper, which `ipcError.ts`
+//! and `api.ts` declare by hand and `tests/commands.rs` pins by their JSON.
+//! Every command is generic over the runtime so `tests/commands.rs` drives
+//! this same table through Tauri's mock runtime.
 
 // Tauri injects `State` and `AppHandle` by value; that is the command
 // signature, not a choice this module gets to make.
 #![allow(clippy::needless_pass_by_value)]
 
 use crate::error::{DesktopError, IpcError};
+use crate::session::Written;
 use crate::state::AppState;
 use crate::{session, shortcut, tray, watcher};
 use nebula_core::{Created, GraphExport, InboxEntry, NodeView};
@@ -31,9 +34,13 @@ async fn blocking<T: Send + 'static>(
 }
 
 /// Append one line to this month's inbox file. A held corpus lock is the
-/// `locked` code, which the capture box retries.
+/// `locked` code, which the capture box retries; once the line is written the
+/// command succeeds, and a refused commit is in its report.
 #[tauri::command]
-pub async fn capture<R: Runtime>(app: AppHandle<R>, text: String) -> Result<InboxEntry, IpcError> {
+pub async fn capture<R: Runtime>(
+    app: AppHandle<R>,
+    text: String,
+) -> Result<Written<InboxEntry>, IpcError> {
     blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
         Ok(session::capture(&corpus, &text)?)
@@ -56,7 +63,7 @@ pub async fn inbox<R: Runtime>(app: AppHandle<R>) -> Result<Vec<InboxEntry>, Ipc
 pub async fn drop_entry<R: Runtime>(
     app: AppHandle<R>,
     entry: String,
-) -> Result<InboxEntry, IpcError> {
+) -> Result<Written<InboxEntry>, IpcError> {
     blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
         let dropped = session::drop_entry(&corpus, &entry)?;
@@ -71,7 +78,7 @@ pub async fn drop_entry<R: Runtime>(
 pub async fn promote_root<R: Runtime>(
     app: AppHandle<R>,
     entry: String,
-) -> Result<Created, IpcError> {
+) -> Result<Written<Created>, IpcError> {
     blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
         let created = session::promote_root(&corpus, &entry)?;

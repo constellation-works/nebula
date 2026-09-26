@@ -1,32 +1,57 @@
 // The IPC surface, one function per `#[tauri::command]` in
 // `src-tauri/src/commands.rs`. Every payload type comes from `./types`, which
-// is generated from nebula-core: nothing here restates a shape. A failed
-// command rejects with an `IpcError` (`./ipcError`): branch on its `code`,
-// show it with `errorMessage`.
+// is generated from nebula-core, except the desktop's own `Written` wrapper
+// declared below. A failed command rejects with an `IpcError` (`./ipcError`):
+// branch on its `code`, show it with `errorMessage`.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl as pluginOpenUrl } from "@tauri-apps/plugin-opener";
+import type { IpcError } from "./ipcError";
+import type { Committed } from "./types/Committed";
 import type { Created } from "./types/Created";
 import type { GraphExport } from "./types/GraphExport";
 import type { Inbox } from "./types/Inbox";
 import type { InboxEntry } from "./types/InboxEntry";
 import type { NodeView } from "./types/NodeView";
 
+/**
+ * What the commit after a write did: `CommitReport` in
+ * `src-tauri/src/session.rs`, whose JSON `tests/commands.rs` pins against
+ * these lines. `refused` means the write landed and was not committed: a
+ * warning, never a reason to write again.
+ */
+export type CommitReport =
+  | { status: "committed"; commit: Committed }
+  | { status: "disabled" }
+  | { status: "not_a_repository" }
+  | { status: "nothing_to_commit" }
+  | { status: "refused"; error: IpcError };
+
+/**
+ * A write that landed: what it produced, and what the commit after it did
+ * (`Written<T>` in `src-tauri/src/session.rs`). A write command rejects only
+ * when nothing was written.
+ */
+export interface Written<T> {
+  value: T;
+  commit: CommitReport;
+}
+
 /** Append one line to this month's inbox file. */
-export const capture = (text: string): Promise<InboxEntry> =>
-  invoke<InboxEntry>("capture", { text });
+export const capture = (text: string): Promise<Written<InboxEntry>> =>
+  invoke<Written<InboxEntry>>("capture", { text });
 
 /** Every unsettled capture, oldest first. */
 export const inbox = (): Promise<Inbox> => invoke<Inbox>("inbox");
 
 /** Settle one entry as dropped through nebula-core. */
-export const dropEntry = (entry: string): Promise<InboxEntry> =>
-  invoke<InboxEntry>("drop_entry", { entry });
+export const dropEntry = (entry: string): Promise<Written<InboxEntry>> =>
+  invoke<Written<InboxEntry>>("drop_entry", { entry });
 
 /** Promote captured text to an unlinked root node through nebula-core. */
-export const promoteRoot = (entry: string): Promise<Created> =>
-  invoke<Created>("promote_root", { entry });
+export const promoteRoot = (entry: string): Promise<Written<Created>> =>
+  invoke<Written<Created>>("promote_root", { entry });
 
 /** The whole corpus as nodes and edges. */
 export const graph = (): Promise<GraphExport> => invoke<GraphExport>("graph");

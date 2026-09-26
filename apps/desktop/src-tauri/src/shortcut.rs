@@ -1,5 +1,6 @@
 //! The global shortcut and the capture window it toggles.
 
+use crate::fail_open;
 use crate::settings::{self, SettingsError};
 use crate::state::AppState;
 use tauri::plugin::TauriPlugin;
@@ -153,7 +154,9 @@ pub fn change<R: Runtime>(app: &AppHandle<R>, value: &str) -> Result<String, Sho
         capture_shortcut: next_text.to_string(),
     };
     if let Err(e) = settings::save(&config_dir, &updated) {
-        let _ = manager.unregister(next);
+        // Fail open: the save failure is the error the caller gets; a
+        // withdrawal that fails too is logged beside it.
+        fail_open("withdrawing the unsaved shortcut", manager.unregister(next));
         return Err(ShortcutError::Save(e));
     }
     if let Some(old) = previous
@@ -163,7 +166,11 @@ pub fn change<R: Runtime>(app: &AppHandle<R>, value: &str) -> Result<String, Sho
             capture_shortcut: current.clone(),
         };
         let rollback = settings::save(&config_dir, &restored);
-        let _ = manager.unregister(next);
+        // Fail open, as for a failed save above.
+        fail_open(
+            "withdrawing the replacement shortcut",
+            manager.unregister(next),
+        );
         return Err(ShortcutError::Replace {
             previous: current,
             source,
@@ -176,17 +183,20 @@ pub fn change<R: Runtime>(app: &AppHandle<R>, value: &str) -> Result<String, Sho
 
 /// Show the capture window on the screen the cursor is on, or hide it if it
 /// is already up. Focus goes with it, so typing can start at once.
+///
+/// Fail open throughout: a key press has no caller to report to, so a window
+/// the OS will not hide, show, focus or place is logged instead.
 pub fn toggle_capture<R: Runtime>(app: &AppHandle<R>) {
     let Some(win) = app.get_webview_window(CAPTURE_WINDOW) else {
         return;
     };
     if win.is_visible().unwrap_or(false) {
-        let _ = win.hide();
+        fail_open("hiding the capture window", win.hide());
         return;
     }
     place_on_active_screen(&win);
-    let _ = win.show();
-    let _ = win.set_focus();
+    fail_open("showing the capture window", win.show());
+    fail_open("focusing the capture window", win.set_focus());
 }
 
 /// Centre horizontally on the cursor's monitor, a third of the way down,
@@ -198,7 +208,7 @@ fn place_on_active_screen<R: Runtime>(win: &WebviewWindow<R>) {
         .ok()
         .and_then(|p| win.monitor_from_point(p.x, p.y).ok().flatten());
     let (Some(monitor), Ok(size)) = (monitor, win.outer_size()) else {
-        let _ = win.center();
+        fail_open("centring the capture window", win.center());
         return;
     };
     let area = monitor.work_area();
@@ -207,7 +217,10 @@ fn place_on_active_screen<R: Runtime>(win: &WebviewWindow<R>) {
     let own_width = i32::try_from(size.width).unwrap_or(0);
     let x = area.position.x + (width - own_width) / 2;
     let y = area.position.y + height / 3;
-    let _ = win.set_position(PhysicalPosition::new(x, y));
+    fail_open(
+        "placing the capture window",
+        win.set_position(PhysicalPosition::new(x, y)),
+    );
 }
 
 #[cfg(test)]

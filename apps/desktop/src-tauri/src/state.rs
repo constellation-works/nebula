@@ -37,10 +37,14 @@ impl AppState {
     /// unreadable `~/.config/nebula/root`, so no single guess would be right.
     pub fn with_root(root: nebula_core::Result<PathBuf>) -> Self {
         let corpus_root = root.map_err(Arc::new);
-        let corpus = corpus_root
-            .as_ref()
-            .ok()
-            .and_then(|root| session::open(root).ok());
+        // Deliberately dropped: a corpus that will not open now is opened
+        // again by the next command, which reports why it cannot be. Logged
+        // at `debug` only, since that report is the one the user sees.
+        let corpus = corpus_root.as_ref().ok().and_then(|root| {
+            session::open(root)
+                .inspect_err(|e| tracing::debug!("corpus not opened at startup: {e}"))
+                .ok()
+        });
         Self {
             corpus_root,
             corpus: Mutex::new(corpus),

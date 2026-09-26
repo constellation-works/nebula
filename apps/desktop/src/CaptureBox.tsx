@@ -1,5 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, useState, type ClipboardEvent, type KeyboardEvent, type Ref } from "react";
 import * as api from "./api";
+import type { Written } from "./api";
 import { errorMessage, isIpcError, LOCKED } from "./ipcError";
 import type { InboxEntry } from "./types/InboxEntry";
 
@@ -12,8 +13,11 @@ interface Props {
   /** Focus the input as soon as it mounts. */
   autoFocus?: boolean;
   placeholder?: string;
-  /** After a successful capture, once the confirmation has been shown. */
-  onCaptured?: (entry: InboxEntry, hasActiveDraft: boolean) => void;
+  /**
+   * After a capture landed: once the confirmation has been shown, or at once
+   * when its commit was refused and the warning stays up.
+   */
+  onCaptured?: (written: Written<InboxEntry>, hasActiveDraft: boolean) => void;
   onEscape?: () => void;
   /** Changes when the floating window opens again. */
   resetErrorKey?: number;
@@ -21,12 +25,15 @@ interface Props {
 
 /**
  * One input. Enter captures; after success the box clears only the submitted
- * text, says "captured" for a second, and is ready for the next thought. The
- * same box sits at the top of the inbox and alone in the floating window.
+ * text, says "captured" for a second, and is ready for the next thought. A
+ * capture whose commit was refused landed all the same: the text is cleared
+ * too, so Enter cannot write it twice, and the status keeps a warning saying
+ * it was not committed. The same box sits at the top of the inbox and alone
+ * in the floating window.
  */
 export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape, resetErrorKey }: Props) {
   const [text, setText] = useState("");
-  const [status, setStatus] = useState<"idle" | "busy" | "retrying" | "captured" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "busy" | "retrying" | "captured" | "warning" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const textRef = useRef("");
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -36,7 +43,7 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape, 
   useEffect(() => () => clearTimeout(timer.current), []);
 
   useEffect(() => {
-    setStatus((current) => current === "error" ? "idle" : current);
+    setStatus((current) => current === "error" || current === "warning" ? "idle" : current);
     setMessage(null);
   }, [resetErrorKey]);
 
@@ -62,10 +69,10 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape, 
     setMessage(null);
     setStatus("busy");
     try {
-      let entry: InboxEntry;
+      let written: Written<InboxEntry>;
       for (let attempt = 0; ; attempt++) {
         try {
-          entry = await api.capture(trimmed);
+          written = await api.capture(trimmed);
           break;
         } catch (e) {
           if (!isIpcError(e) || e.code !== LOCKED) throw e;
@@ -78,16 +85,23 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape, 
           await new Promise((resolve) => setTimeout(resolve, 200));
         }
       }
+      // The line is in the inbox whatever the commit did, so the text goes.
       if (textRef.current === submitted) {
         textRef.current = "";
         setText("");
       }
-      setMessage(null);
-      setStatus("captured");
-      timer.current = setTimeout(() => {
-        setStatus("idle");
-        onCaptured?.(entry, Boolean(textRef.current.trim()));
-      }, CONFIRM_MS);
+      if (written.commit.status === "refused") {
+        setStatus("warning");
+        setMessage(`captured (not committed: ${errorMessage(written.commit.error)})`);
+        onCaptured?.(written, Boolean(textRef.current.trim()));
+      } else {
+        setMessage(null);
+        setStatus("captured");
+        timer.current = setTimeout(() => {
+          setStatus("idle");
+          onCaptured?.(written, Boolean(textRef.current.trim()));
+        }, CONFIRM_MS);
+      }
     } catch (e) {
       setStatus("error");
       setMessage(errorMessage(e));
@@ -124,8 +138,8 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape, 
         onKeyDown={onKeyDown}
         onPaste={onPaste}
       />
-      <span className={`capture__status capture__status--${status}`} role="status" title={status === "error" ? message ?? undefined : undefined}>
-        {status === "captured" ? "captured" : status === "retrying" ? "busy, retrying…" : status === "busy" ? "saving…" : status === "error" ? message : ""}
+      <span className={`capture__status capture__status--${status}`} role="status" title={status === "error" || status === "warning" ? message ?? undefined : undefined}>
+        {status === "captured" ? "captured" : status === "retrying" ? "busy, retrying…" : status === "busy" ? "saving…" : status === "error" || status === "warning" ? message : ""}
       </span>
     </div>
   );

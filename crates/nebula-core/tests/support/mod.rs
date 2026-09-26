@@ -347,7 +347,9 @@ impl Drop for ChildGuard {
 
 /// Read `pipe` to its end on a thread; the bytes arrive on the channel.
 fn drain(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<Vec<u8>> {
-    let (send, receive) = mpsc::channel();
+    // One slot for the one message ever sent, so the send never waits
+    // (STD-03 §R2).
+    let (send, receive) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
         let _ = pipe.read_to_end(&mut bytes);
