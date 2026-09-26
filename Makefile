@@ -1,4 +1,4 @@
-.PHONY: help build release run dev check test types fmt fmt-check release-check clippy audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
+.PHONY: help build release run dev check test types fmt fmt-check release-check standards-check clippy audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
 
 # ------------------------------------------------------------
 # Config
@@ -48,10 +48,12 @@ help:
 	@echo "  make fmt           Format code"
 	@echo "  make fmt-check     Check formatting"
 	@echo "  make release-check Verify Cargo/CHANGELOG version lockstep"
+	@echo "  make standards-check Verify the vendored constellation standards are unedited"
 	@echo "  make clippy        Lint with clippy (deny warnings)"
 	@echo "  make audit         Supply-chain audit (cargo-deny)"
 	@echo "  make tree          Print dependency tree"
-	@echo "  make ci            Full CI pass (fmt-check + clippy + tests)"
+	@echo "  make ci            Full CI pass (fmt-check, release-check, standards-check,"
+	@echo "                     clippy, tests, types, desktop-check)"
 	@echo "  make ci-fast       Pre-handoff gate (fmt-check only; no compile)"
 	@echo "  make corpus-check  Run the invariant checker over your corpus"
 	@echo "                     (ROOT=/path optional; defaults to \$$NEBULA_ROOT or ~/.nebula)"
@@ -106,6 +108,10 @@ fmt-check:
 release-check:
 	./scripts/release-check.sh
 
+# The vendored constellation standards are read-only; this fails on any edit.
+standards-check:
+	sh docs/standards/check.sh
+
 clippy:
 	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -119,7 +125,7 @@ tree:
 	$(CARGO) tree -e features
 
 # Full CI pass. Keep aligned with .github/workflows/ci.yml.
-ci: fmt-check release-check clippy test types desktop-check
+ci: fmt-check release-check standards-check clippy test types desktop-check
 
 # Pre-handoff gate for agents: no compile.
 ci-fast: fmt-check
