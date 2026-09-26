@@ -69,7 +69,6 @@ Query:
   graph        The whole corpus as nodes and edges, for a tool that draws it
 
 Maintenance:
-  open         Nodes that need attention
   review       The weekly maintenance report: stale hypotheses, untouched seeds,
                nodes with no references, and inbox entries waiting too long
 
@@ -502,30 +501,39 @@ enum Command {
         from: Option<String>,
     },
 
-    /// Nodes that need attention.
-    ///
-    /// Hypotheses with no references, seeds untouched for ninety days, and
-    /// inbox captures waiting fourteen days or more.
-    Open {
-        /// Only nodes carrying this tag. Repeat to require every one.
-        #[arg(long = "tag", value_name = "TAG")]
-        tags: Vec<String>,
-    },
-
     /// The weekly maintenance report: stale hypotheses, untouched seeds,
     /// nodes with no references, and inbox entries waiting too long.
     ///
     /// Read-only, by the spec's hard rule: this proposes and never mutates a
-    /// node, an inbox entry, or the manifest.
+    /// node, an inbox entry, or the manifest. `--short` is the quick glance:
+    /// one line per thing waiting on you, and nothing else.
     Review {
+        /// Only what needs attention now, one line each: hypotheses fourteen
+        /// days old with no references, seeds untouched for ninety days, and
+        /// inbox captures waiting fourteen days or more.
+        #[arg(long, conflicts_with_all = ["since", "out"])]
+        short: bool,
+        /// With `--short`, only nodes carrying this tag. Repeat to require
+        /// every one.
+        #[arg(long = "tag", value_name = "TAG", requires = "short")]
+        tags: Vec<String>,
         /// Override the day thresholds for stale hypotheses (default 30) and
         /// untouched seeds (default 90). The inbox's fourteen-day rule is
-        /// unaffected; it is `open`'s rule, reused rather than duplicated.
+        /// unaffected.
         #[arg(long)]
         since: Option<i64>,
         /// Write the report here instead of stdout.
         #[arg(long)]
         out: Option<PathBuf>,
+    },
+
+    /// Deprecated alias for `review --short`, kept for one release so
+    /// existing routines keep working. Hidden from `--help`.
+    #[command(hide = true)]
+    Open {
+        /// Only nodes carrying this tag. Repeat to require every one.
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
     },
 }
 
@@ -1431,19 +1439,19 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Open { tags } => {
-            let corpus = Corpus::open(root)?;
-            let docs = corpus.load_all()?;
-            let report = graph::open(&Graph::build(&docs)?, &corpus.inbox()?, &tags)?;
-            if json {
-                out_json(&report)?;
-            } else {
-                print!("{}", render::open(&report));
-            }
+        Command::Review {
+            short: true, tags, ..
+        } => {
+            short_review(root, json, &tags)?;
             Ok(ok)
         }
 
-        Command::Review { since, out } => {
+        Command::Review {
+            short: false,
+            since,
+            out,
+            ..
+        } => {
             let corpus = Corpus::open(root)?;
             let docs = corpus.load_all()?;
             let report = graph::review(&Graph::build(&docs)?, &corpus.inbox()?, since)?;
@@ -1459,7 +1467,31 @@ fn run(cli: Cli) -> Outcome {
             write_report(out.as_deref(), &text)?;
             Ok(ok)
         }
+
+        Command::Open { tags } => {
+            eprintln!("warning: `neb open` is deprecated; use `neb review --short`");
+            short_review(root, json, &tags)?;
+            Ok(ok)
+        }
     }
+}
+
+/// `review --short`, and the deprecated `open` that now forwards to it:
+/// what needs attention now, one line per item.
+fn short_review(
+    root: Option<PathBuf>,
+    json: bool,
+    tags: &[String],
+) -> std::result::Result<(), Failure> {
+    let corpus = Corpus::open(root)?;
+    let docs = corpus.load_all()?;
+    let report = graph::open(&Graph::build(&docs)?, &corpus.inbox()?, tags)?;
+    if json {
+        out_json(&report)?;
+    } else {
+        print!("{}", render::open(&report));
+    }
+    Ok(())
 }
 
 /// Pretty JSON on stdout, which is what `--json` means everywhere.
@@ -1490,19 +1522,23 @@ mod tests {
         s.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    /// Every subcommand clap knows about has a row in the template, and the
-    /// row's text is the variant's own one-liner, so the two cannot drift.
+    /// Every visible subcommand clap knows about has a row in the template,
+    /// and the row's text is the variant's own one-liner, so the two cannot
+    /// drift. Hidden aliases are the exception, and have no row.
     #[test]
     fn help_rows_match_the_variants() {
         let flat = squash(&help());
         let mut seen = 0;
-        for sub in Cli::command().get_subcommands() {
+        for sub in Cli::command()
+            .get_subcommands()
+            .filter(|s| !s.is_hide_set())
+        {
             let about = sub.get_about().map(ToString::to_string).unwrap_or_default();
             let row = squash(&format!("{} {about}", sub.get_name()));
             assert!(flat.contains(&row), "help is missing the row {row:?}");
             seen += 1;
         }
-        assert_eq!(seen, 26, "template rows need updating for a new subcommand");
+        assert_eq!(seen, 25, "template rows need updating for a new subcommand");
         assert!(
             Cli::command().find_subcommand("help").is_none(),
             "clap's `help` subcommand should be disabled"
@@ -1537,12 +1573,50 @@ mod tests {
         assert!(text.contains("The corpus lives outside this repository"));
     }
 
+    /// `open` is a deprecated alias for `review --short`: it still parses,
+    /// but `--help` no longer offers it.
+    #[test]
+    fn the_deprecated_open_alias_is_hidden() {
+        let open = Cli::command()
+            .find_subcommand("open")
+            .cloned()
+            .expect("`open` still parses");
+        assert!(open.is_hide_set(), "`open` must be hidden from --help");
+        assert!(!help().contains("\n  open "), "`open` has no row in --help");
+        assert!(matches!(
+            parse_cli(&["open", "--tag", "physics"]).map(|c| c.command),
+            Ok(Command::Open { tags }) if tags == ["physics"]
+        ));
+    }
+
+    /// `--short` is its own view with its own thresholds, so it refuses the
+    /// full report's `--since` and `--out`; `--tag` belongs to it alone.
+    #[test]
+    fn review_short_owns_tag_and_refuses_since_and_out() {
+        assert!(matches!(
+            parse_cli(&["review", "--short", "--tag", "a", "--tag", "b"]).map(|c| c.command),
+            Ok(Command::Review { short: true, tags, .. }) if tags == ["a", "b"]
+        ));
+        for args in [
+            ["review", "--short", "--since", "7"].as_slice(),
+            &["review", "--short", "--out", "r.md"],
+        ] {
+            let err = parse_cli(args).err().unwrap_or_default();
+            assert!(err.contains("cannot be used with"), "{args:?}: {err}");
+        }
+        let err = parse_cli(&["review", "--tag", "a"])
+            .err()
+            .unwrap_or_default();
+        assert!(err.contains("--short"), "--tag without --short: {err}");
+    }
+
     /// The variant order mirrors the template's section order, so a command
     /// left out of the template would still surface next to its group.
     #[test]
     fn variant_order_matches_the_template() {
         let names: Vec<_> = Cli::command()
             .get_subcommands()
+            .filter(|s| !s.is_hide_set())
             .map(|s| s.get_name().to_string())
             .collect();
         let expected = [
@@ -1551,7 +1625,7 @@ mod tests {
             &["new", "edit", "sharpen", "status", "link", "tag", "note"],
             &["cite"],
             &["show", "log", "list", "near", "trace", "impact", "graph"],
-            &["open", "review"],
+            &["review"],
         ]
         .concat();
         assert_eq!(names, expected);

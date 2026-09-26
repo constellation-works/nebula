@@ -2,6 +2,7 @@
 import type { OpenItem } from "./OpenItem";
 
 /**
- * Nodes that need attention. Serializes as the bare list.
+ * Nodes that need attention: what `neb review --short` reports. Serializes
+ * as the bare list.
  */
 export type OpenReport = Array<OpenItem>;

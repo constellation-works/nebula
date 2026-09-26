@@ -41,8 +41,8 @@ may point anywhere without creating a cycle.
 
 Every verb that writes takes an advisory lock on `<root>/.lock` and holds it
 until the write — and the commit that records it — is done. Reads take
-nothing, so `show`, `list`, `trace`, `impact`, `graph`, `near`, `open`,
-`review` and `check` never wait and never block anybody.
+nothing, so `show`, `list`, `trace`, `impact`, `graph`, `near`, `review`
+and `check` never wait and never block anybody.
 
 This matters to you because you are the second writer. A human at a terminal,
 the desktop's capture box and your session all run the same verbs against one

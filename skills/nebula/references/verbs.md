@@ -490,10 +490,11 @@ graph BT
 
 | verb | does | flags |
 |---|---|---|
-| `neb open` | hypotheses created ≥ 14 days ago with no references, seeds untouched ≥ 90 days, inbox entries waiting ≥ 14 days | `--tag <TAG>`× |
 | `neb review` | the weekly report: stale hypotheses (≥ 30 days), untouched seeds (≥ 90), hypotheses created ≥ 14 days ago with no references, hypotheses whose kill nobody human wrote, inbox waiting ≥ 14 | `--since <DAYS>`, `--out <FILE>` |
+| `neb review --short` | the quick glance, one line each: hypotheses created ≥ 14 days ago with no references, seeds untouched ≥ 90 days, inbox entries waiting ≥ 14 days | `--tag <TAG>`× |
 
-Both are read-only by the spec's hard rule.
+Both forms are read-only by the spec's hard rule. `--short` refuses `--since`
+and `--out`, and `--tag` needs `--short`.
 Notes are reasoning, not context: adding a note does not count as adding a
 reference and does not close the no-references finding after the grace period.
 
@@ -510,11 +511,11 @@ reference and does not close the no-references finding after the grace period.
 file.
 
 ```json
-// neb open --json
+// neb review --short --json
 [
   { "id": "an-idea", "why": "hypothesis with no references" }
 ]
 ```
 
-`neb open --json` is an array of `{id, why}` — narrower than `review`'s items,
-with no `title`, `status`, or `reason`.
+`neb review --short --json` is an array of `{id, why}` — narrower than full
+`review`'s items, with no `rule`, `title`, or `reason`.

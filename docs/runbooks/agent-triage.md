@@ -43,7 +43,8 @@ starting points:
 > Clear the inbox. For each entry, tell me what you'd promote, what you'd
 > drop, and why, before you do either.
 
-> Look at what `neb open` flags and tell me the single most actionable one.
+> Look at what `neb review --short` flags and tell me the single most
+> actionable one.
 
 > Sharpen `gravity-as-scarcity` — the falsifier is that the effect survives
 > with the coupling turned off.

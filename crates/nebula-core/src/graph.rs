@@ -15,13 +15,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-/// Days a seed may sit untouched before `open` and `review` raise it.
+/// Days a seed may sit untouched before [`open`] and [`review`] raise it.
 pub const SEED_DAYS: i64 = 90;
 /// Days a hypothesis may sit untouched before `review` calls it stale.
 pub const HYPOTHESIS_DAYS: i64 = 30;
-/// Days an inbox capture may wait before `open` and `review` raise it.
+/// Days an inbox capture may wait before [`open`] and [`review`] raise it.
 pub const INBOX_DAYS: i64 = 14;
-/// Days a new node may remain without references before `open` and `review` raise it.
+/// Days a new node may remain without references before [`open`] and [`review`] raise it.
 pub const NO_REFERENCES_DAYS: i64 = 14;
 
 /// An indexed snapshot of a loaded corpus.
@@ -235,7 +235,8 @@ pub fn impact(graph: &Graph<'_>, id: &str) -> Result<Impact> {
     Ok(Impact(out))
 }
 
-/// Nodes that need attention. Serializes as the bare list.
+/// Nodes that need attention: what `neb review --short` reports. Serializes
+/// as the bare list.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct OpenReport(pub Vec<OpenItem>);
@@ -252,6 +253,9 @@ pub struct OpenItem {
 
 /// Hypotheses at least fourteen days old with no references, seeds untouched
 /// for ninety days, and inbox captures waiting fourteen days or more.
+///
+/// The short form of [`review`]: `neb review --short`, and the deprecated
+/// `neb open` that forwards to it.
 pub fn open(graph: &Graph<'_>, inbox: &Inbox, tags: &[String]) -> Result<OpenReport> {
     let tags = model::normalize_tags(tags);
     let mut items: Vec<OpenItem> = Vec::new();
@@ -331,7 +335,7 @@ pub struct ReviewItem {
 /// report, not to this query.
 ///
 /// `since` overrides the hypothesis and seed thresholds together. The inbox's
-/// fourteen-day rule is unaffected; it is `open`'s rule, reused rather than
+/// fourteen-day rule is unaffected; it is [`open`]'s rule, reused rather than
 /// duplicated.
 pub fn review(graph: &Graph<'_>, inbox: &Inbox, since: Option<i64>) -> Result<ReviewReport> {
     let hypothesis_days = since.unwrap_or(HYPOTHESIS_DAYS);

@@ -46,7 +46,7 @@ scratch corpus always use `neb --root <scratch-dir> init` and never pass
 
 Mutating: `capture`, `promote`, `drop`, `new`, `sharpen`, `status`, `link`,
 `tag`, `note`, `cite`, `migrate`, `config`. Read-only: `inbox`, `show`, `list`, `near`, `trace`,
-`impact`, `graph --json`, `open`, `review`, `check`, `tag list`. Every corpus
+`impact`, `graph --json`, `review` (and `review --short`), `check`, `tag list`. Every corpus
 verb listed here (plus `init`) emits JSON on stdout under `--json`;
 [verbs.md](references/verbs.md) has each one's flags and its real shape. Shell
 `completions` is the sole exception. Prefer `--json` for anything you will

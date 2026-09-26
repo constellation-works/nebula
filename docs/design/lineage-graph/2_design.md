@@ -62,7 +62,7 @@ There is no closed list declared anywhere, unlike v0.1's required categorical
 field: a tag is exactly as much structure as a node needs, most nodes need
 very little, and a required field validated against a config-file list turned
 out to be one more decision standing between a person and capturing the idea. `list` and
-`open` narrow with `--tag` (repeatable, every one required); `trace` and
+`review --short` narrow with `--tag` (repeatable, every one required); `trace` and
 `impact` always walk the whole corpus regardless of tags, because an
 observation in one field feeding a hypothesis in another is precisely the link
 the graph exists to surface. `neb tag list` and `check`'s drift warning (two

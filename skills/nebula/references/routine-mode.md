@@ -4,8 +4,8 @@ Nobody is watching. An Orbit routine, a cron entry, a sweep — anything that
 runs without a human in the loop is routine mode, and so is any session where
 you are not sure. The rule is absolute: **read, then propose; never mutate.**
 
-Allowed: `inbox`, `open`, `review`, `list`, `show`, `trace`, `impact`,
-`graph --json`, `check`, `tag list`. Forbidden: everything else, including
+Allowed: `inbox`, `review` (with or without `--short`), `list`, `show`,
+`trace`, `impact`, `graph --json`, `check`, `tag list`. Forbidden: everything else, including
 `capture`, `migrate` and `init`.
 
 The output is one file, `review.md`, in the corpus root (beside `nodes/`).
@@ -16,9 +16,8 @@ agent reads it and runs the lines they agree with.
 
 ```sh
 neb check --json                 # if any error finding: report it as the whole review and stop
-neb review --json                # review findings
+neb review --json                # review findings; covers everything `review --short` would
 neb inbox --json                 # what is waiting
-neb open --json                  # what needs attention
 neb list --json                  # for finding parents and duplicates
 ```
 
@@ -92,8 +91,6 @@ $ neb review --json
     "title": "Tags beat domains", "reason": "no references attached" } ]
 $ neb inbox --json
 [ { "id": "a6e8", "at": "2026-09-12T18:16", "text": "nebula review as a weekly orbit routine" } ]
-$ neb open --json
-[]
 $ neb list --json | jq -c '.[] | {id, status, tags, kill}'
 {"id":"a-single-global-taxonomy","status":"refuted","tags":["design"],"kill":"nobody can keep it current"}
 {"id":"required-categorical-fields-drift","status":"seed","tags":["design"],"kill":null}
