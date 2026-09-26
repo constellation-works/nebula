@@ -113,7 +113,7 @@ for one invocation.
 
 | verb | does | flags |
 |---|---|---|
-| `neb capture <TEXT>...` | append a thought; prints the entry id, then the three nearest nodes; works on a corpus that does not exist yet, and then says so on stderr (`note: created a new corpus at <absolute path>`) | `--quiet`/`-q` (before or after the text) |
+| `neb capture <TEXT\|->...` | append a thought as one inbox line; prints the entry id, then the three nearest nodes; works on a corpus that does not exist yet, and then says so on stderr (`note: created a new corpus at <absolute path>`) | `--quiet`/`-q` (before or after the text) |
 | `neb inbox` | live entries (not promoted, not dropped) | — |
 | `neb promote <ENTRY>` | inbox entry → seed node; without `--parent`, prints the three nearest nodes and proceeds as a root | `--title`, `--body <TEXT\|->`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run`, `--quiet`/`-q` |
 | `neb drop <ENTRY>` | strike an entry through; never deleted | — |
@@ -129,6 +129,11 @@ stores `an idea`; `neb note <id> "a thought" --no-commit` skips the commit
 and stores `a thought`. A thought that itself contains a token starting with
 `-` is one quoted argument, or sits after `--`
 (`neb capture -- --quiet is the idea`).
+
+A lone `-` reads the thought from standard input. Text over several lines,
+piped or quoted, is joined onto one line: each line break becomes a single
+space and blank lines vanish, so `printf 'a\nb\n' | neb capture -` stores
+`a b`. Only whitespace-only text is refused (`nothing to capture`).
 
 `capture` prints the entry id on its own line, then — when any node shares a
 word with the text — a `near:` block of up to three lines, `<score> <status>

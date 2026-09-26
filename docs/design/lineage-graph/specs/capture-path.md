@@ -45,6 +45,41 @@ refuses nothing, so the budget holds. A capture into an existing corpus prints
 no notice. When the corpus cannot be created, the error names the path it tried:
 `creating /nonexistent: Permission denied (os error 13)`.
 
+## Text over several lines
+
+A thought often arrives as more than one line: pasted from a chat, piped from
+another command, or typed with a stray newline. Capture takes it as it comes
+and stores it as one line:
+
+```sh
+printf 'gravity might be about\nscarcity, not curvature\n' | neb capture -
+neb capture "gravity might be about
+scarcity, not curvature"
+```
+
+A lone `-` reads the thought from standard input, as `--body -` does
+elsewhere; a dash among other words is part of the thought. Either way, every
+line break (`\n` or `\r`) becomes a single space together with the whitespace
+around it, blank lines vanish, and the ends are trimmed, so both commands above
+store `gravity might be about scarcity, not curvature`. Whitespace inside a
+line is left alone. Only text that is nothing but whitespace is refused
+(`nothing to capture`), and it is refused before anything, a corpus included,
+is created.
+
+The joining is `nebula_core::store::capture_line`, applied inside the core
+capture itself, so the CLI, the desktop capture box and any other caller store
+the same line for the same text.
+
+This reverses the earlier refusal. When capture first met a newline (#62), the
+inbox's one-entry-per-line format was protected by refusing the capture
+(`capture text must fit on one line`). That kept the format but lost the
+thought, at the moment the budget above exists to protect, and made
+`echo "thought" | neb capture` impossible. Joining keeps the format just as
+strictly, since the stored line can never hold a line break, and asks nothing
+of the person capturing. What it gives up is the line structure of the
+original text, which an inbox entry never had room for; prose that needs it
+belongs in a node's body, through `promote --body -`.
+
 ## Inbox format
 
 One file per month, `inbox/YYYY-MM.md`, with one entry per line. Captures
