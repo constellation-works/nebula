@@ -140,6 +140,10 @@ pub struct TraceNode {
     pub parents: Vec<String>,
     /// The step that first reached it. Null for the node the walk starts at.
     pub via: Option<TraceHop>,
+    /// The Observatory record it was handed off to, when it was; see
+    /// [`Node::handed_off_to`]. Omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed_off_to: Option<String>,
 }
 
 /// One step of a lineage walk: the node it was taken from, and every kind of
@@ -229,6 +233,7 @@ impl Walk<'_, '_> {
                     .map(|p| (*p).to_string())
                     .collect(),
                 via,
+                handed_off_to: doc.node.handed_off_to().map(str::to_owned),
             });
         }
         let next: Vec<(String, Vec<EdgeType>)> = match self.direction {
@@ -629,6 +634,10 @@ pub struct NodeView {
     /// by [`NodeView::with_observatory`], and empty until a caller asks.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub observatory: Vec<ObservatoryLink>,
+    /// The Observatory record the node was handed off to, when it was; see
+    /// [`Node::handed_off_to`]. Omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handed_off_to: Option<String>,
 }
 
 /// One `observatory` reference, located on this machine.
@@ -688,6 +697,7 @@ pub fn node(graph: &Graph<'_>, id: &str) -> Result<NodeView> {
         notes: model::notes_from_body(&body),
         body,
         observatory: Vec::new(),
+        handed_off_to: doc.node.handed_off_to().map(str::to_owned),
     })
 }
 

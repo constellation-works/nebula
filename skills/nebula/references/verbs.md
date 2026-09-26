@@ -377,6 +377,7 @@ changes both nodes.
 | verb | does | flags |
 |---|---|---|
 | `neb cite <NODE> [--uri <URI>]` | attach context | `--kind` (paper, study, article, note, discussion, book, dataset, thread, observatory, other), `--title`, `--note`, `--by <LABEL>`, `--task`, `--run` |
+| `neb handoff <NODE> <RECORD>` | hand the node off to an Observatory record: cite it and close the node, in one write | `--note`, `--by <LABEL>`, `--task`, `--run` |
 
 `--kind` is lowercased before it is checked (`--kind Paper` stores `paper`);
 anything still outside the list is refused. `--uri` may be omitted only with
@@ -444,6 +445,58 @@ behind the checkout. `show` prints the resolved path under the reference, and
   ]
 }
 ```
+
+### Hand-off
+
+`neb handoff <NODE> <RECORD> --note "why"` is the one-step form of "this idea
+became Observatory record `RECORD`". In one write it adds an `observatory`
+reference to the record, with the note, and moves the node to `abandoned`
+with `closed.why: handed off to <RECORD>`. The record id follows the same
+rules as `cite --kind observatory`: a bare id, case normalised up.
+
+It refuses, writing nothing: an unknown node (`NoSuchNode`); a node already
+refuted or abandoned (`AlreadyClosed`), including one handed off before; a
+record id of the wrong shape (`InvalidObservatoryId`); and, when this machine
+has an observatory root, a record that does not resolve under it
+(`UnresolvedObservatoryRecord`). With no root set, the id is accepted and the
+verb prints the same `No observatory root set` line `cite` does.
+
+```
+// neb handoff scarcity-wake H012 --note "the hypothesis this became"
+scarcity-wake seed -> abandoned, handed off to H012 (r1)
+/Users/you/workspace/observatory/hypotheses/H012-scarcity-wake.md
+```
+
+`--json` returns the node as written, the new reference's id, the record as
+stored, and the status it left:
+
+```json
+// neb handoff scarcity-wake H012 --note "the hypothesis this became" --json
+{
+  "doc": {
+    "node": {
+      "id": "scarcity-wake", "title": "Scarcity wake", "status": "abandoned",
+      "created": "2026-09-26", "updated": "2026-09-26",
+      "references": [
+        { "id": "r1", "kind": "observatory", "uri": "H012",
+          "note": "the hypothesis this became", "added": "2026-09-26" }
+      ],
+      "closed": { "why": "handed off to H012", "at": "2026-09-26" }
+    },
+    "body": ""
+  },
+  "reference": "r1",
+  "record": "H012",
+  "from": "seed"
+}
+```
+
+A node reads as handed off when it is `abandoned`, its `closed.why` is
+exactly `handed off to <RECORD>`, and it carries an `observatory` reference
+to that record, so the two-verb form reads the same. `show` then prints the
+record's location under its `closed:` line, `trace` appends
+`handed off to <RECORD>` to its line, and both `--json` forms carry
+`"handed_off_to": "<RECORD>"`, omitted for every other node.
 
 ## Authorship
 
@@ -603,7 +656,8 @@ above declares them to this one; walking down, this one declares them to the
 line above. Two edges between the same pair (`derives-from` plus a later `reopens`)
 are one relation stated twice, so they draw as one line naming both kinds. A
 node reached along two different paths is a true diamond: it is drawn on each
-path but expanded only once, and later copies end in `(shown above)`.
+path but expanded only once, and later copies end in `(shown above)`. A node
+handed off to Observatory ends its line with `handed off to <RECORD>`.
 
 ```
 // neb trace retardation-in-the-wake
@@ -623,6 +677,8 @@ further out. Without `--depth` the whole walk is printed, as before.
 parent once, however many edges reach it. `via` is the step that first reached
 the node: `from` is the node it was reached from, and `kinds` lists every edge
 kind between the two, in declared order. It is `null` for the start.
+`handed_off_to` names the Observatory record a node was handed off to, and is
+omitted for every other node.
 
 ```json
 // neb trace tags-beat-domains --json

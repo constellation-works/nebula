@@ -277,6 +277,16 @@ pub struct Closed {
     pub at: String,
 }
 
+/// How `closed.why` begins on a node handed off to an Observatory record;
+/// the record id follows. See [`handoff_why`] and [`Node::handed_off_to`].
+const HANDED_OFF_TO: &str = "handed off to ";
+
+/// The `closed.why` of a node handed off to Observatory record `record`:
+/// `handed off to H012`.
+pub fn handoff_why(record: &str) -> String {
+    format!("{HANDED_OFF_TO}{record}")
+}
+
 /// One unit of inquiry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -398,6 +408,24 @@ impl Node {
     /// Whether every one of `tags` is on this node. An empty filter matches.
     pub fn has_all_tags(&self, tags: &[String]) -> bool {
         tags.iter().all(|t| self.tags.iter().any(|x| x == t))
+    }
+
+    /// The Observatory record this node was handed off to, if it was.
+    ///
+    /// Read from what the hand-off wrote rather than from a field of its
+    /// own, since the schema has none: an `abandoned` node whose `closed.why`
+    /// is exactly [`handoff_why`] of a record, and which carries an
+    /// `observatory` reference to that same record. Both halves must agree,
+    /// so a reason that merely mentions a record is not a hand-off.
+    pub fn handed_off_to(&self) -> Option<&str> {
+        if self.status != Status::Abandoned {
+            return None;
+        }
+        let record = self.closed.as_ref()?.why.strip_prefix(HANDED_OFF_TO)?;
+        self.references
+            .iter()
+            .any(|r| r.kind == crate::check::OBSERVATORY && r.uri.as_deref() == Some(record))
+            .then_some(record)
     }
 
     /// Next free reference id.

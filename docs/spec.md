@@ -15,7 +15,9 @@ related: ["[[principia]]", "[[orbit-research]]"]
 > `evidence`, `weigh` and `graduate`; the 2026-09-12 reduction removed all four
 > in favour of tags, references, and hand-off by citation rather than by verb
 > (see [docs/design/v0.2/1_spec.md](design/v0.2/1_spec.md), "What is
-> removed"). The maintained documentation is
+> removed"). A later `handoff` verb writes that citation for an Observatory
+> record and closes the node in one step, without a status of its own (same
+> document, "Hand-off"). The maintained documentation is
 > [docs/design/v0.2/1_spec.md](design/v0.2/1_spec.md) for the current model,
 > [docs/design/lineage-graph/](design/lineage-graph/1_overview.md) for the
 > design reasoning that survived the reduction, and

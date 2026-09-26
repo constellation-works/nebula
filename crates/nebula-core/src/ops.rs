@@ -1,5 +1,6 @@
 //! Everything that changes a corpus: capture, promote, drop, new, sharpen,
-//! link, cite, note, status, tags, and the commit that may follow any of them.
+//! link, cite, note, status, handoff, tags, and the commit that may follow
+//! any of them.
 //!
 //! Each op takes a [`Corpus`] and typed arguments, enforces the invariants
 //! that belong at the point of action, writes, and returns what changed. A
@@ -27,7 +28,7 @@
 
 use crate::check::{
     self, OBSERVATORY, is_absolute_local, is_local_path, is_observatory_id, is_reference_kind,
-    normalize_reference_kind, resolve_local,
+    normalize_reference_kind, resolve_local, resolve_observatory,
 };
 use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
@@ -107,6 +108,34 @@ pub struct StatusChange {
     pub doc: Doc,
     /// Where it was before.
     pub from: Status,
+}
+
+/// A node handed off to an Observatory record: cited and closed in one write.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct HandedOff {
+    /// The node as written: `abandoned`, with the hand-off as its reason.
+    pub doc: Doc,
+    /// The id of the `observatory` reference that was added.
+    pub reference: String,
+    /// The record it went to, as stored: `H012`.
+    pub record: String,
+    /// Where the node was before.
+    pub from: Status,
+}
+
+/// Everything that goes into a hand-off.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Handoff {
+    /// The Observatory record id the node becomes, such as `H012`. Case is
+    /// normalised up, as `cite --kind observatory` does.
+    pub record: String,
+    /// Why it goes there: the note on the `observatory` reference.
+    pub note: Option<String>,
+    /// Who attached the reference and wrote the note. `None` is the human.
+    pub by: Option<String>,
+    /// What produced it.
+    pub origin: Option<Origin>,
 }
 
 /// Everything that goes into a node created directly.
@@ -677,6 +706,16 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     let _lock = corpus.lock()?;
     let by = model::author(args.by.as_deref())?;
     let mut doc = corpus.load(id)?;
+    let reference = attach(corpus, &mut doc.node, args, by)?;
+    corpus.save(&mut doc)?;
+    Ok(Cited { doc, reference })
+}
+
+/// Validate a citation and add it to `node` as its next reference, without
+/// saving. Returns the new reference's id. Shared by [`cite`] and
+/// [`handoff`], so a hand-off's reference is held to exactly the rules a
+/// citation is.
+fn attach(corpus: &Corpus, node: &mut Node, args: &Citation, by: Option<String>) -> Result<String> {
     // Case is normalised the way tags are: `Paper` is a spelling of `paper`,
     // not a new kind. Anything still outside the vocabulary is refused.
     let kind = normalize_reference_kind(&args.kind);
@@ -698,13 +737,7 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     // action, because a path or a slug stored here would never resolve and
     // the mistake is obvious now and cryptic later.
     let uri = match (kind.as_str(), uri.as_deref()) {
-        (OBSERVATORY, Some(record)) => {
-            let record = record.trim().to_ascii_uppercase();
-            if !is_observatory_id(&record) {
-                return Err(Error::InvalidObservatoryId(record));
-            }
-            Some(record)
-        }
+        (OBSERVATORY, Some(record)) => Some(observatory_record(record)?),
         _ => uri,
     };
     // Rule 8, before resolving: an absolute path or a `file:` URI may well
@@ -727,8 +760,8 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
             from: corpus.root().join("nodes"),
         });
     }
-    let reference = doc.node.next_reference_id();
-    doc.node.references.push(Reference {
+    let reference = node.next_reference_id();
+    node.references.push(Reference {
         id: reference.clone(),
         kind,
         uri,
@@ -738,8 +771,90 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
         by,
         origin: args.origin.clone(),
     });
+    Ok(reference)
+}
+
+/// An Observatory record id as it is stored: trimmed and upper-cased, or
+/// [`Error::InvalidObservatoryId`] when it is not one.
+fn observatory_record(raw: &str) -> Result<String> {
+    let record = raw.trim().to_ascii_uppercase();
+    if !is_observatory_id(&record) {
+        return Err(Error::InvalidObservatoryId(record));
+    }
+    Ok(record)
+}
+
+/// Hand a node off to an Observatory record: cite the record and close the
+/// node as [`Status::Abandoned`] with `closed.why` reading
+/// `handed off to <record>`, in one save.
+///
+/// What was two verbs (`cite --kind observatory`, then `status abandoned`)
+/// is one write here, so no reader, and no failure between the two, ever
+/// sees a node that is cited but open or closed but uncited.
+///
+/// `observatory` is the root this machine resolves records under, as
+/// [`Corpus::observatory_root`] reports it; the caller reads it, as it does
+/// for [`crate::graph::NodeView::with_observatory`], and so can tell the
+/// human where the record is. With a root, the record must resolve under
+/// it, or the hand-off is refused as [`Error::UnresolvedObservatoryRecord`]:
+/// closing a node for a record that is not there would point its lineage at
+/// nothing. With none, the id is accepted on its shape alone, as `cite`
+/// accepts it, and `check` keeps warning until this machine has a root.
+///
+/// Refuses, before anything is written, an unknown node, one that is
+/// already closed ([`Error::AlreadyClosed`]: refuted is a verdict, and an
+/// abandoned node's reason would be replaced), and a record id of the wrong
+/// shape.
+pub fn handoff(
+    corpus: &Corpus,
+    id: &str,
+    args: &Handoff,
+    observatory: Option<&Path>,
+) -> Result<HandedOff> {
+    let _lock = corpus.lock()?;
+    let by = model::author(args.by.as_deref())?;
+    let mut doc = corpus.load(id)?;
+    let from = doc.node.status;
+    if !from.is_open() {
+        return Err(Error::AlreadyClosed {
+            id: id.to_string(),
+            status: from,
+        });
+    }
+    let record = observatory_record(&args.record)?;
+    if let Some(root) = observatory.filter(|root| resolve_observatory(root, &record).is_none()) {
+        return Err(Error::UnresolvedObservatoryRecord {
+            record,
+            root: root.to_path_buf(),
+        });
+    }
+    let reference = attach(
+        corpus,
+        &mut doc.node,
+        &Citation {
+            uri: Some(record.clone()),
+            kind: OBSERVATORY.to_string(),
+            title: None,
+            note: args.note.clone(),
+            by: None,
+            origin: args.origin.clone(),
+        },
+        by,
+    )?;
+    // Abandoned asks for no kill condition, and an open node has no verdict
+    // to protect, so this is the move `set_status` would allow.
+    doc.node.status = Status::Abandoned;
+    doc.node.closed = Some(Closed {
+        why: model::handoff_why(&record),
+        at: store::today(),
+    });
     corpus.save(&mut doc)?;
-    Ok(Cited { doc, reference })
+    Ok(HandedOff {
+        doc,
+        reference,
+        record,
+        from,
+    })
 }
 
 /// Record where the Observatory checkout is on this machine, in

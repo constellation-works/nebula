@@ -133,7 +133,10 @@ is not currently scarce. Revisit when a scan is measurably slow.
 
 **Reversed 2026-09-12:** downstream hand-off happens by the downstream artifact
 referencing the node, not by a status here (see
-[docs/design/v0.2/1_spec.md](../v0.2/1_spec.md), "What is removed").
+[docs/design/v0.2/1_spec.md](../v0.2/1_spec.md), "What is removed"). The
+`handoff` verb (ORB-13077) records the nebula side for an Observatory record
+as an existing reference plus `abandoned`, not a status of its own, and asks
+for no falsifier (same document, "Hand-off").
 
 principia and orbit-research both demand a kill condition, so nebula refused to
 move a node to a graduated status without one rather than exporting the gap

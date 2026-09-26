@@ -166,6 +166,17 @@ pub enum Error {
     #[error("a refuted node cannot simply reopen")]
     RefutedCannotReopen,
 
+    /// A verb that closes a node was given one that is closed already. A
+    /// refuted node carries a verdict and an abandoned one a reason, and
+    /// closing either again would silently replace what `closed` records.
+    #[error("`{id}` is already {status}, so it cannot be closed again")]
+    AlreadyClosed {
+        /// The node asked for.
+        id: String,
+        /// The closed status it is in.
+        status: Status,
+    },
+
     /// A node that names a kill condition cannot go back to `seed`. The kill
     /// is content, so the move would keep it, and a seed carrying one is a
     /// state no verb otherwise produces. Reopening such a node is a move to
@@ -214,8 +225,8 @@ pub enum Error {
 
     /// A status move the lifecycle does not allow, judged from the pair of
     /// statuses alone. The refusals that exist today name themselves
-    /// ([`Error::NeedsKill`], [`Error::RefutedCannotReopen`] and
-    /// [`Error::SeedWithKill`]); this is what
+    /// ([`Error::NeedsKill`], [`Error::RefutedCannotReopen`],
+    /// [`Error::SeedWithKill`] and [`Error::AlreadyClosed`]); this is what
     /// a guard added later reports, and what a consumer matches on to mean
     /// "that move is not allowed" without enumerating the specific rules.
     #[error("`{from}` cannot become `{to}`")]
@@ -249,6 +260,18 @@ pub enum Error {
         "`{0}` is not an Observatory record id: one of Q, H, T or R followed by digits, such as `Q002`"
     )]
     InvalidObservatoryId(String),
+
+    /// An Observatory record id that does not resolve under the observatory
+    /// root this machine has set. Raised where a write would claim the
+    /// record exists, such as a hand-off; a plain citation stays a `check`
+    /// warning, since the checkout may simply be behind.
+    #[error("Observatory record `{record}` does not resolve under {}", .root.display())]
+    UnresolvedObservatoryRecord {
+        /// The record id, as it would be stored.
+        record: String,
+        /// The observatory root it was looked for under.
+        root: PathBuf,
+    },
 
     /// A user-supplied `--id` does not follow the slug rules: lowercase
     /// words joined by single dashes, no leading, trailing, or doubled
@@ -422,6 +445,7 @@ impl Error {
         KillAlreadySet => "kill_already_set",
         RefutedNeedsWhy => "refuted_needs_why",
         RefutedCannotReopen => "refuted_cannot_reopen",
+        AlreadyClosed => "already_closed",
         SeedWithKill => "seed_with_kill",
         NoSuchCandidate => "no_such_candidate",
         Interactive => "interactive",
@@ -434,6 +458,7 @@ impl Error {
         UnusableTitle => "unusable_title",
         UnknownReferenceKind => "unknown_reference_kind",
         InvalidObservatoryId => "invalid_observatory_id",
+        UnresolvedObservatoryRecord => "unresolved_observatory_record",
         InvalidId => "invalid_id",
         UnsafeId => "unsafe_id",
         IdMismatch => "id_mismatch",

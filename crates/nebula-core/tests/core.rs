@@ -7,9 +7,9 @@
 
 use nebula_core::triage::{Action, Step, Tally};
 use nebula_core::{
-    Band, Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, HUMAN, NEAR_DEFAULT,
-    NewNode, Promotion, ReviewItem, ReviewReport, ReviewRule, Settlement, Status, TraceHop, Triage,
-    Via, graph, ops, store,
+    Band, Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, HUMAN, Handoff,
+    NEAR_DEFAULT, NewNode, Promotion, ReviewItem, ReviewReport, ReviewRule, Settlement, Status,
+    TraceHop, Triage, Via, graph, ops, store,
 };
 use std::fmt::Write as _;
 
@@ -798,6 +798,192 @@ fn a_reference_kind_outside_the_vocabulary_is_refused_by_name() {
         before,
         "nothing written"
     );
+}
+
+fn handing(record: &str) -> Handoff {
+    Handoff {
+        record: record.to_string(),
+        note: Some("the hypothesis this became".to_string()),
+        ..Handoff::default()
+    }
+}
+
+/// An Observatory checkout carrying the one record `H012`, as a file under
+/// `hypotheses/` the way research layout v2 files it.
+fn observatory_with_h012(at: &std::path::Path) -> std::path::PathBuf {
+    let root = at.join("observatory");
+    std::fs::create_dir_all(root.join("hypotheses")).unwrap();
+    std::fs::write(root.join("hypotheses").join("H012-wake.md"), "# H012\n").unwrap();
+    root
+}
+
+/// The hand-off is one write carrying both halves: exactly one `observatory`
+/// reference, and the node abandoned with the record named as the reason.
+/// Trace and show read the hand-off back from those two halves.
+#[test]
+fn a_handoff_cites_the_record_and_closes_the_node_in_one_write() {
+    let (dir, corpus) = corpus();
+    let parent = seed(&corpus, "Gravity as scarcity", &[]);
+    let id = seed(&corpus, "Scarcity wake", &[&parent]);
+    let root = observatory_with_h012(dir.path());
+
+    let done = ops::handoff(&corpus, &id, &handing("h012"), Some(&root)).unwrap();
+    assert_eq!(done.from, Status::Seed);
+    assert_eq!(done.record, "H012", "case is normalised up, as cite does");
+    assert_eq!(done.reference, "r1");
+
+    let node = corpus.load(&id).unwrap().node;
+    assert_eq!(node.status, Status::Abandoned);
+    assert_eq!(
+        node.closed, done.doc.node.closed,
+        "what was returned is on disk"
+    );
+    let closed = node.closed.as_ref().expect("closed");
+    assert_eq!(closed.why, "handed off to H012");
+    assert_eq!(node.references.len(), 1, "exactly one reference");
+    let reference = &node.references[0];
+    assert_eq!(reference.kind, "observatory");
+    assert_eq!(reference.uri.as_deref(), Some("H012"));
+    assert_eq!(
+        reference.note.as_deref(),
+        Some("the hypothesis this became")
+    );
+    assert_eq!(node.handed_off_to(), Some("H012"));
+
+    let docs = corpus.load_all().unwrap();
+    let g = Graph::build(&docs).unwrap();
+    assert_eq!(
+        graph::node(&g, &id).unwrap().handed_off_to.as_deref(),
+        Some("H012")
+    );
+    let walk = graph::trace(&g, &parent, Direction::Down).unwrap().0;
+    let handed: Vec<_> = walk
+        .iter()
+        .map(|n| (n.id.as_str(), n.handed_off_to.as_deref()))
+        .collect();
+    assert_eq!(
+        handed,
+        [(parent.as_str(), None), (id.as_str(), Some("H012"))]
+    );
+}
+
+/// With no observatory root on this machine there is nothing to resolve
+/// against, so the id is accepted on its shape alone, as `cite` accepts it.
+#[test]
+fn a_handoff_with_no_observatory_root_accepts_the_record_id() {
+    let (_dir, corpus) = corpus();
+    let id = seed(&corpus, "An idea", &[]);
+    let done = ops::handoff(&corpus, &id, &handing("H404"), None).unwrap();
+    assert_eq!(done.doc.node.handed_off_to(), Some("H404"));
+}
+
+/// Every refusal comes before the write: the node file is byte for byte
+/// what it was.
+#[test]
+fn a_handoff_refuses_a_closed_node_an_unknown_one_and_an_unresolved_record() {
+    let (dir, corpus) = corpus();
+    let root = observatory_with_h012(dir.path());
+    let unchanged = |id: &str, before: &str, refused: &Result<_, Error>| {
+        let after = std::fs::read_to_string(corpus.node_path(id).unwrap()).unwrap();
+        assert_eq!(after, before, "nothing written after {refused:?}");
+    };
+
+    let dead = refuted(&corpus, "Dead idea");
+    let before = std::fs::read_to_string(corpus.node_path(&dead).unwrap()).unwrap();
+    let refused = ops::handoff(&corpus, &dead, &handing("H012"), Some(&root)).map(|_| ());
+    assert!(
+        matches!(&refused, Err(Error::AlreadyClosed { id, status: Status::Refuted }) if *id == dead),
+        "{refused:?}"
+    );
+    unchanged(&dead, &before, &refused);
+
+    let dropped = seed(&corpus, "Dropped idea", &[]);
+    ops::set_status(&corpus, &dropped, Status::Abandoned, Some("lost interest")).unwrap();
+    let before = std::fs::read_to_string(corpus.node_path(&dropped).unwrap()).unwrap();
+    let refused = ops::handoff(&corpus, &dropped, &handing("H012"), Some(&root)).map(|_| ());
+    assert!(
+        matches!(
+            &refused,
+            Err(Error::AlreadyClosed {
+                status: Status::Abandoned,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
+    unchanged(&dropped, &before, &refused);
+
+    // Handed off once is closed too: a second hand-off would replace the
+    // first one's reason.
+    let once = seed(&corpus, "Handed off once", &[]);
+    ops::handoff(&corpus, &once, &handing("H012"), Some(&root)).unwrap();
+    let before = std::fs::read_to_string(corpus.node_path(&once).unwrap()).unwrap();
+    let refused = ops::handoff(&corpus, &once, &handing("H012"), Some(&root)).map(|_| ());
+    assert!(
+        matches!(refused, Err(Error::AlreadyClosed { .. })),
+        "{refused:?}"
+    );
+    unchanged(&once, &before, &refused);
+
+    let refused = ops::handoff(&corpus, "nope", &handing("H012"), Some(&root)).map(|_| ());
+    assert!(
+        matches!(&refused, Err(Error::NoSuchNode(id)) if id == "nope"),
+        "{refused:?}"
+    );
+
+    let open = seed(&corpus, "Still open", &[]);
+    let before = std::fs::read_to_string(corpus.node_path(&open).unwrap()).unwrap();
+    let refused = ops::handoff(&corpus, &open, &handing("H999"), Some(&root)).map(|_| ());
+    assert!(
+        matches!(
+            &refused,
+            Err(Error::UnresolvedObservatoryRecord { record, root: at })
+                if record == "H999" && *at == root
+        ),
+        "{refused:?}"
+    );
+    unchanged(&open, &before, &refused);
+
+    let refused = ops::handoff(&corpus, &open, &handing("notes/x.md"), None).map(|_| ());
+    assert!(
+        matches!(&refused, Err(Error::InvalidObservatoryId(_))),
+        "{refused:?}"
+    );
+    unchanged(&open, &before, &refused);
+}
+
+/// A hand-off is read from both halves it writes, so a reason that merely
+/// names a record, with no reference to it, is not one.
+#[test]
+fn a_reason_alone_is_not_a_handoff() {
+    let (_dir, corpus) = corpus();
+    let id = seed(&corpus, "An idea", &[]);
+    let changed =
+        ops::set_status(&corpus, &id, Status::Abandoned, Some("handed off to H012")).unwrap();
+    assert_eq!(changed.doc.node.handed_off_to(), None);
+
+    // The two-verb form, with both halves in place, reads the same as the
+    // one-step verb.
+    let other = seed(&corpus, "Another idea", &[]);
+    ops::cite(
+        &corpus,
+        &other,
+        &Citation {
+            uri: Some("H012".into()),
+            kind: "observatory".into(),
+            note: Some("n".into()),
+            ..Citation::default()
+        },
+    )
+    .unwrap();
+    let changed = ops::set_status(
+        &corpus,
+        &other,
+        Status::Abandoned,
+        Some("handed off to H012"),
+    )
+    .unwrap();
+    assert_eq!(changed.doc.node.handed_off_to(), Some("H012"));
 }
 
 /// Authorship as a consumer that is not a terminal sees it: stored per field,

@@ -25,4 +25,9 @@ parents: Array<string>,
 /**
  * The step that first reached it. Null for the node the walk starts at.
  */
-via: TraceHop | null, };
+via: TraceHop | null, 
+/**
+ * The Observatory record it was handed off to, when it was; see
+ * [`Node::handed_off_to`]. Omitted otherwise.
+ */
+handed_off_to?: string | null, };
