@@ -1,0 +1,28 @@
+Walk ancestry. The feature the whole system exists for
+
+Usage: neb trace [OPTIONS] <NODE>
+
+Arguments:
+  <NODE>
+          Node id
+
+Options:
+      --down
+          Walk descendants instead of ancestors
+
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --depth <N>
+          Stop N steps from the node: 1 is its parents, or its children with `--down`, and N is at least 1. Defaults to the whole walk
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  neb trace <id>
+  neb trace <id> --down
+  neb trace <id> --depth 1 --json

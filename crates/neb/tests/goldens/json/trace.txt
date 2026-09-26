@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "--json",
+    "trace",
+    "second-idea"
+  ],
+  "exit_code": 0,
+  "stdout": "[\n  {\n    \"id\": \"second-idea\",\n    \"title\": \"Second idea\",\n    \"status\": \"seed\",\n    \"parents\": [\n      \"first-idea\"\n    ],\n    \"via\": null,\n    \"handed_off_to\": null\n  },\n  {\n    \"id\": \"first-idea\",\n    \"title\": \"First idea\",\n    \"status\": \"seed\",\n    \"parents\": [],\n    \"via\": {\n      \"from\": \"second-idea\",\n      \"kinds\": [\n        \"derives-from\"\n      ]\n    },\n    \"handed_off_to\": null\n  }\n]\n",
+  "stderr": ""
+}

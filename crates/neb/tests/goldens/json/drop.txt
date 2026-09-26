@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "--json",
+    "drop",
+    "<ENTRY>"
+  ],
+  "exit_code": 0,
+  "stdout": "{\n  \"id\": \"<ENTRY>\",\n  \"at\": \"<AT>\",\n  \"text\": \"Pending insight\"\n}\n",
+  "stderr": ""
+}

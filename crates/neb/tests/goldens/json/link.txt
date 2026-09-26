@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "--json",
+    "link",
+    "first-idea",
+    "contradicts",
+    "second-idea"
+  ],
+  "exit_code": 0,
+  "stdout": "[\n  {\n    \"node\": {\n      \"id\": \"first-idea\",\n      \"title\": \"First idea\",\n      \"title_by\": \"human\",\n      \"status\": \"seed\",\n      \"created\": \"<TODAY>\",\n      \"updated\": \"<TODAY>\",\n      \"kill\": null,\n      \"kill_by\": null,\n      \"tags\": [],\n      \"edges\": [\n        {\n          \"type\": \"contradicts\",\n          \"to\": \"second-idea\",\n          \"by\": \"human\"\n        }\n      ],\n      \"references\": [],\n      \"closed\": null,\n      \"origin\": null\n    },\n    \"body\": \"A stable body\\n\"\n  },\n  {\n    \"node\": {\n      \"id\": \"second-idea\",\n      \"title\": \"Second idea\",\n      \"title_by\": \"human\",\n      \"status\": \"seed\",\n      \"created\": \"<TODAY>\",\n      \"updated\": \"<TODAY>\",\n      \"kill\": null,\n      \"kill_by\": null,\n      \"tags\": [],\n      \"edges\": [\n        {\n          \"type\": \"derives-from\",\n          \"to\": \"first-idea\",\n          \"by\": \"human\"\n        },\n        {\n          \"type\": \"contradicts\",\n          \"to\": \"first-idea\",\n          \"by\": \"human\"\n        }\n      ],\n      \"references\": [],\n      \"closed\": null,\n      \"origin\": null\n    },\n    \"body\": \"\"\n  }\n]\n",
+  "stderr": ""
+}

@@ -1,0 +1,21 @@
+Generate shell completion scripts.
+
+The script is the same for every corpus and is never JSON, so `--root` and `--json` are refused here rather than ignored. `$NEBULA_ROOT` is not read.
+
+Usage: neb completions [OPTIONS] <SHELL>
+
+Arguments:
+  <SHELL>
+          The shell to generate completions for
+          
+          [possible values: bash, elvish, fish, powershell, zsh]
+
+Options:
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+  -h, --help
+          Print help (see a summary with '-h')

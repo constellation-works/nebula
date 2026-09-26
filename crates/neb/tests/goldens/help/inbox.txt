@@ -1,0 +1,9 @@
+List captures that have not been promoted or dropped
+
+Usage: neb inbox [OPTIONS]
+
+Options:
+      --limit <N>   Show at most N entries, oldest first, N at least 1. Defaults to every one
+      --root <DIR>  Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+      --json        Emit JSON instead of text, for scripts and agents
+  -h, --help        Print help

@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "--json",
+    "inbox"
+  ],
+  "exit_code": 0,
+  "stdout": "[\n  {\n    \"id\": \"<ENTRY>\",\n    \"at\": \"<AT>\",\n    \"text\": \"Pending insight\"\n  }\n]\n",
+  "stderr": ""
+}

@@ -1,0 +1,13 @@
+Where the Observatory checkout is on this machine, so `cite --kind observatory --uri <record-id>` resolves. A directory is saved to `~/.config/nebula/observatory-root`, never into the corpus, which travels between machines. Without one, prints the effective root and which setting supplied it: `$OBSERVATORY_ROOT`, else this machine's setting, else a legacy `observatory_root` key in `config.yaml`
+
+Usage: neb config observatory-root [OPTIONS] [DIR]
+
+Arguments:
+  [DIR]  The checkout, as an absolute path. Omit to read the current setting
+
+Options:
+      --drop-legacy  Remove the legacy `observatory_root` key from `config.yaml`, where an older `neb` stored one machine's path for every machine. Do it once every machine that uses the corpus has its own setting
+      --root <DIR>   Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+      --json         Emit JSON instead of text, for scripts and agents
+      --no-commit    Skip the commit this once, where `neb config commit on` would make one
+  -h, --help         Print help

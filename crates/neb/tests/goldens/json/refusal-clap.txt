@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "--json",
+    "near"
+  ],
+  "exit_code": 2,
+  "stdout": "",
+  "stderr": "error: the following required arguments were not provided:\n  <QUERY>...\n\nUsage: neb near <QUERY>...\n\nFor more information, try '--help'.\n"
+}

@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "--json",
+    "new",
+    "Third idea",
+    "--id",
+    "third-idea"
+  ],
+  "exit_code": 0,
+  "stdout": "{\n  \"doc\": {\n    \"node\": {\n      \"id\": \"third-idea\",\n      \"title\": \"Third idea\",\n      \"title_by\": \"human\",\n      \"status\": \"seed\",\n      \"created\": \"<TODAY>\",\n      \"updated\": \"<TODAY>\",\n      \"kill\": null,\n      \"kill_by\": null,\n      \"tags\": [],\n      \"edges\": [],\n      \"references\": [],\n      \"closed\": null,\n      \"origin\": null\n    },\n    \"body\": \"\"\n  },\n  \"path\": \"<ROOT>/corpus/nodes/third-idea.md\",\n  \"near\": []\n}\n",
+  "stderr": ""
+}

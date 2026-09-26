@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "--json",
+    "capture",
+    "A captured insight"
+  ],
+  "exit_code": 0,
+  "stdout": "{\n  \"entry\": {\n    \"id\": \"<ENTRY>\",\n    \"at\": \"<AT>\",\n    \"text\": \"A captured insight\"\n  },\n  \"near\": []\n}\n",
+  "stderr": ""
+}

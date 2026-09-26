@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "--json",
+    "graph"
+  ],
+  "exit_code": 0,
+  "stdout": "{\n  \"nodes\": [\n    {\n      \"id\": \"first-idea\",\n      \"title\": \"First idea\",\n      \"status\": \"seed\",\n      \"tags\": [],\n      \"created\": \"<TODAY>\",\n      \"updated\": \"<TODAY>\"\n    },\n    {\n      \"id\": \"second-idea\",\n      \"title\": \"Second idea\",\n      \"status\": \"seed\",\n      \"tags\": [],\n      \"created\": \"<TODAY>\",\n      \"updated\": \"<TODAY>\"\n    }\n  ],\n  \"edges\": [\n    {\n      \"from\": \"second-idea\",\n      \"type\": \"derives-from\",\n      \"to\": \"first-idea\"\n    }\n  ]\n}\n",
+  "stderr": ""
+}

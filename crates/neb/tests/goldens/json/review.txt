@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "--json",
+    "review"
+  ],
+  "exit_code": 0,
+  "stdout": "[]\n",
+  "stderr": ""
+}

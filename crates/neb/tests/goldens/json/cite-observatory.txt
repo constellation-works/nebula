@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "--json",
+    "cite",
+    "first-idea",
+    "--kind",
+    "observatory",
+    "--uri",
+    "H999",
+    "--note",
+    "A source"
+  ],
+  "exit_code": 0,
+  "stdout": "{\n  \"doc\": {\n    \"node\": {\n      \"id\": \"first-idea\",\n      \"title\": \"First idea\",\n      \"title_by\": \"human\",\n      \"status\": \"seed\",\n      \"created\": \"<TODAY>\",\n      \"updated\": \"<TODAY>\",\n      \"kill\": null,\n      \"kill_by\": null,\n      \"tags\": [],\n      \"edges\": [],\n      \"references\": [\n        {\n          \"id\": \"r1\",\n          \"kind\": \"observatory\",\n          \"uri\": \"H999\",\n          \"title\": null,\n          \"note\": \"A source\",\n          \"added\": \"<TODAY>\",\n          \"by\": \"human\",\n          \"origin\": null\n        }\n      ],\n      \"closed\": null,\n      \"origin\": null\n    },\n    \"body\": \"A stable body\\n\"\n  },\n  \"reference\": \"r1\",\n  \"observatory\": {\n    \"reference\": \"r1\",\n    \"record\": \"H999\",\n    \"path\": \"<ROOT>/observatory/hypotheses/H999-golden.md\"\n  }\n}\n",
+  "stderr": ""
+}

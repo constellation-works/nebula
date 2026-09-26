@@ -1,0 +1,13 @@
+Create an empty corpus
+
+Usage: neb init [OPTIONS] [PATH]
+
+Arguments:
+  [PATH]  Where to create it. Defaults to the resolved corpus location
+
+Options:
+      --root <DIR>  Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+      --set-root    Make this corpus the machine default in `~/.config/nebula/root`
+      --force       Replace a machine default that names a different corpus
+      --json        Emit JSON instead of text, for scripts and agents
+  -h, --help        Print help

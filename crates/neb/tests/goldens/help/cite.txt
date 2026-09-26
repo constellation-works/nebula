@@ -1,0 +1,48 @@
+Attach context, with a note saying why it is here
+
+Usage: neb cite [OPTIONS] <NODE>
+
+Arguments:
+  <NODE>
+          Node id
+
+Options:
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --uri <URI>
+          Where it lives. A URL, DOI, path relative to `nodes/`, or almanac wikilink; never an absolute path
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+      --kind <KIND>
+          paper, study, article, note, discussion, book, dataset, thread, observatory, other, in any case (stored lowercase). With `observatory`, `--uri` is a bare record id (`Q<nnn>`) resolved through the configured observatory root
+          
+          [default: other]
+
+      --title <TITLE>
+          Human-readable name
+
+      --note <NOTE>
+          Why this is attached. The only field that matters in a year
+
+      --by <LABEL>
+          Who authored the text: `human`, or the agent's session or crew label. Free text; defaults to `human`
+
+      --task <TASK>
+          Orbit task that produced it
+
+      --run <RUN>
+          Orbit run that produced it
+
+      --no-commit
+          Skip the commit this once, where `neb config commit on` would make one
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  neb cite <id> --kind paper --uri https://doi.org/<doi> --note "why it is here"
+  neb cite <id> --kind note --uri ../notes/<file>.md --note "why it is here"
+  neb cite <id> --kind observatory --uri <record-id> --note "why it is here"

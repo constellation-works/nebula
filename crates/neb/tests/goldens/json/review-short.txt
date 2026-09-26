@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "--json",
+    "review",
+    "--short"
+  ],
+  "exit_code": 0,
+  "stdout": "[]\n",
+  "stderr": "nothing needs attention\n"
+}

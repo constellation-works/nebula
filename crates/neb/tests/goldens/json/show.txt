@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "--json",
+    "show",
+    "first-idea"
+  ],
+  "exit_code": 0,
+  "stdout": "{\n  \"node\": {\n    \"id\": \"first-idea\",\n    \"title\": \"First idea\",\n    \"title_by\": \"human\",\n    \"status\": \"seed\",\n    \"created\": \"<TODAY>\",\n    \"updated\": \"<TODAY>\",\n    \"kill\": null,\n    \"kill_by\": null,\n    \"tags\": [],\n    \"edges\": [],\n    \"references\": [],\n    \"closed\": null,\n    \"origin\": null\n  },\n  \"body\": \"A stable body\",\n  \"notes\": [],\n  \"observatory\": [],\n  \"handed_off_to\": null\n}\n",
+  "stderr": ""
+}

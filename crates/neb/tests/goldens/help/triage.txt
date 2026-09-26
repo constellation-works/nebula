@@ -1,0 +1,28 @@
+Work through the inbox oldest first, one key per entry.
+
+Each waiting entry is shown with its age and the nodes it reads closest to, numbered. One line then decides it: `p` promotes it as a root, `1`-`3` promotes it under that numbered node, `t` sets the title the promotion will use (`t <title>`, or `t` and then the title on the next line; a blank title goes back to the captured text), `d` drops it, `s` leaves it waiting, `q` stops, and `?` lists the keys. Nothing is linked unless a number is chosen.
+
+Each decision is the single verb it stands for, with the same refusals, the same `--by`, and, with `neb config commit on`, the same commit: one per promote or drop. On a terminal a refused key or decision is reported and the same entry asked about again. With standard input piped the keys are read one per line, and the first refusal ends the session non-zero, because the lines after it were written for an entry that did not move. End of input stops as `q` does, except while a title is waiting to be used: then it is a refusal naming the title, so it is never lost without a word. There is no `--json` form; a script runs `inbox`, `near`, `promote` and `drop` itself.
+
+Usage: neb triage [OPTIONS]
+
+Options:
+      --by <LABEL>
+          Who wrote the titles and chose the parents: `human`, or the agent's session or crew label. Free text; defaults to `human`
+
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+      --no-commit
+          Skip the commit this once, where `neb config commit on` would make one
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Examples:
+  neb triage
+  printf 'd\ns\nq\n' | neb triage --no-commit
+  printf 't A sharper title\n1\n' | neb triage --by <label>

@@ -1,0 +1,30 @@
+Move a node to a new status, with the transition guards applied.
+
+`refuted` needs `--why`, saying how the kill condition fired, and is final: reviving the idea takes a new node with a `reopens` edge. `abandoned` takes `--why` optionally. A node with a kill condition cannot go back to `seed`; it reopens as a `hypothesis`.
+
+Usage: neb status [OPTIONS] <NODE> <STATUS>
+
+Arguments:
+  <NODE>
+          Node id
+
+  <STATUS>
+          Target status
+          
+          [possible values: seed, hypothesis, refuted, abandoned]
+
+Options:
+      --root <DIR>
+          Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+
+      --why <WHY>
+          Why it closed. Required for refuted, optional for abandoned
+
+      --json
+          Emit JSON instead of text, for scripts and agents
+
+      --no-commit
+          Skip the commit this once, where `neb config commit on` would make one
+
+  -h, --help
+          Print help (see a summary with '-h')

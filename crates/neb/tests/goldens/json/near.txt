@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "--json",
+    "near",
+    "First idea"
+  ],
+  "exit_code": 0,
+  "stdout": "{\n  \"items\": [\n    {\n      \"id\": \"first-idea\",\n      \"title\": \"First idea\",\n      \"status\": \"seed\",\n      \"tags\": [],\n      \"score\": 0.693,\n      \"band\": \"strong\",\n      \"linked\": null\n    },\n    {\n      \"id\": \"second-idea\",\n      \"title\": \"Second idea\",\n      \"status\": \"seed\",\n      \"tags\": [],\n      \"score\": 0.153,\n      \"band\": \"some\",\n      \"linked\": null\n    }\n  ],\n  \"total\": 2,\n  \"truncated\": false\n}\n",
+  "stderr": ""
+}

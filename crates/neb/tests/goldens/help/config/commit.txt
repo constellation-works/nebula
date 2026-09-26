@@ -1,0 +1,12 @@
+Whether each mutating verb commits the corpus afterwards, when the root is inside a git work tree. Off by default. The commit stages `nodes/`, `inbox/`, `config.yaml` and the generated `.gitignore` and commits those paths alone, whatever else is staged, as `neb <verb> <ids>`. It never pushes. `--no-commit` skips it once
+
+Usage: neb config commit [OPTIONS] [STATE]
+
+Arguments:
+  [STATE]  `on` or `off`. Omit to read the current setting [possible values: on, off]
+
+Options:
+      --no-commit   Skip the commit this once, where `neb config commit on` would make one
+      --root <DIR>  Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
+      --json        Emit JSON instead of text, for scripts and agents
+  -h, --help        Print help

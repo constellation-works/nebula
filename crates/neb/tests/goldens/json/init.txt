@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "--json",
+    "init"
+  ],
+  "exit_code": 0,
+  "stdout": "{\n  \"root\": \"<ROOT>/corpus\"\n}\n",
+  "stderr": ""
+}

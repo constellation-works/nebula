@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "--json",
+    "show",
+    "nope"
+  ],
+  "exit_code": 1,
+  "stdout": "",
+  "stderr": "{\"code\":\"no_such_node\",\"error\":\"no node `nope`\",\"hint\":\"List what exists with:  neb list\"}\n"
+}
