@@ -455,3 +455,33 @@ A list a limit cut says so in its payload, as
 nothing; after the release each would be a breaking change (`STD-01@2 §R10`).
 Reverses only by the same route: a recorded breaking change to the machine
 contract.
+
+## An offset-less inbox stamp is local time
+
+STD-01@2 §R11 requires machine timestamps to be RFC 3339 with an explicit
+offset, and the inbox stamp was not: `2026-09-26T08:11`, to the minute, with
+no offset, and silently in UTC when the local offset could not be read. From
+0.2.0 capture stamps RFC 3339 to the second with the offset it used,
+`2026-09-26T08:11:05+02:00`, or `…Z` when it fell back to UTC, so a fallback
+never passes for local time; `+00:00` is a local offset of zero that was
+actually read.
+
+The inbox files are a persisted format, so the change is compatible
+(STD-02@2 §R16). A legacy line still loads and is never rewritten: settling
+it strikes the line through with the stamp as written, and ids stay what the
+line says, since nothing re-derives an id from its stamp. Its `at`, in
+`neb inbox --json`, `drop --json` and the desktop, is interpreted rather than
+passed through: local time with the offset this machine has for that
+instant (`UtcOffset::local_offset_at`), or `Z` when there is none. That is
+what the old writer meant whenever it could read the offset, and it keeps
+`at` one type for every consumer. The alternative, the legacy text in `at`
+beside a separate normalized field, was rejected because it leaves `at`
+failing §R11 for exactly the entries that need interpreting, and makes every
+consumer handle two forms. The cost is the ambiguity §R16 warns about: a
+legacy stamp written under the silent UTC fallback reads as local time, off
+by the machine's offset, and nothing in the line can tell the two apart.
+`triage` orders by instant, and an entry's age counts from the date its stamp
+was taken on in its own offset, which for a legacy stamp is the date it
+shows. Reverses if a legacy stamp is found that was not written in the
+machine's local time often enough to mislead, in which case legacy `at`
+should pass through as written with a separate field for the reading.

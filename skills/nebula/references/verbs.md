@@ -142,8 +142,14 @@ for one invocation.
 
 ```json
 // neb inbox --json
-[ { "id": "a6e8", "at": "2026-09-12T18:16", "text": "nebula review as a weekly orbit routine" } ]
+[ { "id": "a6e8", "at": "2026-09-12T18:16:42+02:00", "text": "nebula review as a weekly orbit routine" } ]
 ```
+
+`at` is RFC 3339 to the second, with the offset the capture was stamped at,
+and `Z` when the local offset could not be read. An entry captured before
+0.2.0 has a stamp with no offset (`2026-09-12T18:16` in the inbox file); it
+lists as local time with the offset this machine has for that instant, and
+its line is never rewritten.
 
 `triage` is for a human at a terminal. It snapshots the inbox, then shows
 each entry in turn, oldest capture first, with its position, stamp and age
@@ -213,7 +219,7 @@ standard input.
 ```json
 // neb capture --json "domains drift when a field is required"
 {
-  "entry": { "id": "f1ca", "at": "2026-09-21T01:57", "text": "domains drift when a field is required" },
+  "entry": { "id": "f1ca", "at": "2026-09-21T01:57:08+02:00", "text": "domains drift when a field is required" },
   "near": [
     { "id": "required-categorical-fields-drift", "title": "Required categorical fields drift",
       "status": "seed", "tags": ["design"], "score": 0.555, "band": "strong", "linked": null },
@@ -243,7 +249,7 @@ standard input.
 
 ```json
 // neb drop 5572 --json
-{ "id": "5572", "at": "2026-09-21T02:56", "text": "duplicate thought" }
+{ "id": "5572", "at": "2026-09-21T02:56:31+02:00", "text": "duplicate thought" }
 ```
 
 `near` is `[]` in both when it would be empty, so `--quiet`, a `--parent`,

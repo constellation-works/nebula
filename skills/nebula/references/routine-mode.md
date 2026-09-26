@@ -110,8 +110,8 @@ $ neb review --json
 [ { "rule": "no-references", "id": "tags-beat-domains",
     "title": "Tags beat domains", "reason": "no references attached" } ]
 $ neb inbox --json
-[ { "id": "a6e8", "at": "2026-09-12T18:16", "text": "nebula review as a weekly orbit routine" },
-  { "id": "3f1c", "at": "2026-09-12T18:17", "text": "buy more coffee" } ]
+[ { "id": "a6e8", "at": "2026-09-12T18:16:42+02:00", "text": "nebula review as a weekly orbit routine" },
+  { "id": "3f1c", "at": "2026-09-12T18:17:05+02:00", "text": "buy more coffee" } ]
 $ neb list --json | jq -c '.[] | {id, status, tags, kill}'
 {"id":"a-single-global-taxonomy","status":"refuted","tags":["design"],"kill":"nobody can keep it current"}
 {"id":"required-categorical-fields-drift","status":"seed","tags":["design"],"kill":null}

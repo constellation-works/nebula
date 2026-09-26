@@ -350,8 +350,9 @@ fn date_days_ago(days: i64) -> String {
         .expect("formatting a date")
 }
 
-/// The inbox stamp format is the date plus a time-of-day, but only the date
-/// half feeds the fourteen-day rule.
+/// A stamp in the legacy `YYYY-MM-DDTHH:MM` form, so the tests that back-date
+/// captures keep covering legacy stamps. Only the date feeds the fourteen-day
+/// rule.
 fn stamp_days_ago(days: i64) -> String {
     format!("{}T00:00", date_days_ago(days))
 }
@@ -382,6 +383,7 @@ fn set_created(path: &Path, date: &str) {
 /// Back-date one capture's timestamp in place, found by its own text rather
 /// than by position, since `Corpus::seed` leaves earlier settled captures in
 /// the same monthly inbox file ahead of whichever one a test cares about.
+/// The whole stamp is replaced, whichever form either one is in.
 fn set_inbox_stamp_for(root: &Path, capture_text: &str, stamp: &str) {
     let inbox_dir = root.join("inbox");
     for entry in std::fs::read_dir(&inbox_dir).unwrap() {
@@ -392,7 +394,7 @@ fn set_inbox_stamp_for(root: &Path, capture_text: &str, stamp: &str) {
         };
         let line_start = raw[..text_at].rfind('\n').map_or(0, |i| i + 1);
         let stamp_start = raw[line_start..].find("] ").unwrap() + line_start + 2;
-        let stamp_end = stamp_start + "2020-01-01T00:00".len();
+        let stamp_end = stamp_start + raw[stamp_start..].find(' ').unwrap();
         raw.replace_range(stamp_start..stamp_end, stamp);
         std::fs::write(&path, raw).unwrap();
         return;
@@ -698,6 +700,89 @@ fn empty_stdin_capture_creates_no_corpus() {
     );
 }
 
+/// Whether `at` is RFC 3339, which says its offset by construction.
+fn is_rfc3339(at: &serde_json::Value) -> bool {
+    at.as_str().is_some_and(|at| {
+        time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).is_ok()
+    })
+}
+
+/// A POSIX zone two hours ahead of UTC, with no daylight saving, so a stamp's
+/// offset is known whatever zone the suite runs in.
+const PLUS_TWO: (&str, &str) = ("TZ", "XYZ-2");
+
+#[test]
+fn inbox_at_is_rfc3339_with_offset() {
+    let c = Corpus::new();
+
+    let captured = c
+        .run_with_env(&["capture", "x", "--json"], &[PLUS_TWO])
+        .assert_ok()
+        .stdout();
+    let captured: serde_json::Value = serde_json::from_str(&captured).unwrap();
+    let at = &captured["entry"]["at"];
+    assert!(is_rfc3339(at), "{captured}");
+    assert!(at.as_str().unwrap().ends_with("+02:00"), "{captured}");
+    c.run(&["capture", "y", "--quiet"]).assert_ok();
+
+    let listing = c.run(&["inbox", "--json"]).assert_ok().stdout();
+    let listing: serde_json::Value = serde_json::from_str(&listing).unwrap();
+    let entries = listing.as_array().unwrap();
+    assert_eq!(entries.len(), 2, "{listing}");
+    assert!(entries.iter().all(|e| is_rfc3339(&e["at"])), "{listing}");
+    assert_eq!(entries[0]["at"], *at, "a stamp reads back as written");
+
+    let dropped = c
+        .run(&["drop", captured["entry"]["id"].as_str().unwrap(), "--json"])
+        .assert_ok()
+        .stdout();
+    let dropped: serde_json::Value = serde_json::from_str(&dropped).unwrap();
+    assert_eq!(dropped["at"], *at, "{dropped}");
+}
+
+/// A stamp from before 0.2.0 carries no offset. It lists as local time with
+/// the offset the machine has for that instant, and settling it leaves the
+/// line's stamp exactly as it was written.
+#[test]
+fn legacy_inbox_stamp_still_loads() {
+    let c = Corpus::new();
+    let inbox = c.root.join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    let month = inbox.join("2000-01.md");
+    write(
+        &month,
+        "- [abcd] 2026-09-01T08:00 old thought\n\
+         - [bcde] 2026-09-01T09:00 another old thought\n",
+    );
+
+    let listing = c
+        .run_with_env(&["inbox", "--json"], &[PLUS_TWO])
+        .assert_ok()
+        .stdout();
+    let listing: serde_json::Value = serde_json::from_str(&listing).unwrap();
+    assert_eq!(listing[0]["id"], "abcd", "{listing}");
+    assert_eq!(listing[0]["at"], "2026-09-01T08:00:00+02:00", "{listing}");
+    assert_eq!(listing[1]["at"], "2026-09-01T09:00:00+02:00", "{listing}");
+    let listing = c
+        .run_with_env(&["inbox", "--json"], &[("TZ", "UTC0")])
+        .assert_ok()
+        .stdout();
+    assert!(
+        listing.contains("\"2026-09-01T08:00:00+00:00\""),
+        "{listing}"
+    );
+
+    c.run(&["promote", "abcd"]).assert_ok().says("old-thought");
+    c.run(&["drop", "bcde"]).assert_ok();
+
+    assert_eq!(
+        std::fs::read_to_string(&month).unwrap(),
+        "- ~~[abcd] 2026-09-01T08:00 old thought~~ -> old-thought\n\
+         - ~~[bcde] 2026-09-01T09:00 another old thought~~ dropped\n"
+    );
+    c.run(&["inbox", "--json"]).assert_ok().says("[]");
+}
+
 fn inbox_id_candidates(stamp: &str, text: &str) -> Vec<String> {
     fn fnv(s: &str) -> u64 {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -762,7 +847,7 @@ fn capture_collision_fallback_promotes_the_new_thought() {
         assert!(node.ends_with("the intended new thought\n"));
         return;
     }
-    panic!("the clock crossed a minute during all three collision fixtures");
+    panic!("the clock crossed a second during all three collision fixtures");
 }
 
 #[test]

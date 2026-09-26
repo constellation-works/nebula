@@ -115,7 +115,7 @@ session or crew label after `agent:` in a real session.
 $ neb check
 3 nodes, 0 errors, 0 warnings
 $ neb inbox --json
-[ { "id": "a6e8", "at": "2026-09-12T18:16", "text": "nebula review as a weekly orbit routine" } ]
+[ { "id": "a6e8", "at": "2026-09-12T18:16:42+02:00", "text": "nebula review as a weekly orbit routine" } ]
 $ neb near --json "nebula review as a weekly orbit routine"
 { "items": [], "total": 0, "truncated": false }
 $ neb list --json | jq -c '.[] | {id, status, tags}'

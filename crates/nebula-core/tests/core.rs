@@ -1358,6 +1358,32 @@ fn settling_refuses_when_the_indexed_line_has_another_entry_id() {
     assert_eq!(std::fs::read_to_string(&entry.file).unwrap(), replacement);
 }
 
+/// A legacy stamp has no offset. It is read as local time, and settling the
+/// entry strikes the line through with the stamp exactly as it was written.
+#[test]
+fn settling_a_legacy_entry_keeps_its_stamp_as_written() {
+    let (_dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "a new thought").unwrap();
+    let legacy = entry.file.with_file_name("2000-01.md");
+    std::fs::write(&legacy, "- [abcd] 2026-09-01T08:00 old thought\n").unwrap();
+
+    let old = corpus.inbox_entry("abcd").unwrap();
+    assert!(old.at.starts_with("2026-09-01T08:00:00"), "{}", old.at);
+    assert!(
+        time::OffsetDateTime::parse(&old.at, &time::format_description::well_known::Rfc3339)
+            .is_ok(),
+        "{}",
+        old.at
+    );
+    ops::drop(&corpus, "abcd").unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&legacy).unwrap(),
+        "- ~~[abcd] 2026-09-01T08:00 old thought~~ dropped\n"
+    );
+    assert_eq!(corpus.inbox_entry(&entry.id).unwrap().at, entry.at);
+}
+
 #[test]
 fn capture_line_joins_every_line_break_into_one_space() {
     for (text, line) in [
@@ -1477,7 +1503,7 @@ fn capture_uses_a_free_id_after_the_hash_candidates_collide() {
         assert_eq!(corpus.inbox().unwrap().0.len(), occupied.len());
         return;
     }
-    panic!("the clock crossed a minute during all three collision fixtures");
+    panic!("the clock crossed a second during all three collision fixtures");
 }
 
 #[test]
@@ -1552,7 +1578,7 @@ fn capture_ids_are_unique_across_month_files_and_older_entries_still_resolve() {
         assert_eq!(resolved.text, first.text);
         return;
     }
-    panic!("the clock crossed a minute during all three fixture attempts");
+    panic!("the clock crossed a second during all three fixture attempts");
 }
 
 #[test]

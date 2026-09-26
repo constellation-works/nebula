@@ -13,7 +13,11 @@ export type InboxEntry = {
  */
 id: string, 
 /**
- * Capture timestamp.
+ * When it was captured: RFC 3339 with the offset the stamp was taken
+ * at, ending in `Z` when the local offset could not be read. A legacy
+ * `YYYY-MM-DDTHH:MM` stamp reads as local time with the offset this
+ * machine has for that instant. A stamp that is neither, edited in by
+ * hand, is passed through as written.
  */
 at: string, 
 /**
