@@ -173,8 +173,8 @@ space and blank lines vanish, so `printf 'a\nb\n' | neb capture -` stores
 `a b`. Only whitespace-only text is refused (`nothing to capture`).
 
 `capture` prints the entry id on its own line, then — when any node shares a
-word with the text — a `near:` block of up to three lines, `<score> <status>
-<id> <title>`, best first. `promote` prints `<id> <path>` and, when no
+word with the text — a `near:` block of up to three lines, `<band> <status>
+<id> <title>`, best first (bands under [`near`](#query)). `promote` prints `<id> <path>` and, when no
 `--parent` was given, the same block for the title plus captured text. Both
 are the [`near`](#query) query run for you: a suggestion for the triage
 step, never an edge. `promote` writes the node as a root whatever it lists,
@@ -205,9 +205,9 @@ standard input.
   "entry": { "id": "f1ca", "at": "2026-09-21T01:57", "text": "domains drift when a field is required" },
   "near": [
     { "id": "required-categorical-fields-drift", "title": "Required categorical fields drift",
-      "status": "seed", "tags": ["design"], "score": 0.555 },
+      "status": "seed", "tags": ["design"], "score": 0.555, "band": "strong", "linked": null },
     { "id": "tags-beat-domains", "title": "Tags beat domains",
-      "status": "hypothesis", "tags": ["design", "corpus"], "score": 0.177 }
+      "status": "hypothesis", "tags": ["design", "corpus"], "score": 0.177, "band": "some", "linked": null }
   ]
 }
 
@@ -221,9 +221,9 @@ standard input.
   "path": "/Users/you/.nebula/nodes/required-fields-drift-domains.md",
   "near": [
     { "id": "required-categorical-fields-drift", "title": "Required categorical fields drift",
-      "status": "seed", "tags": ["design"], "score": 0.619 },
+      "status": "seed", "tags": ["design"], "score": 0.619, "band": "strong", "linked": null },
     { "id": "tags-beat-domains", "title": "Tags beat domains",
-      "status": "hypothesis", "tags": ["design", "corpus"], "score": 0.114 }
+      "status": "hypothesis", "tags": ["design", "corpus"], "score": 0.114, "band": "some", "linked": null }
   ]
 }
 ```
@@ -465,7 +465,7 @@ not who wrote the words. `check` enforces nothing about authorship.
 | `neb show <NODE>` | one node in full, plus its body, currently or at a historical revision | `--at <HASH\|YYYY-MM-DD>` |
 | `neb log <NODE>` | commits that changed the node, newest first | — |
 | `neb list` | every node | `--status <S>`, `--tag <TAG>`× (every tag must match) |
-| `neb near <QUERY>...` | the existing nodes closest to free text, or to a node (left out of its own answer), scored `0..=1`, best first | `--limit <K>`/`-k` (default 3); flags may follow the query |
+| `neb near <QUERY>...` | the existing nodes closest to free text, or to a node (left out of its own answer), best first, each banded `strong`/`some`/`weak`; for a node, marks neighbours already linked to it | `--limit <K>`/`-k` (default 3); flags may follow the query |
 | `neb trace <NODE>` | ancestry as a tree, each line naming its edge kind(s) | `--down` for descendants |
 | `neb impact <NODE>` | descendants plus `contradicts` neighbours | — |
 | `neb graph` | the whole corpus as `{nodes, edges}` or a Mermaid diagram | `--json`, or `--mermaid [--from <ID>]`; without a format, a hint and exit 2 |
@@ -522,25 +522,52 @@ node carries `"closed": { "why": "...", "at": "2026-09-12" }`; optional fields
 
 `near` is word overlap — BM25 over title, tags and body, title and tags
 weighted up, plurals and `-ing` folded, no embeddings and no network — with
-the score normalised so `1` would saturate every word of the query. Nodes
-sharing no word are left out, so an empty answer (`[]`; in text, `nothing
-near: no node shares a word with this`) is a real finding: the thought is
-unlike anything in the corpus. Roughly, above `0.3` the two share real
-vocabulary; below `0.1` they share one incidental word. It ranks candidates
-for a human to read; it never writes anything, and passing its first line
-straight to `--parent` unread is the automatic linking the spec rules out.
+the score normalised so `1` would saturate every word of the query. Nothing
+does: a word-for-word copy of a node scores about `0.35`–`0.6` against it,
+so the number is not a percentage and text output does not print it. It
+prints a band instead, and `--json` carries both `score` and `band`:
+
+| band | score | reads as |
+|---|---|---|
+| `strong` | `0.25` and up | shares most of the query's distinctive words: a possible duplicate, or the obvious parent |
+| `some` | `0.07` to `0.25` | shares a few distinctive words: read it before deciding |
+| `weak` | under `0.07` | a word or two in passing |
+
+The cut-offs come from a synthetic corpus of sixteen varied nodes: copies
+and promoted copies scored `0.44`–`0.59` (one in a real corpus scored
+`0.36`), sentences reusing most of a node's key words `0.28`–`0.53`, a
+sentence sharing one incidental word `0.09`–`0.20`, and a whole node against
+the others `0.07`–`0.13` for its topical neighbours and under `0.07` for
+nearly everything else. A short query scores
+higher for the same overlap (one word is half of a two-word query), so a
+one-word match on a two-word query can read `strong`. The band never
+reorders anything; the order is the score's.
+
+Given a node, each neighbour's `linked` lists the edges already joining it
+to that node, either way round, as `{from, type, to}` in declaration order;
+text appends `linked: parent (<kinds>)`, `linked: child (<kinds>)` or
+`linked: contradicts`. It is `null` when there is no such edge, and always
+for free text (and so for the `near` of `capture` and `promote`). A linked
+neighbour is a link that exists, not one to make.
+
+Nodes sharing no word are left out, so an empty answer (`[]`; in text,
+`nothing near: no node shares a word with this`) is a real finding: the
+thought is unlike anything in the corpus. It ranks candidates for a human to
+read; it never writes anything, and passing its first line straight to
+`--parent` unread is the automatic linking the spec rules out.
 
 ```json
 // neb near --json "one global taxonomy for every domain"
 [
   { "id": "a-single-global-taxonomy", "title": "A single global taxonomy",
-    "status": "abandoned", "tags": ["design"], "score": 0.301 },
+    "status": "abandoned", "tags": ["design"], "score": 0.301, "band": "strong", "linked": null },
   { "id": "tags-beat-domains", "title": "Tags beat domains",
-    "status": "hypothesis", "tags": ["design", "corpus"], "score": 0.138 }
+    "status": "hypothesis", "tags": ["design", "corpus"], "score": 0.138, "band": "some", "linked": null }
 ]
 
 // neb near tags-beat-domains        (the node's own text is the query; it is not in the answer)
-0.30 abandoned  a-single-global-taxonomy A single global taxonomy
+strong abandoned a-single-global-taxonomy A single global taxonomy  linked: contradicts
+some   seed required-categorical-fields-drift Required categorical fields drift  linked: parent (derives-from)
 ```
 
 `neb trace` prints a tree. Every line below the start names the genealogy

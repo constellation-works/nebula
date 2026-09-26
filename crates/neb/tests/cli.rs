@@ -1488,8 +1488,19 @@ fn near_ranks_existing_nodes_against_free_text() {
         score >= out[1]["score"].as_f64().unwrap(),
         "best first: {json}"
     );
+    // The raw score stays in JSON, beside the band a human is shown; free
+    // text is no node, so nothing is linked to it.
+    for n in out.as_array().unwrap() {
+        assert!(
+            ["strong", "some", "weak"].contains(&n["band"].as_str().unwrap()),
+            "{json}"
+        );
+        assert!(n["linked"].is_null(), "present, and null: {json}");
+    }
+    assert_eq!(first["band"], "strong", "{json}");
 
-    // Text mode: one line per neighbour, score first, the best on top.
+    // Text mode: one line per neighbour, band first, the best on top, and
+    // no bare number to misread.
     let text = c
         .run(&["near", "tags and domains beat a taxonomy"])
         .assert_ok()
@@ -1498,7 +1509,13 @@ fn near_ranks_existing_nodes_against_free_text() {
     assert_eq!(lines.len(), 2, "{text}");
     assert!(lines[0].contains("tags-beat-domains"), "{text}");
     assert!(lines[1].contains("a-single-global-taxonomy"), "{text}");
-    assert!(lines[0].starts_with("0."), "score leads the line: {text}");
+    assert!(
+        lines[0].starts_with("strong "),
+        "band leads the line: {text}"
+    );
+    let band = out[1]["band"].as_str().unwrap();
+    assert!(lines[1].starts_with(band), "the JSON's band: {text}");
+    assert!(!text.contains("0."), "no raw score in text: {text}");
 
     // A limit caps the answer.
     let json = c
@@ -1523,6 +1540,90 @@ fn near_takes_a_node_id_and_never_returns_that_node() {
         Some("a-single-global-taxonomy"),
         "{json}"
     );
+}
+
+/// Asked about a node, `near` says which neighbours are already linked to
+/// it and by what, in text and in JSON, and still writes nothing.
+#[test]
+fn near_marks_candidates_already_linked_to_the_node() {
+    let c = Corpus::new();
+    lexical_fixture(&c);
+    c.run(&[
+        "new",
+        "Tags beat domains in corpus design",
+        "--parent",
+        "tags-beat-domains",
+    ])
+    .assert_ok();
+    c.run(&[
+        "link",
+        "tags-beat-domains",
+        "contradicts",
+        "a-single-global-taxonomy",
+    ])
+    .assert_ok();
+    let before = snapshot_corpus_files(&c.root);
+
+    let text = c.run(&["near", "tags-beat-domains"]).assert_ok().stdout();
+    let line = |id: &str| {
+        text.lines()
+            .find(|l| l.contains(id))
+            .unwrap_or_else(|| panic!("{id} in: {text}"))
+            .to_string()
+    };
+    assert!(
+        line("tags-beat-domains-in-corpus-design").ends_with("linked: child (derives-from)"),
+        "{text}"
+    );
+    assert!(
+        line("a-single-global-taxonomy").ends_with("linked: contradicts"),
+        "one mark for a contradiction stored on both ends: {text}"
+    );
+
+    let text = c
+        .run(&["near", "tags-beat-domains-in-corpus-design"])
+        .assert_ok()
+        .stdout();
+    let parent = text
+        .lines()
+        .find(|l| l.contains(" tags-beat-domains "))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(parent.ends_with("linked: parent (derives-from)"), "{text}");
+    let unlinked = text
+        .lines()
+        .find(|l| l.contains("a-single-global-taxonomy"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(!unlinked.contains("linked"), "{text}");
+
+    let json = c
+        .run(&["near", "--json", "tags-beat-domains-in-corpus-design"])
+        .assert_ok()
+        .stdout();
+    let out: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let by_id = |id: &str| {
+        out.as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == id)
+            .unwrap_or_else(|| panic!("{id} in: {json}"))
+            .clone()
+    };
+    assert_eq!(
+        by_id("tags-beat-domains")["linked"],
+        serde_json::json!([{
+            "from": "tags-beat-domains-in-corpus-design",
+            "type": "derives-from",
+            "to": "tags-beat-domains",
+        }]),
+        "{json}"
+    );
+    assert!(
+        by_id("a-single-global-taxonomy")["linked"].is_null(),
+        "{json}"
+    );
+
+    // A suggestion only: marking a link is a read, and nothing changed.
+    assert_eq!(before, snapshot_corpus_files(&c.root));
 }
 
 #[test]
@@ -1781,6 +1882,7 @@ fn capture_json_carries_the_entry_and_its_neighbours() {
     let near = out["near"].as_array().unwrap();
     assert_eq!(near[0]["id"], "a-single-global-taxonomy", "{json}");
     assert!(near[0]["score"].is_number(), "{json}");
+    assert!(near[0]["band"].is_string(), "{json}");
 
     let json = c
         .run(&[
@@ -2013,8 +2115,14 @@ fn triage_decides_each_entry_oldest_first_as_the_single_verbs_would() {
     assert!(out.contains("[1/4]") && out.contains("[4/4]"), "{out}");
     assert!(out.contains("· 4 days"), "each entry shows its age:\n{out}");
     assert!(
-        out.contains("1 0.") && out.contains("a-single-global-taxonomy"),
-        "the candidates are numbered:\n{out}"
+        out.lines().any(|l| {
+            let mut words = l.split_whitespace();
+            words.next() == Some("1")
+                && words
+                    .next()
+                    .is_some_and(|band| ["strong", "some", "weak"].contains(&band))
+        }) && out.contains("a-single-global-taxonomy"),
+        "the candidates are numbered, each with its band:\n{out}"
     );
     assert!(
         !out.lines().any(|l| l.starts_with("> ")) && !out.contains("q quit"),

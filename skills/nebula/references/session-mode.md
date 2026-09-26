@@ -28,11 +28,15 @@ triage it; do not start without being asked.
 For each inbox entry, in order:
 
 - Run `neb near --json "<the entry's text>"`. It ranks the existing nodes by
-  shared vocabulary, best first, with a score in `0..=1`; `capture` already
-  printed the same three lines when the thought went in. Read the top
-  candidates — `neb show <id>` for the title, body and `kill`, `neb trace
-  <id>` for where each sits — rather than trusting the score: it is word
-  overlap, and a shared word is not a shared idea.
+  shared vocabulary, best first, each with a `band` (`strong`, `some`,
+  `weak`) beside its raw `score`; `capture` already printed the same three
+  lines when the thought went in. The score is not a percentage: a
+  word-for-word duplicate scores about `0.5`, and reads `strong`. Read the
+  top candidates — `neb show <id>` for the title, body and `kill`, `neb trace
+  <id>` for where each sits — rather than trusting the band: it is word
+  overlap, and a shared word is not a shared idea. `neb near <id>` on a node
+  marks each neighbour already linked to it (`linked`, with the edges), so a
+  parent in the answer is not a link still to make.
 - Pick a parent only if one is defensible: you can say in one line why the
   entry descends from, refines or generalizes that node. Otherwise promote
   as a root. An empty `near` (`[]`) is a real finding — nothing in the corpus

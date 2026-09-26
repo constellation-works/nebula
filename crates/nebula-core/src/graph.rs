@@ -13,6 +13,7 @@ use crate::model::{self, Doc, EdgeType, Node, Note, Status};
 use crate::store::{self, Inbox};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// Days a seed may sit untouched before [`open`] and [`review`] raise it.
@@ -659,10 +660,81 @@ pub struct Neighbour {
     pub status: Status,
     /// Its labels, since a promotion reuses the parent's.
     pub tags: Vec<String>,
-    /// Lexical similarity in `0..=1`, rounded to three places. `1` would be a
-    /// node that saturates every word of the query; anything over about
-    /// `0.3` shares real vocabulary rather than one incidental word.
+    /// Lexical similarity in `0..=1`, rounded to three places. Not
+    /// calibrated: `1` would be a node that saturates every word of the
+    /// query, which nothing does, and a word-for-word copy of the query
+    /// scores about `0.35`–`0.6`. [`Band`] is the reading of it.
     pub score: f64,
+    /// The score read as a coarse band, which is what a human is shown.
+    pub band: Band,
+    /// The edges already joining this node and the node `near` was asked
+    /// about, either way round, each once, in declaration order. Null when
+    /// there are none, which is always the case for a free-text query.
+    pub linked: Option<Vec<EdgeRecord>>,
+}
+
+/// How much of a query a [`Neighbour`] shares, coarsely.
+///
+/// A band and not the number, because the number invites a precision it
+/// does not have: it is word overlap scaled by a ceiling nothing reaches,
+/// so a duplicate reads as `0.4` and a reader takes that for "40% alike".
+/// The cut-offs were read off a synthetic corpus of sixteen varied nodes:
+///
+/// - word-for-word duplicates and promoted copies of a node scored
+///   `0.44`–`0.59` (one in a real corpus scored `0.36`), and
+///   sentences reusing most of a node's key words `0.28`–`0.53`;
+/// - a sentence sharing one incidental word with a node scored
+///   `0.09`–`0.20`;
+/// - a whole node against the others scored `0.07`–`0.13` for its topical
+///   neighbours and under `0.07` for nearly everything else.
+///
+/// So [`Band::Strong`] starts at [`STRONG_FROM`], with margin under every
+/// copy and over every one-word match, and [`Band::Weak`] ends at
+/// [`SOME_FROM`], where a node's unrelated neighbours stop. Short queries score
+/// higher for the same overlap, since one word is a larger share of two
+/// than of twenty, so a one-word match on a two-word query can read
+/// `strong`. The band ranks nothing; the order is still the score's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "lowercase")]
+pub enum Band {
+    /// Shares most of the query's distinctive words: a possible duplicate,
+    /// or the obvious parent. Scores from [`STRONG_FROM`] up.
+    Strong,
+    /// Shares a few distinctive words: worth reading before deciding.
+    /// Scores from [`SOME_FROM`] up to [`STRONG_FROM`].
+    Some,
+    /// Shares a word or two in passing. Scores under [`SOME_FROM`].
+    Weak,
+}
+
+/// The lowest score read as [`Band::Strong`].
+pub const STRONG_FROM: f64 = 0.25;
+/// The lowest score read as [`Band::Some`].
+pub const SOME_FROM: f64 = 0.07;
+
+impl Band {
+    /// The band a score falls in.
+    pub fn of(score: f64) -> Self {
+        if score >= STRONG_FROM {
+            Self::Strong
+        } else if score >= SOME_FROM {
+            Self::Some
+        } else {
+            Self::Weak
+        }
+    }
+}
+
+impl fmt::Display for Band {
+    /// Honours width and alignment, so a renderer can line bands up.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad(match self {
+            Self::Strong => "strong",
+            Self::Some => "some",
+            Self::Weak => "weak",
+        })
+    }
 }
 
 /// How many neighbours `near` returns unless told otherwise.
@@ -699,6 +771,11 @@ const STOPWORDS: &[&str] = &[
 /// `0..=1` and is comparable across queries. No embeddings, no network, no
 /// dependency: at the corpus sizes this tool is for, word overlap is enough
 /// to put the right candidates in front of whoever is choosing a parent.
+///
+/// Each neighbour carries its score's [`Band`]. When `query` is a node,
+/// each also carries the edges already joining it to that node, so a parent
+/// or a child in the answer reads as a link that exists and not as one to
+/// make.
 ///
 /// This *suggests*. It never writes an edge, and a caller that turned the
 /// first answer into a `--parent` unread would be doing the automatic
@@ -775,15 +852,43 @@ pub fn near(graph: &Graph<'_>, query: &str, k: usize) -> Result<Near> {
     Ok(Near(
         scored
             .into_iter()
-            .map(|(score, d)| Neighbour {
-                id: d.node.id.clone(),
-                title: d.node.title.clone(),
-                status: d.node.status,
-                tags: d.node.tags.clone(),
-                score: (score * 1000.0).round() / 1000.0,
+            .map(|(score, d)| {
+                // Banded after rounding, so the band always agrees with the
+                // score a reader of `--json` sees beside it.
+                let score = (score * 1000.0).round() / 1000.0;
+                Neighbour {
+                    id: d.node.id.clone(),
+                    title: d.node.title.clone(),
+                    status: d.node.status,
+                    tags: d.node.tags.clone(),
+                    score,
+                    band: Band::of(score),
+                    linked: exclude.and_then(|q| links_between(graph, q, &d.node.id)),
+                }
             })
             .collect(),
     ))
+}
+
+/// Every edge between two nodes, either way round, each distinct claim
+/// once and in declaration order: `a`'s edges to `b`, then `b`'s to `a`.
+/// `None` when there are none.
+fn links_between(graph: &Graph<'_>, a: &str, b: &str) -> Option<Vec<EdgeRecord>> {
+    let mut out: Vec<EdgeRecord> = Vec::new();
+    for (from, to) in [(a, b), (b, a)] {
+        let Some(doc) = graph.get(from) else { continue };
+        for e in doc.node.edges.iter().filter(|e| e.to == to) {
+            // The same claim written twice is one claim, as in `has_edge`.
+            if !out.iter().any(|r| r.from == from && r.kind == e.kind) {
+                out.push(EdgeRecord {
+                    from: from.to_string(),
+                    kind: e.kind,
+                    to: to.to_string(),
+                });
+            }
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// Everything about a node that a similarity should read, as one text.

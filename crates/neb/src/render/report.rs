@@ -2,9 +2,9 @@
 
 use super::{bold, dim, paint, status_badge};
 use nebula_core::{
-    CommitSetting, HUMAN, INBOX_DAYS, Impact, Inbox, MigrationReport, Near, Neighbour, NodeView,
-    OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, OpenReport, Report, ReviewItem,
-    ReviewReport, ReviewRule, Severity, TagCounts, Via,
+    Band, CommitSetting, EdgeType, HUMAN, INBOX_DAYS, Impact, Inbox, MigrationReport, Near,
+    Neighbour, NodeView, OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, OpenReport,
+    Report, ReviewItem, ReviewReport, ReviewRule, Severity, TagCounts, Via,
 };
 use std::fmt::Write as _;
 
@@ -167,15 +167,63 @@ pub fn inbox(inbox: &Inbox) -> String {
     out
 }
 
-/// One neighbour as a line: score, status, id, title.
+/// One neighbour as a line: band, status, id, title, and any link it
+/// already has to the node asked about. The raw score stays in `--json`:
+/// printed bare, it reads as a percentage it is not.
 pub(super) fn neighbour(n: &Neighbour) -> String {
-    format!(
+    let mut line = format!(
         "{} {} {} {}",
-        dim(&format!("{:.2}", n.score)),
+        band(n.band),
         status_badge(n.status),
         bold(&n.id),
         dim(&n.title)
-    )
+    );
+    if let Some(linked) = linked(n) {
+        let _ = write!(line, "  {linked}");
+    }
+    line
+}
+
+/// A band, padded so the columns after it line up.
+fn band(b: Band) -> String {
+    let text = format!("{b:<6}");
+    match b {
+        Band::Strong => bold(&text),
+        Band::Some => text,
+        Band::Weak => dim(&text),
+    }
+}
+
+/// The edges a neighbour already shares with the node `near` was asked
+/// about, by what the neighbour is to that node: `linked: parent
+/// (derives-from)`, `linked: child (refines)`, `linked: contradicts`.
+fn linked(n: &Neighbour) -> Option<String> {
+    let edges = n.linked.as_deref()?;
+    // Kinds grouped by role, each role once, in the order first met.
+    let mut roles: Vec<(&str, Vec<EdgeType>)> = Vec::new();
+    for e in edges {
+        let role = match (e.kind.is_genealogy(), e.from == n.id) {
+            (false, _) => "contradicts",
+            (true, false) => "parent",
+            (true, true) => "child",
+        };
+        match roles.iter_mut().find(|(r, _)| *r == role) {
+            Some((_, kinds)) => kinds.push(e.kind),
+            None => roles.push((role, vec![e.kind])),
+        }
+    }
+    let parts: Vec<String> = roles
+        .into_iter()
+        .map(|(role, kinds)| {
+            if role == "contradicts" {
+                role.to_string()
+            } else {
+                let kinds: Vec<String> = kinds.iter().map(ToString::to_string).collect();
+                format!("{role} ({})", kinds.join(", "))
+            }
+        })
+        .collect();
+    Some(format!("linked: {}", parts.join("; ")))
 }
 
 /// The nodes closest to a query, best first, as `near` prints them.
