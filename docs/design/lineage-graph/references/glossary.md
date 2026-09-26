@@ -2,7 +2,7 @@
 title: Glossary
 owner: claude
 last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_validated: 2026-09-25
 status: Accepted
 feature: lineage-graph
 doc_role: reference
@@ -51,7 +51,8 @@ trailing `s`. `tag list` shows every tag in the corpus with its node count.
 **Graph.** The whole corpus as one `{nodes, edges}` export: what
 [docs/design/v0.2/1_spec.md](../../v0.2/1_spec.md) specifies as `neb graph
 --json`, which the CLI exports for tools and the desktop app's graph view. The
-same shape a `trace` or `impact` walk is computed over, just unfiltered.
+`trace` and `impact` queries use this graph: `trace` walks genealogy, while
+`impact` also reports direct contradictions.
 
 **Migrate.** `neb migrate`: a one-shot, idempotent pass that brings a v1
 corpus forward to the current schema, re-labelling everything the reduction

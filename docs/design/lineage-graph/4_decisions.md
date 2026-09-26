@@ -2,7 +2,7 @@
 title: Lineage Graph — Decisions
 owner: claude
 last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_validated: 2026-09-25
 status: Accepted
 feature: lineage-graph
 doc_role: decisions
@@ -37,7 +37,8 @@ a second, cycle-tolerant relation beside genealogy that could legitimately loop
 back on itself; it warned rather than failed, on the theory that the loop was
 itself a finding. v0.2 cut that second relation entirely (see "References over
 evidence" below), which makes this decision narrower than it once was: today
-there is exactly one graph, and it is acyclic.
+only genealogy is required to be acyclic; `contradicts` remains a symmetric
+relation outside the cycle check and `trace`.
 
 ## Stage four is an edge, not a stage
 

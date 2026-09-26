@@ -2,7 +2,7 @@
 title: Capture Path
 owner: claude
 last_updated: 2026-09-12
-last_validated: 2026-09-12
+last_validated: 2026-09-25
 status: Accepted
 feature: lineage-graph
 doc_role: spec
@@ -31,7 +31,8 @@ so `capture` creates the corpus rather than refusing.
 
 ## Inbox format
 
-One append-only file per month, `inbox/YYYY-MM.md`, one entry per line:
+One file per month, `inbox/YYYY-MM.md`, with one entry per line. Captures
+append; settling strikes the entry through in place:
 
 ```
 - [62fe] 2026-09-06T20:48 gravity might be about scarcity, not curvature
@@ -63,7 +64,9 @@ wording of a thought survives the tidying that naming it involves.
 
 ## Why promotion is separate
 
-Promotion requires a title, and possibly parents. That is a decision, and
-decisions belong after the thought is safe rather than in front of it. Splitting
-the two means the expensive step can wait for a moment when you have attention to
+Promotion creates a seed node and uses the captured text as its default title.
+It can add parents, but `near` only suggests them and never chooses one.
+Deciding whether to promote, and whether a suggested parent is defensible, can
+wait until the thought is safe rather than in front of it. Splitting the two
+means the expensive step can wait for a moment when you have attention to
 spend, and the cheap step is always available.
