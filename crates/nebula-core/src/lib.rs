@@ -56,7 +56,7 @@ pub use error::{Error, Result};
 pub use graph::{
     Direction, EdgeRecord, Graph, GraphExport, HYPOTHESIS_DAYS, INBOX_DAYS, Impact, Listing,
     NEAR_DEFAULT, Near, Neighbour, NodeSummary, NodeView, ObservatoryLink, OpenItem, OpenReport,
-    ReviewItem, ReviewReport, ReviewRule, SEED_DAYS, TagCount, TagCounts, Touched, Trace,
+    ReviewItem, ReviewReport, ReviewRule, SEED_DAYS, TagCount, TagCounts, Touched, Trace, TraceHop,
     TraceNode, Via,
 };
 pub use lock::{CorpusLock, LOCK_FILE, LOCK_WAIT};

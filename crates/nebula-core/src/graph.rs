@@ -52,10 +52,13 @@ impl<'a> Graph<'a> {
             if by_id.insert(id, doc).is_some() {
                 return Err(Error::DuplicateId(id.to_string()));
             }
-            parents.insert(id, doc.node.parents().collect());
-            for p in doc.node.parents() {
+            // Parallel edges collapse here: a node that both derives from
+            // and reopens another has one parent, not two of the same.
+            let lineage: Vec<&str> = doc.node.lineage().into_iter().map(|(p, _)| p).collect();
+            for p in &lineage {
                 children.entry(p).or_default().push(id);
             }
+            parents.insert(id, lineage);
             contradicts.insert(id, doc.node.edges_of(EdgeType::Contradicts).collect());
         }
         Ok(Self {
@@ -83,12 +86,12 @@ impl<'a> Graph<'a> {
             .ok_or_else(|| Error::NoSuchNode(id.to_string()))
     }
 
-    /// Genealogical parents of a node.
+    /// Genealogical parents of a node, each once.
     pub(crate) fn parents_of(&self, id: &str) -> &[&'a str] {
         self.parents.get(id).map_or(&[], Vec::as_slice)
     }
 
-    /// Nodes that name this one as a parent.
+    /// Nodes that name this one as a parent, each once.
     pub(crate) fn children_of(&self, id: &str) -> &[&'a str] {
         self.children.get(id).map_or(&[], Vec::as_slice)
     }
@@ -132,8 +135,25 @@ pub struct TraceNode {
     pub title: String,
     /// Where it is in its lifecycle.
     pub status: Status,
-    /// Its genealogical parents.
+    /// Its genealogical parents, each once.
     pub parents: Vec<String>,
+    /// The step that first reached it. Null for the node the walk starts at.
+    pub via: Option<TraceHop>,
+}
+
+/// One step of a lineage walk: the node it was taken from, and every kind of
+/// genealogy edge between the two.
+///
+/// The edges are always the descendant's, so the kinds read the same both
+/// ways: walking up, `from` is the child that declares them; walking down, it
+/// is the ancestor they name. Parallel edges are one step with several kinds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct TraceHop {
+    /// The node the step was taken from.
+    pub from: String,
+    /// The kinds of edge the step followed, in the order declared.
+    pub kinds: Vec<EdgeType>,
 }
 
 /// Walk ancestry, or descent. The feature the whole system exists for.
@@ -141,13 +161,14 @@ pub fn trace(graph: &Graph<'_>, id: &str, direction: Direction) -> Result<Trace>
     graph.require(id)?;
     let mut acc = Vec::new();
     let mut seen = HashSet::new();
-    collect(graph, id, direction, &mut seen, &mut acc);
+    collect(graph, id, None, direction, &mut seen, &mut acc);
     Ok(Trace(acc))
 }
 
 fn collect(
     graph: &Graph<'_>,
     id: &str,
+    via: Option<TraceHop>,
     direction: Direction,
     seen: &mut HashSet<String>,
     acc: &mut Vec<TraceNode>,
@@ -160,23 +181,41 @@ fn collect(
         id: doc.node.id.clone(),
         title: doc.node.title.clone(),
         status: doc.node.status,
-        parents: doc.node.parents().map(String::from).collect(),
-    });
-    let next: Vec<String> = match direction {
-        Direction::Down => graph
-            .children_of(id)
-            .iter()
-            .map(|c| (*c).to_string())
-            .collect(),
-        Direction::Up => graph
+        parents: graph
             .parents_of(id)
             .iter()
             .map(|p| (*p).to_string())
             .collect(),
+        via,
+    });
+    let next: Vec<(String, Vec<EdgeType>)> = match direction {
+        Direction::Down => graph
+            .children_of(id)
+            .iter()
+            .map(|c| ((*c).to_string(), kinds_between(graph, c, id)))
+            .collect(),
+        Direction::Up => graph
+            .parents_of(id)
+            .iter()
+            .map(|p| ((*p).to_string(), kinds_between(graph, id, p)))
+            .collect(),
     };
-    for n in next {
-        collect(graph, &n, direction, seen, acc);
+    for (n, kinds) in next {
+        let hop = TraceHop {
+            from: id.to_string(),
+            kinds,
+        };
+        collect(graph, &n, Some(hop), direction, seen, acc);
     }
+}
+
+/// The genealogy edge kinds `child` declares to `parent`.
+fn kinds_between(graph: &Graph<'_>, child: &str, parent: &str) -> Vec<EdgeType> {
+    graph
+        .get(child)
+        .and_then(|d| d.node.lineage().into_iter().find(|(p, _)| *p == parent))
+        .map(|(_, kinds)| kinds)
+        .unwrap_or_default()
 }
 
 /// How a node in an [`Impact`] is reached.

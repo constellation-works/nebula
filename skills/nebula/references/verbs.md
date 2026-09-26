@@ -364,7 +364,7 @@ not who wrote the words. `check` enforces nothing about authorship.
 | `neb log <NODE>` | commits that changed the node, newest first | — |
 | `neb list` | every node | `--status <S>`, `--tag <TAG>`× (every tag must match) |
 | `neb near <QUERY>...` | the existing nodes closest to free text, or to a node (left out of its own answer), scored `0..=1`, best first | `--limit <K>`/`-k` (default 3); flags may follow the query |
-| `neb trace <NODE>` | ancestry, nearest first, each node once | `--down` for descendants |
+| `neb trace <NODE>` | ancestry as a tree, each line naming its edge kind(s) | `--down` for descendants |
 | `neb impact <NODE>` | descendants plus `contradicts` neighbours | — |
 | `neb graph` | the whole corpus as `{nodes, edges}` or a Mermaid diagram | `--json`, or `--mermaid [--from <ID>]`; without a format, a hint and exit 2 |
 
@@ -441,13 +441,36 @@ straight to `--parent` unread is the automatic linking the spec rules out.
 0.30 abandoned  a-single-global-taxonomy A single global taxonomy
 ```
 
+`neb trace` prints a tree. Every line below the start names the genealogy
+edge kind(s) joining it to the line above. The kinds are always the
+descendant's edges, so they read the same both ways: walking up, the line
+above declares them to this one; walking down, this one declares them to the
+line above. Two edges between the same pair (`derives-from` plus a later `reopens`)
+are one relation stated twice, so they draw as one line naming both kinds. A
+node reached along two different paths is a true diamond: it is drawn on each
+path but expanded only once, and later copies end in `(shown above)`.
+
+```
+// neb trace retardation-in-the-wake
+hypothesis retardation-in-the-wake Retardation in the wake
+├─ derives-from, reopens  refuted scarcity-wake-retardation Scarcity wake retardation
+│  └─ derives-from  seed gravity-as-scarcity Gravity as scarcity
+└─ refines  seed gravity-as-scarcity Gravity as scarcity  (shown above)
+```
+
+`--json` lists each node once, in walk order. `parents` names each genealogical
+parent once, however many edges reach it. `via` is the step that first reached
+the node: `from` is the node it was reached from, and `kinds` lists every edge
+kind between the two, in declared order. It is `null` for the start.
+
 ```json
 // neb trace tags-beat-domains --json
 [
   { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis",
-    "parents": ["required-categorical-fields-drift"] },
+    "parents": ["required-categorical-fields-drift"], "via": null },
   { "id": "required-categorical-fields-drift", "title": "Required categorical fields drift",
-    "status": "seed", "parents": [] }
+    "status": "seed", "parents": [],
+    "via": { "from": "tags-beat-domains", "kinds": ["derives-from"] } }
 ]
 
 // neb impact required-categorical-fields-drift --json     (via: descends | contradicts)

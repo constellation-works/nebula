@@ -7,7 +7,7 @@
 
 use nebula_core::{
     Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, HUMAN, NEAR_DEFAULT, NewNode,
-    Promotion, ReviewRule, Status, Via, graph, ops,
+    Promotion, ReviewRule, Status, TraceHop, Via, graph, ops,
 };
 use std::fmt::Write as _;
 
@@ -97,6 +97,80 @@ fn trace_down_walks_descendants() {
     assert_eq!(walk.0.len(), 4);
     assert_eq!(walk.0[0].id, a);
     assert!(walk.0.iter().any(|n| n.id == d));
+}
+
+#[test]
+fn trace_records_the_edge_kinds_of_each_step_through_a_diamond() {
+    let (_dir, corpus) = corpus();
+    let [a, b, c, d] = diamond(&corpus);
+    let docs = corpus.load_all().unwrap();
+    let graph = Graph::build(&docs).unwrap();
+    let hop = |from: &str, kinds: &[EdgeType]| {
+        Some(TraceHop {
+            from: from.to_string(),
+            kinds: kinds.to_vec(),
+        })
+    };
+
+    let up = graph::trace(&graph, &d, Direction::Up).unwrap().0;
+    let steps: Vec<_> = up.iter().map(|n| (n.id.as_str(), n.via.clone())).collect();
+    assert_eq!(
+        steps,
+        [
+            (d.as_str(), None),
+            (b.as_str(), hop(&d, &[EdgeType::DerivesFrom])),
+            (a.as_str(), hop(&b, &[EdgeType::DerivesFrom])),
+            (c.as_str(), hop(&d, &[EdgeType::DerivesFrom])),
+        ],
+        "the start has no step; the shared ancestor is reached once, by the first branch"
+    );
+
+    let down = graph::trace(&graph, &a, Direction::Down).unwrap().0;
+    let steps: Vec<_> = down
+        .iter()
+        .map(|n| (n.id.as_str(), n.via.clone()))
+        .collect();
+    assert_eq!(
+        steps,
+        [
+            (a.as_str(), None),
+            (b.as_str(), hop(&a, &[EdgeType::DerivesFrom])),
+            (d.as_str(), hop(&b, &[EdgeType::DerivesFrom])),
+            (c.as_str(), hop(&a, &[EdgeType::DerivesFrom])),
+        ]
+    );
+}
+
+#[test]
+fn trace_merges_parallel_edges_into_one_step_with_both_kinds() {
+    let (_dir, corpus) = corpus();
+    let old = seed(&corpus, "Old", &[]);
+    let new = seed(&corpus, "New", &[&old]);
+    ops::link(&corpus, &new, EdgeType::Reopens, &old, None).unwrap();
+    let docs = corpus.load_all().unwrap();
+    let graph = Graph::build(&docs).unwrap();
+    let both = vec![EdgeType::DerivesFrom, EdgeType::Reopens];
+
+    let up = graph::trace(&graph, &new, Direction::Up).unwrap().0;
+    assert_eq!(up.len(), 2, "two edges to one parent reach it once");
+    assert_eq!(
+        up[0].parents,
+        std::slice::from_ref(&old),
+        "and name it as a parent once"
+    );
+    assert_eq!(up[1].id, old);
+    let via = up[1].via.as_ref().expect("reached by a step");
+    assert_eq!((via.from.as_str(), &via.kinds), (new.as_str(), &both));
+
+    let down = graph::trace(&graph, &old, Direction::Down).unwrap().0;
+    assert_eq!(down.len(), 2, "{down:?}");
+    assert_eq!(down[1].id, new);
+    let via = down[1].via.as_ref().expect("reached by a step");
+    assert_eq!((via.from.as_str(), &via.kinds), (old.as_str(), &both));
+
+    // Parallel edges are one relation, so nothing downstream counts it twice.
+    let touched = graph::impact(&graph, &old).unwrap().0;
+    assert_eq!(touched.len(), 1, "{touched:?}");
 }
 
 #[test]
