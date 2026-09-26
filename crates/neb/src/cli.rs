@@ -332,7 +332,8 @@ enum Command {
     ///
     /// `refuted` needs `--why`, saying how the kill condition fired, and is
     /// final: reviving the idea takes a new node with a `reopens` edge.
-    /// `abandoned` takes `--why` optionally.
+    /// `abandoned` takes `--why` optionally. A node with a kill condition
+    /// cannot go back to `seed`; it reopens as a `hypothesis`.
     Status {
         /// Node id.
         node: String,

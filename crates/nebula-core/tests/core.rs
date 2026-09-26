@@ -256,6 +256,55 @@ fn refuting_needs_a_reason_and_is_final() {
 }
 
 #[test]
+fn a_node_with_a_kill_condition_reopens_as_a_hypothesis_not_a_seed() {
+    let (_dir, corpus) = corpus();
+    let a = seed(&corpus, "A", &[]);
+    ops::sharpen(&corpus, &a, "kill", None).unwrap();
+
+    // hypothesis -> seed would keep the kill, since nothing is deleted, and
+    // leave a seed that `check` reads as a hand edit.
+    assert!(matches!(
+        ops::set_status(&corpus, &a, Status::Seed, None),
+        Err(Error::SeedWithKill)
+    ));
+    let after = corpus.load(&a).unwrap().node;
+    assert_eq!(after.status, Status::Hypothesis);
+    assert_eq!(after.kill.as_deref(), Some("kill"));
+
+    // abandoned -> seed is the same move, and the refusal leaves the closing
+    // exactly as it was.
+    ops::set_status(&corpus, &a, Status::Abandoned, Some("moved on")).unwrap();
+    assert!(matches!(
+        ops::set_status(&corpus, &a, Status::Seed, None),
+        Err(Error::SeedWithKill)
+    ));
+    let after = corpus.load(&a).unwrap().node;
+    assert_eq!(after.status, Status::Abandoned);
+    assert_eq!(after.kill.as_deref(), Some("kill"));
+    assert_eq!(
+        after.closed.as_ref().map(|c| c.why.as_str()),
+        Some("moved on")
+    );
+
+    // abandoned -> hypothesis is the honest reopen, and keeps the kill.
+    let change = ops::set_status(&corpus, &a, Status::Hypothesis, None).unwrap();
+    assert_eq!(change.from, Status::Abandoned);
+    assert_eq!(change.doc.node.status, Status::Hypothesis);
+    assert_eq!(change.doc.node.kill.as_deref(), Some("kill"));
+    assert!(change.doc.node.closed.is_none());
+
+    // A node without a kill still goes back to seed from abandoned.
+    let b = seed(&corpus, "B", &[]);
+    ops::set_status(&corpus, &b, Status::Abandoned, None).unwrap();
+    let change = ops::set_status(&corpus, &b, Status::Seed, None).unwrap();
+    assert_eq!(change.doc.node.status, Status::Seed);
+
+    let docs = corpus.load_all().unwrap();
+    let report = nebula_core::check::run(&Graph::build(&docs).unwrap(), &corpus).unwrap();
+    assert!(report.findings.is_empty(), "{:?}", report.findings);
+}
+
+#[test]
 fn an_empty_kill_condition_is_refused() {
     let (_dir, corpus) = corpus();
     let a = seed(&corpus, "A", &[]);

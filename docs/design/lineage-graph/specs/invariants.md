@@ -38,7 +38,7 @@ and its "What is removed" table for the rules this replaced.
 | 10 | Every reference has a note | warn | `check` |
 | 11 | No two tags differ only by case or a trailing `s` | warn | `check` |
 | 12 | `closed` is set only on a `refuted`/`abandoned` node, never an open one | error | `check` |
-| 13 | A `seed` does not carry a `kill` condition | warn | `check` |
+| 13 | A `seed` does not carry a `kill` condition | warn | `status` refuses the move to `seed`; `check` |
 | 14 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
 | 15 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse (the shape); every read and write (the agreement) |
 | 16 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |
@@ -58,7 +58,9 @@ cycle-closing edge and writes both halves of a `contradicts` pair. `neb
 sharpen`/`neb status` refuse a `hypothesis` or a `refuted` transition that
 does not carry what rule 2 or 5 requires. `neb status` refuses to move a
 `refuted` node to any other status. Catching these when you act is worth more
-than catching them later, because you still remember what you meant.
+than catching them later, because you still remember what you meant. The
+seed-with-kill rule, 13, has a point-of-action refusal too, described
+below.
 
 **Deserialization and the store**, for rule 15, which is the one rule the
 checker cannot hold: see below.
@@ -82,13 +84,20 @@ does not happen to have Observatory checked out.
 
 ## Rules 12–14: nothing a verb writes, only what a hand edit leaves
 
-Rules 12–14 catch states no verb produces: no verb takes `closed`, `created`,
-`updated` or a reference's `added` as free-form input, so there is no place
-for a matching refusal to live. `ops.rs` only ever produces a `closed` block
-on `refuted`/`abandoned`, a `kill` together with a move to `hypothesis`, and
-a date from `store::today()`. Any other value has to have gotten there by
-hand — `check` is the only place these are ever seen, and it never repairs
-them, only reports.
+Rules 12–14 mostly catch states no verb produces: no verb takes `closed`,
+`created`, `updated` or a reference's `added` as free-form input, so there is
+no place for a matching refusal to live. `ops.rs` only ever produces a
+`closed` block on `refuted`/`abandoned`, a `kill` together with a move to
+`hypothesis`, and a date from `store::today()`. Any other value has to have
+gotten there by hand — `check` is the only place these are ever seen, and it
+never repairs them, only reports.
+
+The exception is rule 13, a seed carrying a kill, which a status move could
+produce: nothing is deleted, so moving a node that names a kill condition
+back to `seed`, from `hypothesis` or from `abandoned`, would keep the kill.
+`neb status` refuses that move (`SeedWithKill`) rather than write a state its
+own checker would blame on a hand edit; a node with a falsifier reopens as a
+`hypothesis` instead. The check still stands as the backstop.
 
 The seed-with-kill case is a warning rather than an error: it is not wrong by
 itself, only unusual, since the node has not yet been sharpened through the

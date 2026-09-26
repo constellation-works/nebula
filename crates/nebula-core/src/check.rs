@@ -360,7 +360,8 @@ fn lifecycle_rules(doc: &Doc, r: &mut Report) {
         );
     }
     // 13. `new --kill` and `sharpen` only ever write a kill condition
-    //     together with a move to `hypothesis`, so a `seed` carrying one was
+    //     together with a move to `hypothesis`, and `status` refuses to move
+    //     a node carrying one back to `seed`, so a `seed` carrying one was
     //     set by hand without the guard that would have moved the status
     //     too. Not wrong by itself — the node has not yet been re-sharpened
     //     — so this is a warning rather than an error.

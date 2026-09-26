@@ -58,6 +58,12 @@ pub fn message_about(e: &Error, node: &str) -> String {
             "refuted needs --why: say how the kill condition fired\n\n  \
              neb status {node} refuted --why \"...\""
         ),
+        Error::SeedWithKill => format!(
+            "`{node}` names a kill condition, so it cannot go back to seed; \
+             the kill stays, because nothing is deleted.\n\n\
+             A node with a falsifier is open as a hypothesis:\n  \
+             neb status {node} hypothesis"
+        ),
         Error::RefutedCannotReopen => format!(
             "`{node}` is refuted and cannot simply reopen.\n\n\
              Create the new idea and link it:\n  \

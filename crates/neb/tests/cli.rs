@@ -2137,6 +2137,41 @@ fn abandoning_takes_an_optional_reason_and_reviving_clears_it() {
 }
 
 #[test]
+fn a_node_with_a_kill_condition_cannot_go_back_to_seed() {
+    let c = Corpus::new();
+    c.run(&["new", "X", "--id", "x", "--kill", "k"]).assert_ok();
+
+    // hypothesis -> seed would keep the kill, since nothing is deleted, and
+    // `check` would then blame a hand edit for what the tool did.
+    let before = std::fs::read_to_string(c.node_file("x")).unwrap();
+    c.run(&["status", "x", "seed"])
+        .assert_fails()
+        .says("`x` names a kill condition, so it cannot go back to seed")
+        .says("neb status x hypothesis");
+    let after = std::fs::read_to_string(c.node_file("x")).unwrap();
+    assert_eq!(before, after, "a refused move leaves the node untouched");
+
+    // abandoned -> seed is refused the same way.
+    c.run(&["status", "x", "abandoned"]).assert_ok();
+    let before = std::fs::read_to_string(c.node_file("x")).unwrap();
+    c.run(&["status", "x", "seed"])
+        .assert_fails()
+        .says("cannot go back to seed")
+        .says("neb status x hypothesis");
+    let after = std::fs::read_to_string(c.node_file("x")).unwrap();
+    assert_eq!(before, after, "a refused move leaves the node untouched");
+
+    // The remedy works, keeps the kill, and leaves the corpus check-clean.
+    c.run(&["status", "x", "hypothesis"])
+        .assert_ok()
+        .says("abandoned -> hypothesis");
+    let raw = std::fs::read_to_string(c.node_file("x")).unwrap();
+    assert!(raw.contains("status: hypothesis"), "{raw}");
+    assert!(raw.contains("kill: k"), "{raw}");
+    c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
+}
+
+#[test]
 fn a_refuted_idea_cannot_quietly_come_back() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");

@@ -133,6 +133,13 @@ pub enum Error {
     #[error("a refuted node cannot simply reopen")]
     RefutedCannotReopen,
 
+    /// A node that names a kill condition cannot go back to `seed`. The kill
+    /// is content, so the move would keep it, and a seed carrying one is a
+    /// state no verb otherwise produces. Reopening such a node is a move to
+    /// `hypothesis`.
+    #[error("a node with a kill condition cannot go back to seed")]
+    SeedWithKill,
+
     /// Two nodes claim the same id.
     #[error("duplicate node id `{0}`")]
     DuplicateId(String),
@@ -151,8 +158,9 @@ pub enum Error {
     },
 
     /// A status move the lifecycle does not allow, judged from the pair of
-    /// statuses alone. The two refusals that exist today name themselves
-    /// ([`Error::NeedsKill`] and [`Error::RefutedCannotReopen`]); this is what
+    /// statuses alone. The refusals that exist today name themselves
+    /// ([`Error::NeedsKill`], [`Error::RefutedCannotReopen`] and
+    /// [`Error::SeedWithKill`]); this is what
     /// a guard added later reports, and what a consumer matches on to mean
     /// "that move is not allowed" without enumerating the specific rules.
     #[error("`{from}` cannot become `{to}`")]

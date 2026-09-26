@@ -19,7 +19,7 @@ exit non-zero; `warn` findings do not.
 | 10 | Every reference has a note | warn | `check` |
 | 11 | No two tags differ only by case or a trailing `s` | warn | `check` |
 | 12 | `closed` is set only on a `refuted`/`abandoned` node, never an open one | error | `check` |
-| 13 | A `seed` does not carry a `kill` condition | warn | `check` |
+| 13 | A `seed` does not carry a `kill` condition | warn | `status` refuses the move to `seed`; `check` |
 | 14 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
 | 15 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse (the shape); every read and write (the agreement) |
 | 16 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |
@@ -69,6 +69,7 @@ Refusals are typed. The message is what the CLI prints; the variant is what
 | `kill condition is already \`X\`; it was not replaced` | `KillAlreadySet(X)` | 2 | An open node's falsifier is content, including after `sharpen --confirm`; `sharpen --kill` never overwrites it, regardless of `--by`. A materially different falsifier is a different idea, so create a new node and link the relationship. |
 | `refuted needs --why: say how the kill condition fired` | `RefutedNeedsWhy` | 5 | `neb status <id> refuted --why "..."`. The reason is the human's; quote them. |
 | `\`X\` is refuted and cannot simply reopen` | `RefutedCannotReopen` | 6 | Refuted is final, including its kill condition: `sharpen --kill` and `sharpen --confirm` refuse too, because rewriting the falsifier would orphan `closed.why`. A verdict is part of the record, so `status <id> refuted --why ...` on an already-refuted node is refused too, even with a new `--why`: that would silently replace `closed.why` and its date rather than leaving the recorded verdict alone. `neb new "..." && neb link <new> reopens X` so the fact that it once died stays visible. Only with the human's say-so. Abandoned is not a verdict and is revivable: `sharpen` on an abandoned node is allowed, and `status <id> abandoned --why ...` on an already-abandoned node is allowed too, replacing the reason. |
+| `\`X\` names a kill condition, so it cannot go back to seed` | `SeedWithKill` | 13 | The kill is content and stays: moving the node to `seed` would leave a seed carrying a falsifier, which `check` reads as a hand edit. A node that names what would kill it reopens as a hypothesis: `neb status X hypothesis`, from `abandoned` too. Never delete or blank the kill to make `seed` succeed. |
 | `\`X\` cannot become \`Y\`` | `InvalidTransition` | — | A guard you have not seen. Report it verbatim; do not work around it. |
 | `duplicate node id \`X\`` | `DuplicateId` | — | The corpus has two documents claiming one id, so a verb cannot safely choose one. Report both paths; do not overwrite either document or retry the verb. |
 | `parent \`X\` does not exist` | `MissingParent` | — | The parent id is wrong or has not been created. Check `neb list --json`; use an existing parent, or create the intended parent only with the human's approval. |

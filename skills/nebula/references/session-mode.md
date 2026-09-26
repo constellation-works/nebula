@@ -67,6 +67,8 @@ a mistyped root is the usual cause and later captures would keep landing there.
 - `status <id> refuted --why "<how the kill fired>"`: quote the human. Refuted
   is final. `abandoned` may carry `--why` and should.
 - Never move a `refuted` node. Reviving it is `new` + `link <new> reopens <old>`.
+- A node with a kill condition reopens as `hypothesis`, never `seed`: the kill
+  stays, and `status <id> seed` refuses it.
 
 ## Body work
 
