@@ -153,14 +153,15 @@ return type serialised; see [2_architecture.md](2_architecture.md).
 | 5 | `refuted` carries `closed.why` | error | `status`, `check` |
 | 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status` |
 | 7 | A reference carries no `verdict`/`strength` | error | parse |
-| 8 | Local reference URIs resolve | error | `cite`, `check` |
-| 9 | Every reference has a note | warn | `check` |
-| 10 | No two tags differ only by case or a trailing `s` | warn | `check` |
-| 11 | `closed` is set only on `refuted`/`abandoned`, never on an open node | error | `check` |
-| 11 | A `seed` does not carry a `kill` condition | warn | `check` |
-| 12 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
-| 13 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse; `store` before any read or write |
-| 14 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |
+| 8 | Non-discussion references have a URI; local URIs resolve relative to `nodes/` | error | `cite`, `check` |
+| 9 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`) |
+| 10 | Every reference has a note | warn | `check` |
+| 11 | No two tags differ only by case or a trailing `s` | warn | `check` |
+| 12 | `closed` is set only on a `refuted`/`abandoned` node, never an open one | error | `check` |
+| 13 | A `seed` does not carry a `kill` condition | warn | `check` |
+| 14 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
+| 15 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse (the shape); every read and write (the agreement) |
+| 16 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |
 
 ## Migration (`neb migrate`)
 

@@ -23,15 +23,11 @@ habit. This cut keeps what a person actually uses.
 - Edge types `supports`, `undermines`, `depends-on`; `EdgeType` is now exactly
   `derives-from`, `refines`, `generalizes`, `reopens`, `contradicts`.
 - `check --online`, the Orbit resolver, and invariants 3, 9, 10, 12, 13 of the
-  v0.1 numbering. The checker now implements the ten rules of the v0.2 spec
-  under the spec's numbering: 1 acyclic genealogy, 2 hypothesis names a kill,
-  3 edge targets exist and no self-loops, 4 `contradicts` is mutual, 5 refuted
-  carries `closed.why`, 6 refuted leaves only via `reopens` (enforced at
-  `status`), 7 references carry no verdict (enforced at parse), 8 local
-  reference URIs resolve (now an **error**, and refused at `cite`), 9 every
-  reference has a note (warn), 10 tag drift (warn).
+  v0.1 numbering. The v0.2 rules are listed in
+  [the spec](docs/design/v0.2/1_spec.md#invariants); local reference URIs now
+  resolve as an **error** and are refused at `cite`.
 - `new --status`. `new --kill "..."` starts a hypothesis; without it, a seed.
-- `open` no longer reports references without a note; that is `check` rule 9.
+- `open` no longer reports references without a note; that is `check` rule 10.
 
 ### Added
 
@@ -43,7 +39,7 @@ habit. This cut keeps what a person actually uses.
   `promote`, `tag`, `migrate`). `neb tag <id> --add <tag> --remove <tag>`
   edits them; `neb tag list` shows every tag with its node count; `--tag` on
   `list` and `open` is repeatable and requires every tag named.
-- `check` rule 10 warns when two tags differ only by case or a trailing `s`.
+- `check` rule 11 warns when two tags differ only by case or a trailing `s`.
 - `neb migrate`: one-shot, idempotent conversion of a v1 corpus. Refuses when
   the corpus is a git repository with a dirty tree. Reads nodes with a lenient
   private v1 model and re-labels losslessly: `domain` becomes a tag; each
@@ -64,7 +60,7 @@ habit. This cut keeps what a person actually uses.
   machine-specific reaches the corpus. Where the record is comes from
   `observatory_root` in `config.yaml`, set by the new
   `neb config observatory-root [DIR]` (which reads the effective root and its
-  source when given no directory), else `$OBSERVATORY_ROOT`. `check` rule 8
+  source when given no directory), else `$OBSERVATORY_ROOT`. `check` rule 9
   *warns* rather than errors when the root is unset or the id does not
   resolve, since that judges the machine rather than the corpus. `show`
   prints the resolved path, and `show --json` carries
@@ -115,7 +111,7 @@ habit. This cut keeps what a person actually uses.
   act and `neb check` after every write; routine: read-only, proposals into
   `review.md`), corpus resolution, capture-from-conversation, provenance and
   triage heuristics; `references/` carry every verb's flags and real `--json`
-  shape, the ten invariants with each typed refusal and its remedy, and a
+  shape, the rules in invariants.md with each typed refusal and its remedy, and a
   worked transcript per mode. `make skill-link` symlinks it into
   `~/.claude/skills/nebula`.
 - `apps/desktop`: a menu-bar app (Tauri 2, React, TypeScript) on
@@ -159,7 +155,7 @@ habit. This cut keeps what a person actually uses.
 - The version is written once, in `[workspace.package]`;
   `scripts/release-check.sh` reads it there.
 - A node's id is checked before it becomes a path, and a node file's name and
-  the id it stores have to agree (rule 13). A hand-edited `id: ../../escaped`
+  the id it stores have to agree (rule 15). A hand-edited `id: ../../escaped`
   used to load, and the next verb wrote `escaped.md` outside the corpus root;
   a hand-edited id naming *another* node used to overwrite that node, since
   `save` derives its destination from the stored id. Both now refuse, as do a
@@ -180,7 +176,7 @@ First working version.
 - `domain list|add|default|set` — declared domains inside one corpus, with
   `--domain`/`--all` scoping on `list` and `open`. Edges cross domains; only
   the views narrow.
-- `check` — fifteen invariants, exiting non-zero on any error.
+- `check` — the corpus invariants, exiting non-zero on any error.
 - `src/` laid out as one module directory per layer, `main.rs` the only file
   at the top.
 - `--json` on every read command, for the maintenance loop.

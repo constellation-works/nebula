@@ -19,7 +19,7 @@ The `--json` excerpts below are real output from a three-node fixture corpus.
 | verb | does | flags |
 |---|---|---|
 | `neb init [PATH]` | create an empty corpus without changing the machine default | `--set-root`, `--force` (requires `--set-root`) |
-| `neb check` | run the 14 invariants; exit non-zero on any error | — |
+| `neb check` | run the rules in [invariants.md](invariants.md); exit non-zero on any error | — |
 | `neb migrate` | v1 → v2 in place; idempotent; refuses on a dirty git tree | — |
 | `neb config observatory-root [DIR]` | read or set where the Observatory checkout is | — |
 | `neb config commit [on\|off]` | read or set whether each write is committed to the corpus's git repository | — |
