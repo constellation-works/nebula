@@ -629,6 +629,116 @@ fn promoted_and_dropped_entries_leave_the_inbox_but_stay_on_disk() {
     );
 }
 
+/// Capture never refuses for content, so a thought typed twice lands twice;
+/// stderr says which waiting entry it repeats, and stdout is untouched.
+#[test]
+fn a_repeated_capture_names_the_entry_still_waiting_on_stderr() {
+    let c = Corpus::new();
+    let first = c.run(&["capture", "Tags beat domains"]).assert_ok();
+    assert_eq!(first.stderr(), "", "a new thought is not news");
+    let first = first.stdout_trim();
+    let notice = format!("note: same as {first}, still waiting\n");
+
+    let quiet = c
+        .run(&["capture", "--quiet", "tags  BEAT domains"])
+        .assert_ok();
+    assert_eq!(quiet.stderr(), notice);
+    let second = quiet.stdout_trim();
+    assert_eq!(
+        quiet.stdout(),
+        format!("{second}\n"),
+        "stdout is the id alone"
+    );
+    assert_ne!(second, first);
+
+    let text = c.run(&["capture", "TAGS beat domains"]).assert_ok();
+    assert_eq!(text.stderr(), notice);
+    assert!(
+        !text.stdout().contains("same as"),
+        "the notice stays off stdout"
+    );
+
+    let keys = |run: &Run| {
+        let value: serde_json::Value = serde_json::from_str(&run.stdout()).expect("stdout is JSON");
+        let mut keys: Vec<String> = value["entry"]
+            .as_object()
+            .expect("an entry")
+            .keys()
+            .chain(value.as_object().expect("an object").keys())
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    };
+    let repeated = c
+        .run(&["capture", "--json", " tags beat\tdomains "])
+        .assert_ok();
+    assert_eq!(repeated.stderr(), notice);
+    let fresh = c
+        .run(&["capture", "--json", "an unrelated thought"])
+        .assert_ok();
+    assert_eq!(fresh.stderr(), "");
+    assert_eq!(keys(&repeated), keys(&fresh), "the payload is unchanged");
+
+    let inbox: serde_json::Value =
+        serde_json::from_str(&c.run(&["inbox", "--json"]).assert_ok().stdout()).unwrap();
+    assert_eq!(inbox.as_array().unwrap().len(), 5, "every capture landed");
+
+    // A settled entry is not waiting, so it is never the one named.
+    c.run(&["drop", &first]).assert_ok();
+    let after_drop = c.run(&["capture", "tags beat domains"]).assert_ok();
+    assert_eq!(
+        after_drop.stderr(),
+        format!("note: same as {second}, still waiting\n")
+    );
+}
+
+#[test]
+fn promote_and_drop_on_a_settled_entry_say_how_it_was_settled() {
+    let c = Corpus::new();
+    let keep = c.run(&["capture", "worth keeping"]).stdout_trim();
+    let toss = c.run(&["capture", "not worth keeping"]).stdout_trim();
+    c.run(&["promote", &keep, "--title", "Worth keeping"])
+        .assert_ok();
+    c.run(&["drop", &toss]).assert_ok();
+
+    for verb in ["promote", "drop"] {
+        c.run(&[verb, &keep])
+            .assert_fails()
+            .says(&format!("`{keep}` was already promoted to `worth-keeping`"))
+            .says("neb show worth-keeping");
+        c.run(&[verb, &toss])
+            .assert_fails()
+            .says(&format!("`{toss}` was already dropped"))
+            .says("neb inbox");
+        let json = c.run(&[verb, &keep, "--json"]);
+        assert_eq!(json.stdout(), "", "a refusal prints no payload");
+        assert_eq!(
+            json.refusal(),
+            serde_json::json!({
+                "kind": "InboxEntrySettled",
+                "message": format!("`{keep}` was already promoted to `worth-keeping`"),
+                "hint": "See the node with:  neb show worth-keeping",
+            })
+        );
+        assert_eq!(
+            c.run(&[verb, &toss, "--json"]).refusal(),
+            serde_json::json!({
+                "kind": "InboxEntrySettled",
+                "message": format!("`{toss}` was already dropped"),
+                "hint": "See what is still waiting with:  neb inbox",
+            })
+        );
+        c.run(&[verb, "zzzz"])
+            .assert_fails()
+            .says("no open inbox entry `zzzz`");
+    }
+    assert!(
+        !c.node_file("not-worth-keeping").exists(),
+        "a refused promote writes no node"
+    );
+}
+
 #[test]
 fn capture_works_before_a_corpus_exists() {
     let dir = tempfile::tempdir().unwrap();

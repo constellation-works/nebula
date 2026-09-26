@@ -20,9 +20,9 @@
 use crate::render;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use nebula_core::{
-    Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, NEAR_DEFAULT, NewNode,
-    OBSERVATORY, OBSERVATORY_ROOT_ENV, Origin, Promotion, Severity, Status, check, graph, migrate,
-    model, ops,
+    Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, InboxEntry, NEAR_DEFAULT,
+    NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, Origin, Promotion, Severity, Status, check, graph,
+    migrate, model, ops,
 };
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitCode};
@@ -198,7 +198,9 @@ enum Command {
     /// triage that comes later; that is a suggestion, and nothing is linked.
     /// With no corpus at the root it creates one rather than refuse, and
     /// names the path it created on stderr. Text over several lines, typed,
-    /// pasted or piped in with `-`, is joined onto one line with spaces.
+    /// pasted or piped in with `-`, is joined onto one line with spaces. A
+    /// thought already waiting in the inbox, bar case and spacing, is
+    /// captured all the same, and stderr names the entry it repeats.
     Capture {
         /// Print the entry id alone, without the nearest nodes.
         #[arg(long, short)]
@@ -798,6 +800,18 @@ fn open_locked(root: Option<PathBuf>) -> std::result::Result<(Corpus, CorpusLock
     Ok((corpus, lock))
 }
 
+/// Say on stderr when a capture repeats a thought still waiting in the inbox.
+///
+/// The capture has landed either way: capture never refuses for content, and
+/// the two entries are for the triage to settle. It goes to stderr so the id,
+/// or the `--json` payload, on stdout reads the same as for any capture.
+fn note_same_as(corpus: &Corpus, entry: &InboxEntry) -> std::result::Result<(), Failure> {
+    if let Some(earlier) = corpus.inbox()?.same_as(entry) {
+        eprintln!("note: same as {}, still waiting", earlier.id);
+    }
+    Ok(())
+}
+
 /// Commit the corpus after a write, if `config.yaml` asks for it.
 ///
 /// Runs after the verb has printed its own result, because the write has
@@ -1006,6 +1020,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 let captured = ops::capture_near(&corpus, &text, k)?;
                 out_json(&captured)?;
+                note_same_as(&corpus, &captured.entry)?;
                 commit(&corpus, commits, "capture", &[&captured.entry.id])?;
                 return Ok(ok);
             }
@@ -1014,6 +1029,7 @@ fn run(cli: Cli) -> Outcome {
             // and a node file that will not must not read as a lost thought.
             let entry = ops::capture(&corpus, &text)?;
             println!("{}", render::bold(&entry.id));
+            note_same_as(&corpus, &entry)?;
             print!(
                 "{}",
                 render::suggestions(&ops::suggest(&corpus, &entry.text, k)?)

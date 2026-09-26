@@ -729,11 +729,24 @@ impl Corpus {
 
     /// Inbox entries that have not been promoted or dropped.
     pub fn inbox(&self) -> Result<Inbox> {
-        let dir = self.root.join("inbox");
         let mut out = Vec::new();
+        for file in self.inbox_files()? {
+            for (lineno, line) in std::fs::read_to_string(&file)?.lines().enumerate() {
+                if let Some(e) = InboxEntry::parse(line, &file, lineno) {
+                    out.push(e);
+                }
+            }
+        }
+        Ok(Inbox(out))
+    }
+
+    /// The inbox's month files, oldest first. None when there is no inbox
+    /// yet, which is a corpus nothing has been captured into.
+    fn inbox_files(&self) -> Result<Vec<PathBuf>> {
+        let dir = self.root.join("inbox");
         refuse_inbox_symlink(&dir)?;
         if !dir.is_dir() {
-            return Ok(Inbox(out));
+            return Ok(Vec::new());
         }
         let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)?
             .filter_map(|entry| {
@@ -747,23 +760,45 @@ impl Corpus {
             })
             .collect();
         files.sort();
-        for file in files {
-            for (lineno, line) in std::fs::read_to_string(&file)?.lines().enumerate() {
-                if let Some(e) = InboxEntry::parse(line, &file, lineno) {
-                    out.push(e);
-                }
-            }
-        }
-        Ok(Inbox(out))
+        Ok(files)
     }
 
     /// Find one live inbox entry by id.
+    ///
+    /// An id that only a struck-through line carries is refused with how
+    /// that line says it was settled, rather than as an id nobody captured:
+    /// the record is there, so the refusal can point at what became of it.
     pub fn inbox_entry(&self, id: &str) -> Result<InboxEntry> {
-        self.inbox()?
-            .0
-            .into_iter()
-            .find(|e| e.id == id)
-            .ok_or_else(|| Error::NoSuchInboxEntry(id.to_string()))
+        if let Some(entry) = self.inbox()?.0.into_iter().find(|e| e.id == id) {
+            return Ok(entry);
+        }
+        Err(match self.settlement(id)? {
+            Some(settlement) => Error::InboxEntrySettled {
+                id: id.to_string(),
+                settlement,
+            },
+            None => Error::NoSuchInboxEntry(id.to_string()),
+        })
+    }
+
+    /// How the settled entry `id` was settled, if a struck-through line
+    /// records it.
+    ///
+    /// Ids are unique among live entries only, so one id can be settled more
+    /// than once over the life of a corpus. The latest line wins: it is the
+    /// capture whose id was most recently on offer.
+    fn settlement(&self, id: &str) -> Result<Option<Settlement>> {
+        let mut found = None;
+        for file in self.inbox_files()? {
+            for line in std::fs::read_to_string(&file)?.lines() {
+                if let Some((settled, settlement)) = Settlement::parse(line)
+                    && settled == id
+                {
+                    found = Some(settlement);
+                }
+            }
+        }
+        Ok(found)
     }
 
     /// Settle an inbox entry by striking it through in place.
@@ -1101,6 +1136,65 @@ pub(crate) fn inside_work_tree(root: &Path) -> std::io::Result<bool> {
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Inbox(pub Vec<InboxEntry>);
+
+impl Inbox {
+    /// The earliest other waiting entry that says what `entry` says.
+    ///
+    /// "Says" is equality after folding case and collapsing whitespace, so a
+    /// thought typed twice with different capitals or spacing is caught and a
+    /// reworded one is not: that is `near`'s job, and it searches nodes. Only
+    /// live entries are here, so a settled capture never counts.
+    pub fn same_as(&self, entry: &InboxEntry) -> Option<&InboxEntry> {
+        let said = fold(&entry.text);
+        self.0
+            .iter()
+            .find(|other| other.id != entry.id && fold(&other.text) == said)
+    }
+}
+
+/// Text as the duplicate check compares it: lowercase, one space between words.
+fn fold(text: &str) -> String {
+    text.split_whitespace()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// What became of a settled inbox entry, as its struck-through line records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Settlement {
+    /// Promoted into the node with this id.
+    Promoted(String),
+    /// Dropped without becoming a node.
+    Dropped,
+}
+
+impl Settlement {
+    /// The id and outcome of a line [`Corpus::settle_inbox`] wrote, which is
+    /// `- ~~[<id>] <at> <text>~~ <outcome>`. A struck line whose outcome is
+    /// neither of the two that verb writes was edited by hand, and is not
+    /// read as either.
+    fn parse(line: &str) -> Option<(&str, Self)> {
+        let rest = line.strip_prefix("- ~~[")?;
+        let (id, rest) = rest.split_once("] ")?;
+        let (_, outcome) = rest.rsplit_once("~~")?;
+        let outcome = outcome.trim();
+        if outcome == "dropped" {
+            return Some((id, Self::Dropped));
+        }
+        let node = outcome.strip_prefix("->")?.trim();
+        (!node.is_empty()).then(|| (id, Self::Promoted(node.to_string())))
+    }
+}
+
+impl std::fmt::Display for Settlement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Promoted(node) => write!(f, "promoted to `{node}`"),
+            Self::Dropped => f.write_str("dropped"),
+        }
+    }
+}
 
 /// One unprocessed capture.
 ///

@@ -57,6 +57,9 @@ ask before capturing. `capture` works even when nothing else does; it is the
 five-second path and must stay one. If it prints `note: created a new corpus
 at <path>`, there was no corpus where it looked: tell the human the path, since
 a mistyped root is the usual cause and later captures would keep landing there.
+If it prints `note: same as <id>, still waiting`, the thought is already in the
+inbox, bar case and spacing. Both entries are kept; at triage, drop the newer
+one as a duplicate of `<id>`.
 
 ## Linking, citing, closing
 

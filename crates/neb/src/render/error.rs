@@ -10,7 +10,7 @@
 //! [`Error::kind`], so a new core variant arrives with its name and message
 //! and no hint; giving it advice is one more arm in [`hint`].
 
-use nebula_core::Error;
+use nebula_core::{Error, Settlement};
 
 /// A refusal as `neb` reports it: a name to match on, what is wrong, and what
 /// to do about it when the CLI knows.
@@ -145,6 +145,11 @@ fn hint(e: &Error) -> Option<String> {
     Some(match e {
         Error::NoSuchNode(_) => "List what exists with:  neb list".to_owned(),
         Error::NoSuchInboxEntry(_) => "See them with:  neb inbox".to_owned(),
+        Error::InboxEntrySettled {
+            settlement: Settlement::Promoted(node),
+            ..
+        } => format!("See the node with:  neb show {node}"),
+        Error::InboxEntrySettled { .. } => "See what is still waiting with:  neb inbox".to_owned(),
         Error::NoCorpus(root) => format!("Create one with:  neb init {}", root.display()),
         Error::SchemaMismatch {
             found, expected, ..
