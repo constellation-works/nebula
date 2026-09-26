@@ -151,6 +151,42 @@ fn a_missing_root_is_an_error_naming_the_path() {
     assert!(err.contains("nowhere"), "{err}");
 }
 
+/// The desktop opens the corpus at launch, and a launch is a read: a root
+/// with `nodes/` and no `config.yaml` is the missing-config error, never a
+/// corpus quietly stamped with a config it did not have.
+#[test]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the fixture plants a config-less corpus directly; the code under test only reads"
+)]
+fn opening_a_configless_corpus_errors_and_creates_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("corpus");
+    std::fs::create_dir_all(root.join("nodes")).unwrap();
+    std::fs::write(
+        root.join("nodes").join("an-idea.md"),
+        "---\nid: an-idea\ntitle: An idea\nstatus: seed\ncreated: 2026-09-01\nupdated: 2026-09-01\n---\n\nThe idea.\n",
+    )
+    .unwrap();
+    let listing = |dir: &Path| {
+        let mut names: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    };
+    let (root_before, nodes_before) = (listing(&root), listing(&root.join("nodes")));
+
+    let refused = session::open(&root);
+    assert!(
+        matches!(&refused, Err(Error::MissingConfig { path }) if *path == root.join("config.yaml")),
+        "{refused:?}"
+    );
+    assert_eq!(root_before, listing(&root));
+    assert_eq!(nodes_before, listing(&root.join("nodes")));
+}
+
 #[test]
 fn node_file_refuses_an_unknown_id() {
     let dir = tempfile::tempdir().unwrap();

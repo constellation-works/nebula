@@ -17,4 +17,10 @@ nodes: number,
 /**
  * Whether `config.yaml` was rewritten.
  */
-config_rewritten: boolean, };
+config_rewritten: boolean, 
+/**
+ * The `corpus_id` this run gave the corpus, when it had none to carry
+ * over: a corpus from before `config.yaml` existed. `None` when the id
+ * was kept.
+ */
+minted_corpus_id: string | null, };

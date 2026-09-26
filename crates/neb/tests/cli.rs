@@ -4897,6 +4897,41 @@ fn json_refusals_for_a_schema_too_old_or_too_new_carry_the_direction_in_the_hint
     );
 }
 
+/// A corpus with no `config.yaml` is refused by every verb, the reads and
+/// capture alike, and none of them puts a config back: a synthesized one
+/// would stamp this build's schema over files that may predate it.
+#[test]
+fn list_on_corpus_without_config_refuses_and_leaves_no_file() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let config = c.root.join("config.yaml");
+    std::fs::remove_file(&config).unwrap();
+    let before = snapshot_corpus_files(&c.root);
+
+    for args in [
+        &["--json", "list"][..],
+        &["--json", "show", &id],
+        &["--json", "check"],
+        &["--json", "capture", "x"],
+    ] {
+        let refused = c.run(args).refusal();
+        assert_eq!(refused["code"], "missing_config", "{args:?}: {refused}");
+        assert!(
+            refused["error"]
+                .as_str()
+                .unwrap()
+                .contains(config.to_str().unwrap()),
+            "{args:?}: {refused}"
+        );
+        assert!(
+            refused["hint"].as_str().unwrap().contains("neb migrate"),
+            "{args:?}: {refused}"
+        );
+        assert!(!config.exists(), "`neb {}` wrote a config", args.join(" "));
+    }
+    assert_eq!(before, snapshot_corpus_files(&c.root), "a refusal wrote");
+}
+
 /// A refusal is written by the output layer to stderr: under `--json`, one
 /// JSON object there and nothing on stdout.
 #[test]
@@ -8597,6 +8632,158 @@ fn migrate_refuses_a_malformed_config_before_changing_any_corpus_file() {
     assert_eq!(config_before, std::fs::read_to_string(&config).unwrap());
 }
 
+/// Every entry under `root` but the write lock, with a file's bytes, a
+/// directory as `dir` and a symlink as its target. What a refused migration
+/// is compared on: the lock is the one thing a run may leave behind.
+fn every_file_but_lock(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path == root.join(".lock") {
+                continue;
+            }
+            let kind = std::fs::symlink_metadata(&path).unwrap().file_type();
+            let content = if kind.is_symlink() {
+                format!("-> {}", std::fs::read_link(&path).unwrap().display()).into_bytes()
+            } else if kind.is_dir() {
+                pending.push(path.clone());
+                b"dir".to_vec()
+            } else {
+                std::fs::read(&path).unwrap()
+            };
+            out.insert(path, content);
+        }
+    }
+    out
+}
+
+/// A v1 node `migrate` can convert, sorting first.
+const V1_FIRST: &str = "---\nid: a-first\ntitle: First\ndomain: Physics\nstatus: testing\nkill: If it never shows up.\ncreated: 2026-08-01\nupdated: 2026-08-02\n---\n\nThe first.\n";
+
+/// A v1 node it cannot, sorting after it: `bogus` was never a v1 status.
+const V1_BOGUS: &str = "---\nid: b-second\ntitle: Second\nstatus: bogus\ncreated: 2026-08-01\nupdated: 2026-08-02\n---\n\nThe second.\n";
+
+/// A v1 corpus of `nodes` and, when given, `config`, outside git.
+fn v1_corpus_of(config: Option<&str>, nodes: &[(&str, &str)]) -> Corpus {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("corpus");
+    std::fs::create_dir_all(root.join("nodes")).unwrap();
+    std::fs::create_dir_all(root.join("inbox")).unwrap();
+    if let Some(config) = config {
+        write(&root.join("config.yaml"), config);
+    }
+    for (id, text) in nodes {
+        write(&root.join("nodes").join(format!("{id}.md")), text);
+    }
+    Corpus { dir, root }
+}
+
+/// Every node is converted in memory before the first write, so a node that
+/// cannot be converted late in the corpus refuses the run with the earlier
+/// ones untouched, and the run after the fix reports every node it changed.
+#[test]
+fn a_failing_v1_migration_rewrites_nothing() {
+    let c = v1_corpus_of(
+        Some(V1_CONFIG),
+        &[("a-first", V1_FIRST), ("b-second", V1_BOGUS)],
+    );
+    let before = every_file_but_lock(&c.root);
+
+    c.run(&["migrate"])
+        .assert_fails()
+        .says("b-second.md")
+        .says("status `bogus` is not a v1 status");
+    assert_eq!(before, every_file_but_lock(&c.root));
+
+    write(
+        &c.node_file("b-second"),
+        &V1_BOGUS.replace("status: bogus", "status: seed"),
+    );
+    // `a-first` is converted by this run, notes and all; `b-second` is
+    // already in v2 form now, so it is examined and left alone.
+    c.run(&["migrate"])
+        .assert_ok()
+        .says("domain `Physics` -> tag `physics`")
+        .says("status testing -> hypothesis")
+        .says("1 of 2 nodes rewritten");
+    c.run(&["check"]).assert_ok().says("2 nodes, 0 errors");
+}
+
+/// A corpus an older `neb` stamped at schema 2 over v1 nodes cannot be told
+/// apart from a hand edit for certain, so it is still refused; the refusal
+/// says which file looks like v1 and how to repair it without the tool.
+#[test]
+fn a_corpus_already_stamped_v2_over_v1_nodes_names_the_hand_repair() {
+    let c = v1_corpus_of(
+        Some("schema_version: 2\ncorpus_id: neb-abc123\n"),
+        &[("a-first", V1_FIRST)],
+    );
+    let config = c.root.join("config.yaml");
+    let before = every_file_but_lock(&c.root);
+
+    for args in [&["migrate"][..], &["list"]] {
+        c.run(args)
+            .assert_fails()
+            .says("a-first.md")
+            .says("`domain`")
+            .says("schema_version: 1")
+            .says(config.to_str().unwrap())
+            .says("neb migrate");
+        assert_eq!(before, every_file_but_lock(&c.root), "`neb {args:?}` wrote");
+    }
+    let refused = c.run(&["--json", "list"]).refusal();
+    assert_eq!(refused["code"], "v1_node_under_current_schema", "{refused}");
+
+    // The repair it names works.
+    write(&config, "schema_version: 1\ncorpus_id: neb-abc123\n");
+    c.run(&["migrate"])
+        .assert_ok()
+        .says("1 of 1 node rewritten");
+    let migrated = std::fs::read_to_string(&config).unwrap();
+    assert!(migrated.contains("corpus_id: neb-abc123"), "{migrated}");
+    c.run(&["list"]).assert_ok().says("a-first");
+}
+
+/// A corpus from before `config.yaml` existed migrates, and the report says
+/// the id it now has was minted rather than carried over. Running it again
+/// changes nothing.
+#[test]
+fn migrate_reports_a_minted_corpus_id() {
+    let c = v1_corpus_of(None, &[("a-first", V1_FIRST)]);
+    let out = c.run(&["--json", "migrate"]).assert_ok().stdout();
+    let report: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(report["config_rewritten"], true, "{report}");
+    let minted = report["minted_corpus_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no minted id: {report}"));
+    assert!(minted.starts_with("neb-"), "{report}");
+    let config = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    assert!(config.contains(&format!("corpus_id: {minted}")), "{config}");
+
+    let before = every_file_but_lock(&c.root);
+    let out = c.run(&["--json", "migrate"]).assert_ok().stdout();
+    let again: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(again["config_rewritten"], false, "{again}");
+    assert_eq!(
+        again["minted_corpus_id"],
+        serde_json::Value::Null,
+        "{again}"
+    );
+    assert_eq!(again["rewritten"], serde_json::json!([]), "{again}");
+    c.run(&["migrate"])
+        .assert_ok()
+        .says("already at schema 2; nothing changed");
+    assert_eq!(before, every_file_but_lock(&c.root));
+
+    let plain = v1_corpus_of(None, &[("a-first", V1_FIRST)]);
+    plain
+        .run(&["migrate"])
+        .assert_ok()
+        .says("minted corpus_id neb-");
+}
+
 #[test]
 fn migrate_refuses_a_dirty_git_tree() {
     let c = v1_corpus();
@@ -8932,6 +9119,34 @@ fn commit_is_off_by_default_and_the_setting_reads_and_writes() {
     c.run(&["capture", "with it off"]).assert_ok();
     assert_eq!(log(&c.root)[0], "off");
     assert!(git(&c.root, &["status", "--porcelain"]).contains(" M inbox/"));
+}
+
+/// A deleted `config.yaml` used to come back without `commit: true`, and
+/// the write that brought it back went uncommitted. Now the write is refused
+/// before it happens, and the file stays gone for whoever deleted it.
+#[test]
+fn deleted_config_never_turns_commit_off() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let config = c.root.join("config.yaml");
+    assert!(
+        std::fs::read_to_string(&config)
+            .unwrap()
+            .contains("commit: true")
+    );
+    let commits = log(&c.root);
+    std::fs::remove_file(&config).unwrap();
+    let inbox = snapshot_corpus_files(&c.root);
+
+    let refused = c.run(&["--json", "capture", "x"]).refusal();
+    assert_eq!(refused["code"], "missing_config", "{refused}");
+    assert!(!config.exists());
+    assert_eq!(
+        inbox,
+        snapshot_corpus_files(&c.root),
+        "an inbox line was written"
+    );
+    assert_eq!(commits, log(&c.root));
 }
 
 /// With `commit` on, every mutating verb lands as one commit named after it

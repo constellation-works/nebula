@@ -1,6 +1,10 @@
-//! Bring a v1 corpus forward to v2.
+//! Bring a corpus forward to this build's schema.
 //!
-//! One shot and idempotent. The v1 model below is private to this module and
+//! The steps are an ordered, append-only registry, `MIGRATIONS`, applied
+//! from the schema `config.yaml` declares (a corpus with no config is v1) to
+//! [`crate::SCHEMA_VERSION`], all in memory, before anything is written;
+//! `config.yaml` is written last, as the ledger. One shot and idempotent.
+//! Today there is one step, v1 to v2. The v1 model below is private to this module and
 //! deliberately lenient: every field is optional and unknown keys are
 //! tolerated, because the point is to read whatever an old corpus holds and
 //! re-label it losslessly into the v2 shape. Evidence, task links and the
@@ -14,7 +18,7 @@
 //! re-label there and the only thing tolerance could do is quietly drop a
 //! field the build does not know.
 
-use crate::config::{self, Config};
+use crate::config::{self, Config, Declared};
 use crate::error::{Error, Result};
 use crate::git::RunError;
 use crate::lock::{CorpusLock, LOCK_FILE};
@@ -154,6 +158,10 @@ pub struct MigrationReport {
     pub nodes: usize,
     /// Whether `config.yaml` was rewritten.
     pub config_rewritten: bool,
+    /// The `corpus_id` this run gave the corpus, when it had none to carry
+    /// over: a corpus from before `config.yaml` existed. `None` when the id
+    /// was kept.
+    pub minted_corpus_id: Option<String>,
 }
 
 /// One node brought forward, and what changed about it.
@@ -166,12 +174,135 @@ pub struct NodeMigration {
     pub notes: Vec<String>,
 }
 
+// ----------------------------------------------------------- the registry --
+
+/// One schema step: a whole corpus, in memory, from schema `from` to `to`.
+pub(crate) struct Migration {
+    /// The schema the step reads.
+    pub(crate) from: u32,
+    /// The schema it leaves the corpus at, always `from + 1`.
+    pub(crate) to: u32,
+    /// Rewrites every staged node's text and the staged config. Never
+    /// touches the disk: [`run`] writes only after every step has succeeded.
+    pub(crate) step: fn(&mut Staged) -> Result<()>,
+}
+
+/// Every schema step there has been, oldest first (STD-03 §R23).
+///
+/// Append-only. A shipped entry is never edited, reordered or removed: a
+/// corpus written by any past build comes forward by starting at the entry
+/// for the schema its `config.yaml` declares and applying every one after
+/// it. A new schema adds one entry at the end and bumps
+/// [`config::SCHEMA_VERSION`] to its `to`.
+///
+/// `config.yaml` is the ledger and is written last, so a run that stops part
+/// way leaves it declaring the old schema, and the rerun applies every step
+/// again, to the nodes that were already written as well. Each step must
+/// therefore leave a node already at or past its `to` unchanged.
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    // Shipped in v0.2. Frozen.
+    Migration {
+        from: 1,
+        to: 2,
+        step: v1_to_v2,
+    },
+];
+
+/// The steps that bring a corpus declared at `version` to this build's
+/// schema, or `None` when no entry starts there.
+///
+/// A corpus already at this schema gets the last step again. It has nothing
+/// to convert, and the strict preflight in [`run`] has proved that step has
+/// nothing to drop, so all it can do is render a node a hand edit left out
+/// of form (a tag's case) the way this build writes it.
+fn steps_from(version: u32) -> Option<&'static [Migration]> {
+    if version == config::SCHEMA_VERSION {
+        return MIGRATIONS
+            .len()
+            .checked_sub(1)
+            .map(|last| &MIGRATIONS[last..]);
+    }
+    MIGRATIONS
+        .iter()
+        .position(|migration| migration.from == version)
+        .map(|first| &MIGRATIONS[first..])
+}
+
+/// A corpus as the steps see it: its config and every node file, as text.
+pub(crate) struct Staged {
+    /// Where the corpus is, for the paths an error names and the id a step
+    /// mints.
+    pub(crate) root: PathBuf,
+    /// `config.yaml`'s text at the schema the steps have reached; `None`
+    /// while there is no config, which is where a corpus from before the
+    /// file starts.
+    pub(crate) config: Option<String>,
+    /// The `corpus_id` a step minted, when there was none to carry over.
+    pub(crate) minted_corpus_id: Option<String>,
+    /// Every node file, in corpus order.
+    pub(crate) nodes: Vec<StagedNode>,
+}
+
+/// One node file on its way forward.
+pub(crate) struct StagedNode {
+    /// The file.
+    pub(crate) path: PathBuf,
+    /// Its text as it was read, to tell whether it needs writing.
+    pub(crate) original: String,
+    /// Its text at the schema the steps have reached.
+    pub(crate) text: String,
+    /// A line per thing a step re-labelled.
+    pub(crate) notes: Vec<String>,
+}
+
+impl Staged {
+    /// Read every node file and the config text under `root`, writing
+    /// nothing.
+    fn read(root: &Path, config: Option<String>) -> Result<Self> {
+        store::refuse_nodes_symlink(root)?;
+        let dir = root.join("nodes");
+        let mut paths = Vec::new();
+        for entry in std::fs::read_dir(&dir).map_err(|e| Error::io_at("reading", &dir, e))? {
+            let path = entry.map_err(|e| Error::io_at("reading", &dir, e))?.path();
+            if path.extension().is_some_and(|e| e == "md") {
+                paths.push(path);
+            }
+        }
+        paths.sort();
+        let nodes = paths
+            .into_iter()
+            .map(|path| {
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|e| Error::io_at("reading", &path, e))?;
+                Ok(StagedNode {
+                    path,
+                    original: text.clone(),
+                    text,
+                    notes: Vec::new(),
+                })
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self {
+            root: root.to_path_buf(),
+            config,
+            minted_corpus_id: None,
+            nodes,
+        })
+    }
+}
+
 // --------------------------------------------------------------- the verb --
 
 /// Convert every node and the config in place.
 ///
 /// Takes a root rather than a [`Corpus`], because a corpus at the old schema
 /// is exactly what refuses to open.
+///
+/// Every refusal comes before the first write (STD-02 §R34, STD-03 §R23):
+/// the config is read, every node is read and put through every step in
+/// memory, and every result is read back with the current model, before
+/// anything is written. Then the nodes that changed are written one by one,
+/// and `config.yaml` last, as the record that the corpus is at this schema.
 pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
     let root = Corpus::resolve_root(root)?;
     store::refuse_nodes_symlink(&root)?;
@@ -186,55 +317,90 @@ pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
     // Validate the config before touching a node. In particular, a future
     // schema may contain fields this build does not know how to preserve, so
     // treating it as v1 would turn migration into a destructive downgrade.
-    let config = preflight_config(&root)?;
+    let (version, existing) = match config::declared(&root)? {
+        // No config at all is a corpus from before the file existed, which
+        // is v1: the one verb that can bring such a corpus forward accepts
+        // it (STD-02 §R33, STD-03 §R24).
+        Declared::Missing => (1, None),
+        Declared::Current { raw, .. } => (config::SCHEMA_VERSION, Some(raw)),
+        Declared::Older { version, raw } => (version, Some(raw)),
+        Declared::Newer { version } => return Err(config::schema_mismatch(&root, version)),
+    };
+    let steps = steps_from(version).ok_or_else(|| config::schema_mismatch(&root, version))?;
 
-    let mut report = MigrationReport::default();
-    store::refuse_nodes_symlink(&root)?;
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(root.join("nodes"))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "md"))
-        .collect();
-    paths.sort();
-    report.nodes = paths.len();
+    let mut staged = Staged::read(&root, existing.clone())?;
     // A corpus already at this build's schema has nothing to convert, so
     // every node in it must already read under the current model. Proving
-    // that here, over the whole corpus and before the loop below writes
-    // anything, is what stops the v1 model's leniency from turning a no-op
-    // migration into a silent deletion: unknown keys are tolerated because a
-    // v1 file holds retired ones, and the only thing that tolerance can do to
-    // current-schema content is drop what this build does not recognise. Up
-    // front rather than per node, so an unreadable node late in the corpus
-    // cannot leave the earlier ones rewritten.
-    if config.version == config::SCHEMA_VERSION {
-        preflight_nodes(&paths, config.version)?;
+    // that here, over the whole corpus, is what stops the v1 model's
+    // leniency from turning a no-op migration into a silent deletion:
+    // unknown keys are tolerated because a v1 file holds retired ones, and
+    // the only thing that tolerance can do to current-schema content is drop
+    // what this build does not recognise.
+    if version == config::SCHEMA_VERSION {
+        preflight_nodes(&root, &staged, version)?;
     }
-    for path in &paths {
+    let mut reached = version;
+    for migration in steps {
+        (migration.step)(&mut staged)?;
+        reached = migration.to;
+    }
+    // The registry's contiguity is a unit test; this is the same fact
+    // checked where a gap would otherwise write a corpus at the wrong schema.
+    if reached != config::SCHEMA_VERSION {
+        return Err(config::schema_mismatch(&root, reached));
+    }
+    let (writes, config) = verified(&staged)?;
+
+    // Nothing has been written yet; everything that could refuse has.
+    let mut report = MigrationReport {
+        nodes: staged.nodes.len(),
+        minted_corpus_id: staged.minted_corpus_id.clone(),
+        ..MigrationReport::default()
+    };
+    for (node, id) in writes {
         store::refuse_nodes_symlink(&root)?;
-        let raw = std::fs::read_to_string(path)?;
-        let (front, body) = model::split_frontmatter(&raw).map_err(|e| in_file(e, path))?;
-        let v1: V1Node = serde_yaml_ng::from_str(front)
-            .map_err(|e| Error::yaml(format!("parsing {} with the v1 model", path.display()), e))?;
-        let (node, notes) = convert(v1).map_err(|e| in_file(e, path))?;
-        let doc = Doc {
-            node,
-            body: body.to_string(),
-        };
+        crate::fs::write_private_atomic(&node.path, &node.text)?;
+        report.rewritten.push(NodeMigration {
+            id,
+            notes: node.notes.clone(),
+        });
+    }
+    // Last: the ledger. Idempotence is byte equality here as for the nodes.
+    if existing.as_deref() != Some(config.render()?.as_str()) {
+        config.save(&root)?;
+        report.config_rewritten = true;
+    }
+    Ok(report)
+}
+
+/// Read back what the steps produced with the current model, in memory: each
+/// node that changed, with its id, and the config. A step that produced
+/// something this build cannot read is refused here, before any write,
+/// rather than found by the next verb in a half-written corpus.
+fn verified(staged: &Staged) -> Result<(Vec<(&StagedNode, String)>, Config)> {
+    let mut writes = Vec::new();
+    for node in &staged.nodes {
         // Idempotence is byte equality: a node already in v2 form renders
         // back to exactly what is on disk and is left alone, so a second run
         // rewrites nothing and `updated` is never bumped by a migration.
-        if model::render(&doc)? == raw {
+        if node.text == node.original {
             continue;
         }
-        store::refuse_nodes_symlink(&root)?;
-        model::write(path, &doc)?;
-        report.rewritten.push(NodeMigration {
-            id: doc.node.id,
-            notes,
-        });
+        let doc = model::parse(&node.text).map_err(|e| {
+            Error::corpus(format!(
+                "in {}: the migration produced a node this build cannot read: {e}",
+                node.path.display()
+            ))
+        })?;
+        writes.push((node, doc.node.id));
     }
-
-    report.config_rewritten = migrate_config(&root, config)?;
-    Ok(report)
+    let path = staged.root.join(config::FILE);
+    let config: Config = serde_yaml_ng::from_str(staged.config.as_deref().unwrap_or_default())
+        .map_err(|e| Error::yaml(format!("the migrated {}", path.display()), e))?;
+    if config.schema_version != config::SCHEMA_VERSION {
+        return Err(config::schema_mismatch(&staged.root, config.schema_version));
+    }
+    Ok((writes, config))
 }
 
 /// Refuse a corpus that declares the current schema but holds a node this
@@ -243,17 +409,53 @@ pub fn run(root: Option<PathBuf>) -> Result<MigrationReport> {
 /// Reads with the same model every other verb reads with, so `migrate`
 /// accepts exactly what `check` accepts and neither one's idea of a node can
 /// drift from the other's.
-fn preflight_nodes(paths: &[PathBuf], version: u32) -> Result<()> {
-    for path in paths {
-        if let Err(source) = model::read(path) {
-            return Err(Error::CurrentSchemaUnreadable {
-                path: path.clone(),
-                version,
-                source: Box::new(source),
-            });
+fn preflight_nodes(root: &Path, staged: &Staged, version: u32) -> Result<()> {
+    for node in &staged.nodes {
+        if let Err(source) = model::read(&node.path) {
+            return Err(
+                v1_node_under_current_schema(root, &node.path, version).unwrap_or_else(|| {
+                    Error::CurrentSchemaUnreadable {
+                        path: node.path.clone(),
+                        version,
+                        source: Box::new(source),
+                    }
+                }),
+            );
         }
     }
     Ok(())
+}
+
+/// The keys only a v1 node carries. A node holding one of them is old
+/// content, not a typo or a newer build's field.
+const V1_ONLY_KEYS: [&str; 4] = ["domain", "evidence", "tasks", "graduated_to"];
+
+/// [`Error::V1NodeUnderCurrentSchema`] for the node at `path`, when it reads
+/// under the v1 model and carries a key only v1 had; `None` otherwise, and
+/// when it cannot be read at all.
+///
+/// Asked only about a node the current model has already refused, in a
+/// corpus whose config declares `version`, this build's schema.
+pub(crate) fn v1_node_under_current_schema(
+    root: &Path,
+    path: &Path,
+    version: u32,
+) -> Option<Error> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let (front, _) = model::split_frontmatter(&raw).ok()?;
+    serde_yaml_ng::from_str::<V1Node>(front).ok()?;
+    let fields: serde_yaml_ng::Mapping = serde_yaml_ng::from_str(front).ok()?;
+    let keys: Vec<String> = V1_ONLY_KEYS
+        .iter()
+        .filter(|key| fields.contains_key(**key))
+        .map(ToString::to_string)
+        .collect();
+    (!keys.is_empty()).then(|| Error::V1NodeUnderCurrentSchema {
+        path: path.to_path_buf(),
+        config: root.join(config::FILE),
+        version,
+        keys,
+    })
 }
 
 /// Name the file a complaint about the corpus came from.
@@ -298,15 +500,10 @@ fn refuse_dirty_tree(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Rewrite `config.yaml` to hold `corpus_id`, `schema_version`, the
-/// observatory root when one was set, and `commit` when it is on. The v1
-/// keys it drops are named in `docs/runbooks/migrate-v1-to-v2.md`.
-#[derive(Deserialize)]
-struct ConfigVersion {
-    #[serde(default)]
-    schema_version: Option<u32>,
-}
+// ---------------------------------------------------------------- v1 -> v2 --
 
+/// The keys of a v1 `config.yaml` that v2 keeps. The v1 keys it drops are
+/// named in `docs/runbooks/migrate-v1-to-v2.md`.
 #[derive(Default, Deserialize)]
 struct V1Config {
     #[serde(default)]
@@ -317,86 +514,49 @@ struct V1Config {
     commit: bool,
 }
 
-struct MigrationConfig {
-    /// The schema the corpus declares, which decides how its nodes are read.
-    /// Absent `schema_version` means v1, as it always has.
-    version: u32,
-    existing: Option<String>,
-    corpus_id: Option<String>,
-    observatory_root: Option<PathBuf>,
-    commit: bool,
-}
-
-/// Parse and validate the config before migration can rewrite any corpus
-/// content. V1 remains lenient because its retired keys are intentionally
-/// discarded; v2 uses the current strict model, and every other version is
-/// refused rather than guessed at.
-fn preflight_config(root: &Path) -> Result<MigrationConfig> {
-    let path = root.join(config::FILE);
-    let existing = if path.exists() {
-        Some(std::fs::read_to_string(&path)?)
-    } else {
-        None
-    };
-    let version = existing
+/// The first entry in [`MIGRATIONS`]: `config.yaml` keeps `corpus_id`, the
+/// observatory root when one was set, and `commit` when it is on, gaining
+/// an id when it had none; every node is read with the lenient v1 model and
+/// rendered in v2 form.
+fn v1_to_v2(corpus: &mut Staged) -> Result<()> {
+    // The config first, so a malformed one is what a run reports.
+    let path = corpus.root.join(config::FILE);
+    let legacy: V1Config = corpus
+        .config
         .as_deref()
-        .map(serde_yaml_ng::from_str::<ConfigVersion>)
+        .map(serde_yaml_ng::from_str)
         .transpose()
         .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))?
-        .and_then(|probe| probe.schema_version)
-        .unwrap_or(1);
-    let (corpus_id, observatory_root, commit) = match version {
-        1 => {
-            let legacy = existing
-                .as_deref()
-                .map(serde_yaml_ng::from_str::<V1Config>)
-                .transpose()
-                .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))?
-                .unwrap_or_default();
-            (legacy.corpus_id, legacy.observatory_root, legacy.commit)
-        }
-        config::SCHEMA_VERSION => {
-            let current: Config = serde_yaml_ng::from_str(existing.as_deref().unwrap_or_default())
-                .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))?;
-            (
-                Some(current.corpus_id),
-                current.observatory_root,
-                current.commit,
-            )
-        }
-        found => {
-            return Err(Error::SchemaMismatch {
-                path,
-                found,
-                expected: config::SCHEMA_VERSION,
-            });
-        }
+        .unwrap_or_default();
+    let corpus_id = if let Some(id) = legacy.corpus_id.filter(|id| !id.is_empty()) {
+        id
+    } else {
+        let id = store::corpus_id(&corpus.root);
+        corpus.minted_corpus_id = Some(id.clone());
+        id
     };
-    Ok(MigrationConfig {
-        version,
-        existing,
-        corpus_id,
-        observatory_root,
-        commit,
-    })
-}
+    let mut migrated = Config::fresh(corpus_id);
+    migrated.observatory_root = legacy.observatory_root;
+    migrated.commit = legacy.commit;
+    corpus.config = Some(migrated.render()?);
 
-fn migrate_config(root: &Path, config: MigrationConfig) -> Result<bool> {
-    let MigrationConfig {
-        version: _,
-        existing,
-        corpus_id,
-        observatory_root,
-        commit,
-    } = config;
-    let mut fresh = Config::fresh(corpus_id.unwrap_or_else(|| store::corpus_id(root)));
-    fresh.observatory_root = observatory_root;
-    fresh.commit = commit;
-    if existing.as_deref() == Some(fresh.render()?.as_str()) {
-        return Ok(false);
+    for node in &mut corpus.nodes {
+        let (front, body) =
+            model::split_frontmatter(&node.text).map_err(|e| in_file(e, &node.path))?;
+        let v1: V1Node = serde_yaml_ng::from_str(front).map_err(|e| {
+            Error::yaml(
+                format!("parsing {} with the v1 model", node.path.display()),
+                e,
+            )
+        })?;
+        let (converted, notes) = convert(v1).map_err(|e| in_file(e, &node.path))?;
+        node.text = model::render(&Doc {
+            node: converted,
+            body: body.to_string(),
+        })?;
+        node.notes.extend(notes);
     }
-    fresh.save(root)?;
-    Ok(true)
+    Ok(())
 }
 
 // ------------------------------------------------------------ conversion --
