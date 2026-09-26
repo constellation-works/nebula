@@ -120,13 +120,15 @@ impl ObservatoryRoot {
     }
 
     /// Where Observatory record `record` (`Q002`, `R012`) is under the
-    /// effective root. `None` when no root is set, the id is not a record id,
-    /// or the checkout does not carry it; [`Self::root`] tells the first
-    /// apart from the others.
-    pub fn resolve(&self, record: &str) -> Option<PathBuf> {
+    /// effective root. `Ok(None)` when no root is set, the id is not a record
+    /// id, or the checkout does not carry it; [`Self::root`] tells the first
+    /// apart from the others. A directory that cannot be read returns an error.
+    pub fn resolve(&self, record: &str) -> crate::Result<Option<PathBuf>> {
         self.root
             .as_deref()
-            .and_then(|root| crate::check::resolve_observatory(root, record))
+            .map(|root| crate::check::resolve_observatory(root, record))
+            .transpose()
+            .map(Option::flatten)
     }
 }
 
@@ -321,6 +323,6 @@ mod tests {
 
     #[test]
     fn with_no_root_nothing_resolves() {
-        assert_eq!(pick(None, None, None).resolve("Q002"), None);
+        assert_eq!(pick(None, None, None).resolve("Q002").unwrap(), None);
     }
 }

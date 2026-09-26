@@ -261,8 +261,8 @@ impl Staged {
         store::refuse_nodes_symlink(root)?;
         let dir = root.join("nodes");
         let mut paths = Vec::new();
-        for entry in std::fs::read_dir(&dir).map_err(|e| Error::io_at("reading", &dir, e))? {
-            let path = entry.map_err(|e| Error::io_at("reading", &dir, e))?.path();
+        for entry in store::list_directory(&dir)?.into_strict()? {
+            let path = entry.path();
             if path.extension().is_some_and(|e| e == "md") {
                 paths.push(path);
             }

@@ -279,6 +279,7 @@ fn hint(e: &Error) -> Option<String> {
         return Some(hint);
     }
     Some(match e {
+        Error::UnreadableNodes { .. } => "Run `neb check` for every unreadable file and the findings from the rest of the corpus.".to_owned(),
         Error::NoSuchNode(_) => "List what exists with:  neb list".to_owned(),
         Error::NoSuchInboxEntry(_) => "See them with:  neb inbox".to_owned(),
         Error::InboxEntrySettled {

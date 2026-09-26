@@ -9,13 +9,13 @@
 //! The checker reports; it never fixes and never prints. What an error costs
 //! the caller — an exit code, a red badge — is the caller's business.
 
-use crate::config::{self, OBSERVATORY_ROOT_ENV, ObservatorySource};
+use crate::config::{self, OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource};
 use crate::error::{Error, Result};
 use crate::graph::Graph;
-use crate::model::{Doc, EdgeType, Status, is_iso_date};
+use crate::model::{Doc, EdgeType, Reference, Status, is_iso_date};
 use crate::pending::{self, PENDING_FILE, PendingWrite};
-use crate::store::Corpus;
 use crate::store::GITIGNORE_FILE;
+use crate::store::{Corpus, Scan, UnreadableNode};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::OsString;
@@ -77,6 +77,8 @@ pub struct Finding {
 #[derive(Debug, Default, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Report {
+    /// Files and directory entries that could not be loaded.
+    pub unreadable: Vec<UnreadableNode>,
     /// Everything found, errors first.
     pub findings: Vec<Finding>,
     /// How many nodes were examined.
@@ -105,9 +107,25 @@ impl Report {
 /// The corpus is needed for rules 8 and 9, which ask the filesystem whether
 /// local references and Observatory records resolve.
 ///
-/// Rule 7 never reaches this function: a reference carrying a `verdict` or
-/// `strength`, or a node with an unknown field, fails to deserialize, so the
-/// corpus load itself errors out rather than producing a finding.
+/// A reference carrying a `verdict` or `strength`, or a node with an unknown
+/// field, fails deserialization. [`run_scanned`] reports it as unreadable and
+/// checks the remaining documents.
+pub fn run_scanned(scan: &Scan, corpus: &Corpus) -> Result<Report> {
+    let graph = Graph::build(&scan.docs)?;
+    let mut report = run(&graph, corpus)?;
+    report.unreadable.clone_from(&scan.unreadable);
+    Ok(report)
+}
+
+#[derive(Clone, Copy)]
+enum ObservatoryState<'a> {
+    Root(&'a Path),
+    Unset,
+    Broken,
+}
+
+/// Run invariant checks over loaded documents. Call [`run_scanned`] when a
+/// corpus scan may also contain unreadable files.
 pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
     let docs = graph.docs();
     let ids: HashSet<&str> = docs.iter().map(|d| d.node.id.as_str()).collect();
@@ -115,17 +133,26 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
         nodes: docs.len(),
         ..Report::default()
     };
-    let observatory = corpus.observatory_root()?;
+    let observatory = checked_observatory_setting(corpus, &mut r);
+    let observatory_state = match observatory.as_ref() {
+        Some(setting) => match setting.root.as_deref() {
+            Some(root) => ObservatoryState::Root(root),
+            None => ObservatoryState::Unset,
+        },
+        None => ObservatoryState::Broken,
+    };
 
     for doc in docs {
-        check_node(doc, &ids, corpus, observatory.root.as_deref(), &mut r);
+        check_node(doc, &ids, corpus, observatory_state, &mut r);
     }
 
     // 9, for the Observatory setting itself: an `observatory_root` key in
     //    `config.yaml` is one machine's path in a file every machine shares.
     //    Still honoured as a fallback, so a warning rather than an error, and
     //    one that says whether it is the value in force here.
-    if let Some(legacy) = &observatory.legacy {
+    if let Some(observatory) = &observatory
+        && let Some(legacy) = &observatory.legacy
+    {
         let shadowed = |by: &str| {
             format!(
                 "config.yaml still carries the machine-specific observatory_root {}, ignored \
@@ -216,6 +243,21 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
     Ok(r)
 }
 
+fn checked_observatory_setting(corpus: &Corpus, r: &mut Report) -> Option<ObservatoryRoot> {
+    match corpus.observatory_root() {
+        Ok(setting) => Some(setting),
+        Err(error) => {
+            r.push(
+                Severity::Error,
+                Rule::ObservatoryReference,
+                None,
+                format!("could not read the observatory root setting: {error}"),
+            );
+            None
+        }
+    }
+}
+
 /// 17. A write that did not finish is reported, never repaired here: the
 ///     temporary file a killed write left beside the file it was replacing,
 ///     and a pending-write record the next writer has not yet settled.
@@ -235,8 +277,19 @@ fn interrupted_writes(corpus: &Corpus, r: &mut Report) -> Result<()> {
     // Relative to the root, in the order they are reported.
     let mut debris: Vec<PathBuf> = Vec::new();
     for dir in ["nodes", "inbox"] {
-        let found = temporaries(&root.join(dir))?;
-        debris.extend(found.into_iter().map(|name| Path::new(dir).join(name)));
+        let path = root.join(dir);
+        match temporaries(&path) {
+            Ok(found) => debris.extend(found.into_iter().map(|name| Path::new(dir).join(name))),
+            Err(error) => r.push(
+                Severity::Error,
+                Rule::InterruptedWrite,
+                None,
+                format!(
+                    "could not inspect temporary files in {}: {error}",
+                    path.display()
+                ),
+            ),
+        }
     }
     let beside_root_files = |name: &OsString| {
         let name = name.to_string_lossy();
@@ -244,13 +297,23 @@ fn interrupted_writes(corpus: &Corpus, r: &mut Report) -> Result<()> {
             .iter()
             .any(|file| name.starts_with(&format!("{file}.")))
     };
-    let found = temporaries(root)?;
-    debris.extend(
-        found
-            .into_iter()
-            .filter(beside_root_files)
-            .map(PathBuf::from),
-    );
+    match temporaries(root) {
+        Ok(found) => debris.extend(
+            found
+                .into_iter()
+                .filter(beside_root_files)
+                .map(PathBuf::from),
+        ),
+        Err(error) => r.push(
+            Severity::Error,
+            Rule::InterruptedWrite,
+            None,
+            format!(
+                "could not inspect temporary files in {}: {error}",
+                root.display()
+            ),
+        ),
+    }
     for relative in debris {
         r.push(
             Severity::Warn,
@@ -470,21 +533,30 @@ fn observatory_dir(letter: char) -> Option<&'static str> {
 /// Where an Observatory record is under `root`: the entry of the id's
 /// directory whose name is the id, or the id followed by `-` or `.`, so
 /// `Q002` finds `questions/Q002-is-proper-time-a-count.md` without the
-/// reference having to know the slug. `None` when the id has the wrong
-/// shape, the directory is unreadable, or nothing there starts with it.
+/// reference having to know the slug. `Ok(None)` when the id has the wrong
+/// shape, the directory is absent, or nothing there starts with it; an
+/// unreadable directory or entry is an I/O error naming the directory.
 ///
 /// Matched by prefix in a listing rather than by resolving a path, and used
 /// as given: nothing is canonicalized. Ties (two records claiming one id)
 /// go to the first in name order, which `check` in Observatory is the place
 /// to catch.
-pub fn resolve_observatory(root: &Path, id: &str) -> Option<PathBuf> {
+pub fn resolve_observatory(root: &Path, id: &str) -> Result<Option<PathBuf>> {
     if !is_observatory_id(id) {
-        return None;
+        return Ok(None);
     }
-    let dir = root.join(observatory_dir(id.chars().next()?)?);
-    let mut names: Vec<String> = std::fs::read_dir(&dir)
-        .ok()?
-        .filter_map(std::result::Result::ok)
+    let Some(record_dir) = id.chars().next().and_then(observatory_dir) else {
+        return Ok(None);
+    };
+    let dir = root.join(record_dir);
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(Error::io_at("reading", &dir, error)),
+    };
+    let mut names: Vec<String> = crate::store::collect_directory_entries(&dir, entries)
+        .into_strict()?
+        .into_iter()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|name| {
             name.strip_prefix(id)
@@ -492,7 +564,7 @@ pub fn resolve_observatory(root: &Path, id: &str) -> Option<PathBuf> {
         })
         .collect();
     names.sort();
-    names.into_iter().next().map(|name| dir.join(name))
+    Ok(names.into_iter().next().map(|name| dir.join(name)))
 }
 
 /// Every invariant that can be judged from a single node plus the id set.
@@ -500,7 +572,7 @@ fn check_node(
     doc: &Doc,
     ids: &HashSet<&str>,
     corpus: &Corpus,
-    observatory: Option<&Path>,
+    observatory: ObservatoryState<'_>,
     r: &mut Report,
 ) {
     status_rules(doc, r);
@@ -657,7 +729,7 @@ fn edge_rules(doc: &Doc, ids: &HashSet<&str>, r: &mut Report) {
 }
 
 /// Rules about the references hanging off a node.
-fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &mut Report) {
+fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: ObservatoryState<'_>, r: &mut Report) {
     let n = &doc.node;
     let id = Some(n.id.as_str());
     for f in &n.references {
@@ -700,33 +772,7 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
         //    record is gone, so the finding is a warning rather than an
         //    error and the reference stays valid on a machine that has it.
         if f.kind == OBSERVATORY {
-            if let Some(record) = f.uri.as_deref().filter(|record| !record.trim().is_empty()) {
-                match observatory {
-                    None => r.push(
-                        Severity::Warn,
-                        Rule::ObservatoryReference,
-                        id,
-                        format!(
-                            "reference `{}` names Observatory record `{record}` but no \
-                             observatory root is set (`neb config observatory-root <DIR>` \
-                             or $OBSERVATORY_ROOT)",
-                            f.id
-                        ),
-                    ),
-                    Some(root) if resolve_observatory(root, record).is_none() => r.push(
-                        Severity::Warn,
-                        Rule::ObservatoryReference,
-                        id,
-                        format!(
-                            "reference `{}` names Observatory record `{record}`, which does \
-                             not resolve under {}",
-                            f.id,
-                            root.display()
-                        ),
-                    ),
-                    Some(_) => {}
-                }
-            }
+            check_observatory_reference(f, id, observatory, r);
             continue;
         }
         // 8, for an absolute path or a `file:` URI: it may well resolve on
@@ -766,6 +812,51 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
                 ),
             );
         }
+    }
+}
+
+fn check_observatory_reference(
+    reference: &Reference,
+    node: Option<&str>,
+    observatory: ObservatoryState<'_>,
+    r: &mut Report,
+) {
+    let Some(record) = reference
+        .uri
+        .as_deref()
+        .filter(|record| !record.trim().is_empty())
+    else {
+        return;
+    };
+    let id = &reference.id;
+    match observatory {
+        ObservatoryState::Broken => r.push(
+            Severity::Warn,
+            Rule::ObservatoryReference,
+            node,
+            format!("reference `{id}` names Observatory record `{record}`, but its location could not be checked because the observatory root setting is broken"),
+        ),
+        ObservatoryState::Unset => r.push(
+            Severity::Warn,
+            Rule::ObservatoryReference,
+            node,
+            format!("reference `{id}` names Observatory record `{record}` but no observatory root is set (`neb config observatory-root <DIR>` or $OBSERVATORY_ROOT)"),
+        ),
+        ObservatoryState::Root(root) => match resolve_observatory(root, record) {
+            Ok(None) => r.push(
+                Severity::Warn,
+                Rule::ObservatoryReference,
+                node,
+                format!("reference `{id}` names Observatory record `{record}`, which does not resolve under {}", root.display()),
+            ),
+            Ok(Some(_)) => {},
+            Err(error) => r.push(
+                Severity::Error,
+                Rule::ObservatoryReference,
+                node,
+                format!("reference `{id}` names Observatory record `{record}`, but could not read its directory: {error}"),
+            ),
+        },
     }
 }
 
@@ -961,19 +1052,19 @@ mod tests {
         std::fs::write(root.join("questions").join("README.md"), "").unwrap();
 
         assert_eq!(
-            resolve_observatory(root, "Q002"),
+            resolve_observatory(root, "Q002").unwrap(),
             Some(root.join("questions").join("Q002-a-question.md"))
         );
         assert_eq!(
-            resolve_observatory(root, "R012"),
+            resolve_observatory(root, "R012").unwrap(),
             Some(root.join("research").join("R012-arc"))
         );
-        assert_eq!(resolve_observatory(root, "Q003"), None);
+        assert_eq!(resolve_observatory(root, "Q003").unwrap(), None);
         assert_eq!(
-            resolve_observatory(root, "H001"),
+            resolve_observatory(root, "H001").unwrap(),
             None,
             "no hypotheses/ at all"
         );
-        assert_eq!(resolve_observatory(root, "Q002-a-question"), None);
+        assert_eq!(resolve_observatory(root, "Q002-a-question").unwrap(), None);
     }
 }

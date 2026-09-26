@@ -48,11 +48,12 @@ and its "What is removed" table for the rules this replaced.
 
 Three placements, chosen per rule.
 
-**Deserialization**, for rule 7. A reference carrying an unknown field makes
-the corpus fail to load rather than producing a finding. `deny_unknown_fields`
-on every model type is the mechanism: the schema itself is the enforcement,
-and a rule that merely warned would be routed around the moment it was
-inconvenient.
+**Deserialization**, for rule 7. A reference carrying an unknown field cannot
+be loaded. `neb check` reports an unreadable-file finding, with its path and parse
+error, then checks the other files. Graph queries refuse the whole corpus and
+name every unreadable file. `deny_unknown_fields` on every model type is the
+mechanism: the schema itself is the enforcement, and a rule that merely warned
+would be routed around the moment it was inconvenient.
 
 **Point of action**, for rules 1, 2, 4, 5 and 6. `neb link` refuses a
 cycle-closing edge and writes both halves of a `contradicts` pair, and `neb

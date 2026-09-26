@@ -664,23 +664,25 @@ impl NodeView {
     /// step a caller takes rather than part of [`node`]: a reader that only
     /// wants the node pays nothing, and the rest of this module stays pure
     /// over the graph.
-    #[must_use]
-    pub fn with_observatory(mut self, root: Option<&Path>) -> Self {
+    pub fn with_observatory(mut self, root: Option<&Path>) -> Result<Self> {
         self.observatory = self
             .node
             .references
             .iter()
             .filter(|r| r.kind == OBSERVATORY)
-            .filter_map(|r| {
-                let record = r.uri.clone()?;
-                Some(ObservatoryLink {
+            .filter_map(|r| r.uri.clone().map(|record| (r, record)))
+            .map(|(r, record)| {
+                Ok(ObservatoryLink {
                     reference: r.id.clone(),
-                    path: root.and_then(|root| resolve_observatory(root, &record)),
+                    path: root
+                        .map(|root| resolve_observatory(root, &record))
+                        .transpose()?
+                        .flatten(),
                     record,
                 })
             })
-            .collect();
-        self
+            .collect::<Result<Vec<_>>>()?;
+        Ok(self)
     }
 }
 

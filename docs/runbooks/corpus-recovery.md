@@ -18,9 +18,17 @@ last_validated: 2026-09-26
 error: in /corpus/nodes/an-idea.md: parsing frontmatter: references[0]: unknown field `uri_kind`
 ```
 
-The corpus refuses to load as a whole rather than skipping the bad node, because
-a partially loaded graph would give wrong answers to `trace` and `impact` while
-looking like it worked.
+`neb check` reports each unreadable or malformed node file as an error finding,
+with its path and cause, and checks the nodes it can load. Its summary counts
+unreadable files
+separately from checked nodes, and it exits nonzero when any file is unreadable.
+A broken Observatory setting is an error finding while other node checks still
+run. An unreadable Observatory directory is reported as unreadable rather than
+as a missing record.
+
+Graph queries such as `list`, `show`, `trace`, `graph`, `impact`, `near`, and
+`review` refuse as a whole, naming every bad file. A partially loaded graph
+would give wrong lineage answers while looking complete.
 
 Common causes, all from hand-editing:
 

@@ -67,6 +67,31 @@ fn current_model_refuses_unknown_fields_in_nested_node_data() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn scan_reports_every_bad_file_and_returns_the_rest() {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        eprintln!("skipped: root can read mode-000 files");
+        return;
+    }
+    let (_dir, corpus) = corpus();
+    let good = seed(&corpus, "Good idea", &[]);
+    let unreadable = corpus.node_path("unreadable").unwrap();
+    let malformed = corpus.node_path("malformed").unwrap();
+    std::fs::write(&unreadable, "---\nid: unreadable\n---\n").unwrap();
+    std::fs::write(&malformed, "no frontmatter\n").unwrap();
+    let original = std::fs::metadata(&unreadable).unwrap().permissions();
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let scan = corpus.scan().unwrap();
+    std::fs::set_permissions(&unreadable, original).unwrap();
+    assert_eq!(scan.docs.len(), 1);
+    assert_eq!(scan.docs[0].node.id, good);
+    assert_eq!(scan.unreadable.len(), 2);
+    assert!(scan.unreadable.iter().any(|entry| entry.path == unreadable));
+    assert!(scan.unreadable.iter().any(|entry| entry.path == malformed));
+}
+
 /// A diamond: `d` descends from `b` and `c`, both of which descend from `a`.
 fn diamond(corpus: &Corpus) -> [String; 4] {
     let a = seed(corpus, "A", &[]);
@@ -1018,7 +1043,8 @@ fn a_cited_observatory_record_is_located_under_the_root_given() {
 
     let located = ops::cite(&corpus, &id, &args)
         .unwrap()
-        .with_observatory(Some(&root));
+        .with_observatory(Some(&root))
+        .unwrap();
     assert_eq!(
         located.observatory,
         Some(ObservatoryLink {
@@ -1033,7 +1059,8 @@ fn a_cited_observatory_record_is_located_under_the_root_given() {
     };
     let unresolved = ops::cite(&corpus, &id, &missing)
         .unwrap()
-        .with_observatory(Some(&root));
+        .with_observatory(Some(&root))
+        .unwrap();
     assert_eq!(unresolved.observatory.map(|l| l.path), Some(None));
     let paper = Citation {
         kind: "paper".into(),
@@ -1042,7 +1069,8 @@ fn a_cited_observatory_record_is_located_under_the_root_given() {
     };
     let cited = ops::cite(&corpus, &id, &paper)
         .unwrap()
-        .with_observatory(Some(&root));
+        .with_observatory(Some(&root))
+        .unwrap();
     assert_eq!(cited.observatory, None);
 }
 
@@ -4981,7 +5009,18 @@ fn a_node_file_that_claims_another_nodes_id_is_refused_before_the_write() {
     );
     // A scan finds nodes by path, so it refuses from the other direction
     // rather than answering every query from the wrong file.
-    assert!(matches!(corpus.load_all(), Err(Error::IdMismatch { .. })));
+    assert!(matches!(
+        corpus.load_all(),
+        Err(Error::UnreadableNodes { count: 1, .. })
+    ));
+    assert!(
+        corpus
+            .scan()
+            .unwrap()
+            .unreadable
+            .iter()
+            .any(|entry| entry.code == "id_mismatch")
+    );
 }
 
 /// The same bug without the hand edit. Copying a node file leaves two files
@@ -5014,7 +5053,10 @@ fn a_copy_of_another_node_file_does_not_authorize_the_id_it_stores() {
         "a read answered from the wrong file"
     );
     assert!(
-        matches!(corpus.load_all(), Err(Error::IdMismatch { .. })),
+        matches!(
+            corpus.load_all(),
+            Err(Error::UnreadableNodes { count: 1, .. })
+        ),
         "a scan read it as the node it claims"
     );
     assert_eq!(
@@ -5060,7 +5102,7 @@ fn a_hard_linked_alias_is_refused_before_a_write_can_split_it() {
     );
     let scanned = corpus.load_all();
     assert!(
-        matches!(&scanned, Err(Error::IdMismatch { path, id }) if path == &safe_path && id == &victim),
+        matches!(&scanned, Err(Error::UnreadableNodes { count: 2, details }) if details.contains(&safe_path.display().to_string()) && details.contains(&victim)),
         "got {scanned:?}"
     );
     assert!(matches!(corpus.load("safe"), Err(Error::IdMismatch { .. })));
@@ -5094,7 +5136,7 @@ fn a_symlinked_alias_is_refused_by_load_and_by_a_scan_alike() {
     );
     let scanned = corpus.load_all();
     assert!(
-        matches!(&scanned, Err(Error::IdMismatch { path, id }) if path == &alias_path && id == &victim),
+        matches!(&scanned, Err(Error::UnreadableNodes { count: 1, details }) if details.contains(&alias_path.display().to_string()) && details.contains(&victim)),
         "a scan refused something other than the alias: {scanned:?}"
     );
     assert_eq!(std::fs::read_to_string(&victim_path).unwrap(), before);
@@ -5149,15 +5191,15 @@ fn a_node_file_symlinked_outside_the_corpus_is_refused_by_load_scan_and_check() 
     let before = std::fs::read(&outside).unwrap();
 
     assert!(not_regular(&corpus.load(&id), &node, EntryKind::Symlink));
-    assert!(not_regular(&corpus.load_all(), &node, EntryKind::Symlink));
-    let checked = corpus.load_all().and_then(|docs| {
-        let graph = Graph::build(&docs)?;
-        nebula_core::check::run(&graph, &corpus)
-    });
-    assert!(
-        not_regular(&checked, &node, EntryKind::Symlink),
-        "{checked:?}"
-    );
+    assert!(matches!(
+        corpus.load_all(),
+        Err(Error::UnreadableNodes { count: 1, .. })
+    ));
+    let scan = corpus.scan().unwrap();
+    assert_eq!(scan.unreadable[0].path, node);
+    assert_eq!(scan.unreadable[0].code, "not_regular_file");
+    let checked = nebula_core::check::run_scanned(&scan, &corpus).unwrap();
+    assert_eq!(checked.unreadable.len(), 1);
     let noted = ops::note(&corpus, &id, "a fixture note", None);
     assert!(not_regular(&noted, &node, EntryKind::Symlink), "{noted:?}");
 
@@ -5203,7 +5245,7 @@ fn a_fifo_under_nodes_is_refused_without_blocking() {
         move || corpus.load_all()
     });
     assert!(
-        not_regular(&scanned, &fifo, nebula_core::fs::EntryKind::Fifo),
+        matches!(&scanned, Err(Error::UnreadableNodes { count: 1, details }) if details.contains(&fifo.display().to_string()) && details.contains("FIFO")),
         "{scanned:?}"
     );
     let loaded = within_two_seconds(move || corpus.load("fifo"));
@@ -5227,7 +5269,7 @@ fn a_device_symlink_under_nodes_is_refused_without_reading() {
         move || corpus.load_all()
     });
     assert!(
-        not_regular(&scanned, &zero, nebula_core::fs::EntryKind::Symlink),
+        matches!(&scanned, Err(Error::UnreadableNodes { count: 1, details }) if details.contains(&zero.display().to_string()) && details.contains("symlink")),
         "{scanned:?}"
     );
     let loaded = within_two_seconds(move || corpus.load("zero"));
