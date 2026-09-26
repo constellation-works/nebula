@@ -92,8 +92,16 @@ One file per month, `inbox/YYYY-MM.md`, with one entry per line. Captures
 append; settling strikes the entry through in place:
 
 ```
-- [62fe] 2026-09-06T20:48 gravity might be about scarcity, not curvature
+- [62fe] 2026-09-06T20:48:13+02:00 gravity might be about scarcity, not curvature
 ```
+
+The stamp is RFC 3339 to the second, with the local offset it was taken at,
+or in UTC marked `Z` when the local offset could not be read; `+00:00` is a
+local offset of zero. Its first seven characters name the month file. Entries
+captured before 0.2.0 carry the legacy form, `2026-09-06T20:48`, with no
+offset. They still load, and read as local time with the offset the machine
+has for that instant ("An offset-less inbox stamp is local time" in
+[4_decisions.md](../4_decisions.md)); `triage` orders both forms by instant.
 
 The short id is a hash of the timestamp and text, allocated from a fixed
 four-hex-character space across every live entry in the inbox. Capture tries
@@ -108,9 +116,12 @@ An entry leaves the inbox by being promoted or dropped, and either way the line
 is struck through in place rather than removed:
 
 ```
-- ~~[62fe] 2026-09-06T20:48 gravity might be about scarcity, not curvature~~ -> gravity-as-scarcity
-- ~~[efbb] 2026-09-06T20:49 a half-formed thing that went nowhere~~ dropped
+- ~~[62fe] 2026-09-06T20:48:13+02:00 gravity might be about scarcity, not curvature~~ -> gravity-as-scarcity
+- ~~[efbb] 2026-09-06T20:49:40+02:00 a half-formed thing that went nowhere~~ dropped
 ```
+
+The stamp is struck through exactly as the line held it, so settling a legacy
+entry leaves its offset-less stamp as it was.
 
 Dropping is a normal outcome, not a failure, and most captures should end there.
 Keeping the dropped text costs nothing and records a road not taken, which is

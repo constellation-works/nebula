@@ -1,11 +1,23 @@
 // "3m", "2h", "5d": how long ago a capture was, from its `at` stamp.
 
-/** Parse nebula-core's `YYYY-MM-DDTHH:MM` stamp as local time. */
+/** nebula-core's stamp before 0.2.0: `YYYY-MM-DDTHH:MM`, with no offset. */
+const LEGACY = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
+/** RFC 3339 with its offset, which is what core stamps and lists now. */
+const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/i;
+
+/**
+ * The instant a stamp names: RFC 3339 as written, and a legacy stamp as local
+ * time, which is how core reads it. `null` when it is neither.
+ */
 export function parseStamp(at: string): Date | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(at);
-  if (!m) return null;
-  const [, y, mo, d, h, mi] = m;
-  return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi));
+  const legacy = LEGACY.exec(at);
+  if (legacy) {
+    const [, y, mo, d, h, mi] = legacy;
+    return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi));
+  }
+  if (!RFC3339.test(at)) return null;
+  const then = new Date(at.toUpperCase());
+  return Number.isNaN(then.getTime()) ? null : then;
 }
 
 /** A short relative age, or the raw stamp when it does not parse. */
@@ -24,11 +36,15 @@ export function formatAge(at: string, now: number = Date.now()): string {
   return `${Math.floor(days / 30)}mo`;
 }
 
-/** Match core's inbox threshold: fourteen calendar dates since capture. */
+/**
+ * Match core's inbox threshold: fourteen calendar dates since capture. Core
+ * counts from the date the stamp was taken on, as its own offset has it, which
+ * is the stamp's first ten characters in either form.
+ */
 export function isStale(at: string, now: number = Date.now()): boolean {
-  const then = parseStamp(at);
-  if (!then) return false;
+  if (!parseStamp(at)) return false;
+  const [y, mo, d] = at.slice(0, 10).split("-").map(Number);
   const today = new Date(now);
-  const date = (d: Date) => Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
-  return (date(today) - date(then)) / 86_400_000 >= 14;
+  const date = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  return (date - Date.UTC(y, mo - 1, d)) / 86_400_000 >= 14;
 }

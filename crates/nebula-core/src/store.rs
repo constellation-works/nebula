@@ -24,7 +24,9 @@ use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output};
 use time::{
-    Date, OffsetDateTime, format_description::well_known::Iso8601, macros::format_description,
+    Date, OffsetDateTime, PrimitiveDateTime, UtcOffset,
+    format_description::well_known::{Iso8601, Rfc3339},
+    macros::format_description,
 };
 
 /// A corpus on disk.
@@ -835,7 +837,8 @@ impl Corpus {
             .map_err(|error| Error::io_at("writing", &path, error))?;
         Ok(InboxEntry {
             id,
-            at: now,
+            at: now.clone(),
+            stamp: now,
             text,
             file: path,
             line,
@@ -944,7 +947,12 @@ impl Corpus {
                 "inbox entry moved underneath us; nothing written",
             ));
         }
-        *slot = format!("- ~~[{}] {} {}~~ {outcome}", entry.id, entry.at, entry.text);
+        // The stamp goes back as the line held it, so settling a legacy
+        // entry never rewrites when it was captured (STD-02 §R16).
+        *slot = format!(
+            "- ~~[{}] {} {}~~ {outcome}",
+            entry.id, entry.stamp, entry.text
+        );
         refuse_inbox_symlink(&self.root.join("inbox"))?;
         refuse_inbox_symlink(&entry.file)?;
         write_atomic(&entry.file, lines.join("\n") + "\n")?;
@@ -1365,8 +1373,16 @@ impl std::fmt::Display for Settlement {
 pub struct InboxEntry {
     /// Short id, unique among the corpus's live inbox entries.
     pub id: String,
-    /// Capture timestamp.
+    /// When it was captured: RFC 3339 with the offset the stamp was taken
+    /// at, ending in `Z` when the local offset could not be read. A legacy
+    /// `YYYY-MM-DDTHH:MM` stamp reads as local time with the offset this
+    /// machine has for that instant. A stamp that is neither, edited in by
+    /// hand, is passed through as written.
     pub at: String,
+    /// The stamp as the inbox line holds it, which settling writes back
+    /// unchanged.
+    #[serde(skip)]
+    pub(crate) stamp: String,
     /// What you wrote.
     pub text: String,
     /// Which inbox file it lives in.
@@ -1382,10 +1398,11 @@ impl InboxEntry {
         // `- ~~...~~` is a settled entry: promoted or dropped, kept for the record.
         let rest = line.strip_prefix("- [")?;
         let (id, rest) = rest.split_once("] ")?;
-        let (at, text) = rest.split_once(' ')?;
+        let (stamp, text) = rest.split_once(' ')?;
         Some(Self {
             id: id.to_string(),
-            at: at.to_string(),
+            at: rfc3339_stamp(stamp).unwrap_or_else(|| stamp.to_string()),
+            stamp: stamp.to_string(),
             text: text.trim().to_string(),
             file: file.to_path_buf(),
             line: lineno,
@@ -1400,11 +1417,76 @@ pub(crate) fn today() -> String {
         .unwrap_or_default()
 }
 
-/// Now, local, to the minute.
+/// Now, as an inbox stamp: RFC 3339 to the second, with the local offset,
+/// or in UTC marked `Z` when the local offset cannot be read. The first seven
+/// characters are the month, which names the inbox file.
 pub(crate) fn stamp() -> String {
-    now()
-        .format(format_description!("[year]-[month]-[day]T[hour]:[minute]"))
-        .unwrap_or_default()
+    let now = OffsetDateTime::now_utc();
+    format_stamp(now, UtcOffset::local_offset_at(now).ok())
+}
+
+/// `instant` as an inbox stamp at `offset`, or in UTC marked `Z` when there
+/// is none.
+///
+/// `Z` and `+00:00` are the same instant, and the difference is kept on
+/// purpose: `+00:00` is a local offset of zero that was read, `Z` is a
+/// fallback, so a stamp never passes a guess off as local time
+/// (STD-01 §R11).
+fn format_stamp(instant: OffsetDateTime, offset: Option<UtcOffset>) -> String {
+    match offset {
+        Some(offset) => instant.to_offset(offset).format(format_description!(
+            "[year]-[month]-[day]T[hour]:[minute]:[second][offset_hour sign:mandatory]:[offset_minute]"
+        )),
+        None => instant
+            .to_offset(UtcOffset::UTC)
+            .format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z")),
+    }
+    .unwrap_or_default()
+}
+
+/// When an inbox stamp says a capture happened, in either form it may be in.
+///
+/// RFC 3339 is read as written. The legacy `YYYY-MM-DDTHH:MM` form, which
+/// carries no offset, is local time with the offset this machine has for
+/// that instant, or UTC when there is none: the reading recorded in
+/// `docs/design/lineage-graph/4_decisions.md`.
+pub(crate) fn parse_stamp(stamp: &str) -> Option<OffsetDateTime> {
+    if let Ok(at) = OffsetDateTime::parse(stamp, &Rfc3339) {
+        return Some(at);
+    }
+    let (wall, offset) = legacy_stamp(stamp)?;
+    Some(wall.assume_offset(offset.unwrap_or(UtcOffset::UTC)))
+}
+
+/// A stamp as RFC 3339: itself when it already is, the legacy form read as
+/// [`parse_stamp`] reads it, and `None` when it is neither.
+fn rfc3339_stamp(stamp: &str) -> Option<String> {
+    if OffsetDateTime::parse(stamp, &Rfc3339).is_ok() {
+        return Some(stamp.to_string());
+    }
+    let (wall, offset) = legacy_stamp(stamp)?;
+    Some(format_stamp(
+        wall.assume_offset(offset.unwrap_or(UtcOffset::UTC)),
+        offset,
+    ))
+}
+
+/// A legacy `YYYY-MM-DDTHH:MM` stamp's wall-clock time, and the local
+/// offset for it, if this machine can say.
+///
+/// The offset is looked up twice because it depends on the instant, which
+/// depends on the offset: the second lookup settles a wall-clock time within
+/// a few hours of a daylight-saving change.
+fn legacy_stamp(stamp: &str) -> Option<(PrimitiveDateTime, Option<UtcOffset>)> {
+    let wall = PrimitiveDateTime::parse(
+        stamp,
+        format_description!("[year]-[month]-[day]T[hour]:[minute]"),
+    )
+    .ok()?;
+    let offset = UtcOffset::local_offset_at(wall.assume_utc())
+        .ok()
+        .map(|guess| UtcOffset::local_offset_at(wall.assume_offset(guess)).unwrap_or(guess));
+    Some((wall, offset))
 }
 
 fn now() -> OffsetDateTime {
@@ -1417,9 +1499,11 @@ pub(crate) fn days_since(date: &str) -> Option<i64> {
     Some((now().date() - d).whole_days())
 }
 
-/// Whole days between the date in a `YYYY-MM-DDTHH:MM` stamp and today.
+/// Whole days between the date an inbox stamp was taken on, as its own
+/// offset has it, and today. Either stamp form; `None` when it parses as
+/// neither.
 pub(crate) fn days_since_stamp(stamp: &str) -> Option<i64> {
-    days_since(stamp.get(..10)?)
+    Some((now().date() - parse_stamp(stamp)?.date()).whole_days())
 }
 
 /// A short id unique in the live inbox, or a refusal when all ids are occupied.
@@ -1805,6 +1889,44 @@ mod tests {
             "the inbox would read this temporary as a month file: {}",
             month.display()
         );
+    }
+
+    #[test]
+    fn stamp_names_the_offset_it_used() {
+        let instant = time::macros::datetime!(2026-09-26 06:11:05.25 UTC);
+
+        let fallback = format_stamp(instant, None);
+        assert_eq!(fallback, "2026-09-26T06:11:05Z");
+        let local = format_stamp(instant, Some(time::macros::offset!(+2)));
+        assert_eq!(local, "2026-09-26T08:11:05+02:00");
+        let zero = format_stamp(instant, Some(UtcOffset::UTC));
+        assert_eq!(zero, "2026-09-26T06:11:05+00:00");
+        for stamp in [fallback, local, zero, stamp()] {
+            let parsed = OffsetDateTime::parse(&stamp, &Rfc3339)
+                .unwrap_or_else(|error| panic!("{stamp}: {error}"));
+            assert_eq!(parse_stamp(&stamp), Some(parsed), "{stamp}");
+            assert!(
+                stamp.ends_with('Z') || stamp[stamp.len() - 6..].starts_with(['+', '-']),
+                "{stamp} does not name its offset"
+            );
+            assert_eq!(stamp.find('.'), None, "{stamp} is to the second");
+        }
+    }
+
+    #[test]
+    fn a_legacy_stamp_reads_as_local_time_and_rfc3339_as_written() {
+        let legacy = rfc3339_stamp("2026-09-01T08:00").unwrap();
+        assert!(legacy.starts_with("2026-09-01T08:00:00"), "{legacy}");
+        let parsed = OffsetDateTime::parse(&legacy, &Rfc3339).unwrap();
+        assert_eq!(parse_stamp("2026-09-01T08:00"), Some(parsed));
+
+        for written in ["2026-09-01T08:00:00+02:00", "2026-09-01T08:00:00.5-05:30"] {
+            assert_eq!(rfc3339_stamp(written).as_deref(), Some(written));
+        }
+        for unreadable in ["someday", "2026-09-01", "2026-09-01T08:00:00", ""] {
+            assert_eq!(rfc3339_stamp(unreadable), None, "{unreadable}");
+            assert_eq!(parse_stamp(unreadable), None, "{unreadable}");
+        }
     }
 
     #[test]

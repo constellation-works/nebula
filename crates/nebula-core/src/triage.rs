@@ -126,8 +126,14 @@ impl Triage {
         let mut entries = corpus.inbox()?.0;
         // Month files are read in order and captures append, so this is
         // usually already sorted; a hand-edited file is why it is not assumed.
-        // Stable, so two captures in one minute keep their file order.
-        entries.sort_by(|a, b| a.at.cmp(&b.at));
+        // By instant rather than text, since stamps carry different offsets
+        // and a legacy one carries none. Stable, so two captures in one
+        // second keep their file order; a stamp that does not parse sorts
+        // last.
+        entries.sort_by_cached_key(|entry| {
+            let at = store::parse_stamp(&entry.at);
+            (at.is_none(), at)
+        });
         Ok(Self {
             total: entries.len(),
             queue: entries.into(),
@@ -279,4 +285,48 @@ pub fn settled_elsewhere(e: &Error) -> bool {
         e,
         Error::NoSuchInboxEntry(_) | Error::InboxEntrySettled { .. }
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn triage_orders_mixed_stamp_forms_by_instant() {
+        let dir = tempfile::tempdir().unwrap();
+        let corpus = Corpus::init(&dir.path().join("corpus")).unwrap();
+        let inbox = dir.path().join("corpus/inbox");
+        std::fs::create_dir_all(&inbox).unwrap();
+        // In file order, and so that text order differs from instant order:
+        // `b` sorts before `a` as text but is an hour later. The legacy
+        // stamp is local time, which is within fourteen hours of UTC
+        // wherever this runs, so it falls between `b` and `d` on any host.
+        std::fs::write(
+            inbox.join("2026-09.md"),
+            "- [000d] 2026-09-05T01:00:00+09:00 d\n\
+             - [000c] 2026-09-03T08:00 c\n\
+             - [000b] 2026-09-01T06:00:00-05:00 b\n\
+             - [000e] someday e\n\
+             - [000a] 2026-09-01T12:00:00+02:00 a\n",
+        )
+        .unwrap();
+
+        let session = Triage::start(&corpus, None).unwrap();
+
+        let order: Vec<&str> = session.queue.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(order, ["a", "b", "c", "d", "e"]);
+
+        // An entry's age counts from the date its stamp was taken on, as its
+        // own offset has it, whichever form the stamp is in.
+        let legacy = store::days_since_stamp("2026-09-01T08:00");
+        assert!(legacy.is_some());
+        for stamp in [
+            "2026-09-01T08:00:00+02:00",
+            "2026-09-01T08:00:00Z",
+            "2026-09-01T23:30:00-05:00",
+        ] {
+            assert_eq!(store::days_since_stamp(stamp), legacy, "{stamp}");
+        }
+        assert_eq!(store::days_since_stamp("someday"), None);
+    }
 }
