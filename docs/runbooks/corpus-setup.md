@@ -70,14 +70,19 @@ git -C "$NEBULA_ROOT" add -A
 git -C "$NEBULA_ROOT" commit -m "corpus"
 ```
 
-`neb init` writes `/.lock` to the corpus `.gitignore`, so the advisory runtime
-lock never appears in `git status` or gets swept up by `git add -A`. For a
-corpus created by an older `neb`, run `neb init "$NEBULA_ROOT"` once; it keeps
-the corpus and existing ignore rules intact while adding the missing rule.
+`neb init` writes `/.lock`, `/.pending` and `*.tmp` to the corpus
+`.gitignore`, in that order and after any rules already there, so the advisory
+runtime lock, the record of a promotion in flight, and the temporary file a
+killed write leaves behind never appear in `git status` or get swept up by
+`git add -A`. For a corpus created by an older `neb`, run
+`neb init "$NEBULA_ROOT"` once; it keeps the corpus and existing ignore rules
+intact while adding the missing rules (after an older `/.lock`, only the two
+new ones). `neb`'s own commits exclude `*.tmp` and `.pending` whether or not
+the rules are there.
 Git does not honor a symlink at `.gitignore`, so `neb init` replaces one with
 an effective regular file in the corpus: a readable target's bytes are copied
-before `/.lock` is added when needed, while a dangling link becomes a local
-file containing only `/.lock`. The external target is never changed. If the
+before the rules are added when needed, while a dangling link becomes a local
+file containing only them. The external target is never changed. If the
 link cannot be read for another reason, initialization fails instead of
 claiming the lock is ignored.
 
@@ -215,6 +220,7 @@ neb check
 | `~/.config/nebula/root` | this machine's default corpus, written by `neb init <DIR> --set-root` |
 | `~/.config/nebula/observatory-root` | this machine's Observatory checkout, written by `neb config observatory-root <DIR>`; `$OBSERVATORY_ROOT` outranks it |
 | `$NEBULA_ROOT/.lock`, `~/.config/nebula/.lock` | the advisory write locks; runtime state, never committed, never to be deleted by hand |
+| `$NEBULA_ROOT/.pending` | present only while a promotion is in flight, or after one was interrupted; the next write settles it (see [corpus-recovery.md](corpus-recovery.md#symptom-a-capture-you-promoted-is-still-in-the-inbox)); never committed |
 
 Every file `neb` writes is created `0600` and every directory it creates
 `0700`, whatever your umask, because a corpus mixes work and personal

@@ -20,6 +20,7 @@ use crate::fs::{append_private, create_private_dir_all, create_private_new, writ
 use crate::git::{self, GitOutput};
 use crate::lock::{CorpusLock, LOCK_FILE};
 use crate::model::{self, Doc};
+use crate::pending::PENDING_FILE;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -481,14 +482,25 @@ impl Corpus {
     ///
     /// Deliberately not taken by [`Self::open`]: a read-only verb and the
     /// desktop's file watcher must never wait on a writer.
+    ///
+    /// The take that enters the critical section first settles a write an
+    /// earlier writer recorded and did not finish — a promotion interrupted
+    /// between its node and its strike — so every writer starts from the
+    /// outcome that write decided (STD-03 §R9; see `pending.rs`). A record
+    /// that cannot be read refuses the lock, as
+    /// [`Error::PendingWriteUnreadable`], and nothing is written.
     pub fn lock(&self) -> Result<CorpusLock> {
-        CorpusLock::acquire(&self.root)
+        self.lock_within(crate::LOCK_WAIT)
     }
 
     /// Take the write lock with a caller-chosen wait bound. A responsive UI
     /// can refuse a busy writer sooner while keeping the same critical section.
     pub fn lock_within(&self, wait: std::time::Duration) -> Result<CorpusLock> {
-        CorpusLock::acquire_within(&self.root, wait)
+        let lock = CorpusLock::acquire_within(&self.root, wait)?;
+        if lock.is_outermost() {
+            self.finish_pending()?;
+        }
+        Ok(lock)
     }
 
     /// `config.yaml` as it stands on disk, rather than the snapshot
@@ -585,9 +597,10 @@ impl Corpus {
     /// the root is inside a git work tree.
     ///
     /// Stages `nodes/`, `inbox/`, `config.yaml` and the generated `.gitignore`
-    /// under the root and nothing else — not `.lock`, which records nothing
-    /// about the corpus — and commits exactly those paths as
-    /// `neb <verb> <ids>`. The commit names them as its pathspec, so whatever
+    /// under the root and nothing else — not `.lock` or `.pending`, which
+    /// record nothing about the corpus, and not a temporary file a killed
+    /// write left in `nodes/` or `inbox/` ([`NEVER_STAGED`]) — and commits
+    /// exactly those paths as `neb <verb> <ids>`. The commit names them as its pathspec, so whatever
     /// else is staged in the repository, before this runs or while it does,
     /// is neither committed nor unstaged (STD-03 §R28). The write is on disk
     /// before this runs and stays there whatever git says. Never pushes.
@@ -614,6 +627,7 @@ impl Corpus {
         }
         let mut add = vec!["add", "-A", "--"];
         add.extend(&paths);
+        add.extend(NEVER_STAGED);
         git_ok(root, &add)?;
         let changed = staged_paths(root, &paths)?;
         if changed.is_empty() {
@@ -999,7 +1013,16 @@ impl Corpus {
     }
 
     /// Inbox entries that have not been promoted or dropped.
+    ///
+    /// A line still live on disk whose recorded promotion has already written
+    /// its node is left out: that entry is settled, and the next writer will
+    /// strike it (see `pending.rs`).
     pub fn inbox(&self) -> Result<Inbox> {
+        Ok(Inbox(self.waiting(self.live_entries()?)?))
+    }
+
+    /// Every inbox line that is not struck through, as it stands on disk.
+    pub(crate) fn live_entries(&self) -> Result<Vec<InboxEntry>> {
         let mut out = Vec::new();
         for file in self.inbox_files()? {
             for (lineno, line) in std::fs::read_to_string(&file)?.lines().enumerate() {
@@ -1008,7 +1031,7 @@ impl Corpus {
                 }
             }
         }
-        Ok(Inbox(out))
+        Ok(out)
     }
 
     /// The inbox's month files, oldest first. None when there is no inbox
@@ -1292,7 +1315,7 @@ pub struct HistoryEntry {
 /// the corpus, and it means nothing on another machine. `.gitignore` is
 /// corpus setup metadata: `init` maintains it so ordinary git commands cannot
 /// mistake the lock for corpus content.
-const GITIGNORE_FILE: &str = ".gitignore";
+pub(crate) const GITIGNORE_FILE: &str = ".gitignore";
 const COMMIT_PATHS: [&str; 4] = ["nodes", "inbox", config::FILE, GITIGNORE_FILE];
 
 /// The pathspec a `neb` commit stages and commits: the [`COMMIT_PATHS`] that
@@ -1340,13 +1363,44 @@ fn staged_paths<'a>(root: &Path, pathspec: &[&'a str]) -> Result<Vec<&'a str>> {
     Ok(staged)
 }
 
-/// Keep the process-local advisory lock out of the corpus repository.
+/// Pathspecs that keep crash debris out of a `neb` commit, appended to the
+/// [`commit_pathspec`] of its `git add` and nowhere else: [`staged_paths`]
+/// and `commit --only` take plain paths, and `--only` never commits a file
+/// the `git add` left untracked.
+///
+/// A write killed before its rename leaves its temporary file,
+/// `<file>.<pid>-<n>-<nanos>.tmp` (see `fs.rs`), beside the file it was
+/// replacing — in `nodes/` or `inbox/`, which a commit stages whole. It is
+/// debris, not corpus: it stays on disk for `check` to report and a person
+/// to remove, and out of the history (STD-03 §R4). The pending-write record
+/// is excluded too, although no corpus path names it, so a pathspec that
+/// ever widens cannot sweep it in. `init` writes the matching ignore rules
+/// ([`ignore_rules`]), so a person's own `git add -A` skips both as well.
+const NEVER_STAGED: [&str; 2] = [":(exclude,glob)**/*.tmp", ":(exclude).pending"];
+
+/// The rules `init` keeps last in the corpus `.gitignore`, in this order:
+/// the advisory lock and the pending-write record at the root, which say
+/// which process is writing and what it is part-way through, and every
+/// temporary file a killed write leaves behind ([`NEVER_STAGED`]). None of
+/// them is corpus content.
+fn ignore_rules() -> [String; 3] {
+    [
+        format!("/{LOCK_FILE}"),
+        format!("/{PENDING_FILE}"),
+        "*.tmp".to_string(),
+    ]
+}
+
+/// Keep the runtime files and crash debris ([`ignore_rules`]) out of the
+/// corpus repository.
 ///
 /// Existing ignore content is preserved. Re-running `init` is idempotent when
-/// the final effective rule is already ours; if the user later adds another
-/// rule, a later `init` puts this root-specific rule last again. Git does not
-/// follow a `.gitignore` symlink, so even a symlink whose target already ends
-/// in our rule is replaced atomically with a regular file containing the same
+/// the final effective rules are already ours, in order; if the user later
+/// adds another rule, a later `init` puts ours last again. A file that ends
+/// with the first of ours — the one rule an older `init` wrote — gets only
+/// the rest appended, so an upgrade does not repeat it. Git does not follow a
+/// `.gitignore` symlink, so even a symlink whose target already ends in our
+/// rules is replaced atomically with a regular file containing the same
 /// bytes. The target itself is never changed.
 fn ensure_lock_ignored(root: &Path) -> Result<()> {
     let path = root.join(GITIGNORE_FILE);
@@ -1360,12 +1414,24 @@ fn ensure_lock_ignored(root: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(Error::io_at("reading", &path, error)),
     };
-    let expected = format!("/{LOCK_FILE}");
-    let last_rule = contents
+    let ours = ignore_rules();
+    let rules: Vec<&[u8]> = contents
         .split(|byte| *byte == b'\n')
         .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
-        .rfind(|line| !line.is_empty() && !line.starts_with(b"#"));
-    if last_rule == Some(expected.as_bytes()) {
+        .filter(|line| !line.is_empty() && !line.starts_with(b"#"))
+        .collect();
+    // How many of ours already end the file, in order: the rest are appended.
+    let present = (0..=ours.len())
+        .rev()
+        .find(|&n| {
+            n <= rules.len()
+                && rules[rules.len() - n..]
+                    .iter()
+                    .zip(&ours[..n])
+                    .all(|(rule, our)| *rule == our.as_bytes())
+        })
+        .unwrap_or(0);
+    if present == ours.len() {
         return if is_symlink {
             write_private_atomic(&path, contents)
         } else {
@@ -1376,8 +1442,10 @@ fn ensure_lock_ignored(root: &Path) -> Result<()> {
     if !contents.is_empty() && !contents.ends_with(b"\n") {
         contents.push(b'\n');
     }
-    contents.extend_from_slice(expected.as_bytes());
-    contents.push(b'\n');
+    for rule in &ours[present..] {
+        contents.extend_from_slice(rule.as_bytes());
+        contents.push(b'\n');
+    }
     write_private_atomic(&path, contents)
 }
 
@@ -2154,6 +2222,37 @@ mod tests {
             !is_inbox_month_filename(month.file_name().unwrap()),
             "the inbox would read this temporary as a month file: {}",
             month.display()
+        );
+    }
+
+    /// Crash debris and the pending record stay out of every commit, and
+    /// out of a person's `git add -A` once `init` has run.
+    #[test]
+    fn commits_and_ignore_rules_cover_debris_and_the_pending_record() {
+        assert_eq!(
+            NEVER_STAGED,
+            [
+                ":(exclude,glob)**/*.tmp".to_string(),
+                format!(":(exclude){PENDING_FILE}")
+            ]
+        );
+        // What the exclusion and the ignore rule both match on is the name
+        // every temporary the write helper makes ends with.
+        let dir = tempfile::tempdir().unwrap();
+        let (tmp, _handle) = create_temporary_sibling(&dir.path().join("a.md")).unwrap();
+        assert_eq!(
+            tmp.extension(),
+            Some(OsStr::new("tmp")),
+            "{}",
+            tmp.display()
+        );
+        assert_eq!(
+            ignore_rules(),
+            [
+                format!("/{LOCK_FILE}"),
+                format!("/{PENDING_FILE}"),
+                "*.tmp".to_string()
+            ]
         );
     }
 

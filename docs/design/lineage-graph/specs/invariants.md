@@ -29,7 +29,7 @@ and its "What is removed" table for the rules this replaced.
 | 1 | Genealogy is acyclic | error | `link`/`new` refuse; `check` proves |
 | 2 | `hypothesis` names a non-empty `kill` | error | `sharpen`/`status`, `check` |
 | 3 | Every edge target exists; no self-loop | error | `link`/`new`, `check` |
-| 4 | `contradicts` is mutual | error | `link`/`new` write both; `check` |
+| 4 | `contradicts` is mutual | error | `link`/`new` write both, and re-running `link` writes a missing half; `check` |
 | 5 | `refuted` carries `closed.why` | error | `status`, `check` |
 | 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status`, `handoff` |
 | 7 | A reference carries no `verdict`/`strength` | error | parse |
@@ -42,6 +42,7 @@ and its "What is removed" table for the rules this replaced.
 | 14 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
 | 15 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse (the shape); every read and write (the agreement) |
 | 16 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |
+| 17 | No write is left half-done: no stray temporary file and no pending-write record | warn; error for a record this build cannot read | the next write settles the record; `check` reports both and deletes neither |
 
 ## Where a rule lives matters
 
@@ -63,6 +64,18 @@ does not carry what rule 2 or 5 requires. `neb status` refuses to move a
 than catching them later, because you still remember what you meant. The
 seed-with-kill rule, 13, has a point-of-action refusal too, described
 below.
+
+A `contradicts` pair is two saves, so a crash between them leaves rule 4
+broken with nobody's intent in doubt. Re-running the same `link` is the
+repair: it writes only the missing half, and rule 4's finding names that
+command. Only a pair already recorded on both ends is a duplicate.
+
+**The next write**, for rule 17's pending-write record. `promote` changes two
+files, and the record it writes first is what lets the writer after a crash
+finish the promotion (or discard it, when the node was never written) before
+doing anything else. `check` only names it. The temporary files a killed write
+leaves are rule 17 too, and only reported: nothing deletes a file it cannot
+prove holds nothing wanted.
 
 **Deserialization and the store**, for rule 15, which is the one rule the
 checker cannot hold: see below.

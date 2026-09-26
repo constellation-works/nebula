@@ -10,7 +10,7 @@ exit non-zero; `warn` findings do not.
 | 1 | Genealogy is acyclic | error | `link`/`new` refuse; `check` proves |
 | 2 | `hypothesis` names a non-empty `kill` | error | `sharpen`/`status`, `check` |
 | 3 | Every edge target exists; no self-loop | error | `link`/`new`, `check` |
-| 4 | `contradicts` is mutual | error | `link`/`new` write both; `check` |
+| 4 | `contradicts` is mutual | error | `link`/`new` write both, and re-running `link` writes a missing half; `check` |
 | 5 | `refuted` carries `closed.why` | error | `status`, `check` |
 | 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status`/`sharpen`/`handoff` |
 | 7 | A reference carries no `verdict`/`strength` | error | parse |
@@ -23,6 +23,7 @@ exit non-zero; `warn` findings do not.
 | 14 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
 | 15 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse (the shape); every read and write (the agreement) |
 | 16 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |
+| 17 | No write is left half-done: no stray temporary file and no pending-write record | warn; error for a record this build cannot read | the next write settles the record; `check` reports both and deletes neither |
 
 Rule 15 is the one rule `check` cannot hold: an id decides which file a write
 lands in, so a corpus whose ids disagree with their file names is one `check`
@@ -56,6 +57,19 @@ only thing you see of it is the refusal below when the wait runs out.
 `<root>/.lock` is not corpus content. It is never committed, never checked,
 and never something to delete or edit.
 
+Nor is `<root>/.pending`. `promote` writes it before the node and removes it
+after striking the inbox line, so it outlives the verb only when a crash fell
+between the two. The next verb that writes settles it before doing its own
+work — strikes the line when the node was written, discards the record when
+it was not — and until then `inbox` does not list an entry whose node exists.
+`check` names it (rule 17). Never delete or edit it, and never `drop` the
+entry it names: run your next write, or `neb promote <entry>`, which settles
+it and then reports the entry as already promoted.
+
+A `*.tmp` file under `nodes/` or `inbox/` is what a write killed before its
+rename leaves. `check` warns about each one with the `rm` that removes it.
+That is the human's call, not yours: report it, and never delete it.
+
 ## What each refusal means and what to do
 
 Refusals are typed. The message is what the CLI prints; the variant is what
@@ -69,7 +83,7 @@ is `io_at` (the envelope is in [verbs.md](verbs.md#refusals-under---json)).
 | `that edge would make \`X\` its own ancestor` | `Cycle {from, to}` | 1 | The edge is backwards, or the relation is really `contradicts`. Run `neb trace X` and `neb trace Y --down` to see the existing line; propose the reverse edge or none. |
 | `a node cannot link to itself` | `SelfLoop` | 3 | You passed the same id twice. Check the ids with `neb list --json`. |
 | `no node \`X\`` | `NoSuchNode` | 3 | The id is wrong. Ids are title slugs; `neb list --json \| jq '.[].id'`. Never `neb new` a node to satisfy a link you meant for an existing one. |
-| `the edge \`X\` <kind> \`Y\` already exists` | `DuplicateEdge { from, kind, to }` | — | From `link`, nothing to do; it is already recorded (`neb show X` lists it). From `new`, a flag named the same node twice and nothing was written: name it once. |
+| `the edge \`X\` <kind> \`Y\` already exists` | `DuplicateEdge { from, kind, to }` | — | From `link`, nothing to do; it is already recorded (`neb show X` lists it). A `contradicts` link that `check` reports as one-sided is not a duplicate: re-running it writes the missing half. From `new`, a flag named the same node twice and nothing was written: name it once. |
 | `\`X\` is named as both a parent and the node this reopens` | `ParentAndReopens(X)` | 1 | `reopens` is already genealogy, so drop `--parent X` and keep `--reopens X`. Nothing was written. |
 | `\`hypothesis\` needs a kill condition first` | `NeedsKill(hypothesis)` | 2 | `neb sharpen <id> --kill "..."` — it moves the status for you. Ask the human for the falsifier if you do not have one; do not invent it. |
 | `a kill condition cannot be empty` | `EmptyKill` | 2 | Same: write the falsifier. |
@@ -103,6 +117,7 @@ is `io_at` (the envelope is in [verbs.md](verbs.md#refusals-under---json)).
 | `... is schema_version 1, and this build understands 2` | `SchemaMismatch` | — | The corpus needs `neb migrate`. In session mode, run it only on a clean git tree and tell the human it lands as its own commit; in routine mode, propose it. |
 | `<root>/config.yaml does not exist, so the corpus's schema and settings are unknown; nothing was read or written` | `MissingConfig { path }` (`missing_config`) | — | The corpus has `nodes/` but no config, and no verb will guess one. Nothing was written. Do **not** create `config.yaml` by hand and do not run `neb init`. Tell the human: if the file was deleted, restore it from git (`git -C <root> checkout -- config.yaml`), which keeps the corpus's id and `commit` setting; if the corpus predates the file, `neb migrate` brings it forward (session mode, clean tree only; propose it in routine mode). |
 | `<node> is a v1 node (it carries \`domain\`), but <root>/config.yaml declares schema_version 2` | `V1NodeUnderCurrentSchema { path, config, version, keys }` | — | The config says v2 but this node is still in the v1 shape, most likely because an older `neb` stamped a config over a v0.1 corpus. Nothing was written. Report it to the human, who either sets `schema_version: 1` in that `config.yaml` and runs `neb migrate`, or, if the key was a hand edit, removes it from the node. Do not edit either file yourself. |
+| `<root>/.pending records an unfinished write that this build cannot read: ...; nothing was written` | `PendingWriteUnreadable { path, reason }` | 17 | The record of an interrupted `promote` was edited by hand or written by a newer `neb`, so every write refuses rather than guess how to finish it. **Nothing was written; do not retry, and do not delete the file.** Report the path and the reason to the human, who reads it, checks the node and inbox line it names, and removes it. |
 | `another nebula writer is holding <root>; nothing was written` | `Locked { root }` | — | Another `neb`, an agent session, or the desktop app was mid-write and still had the corpus lock after a five-second wait. **Nothing was written, so the same command is safe to run again** — unlike every other refusal in this table, this one is worth retrying, once, after a pause. Do not delete `<root>/.lock`: the lock goes with the writer's process, so there is never a stale one to clear. If it keeps refusing, say so and name the root; something is holding the corpus open. When `<root>` is `~/.config/nebula`, the lock held is the one on this machine's settings, taken by `init --set-root` and `config observatory-root DIR`; the same advice applies. |
 | `` `X`'s body changed while it was being edited; nothing was written; your edited text is kept at <path> `` | `EditConflict(X)` (`edit_conflict`) | — | From `edit`: another writer changed the body while it was open in the editor, and saving would have erased that. Your text is in `<path>`, a new owner-only file under `$XDG_STATE_HOME/nebula/edits/` (default `~/.local/state/nebula/edits/`), outside the corpus. `neb show X`, then `neb edit X` again and carry the text over; never copy the kept file into `nodes/`. Every other refusal after the editor exits (`notes_changed`, `locked`, a failed write) keeps the text the same way and names the file. |
 | `<what> on standard input is larger than <limit> bytes; nothing was written` | `InputTooLarge { what, limit }` (`input_too_large`) | — | `capture -` takes up to 64 KiB (65536 bytes) and `--body -` up to 1 MiB (1048576 bytes). Refused before the corpus is opened for writing, so nothing was written. A thought that long is not a capture: put the text in a file and `neb cite` it, or split it. |

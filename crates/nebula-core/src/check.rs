@@ -9,13 +9,16 @@
 //! The checker reports; it never fixes and never prints. What an error costs
 //! the caller — an exit code, a red badge — is the caller's business.
 
-use crate::config::{OBSERVATORY_ROOT_ENV, ObservatorySource};
-use crate::error::Result;
+use crate::config::{self, OBSERVATORY_ROOT_ENV, ObservatorySource};
+use crate::error::{Error, Result};
 use crate::graph::Graph;
 use crate::model::{Doc, EdgeType, Status, is_iso_date};
+use crate::pending::{self, PENDING_FILE, PendingWrite};
 use crate::store::Corpus;
+use crate::store::GITIGNORE_FILE;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 /// Stable IDs for corpus invariants. Some rules are enforced before a graph
@@ -39,6 +42,7 @@ pub enum Rule {
     Dates = 14,
     NodeId = 15,
     ReferenceKind = 16,
+    InterruptedWrite = 17,
 }
 
 /// How badly a finding breaks the corpus.
@@ -152,16 +156,24 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
                     .edges_of(EdgeType::Contradicts)
                     .any(|b| b == doc.node.id)
             });
+            // Re-running the link writes the missing half and nothing else,
+            // which is also how a crash between its two saves is finished.
             if !mutual {
                 r.push(
                     Severity::Error,
                     Rule::MutualContradicts,
                     Some(&doc.node.id),
-                    format!("contradicts `{target}`, which does not contradict back"),
+                    format!(
+                        "contradicts `{target}`, which does not contradict back; record the \
+                         other half with `neb link {} contradicts {target}`",
+                        doc.node.id
+                    ),
                 );
             }
         }
     }
+
+    interrupted_writes(corpus, &mut r)?;
 
     // 1. Genealogy must be acyclic: an idea cannot be its own ancestor.
     //    Diamonds are legal; only a loop is not.
@@ -202,6 +214,119 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
     r.findings
         .sort_by_key(|f| (f.level != Severity::Error, f.rule));
     Ok(r)
+}
+
+/// 17. A write that did not finish is reported, never repaired here: the
+///     temporary file a killed write left beside the file it was replacing,
+///     and a pending-write record the next writer has not yet settled.
+///
+/// A temporary file is read by nothing and committed by nothing, but it is
+/// not nebula's to delete: its name says a nebula write made it, not that
+/// the bytes in it are nothing anybody wants (STD-03 §R29). So each one is
+/// named, with the command that removes it, for a person to run. The
+/// directories nebula writes into are the ones looked in: `nodes/`,
+/// `inbox/`, and at the root the temporaries of the files kept there.
+///
+/// A pending record is a warning while it can be read, since the next write
+/// settles it, and an error when it cannot, since every write refuses until
+/// someone deals with it.
+fn interrupted_writes(corpus: &Corpus, r: &mut Report) -> Result<()> {
+    let root = corpus.root();
+    // Relative to the root, in the order they are reported.
+    let mut debris: Vec<PathBuf> = Vec::new();
+    for dir in ["nodes", "inbox"] {
+        let found = temporaries(&root.join(dir))?;
+        debris.extend(found.into_iter().map(|name| Path::new(dir).join(name)));
+    }
+    let beside_root_files = |name: &OsString| {
+        let name = name.to_string_lossy();
+        [config::FILE, GITIGNORE_FILE, PENDING_FILE]
+            .iter()
+            .any(|file| name.starts_with(&format!("{file}.")))
+    };
+    let found = temporaries(root)?;
+    debris.extend(
+        found
+            .into_iter()
+            .filter(beside_root_files)
+            .map(PathBuf::from),
+    );
+    for relative in debris {
+        r.push(
+            Severity::Warn,
+            Rule::InterruptedWrite,
+            None,
+            format!(
+                "`{}` is a temporary file left by a write that did not finish; nothing reads \
+                 or commits it, and nebula never deletes it. Once it holds nothing you need, \
+                 remove it: rm {}",
+                relative.display(),
+                shell_quote(&root.join(&relative).display().to_string())
+            ),
+        );
+    }
+
+    let record = pending::pending_path(root);
+    match pending::read(root) {
+        Ok(None) => {}
+        Ok(Some(PendingWrite::Promote { entry, node, .. })) => {
+            let outcome = if corpus.node_path(&node)?.exists() {
+                format!("`{node}` was written, so the next write strikes the entry `-> {node}`")
+            } else {
+                format!("`{node}` was never written, so the next write leaves the entry waiting")
+            };
+            r.push(
+                Severity::Warn,
+                Rule::InterruptedWrite,
+                None,
+                format!(
+                    "a promotion of inbox entry `{entry}` did not finish, as {} records; \
+                     {outcome}",
+                    record.display()
+                ),
+            );
+        }
+        Err(Error::PendingWriteUnreadable { path, reason }) => r.push(
+            Severity::Error,
+            Rule::InterruptedWrite,
+            None,
+            format!(
+                "{} records an unfinished write that this build cannot read ({reason}); every \
+                 write refuses until it has been read by hand and removed: rm {}",
+                path.display(),
+                shell_quote(&path.display().to_string())
+            ),
+        ),
+        Err(error) => return Err(error),
+    }
+    Ok(())
+}
+
+/// The names in `dir` that end `.tmp`, sorted. None when `dir` is not there.
+fn temporaries(dir: &Path) -> Result<Vec<OsString>> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(Error::io_at("reading", dir, error)),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let name = entry
+            .map_err(|error| Error::io_at("reading", dir, error))?
+            .file_name();
+        if name.to_string_lossy().ends_with(".tmp") {
+            names.push(name);
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// `text` as one POSIX shell word: single-quoted, with each `'` closed,
+/// escaped and reopened, so a suggested command runs as shown whatever the
+/// path holds.
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', r"'\''"))
 }
 
 /// Every tag in the corpus, as written, with the ids of the nodes carrying
@@ -703,6 +828,10 @@ mod tests {
         (
             Rule::ReferenceKind,
             "Every reference kind belongs to the documented vocabulary",
+        ),
+        (
+            Rule::InterruptedWrite,
+            "No write is left half-done: no stray temporary file and no pending-write record",
         ),
     ];
 

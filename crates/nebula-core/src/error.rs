@@ -414,6 +414,20 @@ pub enum Error {
         limit: usize,
     },
 
+    /// `<root>/.pending` records a write that did not finish, and this build
+    /// cannot read the record: it does not parse, or it names an operation
+    /// this build does not know. Every writer refuses, and so does the inbox
+    /// read, until a person has looked at it: finishing a write this build
+    /// cannot read would be a guess, and ignoring it would expose the
+    /// half-written state it records (STD-03 §R9).
+    #[error("{} records an unfinished write that this build cannot read: {reason}; nothing was written", .path.display())]
+    PendingWriteUnreadable {
+        /// The record.
+        path: PathBuf,
+        /// Why it could not be read, as the parser put it.
+        reason: String,
+    },
+
     /// `commit` is on, but the repository containing the corpus ignores it,
     /// so there is nothing git would ever record.
     #[error("{} is ignored by the git repository that contains it; nothing can be committed", .0.display())]
@@ -571,6 +585,7 @@ impl Error {
         Locked => "locked",
         EditConflict => "edit_conflict",
         InputTooLarge => "input_too_large",
+        PendingWriteUnreadable => "pending_write_unreadable",
         CorpusIgnored => "corpus_ignored",
         Git => "git",
         GitTimedOut => "git_timed_out",

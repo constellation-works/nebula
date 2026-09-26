@@ -293,6 +293,7 @@ fn exit(e: &Error) -> Exit {
         | Error::UnsafeId(_)
         | Error::IdMismatch { .. }
         | Error::Locked { .. }
+        | Error::PendingWriteUnreadable { .. }
         | Error::EditConflict(_)
         // Stdin is data, not an argument: too much of it is refused like
         // any other input the corpus will not take.
@@ -310,7 +311,7 @@ fn exit(e: &Error) -> Exit {
 
 /// The advice for an error, where the CLI has any.
 fn hint(e: &Error) -> Option<String> {
-    if let Some(hint) = schema_hint(e) {
+    if let Some(hint) = schema_hint(e).or_else(|| interrupted_write_hint(e)) {
         return Some(hint);
     }
     Some(match e {
@@ -441,6 +442,22 @@ fn schema_hint(e: &Error) -> Option<String> {
              set `schema_version: 1` in {} (or delete that file), then run:  neb migrate\n\
              If the key was added by hand, remove it from {} instead.",
             config.display(),
+            path.display()
+        ),
+        _ => return None,
+    })
+}
+
+/// The advice for a write an earlier process left unfinished, which every
+/// writer refuses to finish by guessing: a person reads the record and
+/// removes it.
+fn interrupted_write_hint(e: &Error) -> Option<String> {
+    Some(match e {
+        Error::PendingWriteUnreadable { path, .. } => format!(
+            "It is what an interrupted `neb promote` leaves behind. Read it with  \
+             cat {0}\n\
+             check that the node it names and its inbox line say what you want, \
+             then remove it:  rm {0}",
             path.display()
         ),
         _ => return None,
