@@ -13,12 +13,18 @@
 //! drift. (The CLI serialises it with every absent field stated as `null`,
 //! where these types leave out what the corpus files store by omission.)
 //!
+//! One thing reaches past the files: git. Every git child goes through one
+//! supervised runner (`git`), and while one is live the runner holds
+//! SIGINT, SIGTERM and SIGHUP so that stopping nebula stops git first; the
+//! signal is delivered again, with its old disposition, once git is gone.
+//!
 //! Module map:
 //!
 //! - [`model`]  the file format: [`Node`], [`Status`], [`Edge`], [`Reference`], [`Note`]
 //! - [`store`]  [`Corpus`]: where it lives, loading, saving, the inbox
 //! - [`fs`]     the one durable write path: fsync, rename, owner-only modes
 //! - `lock`    [`CorpusLock`]: the advisory `.lock` every write holds, and reads never do
+//! - `git`     the one way git is run: own process group, deadline, bounded output
 //! - [`graph`]  [`Graph`] and the pure queries over it, `near` included
 //! - [`ops`]    the mutations, each enforcing its point-of-action invariants
 //! - [`check`]  the invariant checker, and where an `observatory` record resolves
@@ -42,6 +48,7 @@
 
 mod config;
 mod error;
+mod git;
 mod lock;
 
 pub mod check;
@@ -58,6 +65,10 @@ pub use config::{
     CommitSetting, OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, SCHEMA_VERSION,
 };
 pub use error::{Error, Result};
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub use git::GitDeadlineOverride;
+pub use git::{GIT_COMMIT_DEADLINE, GIT_DEADLINE, GIT_OUTPUT_CAP, GIT_TERMINATION_GRACE};
 pub use graph::{
     Band, Direction, EdgeRecord, Graph, GraphExport, HYPOTHESIS_DAYS, INBOX_DAYS, Impact, Listing,
     NEAR_DEFAULT, Near, Neighbour, NodeSummary, NodeView, ObservatoryLink, OpenItem, OpenReport,

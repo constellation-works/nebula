@@ -168,6 +168,19 @@ fn hint(e: &Error) -> Option<String> {
              Or skip the commit next time with --no-commit.",
             root.display()
         ),
+        Error::GitTimedOut { root, context, .. } if context == "commit" => format!(
+            "A git hook is the likely cause: `git commit` runs the repository's \
+             pre-commit and commit-msg hooks, and one did not finish. Run it by \
+             hand to see where it stops:\n  git -C {0} hook run pre-commit\n\n\
+             The write is in place. Skip the commit next time with --no-commit, \
+             or record it once the hook is fixed:\n  \
+             git -C {0} add nodes inbox config.yaml .gitignore && git -C {0} commit -m \"neb\"",
+            root.display()
+        ),
+        Error::GitTimedOut { root, context, .. } => format!(
+            "Run it by hand to see what it is waiting on:\n  git -C {} {context}",
+            root.display()
+        ),
         Error::CorpusIgnored(root) => format!(
             "Make the corpus its own repository, so the containing one's ignore \
              rules stop applying:\n  git -C {} init\n\nOr turn the setting off:  \
@@ -233,6 +246,31 @@ mod tests {
         let refused = refusal(&Error::SelfLoop);
         assert_eq!(refused.prose(), "a node cannot link to itself");
         assert_eq!(refused.hint, None);
+    }
+
+    #[test]
+    fn a_timed_out_git_blames_a_hook_only_when_it_was_committing() {
+        let timed_out = |context: &str| {
+            refusal(&Error::GitTimedOut {
+                root: PathBuf::from("/c"),
+                context: context.into(),
+                after: std::time::Duration::from_secs(120),
+            })
+        };
+        let commit = timed_out("commit");
+        assert_eq!(commit.code, "git_timed_out");
+        assert_eq!(
+            commit.message,
+            "git commit did not finish within 120s in /c and was stopped"
+        );
+        let hint = commit.hint.expect("a hint");
+        for named in ["hook", "git -C /c hook run pre-commit", "--no-commit"] {
+            assert!(hint.contains(named), "{named} in {hint}");
+        }
+        assert_eq!(
+            timed_out("log").hint.as_deref(),
+            Some("Run it by hand to see what it is waiting on:\n  git -C /c log")
+        );
     }
 
     #[test]

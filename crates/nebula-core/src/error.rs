@@ -342,8 +342,22 @@ pub enum Error {
         root: PathBuf,
         /// Which command.
         context: String,
-        /// What git said.
+        /// What git said, cut at [`crate::GIT_OUTPUT_CAP`] with the cut
+        /// marked.
         stderr: String,
+    },
+
+    /// A git command ran past its deadline, and it and everything it started
+    /// were stopped. A write it was recording is in place, uncommitted; the
+    /// corpus lock is free again.
+    #[error("git {context} did not finish within {after:?} in {} and was stopped", .root.display())]
+    GitTimedOut {
+        /// The corpus root the command ran in.
+        root: PathBuf,
+        /// Which command.
+        context: String,
+        /// The deadline it ran past.
+        after: std::time::Duration,
     },
 
     /// Anything else about the corpus itself: configuration, a malformed
@@ -468,6 +482,7 @@ impl Error {
         StagedElsewhere => "staged_elsewhere",
         CorpusIgnored => "corpus_ignored",
         Git => "git",
+        GitTimedOut => "git_timed_out",
         Corpus => "corpus",
         Io => "io",
         IoAt => "io_at",

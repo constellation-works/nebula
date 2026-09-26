@@ -2410,6 +2410,7 @@ dependencies = [
  "clap_complete",
  "ctor",
  "nebula-core",
+ "rustix",
  "serde",
  "serde_json",
  "shlex",
@@ -2423,6 +2424,8 @@ version = "0.2.0"
 dependencies = [
  "ctor",
  "fs4",
+ "libc",
+ "rustix",
  "serde",
  "serde_json",
  "serde_yaml_ng",

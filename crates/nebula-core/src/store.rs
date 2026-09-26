@@ -17,13 +17,13 @@
 use crate::config::{self, CommitSetting, Config, ObservatoryRoot};
 use crate::error::{Error, Result};
 use crate::fs::{append_private, create_private_dir_all, write_private_atomic};
+use crate::git::{self, GitOutput};
 use crate::lock::{CorpusLock, LOCK_FILE};
 use crate::model::{self, Doc};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Output};
 use time::{
     Date, OffsetDateTime, PrimitiveDateTime, UtcOffset,
     format_description::well_known::{Iso8601, Rfc3339},
@@ -491,7 +491,7 @@ impl Corpus {
             return Ok(None);
         }
         let root = &self.root;
-        if !inside_work_tree(root).map_err(|e| git_unavailable(root, &e))? {
+        if !inside_work_tree(root).map_err(|e| e.into_error(root, "rev-parse"))? {
             return Ok(None);
         }
         // The corpus is gitignored by the repository around it, which is
@@ -501,11 +501,7 @@ impl Corpus {
             Some(0) => return Err(Error::CorpusIgnored(root.clone())),
             Some(1) => {}
             _ => {
-                return Err(git_failed(
-                    root,
-                    "check-ignore",
-                    &String::from_utf8_lossy(&ignored.stderr),
-                ));
+                return Err(git_failed(root, "check-ignore", &ignored.stderr.text()));
             }
         }
         let prefix = git_ok(root, &["rev-parse", "--show-prefix"])?;
@@ -521,14 +517,10 @@ impl Corpus {
             &["diff", "--cached", "--name-only", "--no-renames", "-z"],
         )?;
         if !staged.status.success() {
-            return Err(git_failed(
-                root,
-                "diff",
-                &String::from_utf8_lossy(&staged.stderr),
-            ));
+            return Err(git_failed(root, "diff", &staged.stderr.text()));
         }
         let outside: Vec<String> = staged
-            .stdout
+            .stdout_whole(root, "diff")?
             .split(|byte| *byte == b'\0')
             .filter(|path| !path.is_empty())
             .map(|path| String::from_utf8_lossy(path).into_owned())
@@ -558,13 +550,7 @@ impl Corpus {
         match staged.status.code() {
             Some(0) => return Ok(None), // the write changed nothing git can see
             Some(1) => {}
-            _ => {
-                return Err(git_failed(
-                    root,
-                    "diff",
-                    &String::from_utf8_lossy(&staged.stderr),
-                ));
-            }
+            _ => return Err(git_failed(root, "diff", &staged.stderr.text())),
         }
         let message = match ids {
             [] => format!("neb {verb}"),
@@ -690,7 +676,8 @@ impl Corpus {
                 revision: at.to_string(),
             });
         }
-        let doc = model::parse(&String::from_utf8_lossy(&shown.stdout)).map_err(|e| match e {
+        let text = String::from_utf8_lossy(shown.stdout_whole(&self.root, "show")?);
+        let doc = model::parse(&text).map_err(|e| match e {
             // Same reporting as a read from disk: an id that came out of a
             // file is a fact about that file.
             Error::UnsafeId(id) => Error::IdMismatch {
@@ -711,7 +698,9 @@ impl Corpus {
     }
 
     fn require_git(&self) -> Result<()> {
-        if inside_work_tree(&self.root).map_err(|error| git_unavailable(&self.root, &error))? {
+        if inside_work_tree(&self.root)
+            .map_err(|error| error.into_error(&self.root, "rev-parse"))?
+        {
             Ok(())
         } else {
             Err(Error::NotGitWorkTree(self.root.clone()))
@@ -1175,29 +1164,23 @@ fn ensure_lock_ignored(root: &Path) -> Result<()> {
     write_private_atomic(&path, contents)
 }
 
-/// Run git at the corpus root. The process not starting at all is the one
-/// failure this reports; whether the command succeeded is the caller's to
-/// judge, since a non-zero exit is an answer for some of them.
-pub(crate) fn git(root: &Path, args: &[&str]) -> Result<Output> {
-    Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
-        .map_err(|e| git_unavailable(root, &e))
+/// Run git at the corpus root, through the one supervised runner. Git not
+/// starting, running out of time or being stopped is what this reports;
+/// whether the command succeeded is the caller's to judge, since a non-zero
+/// exit is an answer for some of them.
+pub(crate) fn git(root: &Path, args: &[&str]) -> Result<GitOutput> {
+    git::run_git(root, args).map_err(|e| e.into_error(root, args.first().copied().unwrap_or("git")))
 }
 
-/// Run git at the corpus root and require it to succeed; stdout as text.
+/// Run git at the corpus root and require it to succeed; all of stdout as
+/// text.
 fn git_ok(root: &Path, args: &[&str]) -> Result<String> {
+    let context = args.first().copied().unwrap_or("git");
     let out = git(root, args)?;
     if !out.status.success() {
-        return Err(git_failed(
-            root,
-            args.first().copied().unwrap_or("git"),
-            &String::from_utf8_lossy(&out.stderr),
-        ));
+        return Err(git_failed(root, context, &out.stderr.text()));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(String::from_utf8_lossy(out.stdout_whole(root, context)?).into_owned())
 }
 
 fn git_failed(root: &Path, context: &str, stderr: &str) -> Error {
@@ -1208,20 +1191,16 @@ fn git_failed(root: &Path, context: &str, stderr: &str) -> Error {
     }
 }
 
-fn git_unavailable(root: &Path, e: &std::io::Error) -> Error {
-    git_failed(root, "start", &e.to_string())
-}
-
-/// Whether the root is inside a git work tree. `Err` only when git itself
-/// could not be run, which a caller that merely wants to know may treat as
-/// "no".
-pub(crate) fn inside_work_tree(root: &Path) -> std::io::Result<bool> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .output()?;
-    Ok(out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true")
+/// Whether the root is inside a git work tree. `Err` only when git gave no
+/// answer: [`git::RunError::Start`] when it could not be run at all, which a
+/// caller that merely wants to know may treat as "no".
+pub(crate) fn inside_work_tree(root: &Path) -> std::result::Result<bool, git::RunError> {
+    let out = git::run_git(root, &["rev-parse", "--is-inside-work-tree"])?;
+    Ok(out.status.success()
+        && out
+            .stdout
+            .whole()
+            .is_some_and(|stdout| String::from_utf8_lossy(stdout).trim() == "true"))
 }
 
 /// Every capture still waiting to be promoted or dropped.

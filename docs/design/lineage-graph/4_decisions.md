@@ -347,8 +347,9 @@ This departs from the last clause of STD-03@2 §R15: nebula keeps no durable log
 of a child's output. The only children whose output it captures are `git`
 and the hooks git runs.
 Bounding their captured output and marking the cut is the git runner's job
-(ORB-13184). Once it lands, the untruncated text is discarded, not kept. That
-is enough here because every git call nebula makes can be repeated by hand to
+(`crates/nebula-core/src/git.rs`): it keeps `GIT_OUTPUT_CAP` (1 MiB) of each
+stream, ends a cut message in `… [truncated N bytes]`, refuses to parse cut
+output, and discards the rest rather than keeping it. That is enough here because every git call nebula makes can be repeated by hand to
 see the full text. A refused commit leaves the write on disk and staged, so
 `git -C <root> commit` runs the same hooks over the same index. The other
 calls are reads and queries, repeatable as they are.
@@ -495,3 +496,26 @@ rule with owner-only ACLs, and none are applied. The rename is still atomic
 there. nebula builds, tests and ships on Linux and macOS only, so no supported
 platform is affected. Reverses if a Windows build is ever supported; the
 helper is the one place an ACL would be set.
+
+## The editor stays in the terminal's process group, with no deadline
+
+This departs from STD-03@2 §R11, which puts every child in a process group of
+its own, and from STD-03@2 §R12 and §R22, which give every wait on a child a
+deadline ended by SIGTERM, a grace period and SIGKILL of the group. Every git
+child goes through the supervised runner in `crates/nebula-core/src/git.rs`,
+which meets them. The one other child is the `$VISUAL`/`$EDITOR` that
+`neb edit` opens on a node's body (`edit_body` in `crates/neb/src/cli.rs`), and
+it stays in `neb`'s own process group, the terminal's foreground group.
+
+An editor is a terminal program. In a group of its own it would be a
+background job, stopped by SIGTTIN the first time it read a key, and Ctrl-C,
+Ctrl-Z and window resizes would stop reaching it. It has no deadline because
+a person drives it, for as long as they like. `neb` does nothing else while it
+waits, and no git child is live meanwhile, so the runner's signal handling
+never involves it; a Ctrl-C reaches the editor and `neb` together, which is
+what a person pressing it means.
+
+What is given up: an editor that hangs holds `neb edit` until someone ends
+it. Scope: the editor child of `neb edit`. Reverses if nebula ever opens an
+editor with no person at the terminal, such as for an agent or a routine,
+which would then need a group and a deadline like git.
