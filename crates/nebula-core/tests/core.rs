@@ -1504,6 +1504,81 @@ fn inbox_writes_refuse_a_symlinked_directory_without_changing_its_target() {
     assert!(corpus.load_all().unwrap().is_empty());
 }
 
+/// An entry's file is the caller's to set, and settling writes it. Only
+/// `<root>/inbox/<month>.md` is taken: a path that merely starts with the
+/// inbox can climb out of it with `..`, and the entry's line copied there
+/// would be struck in a file that is not the inbox's (STD-05 §R6).
+#[test]
+fn settling_refuses_an_entry_file_that_leaves_the_inbox_by_name() {
+    let (dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "the live thought").unwrap();
+    let content = std::fs::read_to_string(&entry.file).unwrap();
+    let root = dir.path().join("corpus");
+    let outside = dir.path().join("elsewhere");
+    std::fs::create_dir(&outside).unwrap();
+    let month = entry.file.file_name().unwrap();
+    std::fs::write(root.join(month), &content).unwrap();
+    std::fs::write(outside.join(month), &content).unwrap();
+
+    for file in [
+        root.join("inbox").join("..").join(month),
+        root.join("inbox")
+            .join("..")
+            .join("..")
+            .join("elsewhere")
+            .join(month),
+        outside.join(month),
+    ] {
+        let mut foreign = entry.clone();
+        foreign.file = file.clone();
+        let error = corpus.settle_inbox(&foreign, "dropped").unwrap_err();
+        assert!(
+            matches!(&error, Error::InboxEntryForeign { file: named, .. } if *named == file),
+            "{error}"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(root.join(month)).unwrap(), content);
+    assert_eq!(
+        std::fs::read_to_string(outside.join(month)).unwrap(),
+        content
+    );
+    assert_eq!(std::fs::read_to_string(&entry.file).unwrap(), content);
+    assert_eq!(corpus.inbox().unwrap().0.len(), 1);
+}
+
+/// `inbox/` is judged by `lstat`, and so is the month file, but nothing
+/// between them is: an entry whose file sits in a symlinked directory under
+/// the inbox is refused by its shape rather than followed out of the corpus.
+#[cfg(unix)]
+#[test]
+fn settling_refuses_an_entry_file_below_a_symlinked_inbox_subdirectory() {
+    let (dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "the live thought").unwrap();
+    let content = std::fs::read_to_string(&entry.file).unwrap();
+    let outside = dir.path().join("outside-inbox");
+    std::fs::create_dir(&outside).unwrap();
+    let month = entry.file.file_name().unwrap();
+    std::fs::write(outside.join(month), &content).unwrap();
+    let planted = entry.file.parent().unwrap().join("sub");
+    std::os::unix::fs::symlink(&outside, &planted).unwrap();
+
+    let mut foreign = entry.clone();
+    foreign.file = planted.join(month);
+    let error = corpus.settle_inbox(&foreign, "dropped").unwrap_err();
+
+    assert!(
+        matches!(&error, Error::InboxEntryForeign { file, .. } if *file == foreign.file),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(outside.join(month)).unwrap(),
+        content
+    );
+    assert_eq!(std::fs::read_to_string(&entry.file).unwrap(), content);
+    corpus.settle_inbox(&entry, "dropped").unwrap();
+    assert!(corpus.inbox().unwrap().0.is_empty());
+}
+
 #[cfg(unix)]
 #[test]
 fn a_config_write_cannot_reach_a_file_outside_the_corpus() {
