@@ -485,6 +485,13 @@ pub fn migration(report: &MigrationReport) -> String {
             nebula_core::SCHEMA_VERSION
         );
     }
+    if let Some(id) = &report.minted_corpus_id {
+        let _ = writeln!(
+            out,
+            "{} minted corpus_id {id} (there was none to keep)",
+            bold("config.yaml")
+        );
+    }
     out
 }
 

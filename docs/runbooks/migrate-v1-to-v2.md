@@ -5,7 +5,7 @@ tags: [operations, migration, corpus]
 paths: ["crates/nebula-core/src/migrate.rs", "crates/nebula-core/src/config.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
-last_validated: 2026-09-12
+last_validated: 2026-09-26
 ---
 
 # Migrate a v1 Corpus to v2
@@ -62,10 +62,61 @@ sequence cannot leave the earlier ones rewritten.
 Fix the node by hand — `neb check` names the same problem — then run
 `neb migrate` again. Nothing on disk changed, so there is nothing to undo.
 
+## A corpus stamped v2 over v1 nodes
+
+An older `neb` wrote a fresh `config.yaml` whenever it opened a corpus that had
+none, and stamped it `schema_version: 2`. A v0.1 corpus from before the file
+existed could come out of that declaring v2 over nodes still in the v1 shape.
+Nothing can tell that apart from a hand edit for certain, so `migrate` still
+refuses it, but when the unreadable node reads as v1 and carries a key only v1
+had (`domain`, `evidence`, `tasks` or `graduated_to`), `migrate` and every
+verb that reads the nodes say so (`v1_node_under_current_schema`):
+
+```
+error: /corpus/nodes/an-idea.md is a v1 node (it carries `domain`), but
+/corpus/config.yaml declares schema_version 2
+```
+
+If the corpus was never migrated, repair it by hand and migrate:
+
+1. In `<root>/config.yaml`, set `schema_version: 1`. This keeps the
+   `corpus_id` and the `commit` setting. Deleting the file works too, but
+   `migrate` then mints a new `corpus_id` and leaves `commit` off.
+2. Run `neb migrate`.
+
+If the key was added by hand to a corpus that really is v2, remove it from the
+node instead.
+
+## A corpus with no `config.yaml`
+
+Every verb except `migrate` and `init` refuses a corpus root whose `nodes/` has
+no `config.yaml` beside it (`missing_config`), and none of them writes one:
+which schema the files follow, the corpus's id and its `commit` setting are all
+unknown. `neb migrate` reads the absence as a corpus from before the file
+existed, so it converts the nodes as v1, writes the config, and reports that it
+minted a `corpus_id`:
+
+```
+config.yaml schema_version -> 2
+config.yaml minted corpus_id neb-1a2b3c (there was none to keep)
+```
+
+If the file was deleted from a corpus that had one, restore it instead, for
+example with `git -C "$NEBULA_ROOT" checkout -- config.yaml`: that keeps the
+corpus's own id and settings. A `config.yaml` that is there but cannot be read,
+such as a symlink to a missing file, is reported as that path's I/O error, not
+as a missing config.
+
 ## What changes
 
-Per node, `neb migrate` reads the old, lenient shape and writes the new one
-back, printing a line per node changed and a note per thing it did:
+Per node, `neb migrate` reads the old, lenient shape and converts it to the
+new one, printing a line per node changed and a note per thing it did. Every
+node is converted in memory before any file is written, so a node that cannot
+be converted (`status \`bogus\` is not a v1 status`, naming its file) refuses
+the whole run with nothing rewritten. Fix that node and run it again. Then the
+nodes are written one by one, and `config.yaml` is written last: until it
+says `schema_version: 2`, every other verb refuses the corpus, so no reader
+treats a half-written corpus as current.
 
 - `domain: X` is appended to `tags` (normalised to kebab-case) if not already
   present, and the field is dropped.
@@ -108,7 +159,10 @@ already at schema 2; nothing changed
 ```
 
 A node already in v2 form renders back to exactly the bytes on disk, so a
-second run rewrites nothing and no node's `updated` timestamp moves.
+second run rewrites nothing and no node's `updated` timestamp moves. The same
+property makes a run that stopped part way safe to repeat: the config still
+declares v1, the nodes already written convert to themselves, and the rerun
+finishes the rest.
 
 ## Verify
 

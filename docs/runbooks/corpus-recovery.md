@@ -5,7 +5,7 @@ tags: [operations, recovery, debugging]
 paths: ["crates/nebula-core/src/model.rs", "crates/nebula-core/src/check.rs", "crates/nebula-core/src/store.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
-last_validated: 2026-09-21
+last_validated: 2026-09-26
 ---
 
 # Recover a Corpus
@@ -31,9 +31,16 @@ Common causes, all from hand-editing:
 | `missing YAML frontmatter` | the leading `---` line was lost | restore it |
 | `frontmatter is not terminated` | the closing `---` was lost | restore it |
 
-If the config names `schema_version: 1` (or has no `schema_version` at all),
-every node fails to load and the error names `neb migrate` — see
-[migrate-v1-to-v2.md](migrate-v1-to-v2.md).
+If `config.yaml` names `schema_version: 1`, or exists with no
+`schema_version` key, the corpus is refused before any node is read
+(`schema_mismatch`), and the hint names `neb migrate`. If there is no
+`config.yaml` at all, every verb but `migrate` and `init` refuses with
+`missing_config` and writes nothing: `neb migrate` brings forward a corpus from
+before the file existed, and a file deleted by mistake is better restored from
+git, which keeps the corpus's id and `commit` setting. A node in the v1 shape
+under a config that says `schema_version: 2` is `v1_node_under_current_schema`,
+and the repair is to set `schema_version: 1` in `config.yaml` and run
+`neb migrate`. All three are in [migrate-v1-to-v2.md](migrate-v1-to-v2.md).
 
 Prefer the CLI over hand-editing. Every command that mutates a node writes valid
 frontmatter by construction.

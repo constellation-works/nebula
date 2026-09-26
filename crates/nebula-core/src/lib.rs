@@ -85,6 +85,10 @@ pub use ops::{
 pub use store::{Committed, Corpus, HistoryEntry, Inbox, InboxEntry, Settlement};
 pub use triage::Triage;
 
+// Unit tests for the top-level modules, one file each (STD-02 §R19).
+#[cfg(test)]
+mod tests;
+
 /// Writes `apps/desktop/src/types/*.ts` from the types above.
 ///
 /// The desktop is the consumer most likely to drift silently, because nothing

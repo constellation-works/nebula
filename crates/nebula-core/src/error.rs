@@ -90,6 +90,22 @@ pub enum Error {
         setting: Option<PathBuf>,
     },
 
+    /// A corpus root with no `config.yaml`, so which schema its files follow,
+    /// its id and its settings are all unknown.
+    ///
+    /// Every verb but `migrate` refuses it rather than assume anything:
+    /// synthesizing a config would stamp the current schema over files that
+    /// may predate it, mint an id the corpus never had, and read a deleted
+    /// `commit: true` as off. `migrate` reads the absence as a corpus from
+    /// before the file existed, and `init` completes a root that holds no
+    /// content yet. Absent means absent: a `config.yaml` that exists but
+    /// cannot be followed or read is [`Error::IoAt`] instead.
+    #[error("{} does not exist, so the corpus's schema and settings are unknown; nothing was read or written", .path.display())]
+    MissingConfig {
+        /// Where the config was expected.
+        path: PathBuf,
+    },
+
     /// The corpus on disk follows a schema this build does not read.
     #[error("{} is schema_version {found}, and this build understands {expected}", .path.display())]
     SchemaMismatch {
@@ -121,6 +137,32 @@ pub enum Error {
         version: u32,
         /// Why it would not parse, as the current model complained.
         source: Box<Error>,
+    },
+
+    /// A corpus whose `config.yaml` declares this build's schema holds a node
+    /// in the v1 shape: it fails the current model, reads under the v1 one,
+    /// and carries a key only v1 had.
+    ///
+    /// The likeliest cause is an older `neb` that stamped a fresh
+    /// `config.yaml` over a corpus written before the file existed. That
+    /// cannot be told apart for certain from a hand edit, so nothing guesses
+    /// and nothing is rewritten; the refusal names the file and the keys, so
+    /// whoever knows which it was can repair it.
+    #[error(
+        "{} is a v1 node (it carries {}), but {} declares schema_version {version}",
+        .path.display(),
+        .keys.iter().map(|key| format!("`{key}`")).collect::<Vec<_>>().join(", "),
+        .config.display()
+    )]
+    V1NodeUnderCurrentSchema {
+        /// The node file in the v1 shape.
+        path: PathBuf,
+        /// The `config.yaml` that declares the current schema.
+        config: PathBuf,
+        /// The schema it declares, which is this build's own.
+        version: u32,
+        /// The v1-only keys the node carries.
+        keys: Vec<String>,
     },
 
     /// The edge would make a node its own ancestor. Genealogy is a DAG.
@@ -450,8 +492,10 @@ impl Error {
         EmptyRoot => "empty_root",
         RootConfigConflict => "root_config_conflict",
         RelativeObservatoryRoot => "relative_observatory_root",
+        MissingConfig => "missing_config",
         SchemaMismatch => "schema_mismatch",
         CurrentSchemaUnreadable => "current_schema_unreadable",
+        V1NodeUnderCurrentSchema => "v1_node_under_current_schema",
         Cycle => "cycle",
         SelfLoop => "self_loop",
         DuplicateEdge => "duplicate_edge",

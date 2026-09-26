@@ -140,6 +140,9 @@ pub fn refusal_about(e: &Error, node: &str) -> Refusal {
 
 /// The advice for an error, where the CLI has any.
 fn hint(e: &Error) -> Option<String> {
+    if let Some(hint) = schema_hint(e) {
+        return Some(hint);
+    }
     Some(match e {
         Error::NoSuchNode(_) => "List what exists with:  neb list".to_owned(),
         Error::NoSuchInboxEntry(_) => "See them with:  neb inbox".to_owned(),
@@ -149,12 +152,6 @@ fn hint(e: &Error) -> Option<String> {
         } => format!("See the node with:  neb show {node}"),
         Error::InboxEntrySettled { .. } => "See what is still waiting with:  neb inbox".to_owned(),
         Error::NoCorpus(root) => format!("Create one with:  neb init {}", root.display()),
-        Error::SchemaMismatch {
-            found, expected, ..
-        } if found > expected => {
-            "This corpus was written by a newer nebula. Upgrade this build.".to_owned()
-        }
-        Error::SchemaMismatch { .. } => "Bring the corpus forward with:  neb migrate".to_owned(),
         Error::Locked { .. } => {
             "Another `neb`, an agent session, or the desktop app is mid-write. \
              Nothing changed, so run it again in a moment.\n\n\
@@ -222,6 +219,39 @@ fn hint(e: &Error) -> Option<String> {
              neb promote <entry> [--title <title>] [--parent <id>]\n  \
              neb drop <entry>"
             .to_owned(),
+        _ => return None,
+    })
+}
+
+/// The advice for a corpus this build cannot read as it stands: its config
+/// is missing or at another schema, or a node is not at the schema the
+/// config declares. Each names `neb migrate` or the repair that precedes it.
+fn schema_hint(e: &Error) -> Option<String> {
+    Some(match e {
+        Error::SchemaMismatch {
+            found, expected, ..
+        } if found > expected => {
+            "This corpus was written by a newer nebula. Upgrade this build.".to_owned()
+        }
+        Error::SchemaMismatch { .. } => "Bring the corpus forward with:  neb migrate".to_owned(),
+        Error::MissingConfig { path } => format!(
+            "If the corpus predates config.yaml, bring it forward with:  neb migrate\n\
+             If the file was deleted, restore it instead, which keeps the corpus's \
+             id and settings:  git -C {} checkout -- config.yaml",
+            path.parent().unwrap_or(path).display()
+        ),
+        Error::CurrentSchemaUnreadable { .. } => {
+            "Fix the node by hand (`neb check` names the same problem), then run \
+             `neb migrate` again."
+                .to_owned()
+        }
+        Error::V1NodeUnderCurrentSchema { path, config, .. } => format!(
+            "If this corpus was never migrated, an older neb stamped its config. Repair it:\n  \
+             set `schema_version: 1` in {} (or delete that file), then run:  neb migrate\n\
+             If the key was added by hand, remove it from {} instead.",
+            config.display(),
+            path.display()
+        ),
         _ => return None,
     })
 }

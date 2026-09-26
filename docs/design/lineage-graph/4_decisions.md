@@ -323,19 +323,22 @@ STD-03@2 §R23 that applies each migration in one transaction with its ledger
 record. The ledger is `config.yaml`'s `schema_version`, and the equivalent is:
 
 - Convert every node in memory before writing any, so a node that cannot be
-  converted refuses the run with nothing written. This step is ORB-13175's.
-  Until it lands, a bad v1 node late in the corpus leaves the earlier nodes
-  rewritten.
+  converted refuses the run with nothing written.
 - Write each node through the corpus's one atomic-write helper.
 - Write `config.yaml` last. Until it is rewritten, every verb except `migrate`
-  refuses the corpus with `Error::SchemaMismatch`, so no reader treats a
-  half-converted corpus as current.
+  refuses the corpus, with `Error::SchemaMismatch` or, for a corpus from
+  before the file existed, `Error::MissingConfig`, so no reader treats a
+  half-converted corpus as current. No read ever writes the file.
 - Re-running is safe and idempotent. A node already in v2 form renders back to
   the bytes on disk and is left alone, so a second run finishes an interrupted
   one without bumping `updated`.
 
-ORB-13175 also adds the ordered, append-only registry and the fresh-versus-
-migrated parity that the rest of the rule asks for. What is given up is
+The steps come from `migrate::MIGRATIONS`, an ordered, append-only registry
+of `(from, to, step)` entries applied from the declared version up, and a unit
+test holds the fresh-versus-migrated config parity that the rest of the rule
+asks for. Because a rerun re-applies every step from the old ledger version,
+including to nodes the interrupted run already wrote, each step must leave a
+node already at or past its target unchanged. What is given up is
 rollback: a crash mid-write leaves some nodes converted under an old ledger,
 and recovery runs forward rather than back. Under git, the clean-tree refusal
 means the pre-migration state is also one `git checkout` away. Reverses if the

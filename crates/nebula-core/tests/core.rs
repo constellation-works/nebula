@@ -2764,28 +2764,196 @@ fn set_root_replaces_a_symlinked_setting_instead_of_writing_through() {
     );
 }
 
-#[test]
-fn opening_a_configless_corpus_persists_its_synthesized_id() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("corpus");
+/// Every entry under `root`, not following symlinks: a file's bytes, a
+/// directory as `dir`, a symlink as `-> target`. What a test compares before
+/// and after a call that must write nothing.
+fn every_file(root: &std::path::Path) -> std::collections::BTreeMap<std::path::PathBuf, Vec<u8>> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let kind = std::fs::symlink_metadata(&path).unwrap().file_type();
+            let content = if kind.is_symlink() {
+                format!("-> {}", std::fs::read_link(&path).unwrap().display()).into_bytes()
+            } else if kind.is_dir() {
+                pending.push(path.clone());
+                b"dir".to_vec()
+            } else {
+                std::fs::read(&path).unwrap()
+            };
+            out.insert(path, content);
+        }
+    }
+    out
+}
+
+/// A current-schema node file, as `neb new` would write it.
+const V2_NODE: &str = "---\nid: an-idea\ntitle: An idea\nstatus: seed\ncreated: 2026-09-01\nupdated: 2026-09-01\n---\n\nThe idea.\n";
+
+/// A corpus written by v0.1, before `config.yaml` existed: one node in the
+/// v1 shape and nothing else.
+const V1_NODE: &str = "---\nid: first\ntitle: First\ndomain: Physics\nstatus: testing\ncreated: 2026-08-01\nupdated: 2026-08-02\n---\n\nThe first.\n";
+
+/// A root with `nodes/` holding `node` as `<id>.md`, and no `config.yaml`.
+fn configless(dir: &std::path::Path, id: &str, node: &str) -> std::path::PathBuf {
+    let root = dir.join("corpus");
     std::fs::create_dir_all(root.join("nodes")).unwrap();
+    std::fs::write(root.join("nodes").join(format!("{id}.md")), node).unwrap();
+    root
+}
+
+/// A missing `config.yaml` is refused, not synthesized: opening is a read,
+/// and a read that wrote a fresh config would stamp this build's schema over
+/// files that may predate it and mint an id the corpus never had.
+#[test]
+fn open_never_writes_a_missing_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = configless(dir.path(), "an-idea", V2_NODE);
+    let before = every_file(&root);
+
+    let refused = Corpus::open(Some(root.clone()));
+    assert!(
+        matches!(&refused, Err(Error::MissingConfig { path }) if *path == root.join("config.yaml")),
+        "{refused:?}"
+    );
+    assert_eq!(before, every_file(&root));
+}
+
+/// The corpora this refusal exists for are still one command from working:
+/// `migrate` reads a missing config as a corpus from before the file.
+#[test]
+fn v1_corpus_without_config_still_migrates() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = configless(dir.path(), "first", V1_NODE);
+    let before = every_file(&root);
+
+    assert!(matches!(
+        Corpus::open(Some(root.clone())),
+        Err(Error::MissingConfig { .. })
+    ));
+    assert_eq!(before, every_file(&root), "a refused open wrote something");
+
+    let report = nebula_core::migrate::run(Some(root.clone())).unwrap();
+    assert!(report.config_rewritten);
+    assert!(report.minted_corpus_id.is_some(), "{report:?}");
+    assert_eq!(
+        report
+            .rewritten
+            .iter()
+            .map(|n| n.id.as_str())
+            .collect::<Vec<_>>(),
+        ["first"]
+    );
+    let node = std::fs::read_to_string(root.join("nodes").join("first.md")).unwrap();
+    assert!(node.contains("tags:\n- physics\n"), "{node}");
+    assert!(node.contains("status: hypothesis"), "{node}");
+
+    let corpus = Corpus::open(Some(root)).unwrap();
+    assert_eq!(corpus.load_all().unwrap().len(), 1);
+}
+
+/// Absent means `NotFound`. A `config.yaml` that is there but cannot be
+/// followed is a different fault, named as the path it is, and the symlink is
+/// left for whoever made it.
+#[cfg(unix)]
+#[test]
+fn a_dangling_config_symlink_is_not_a_missing_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = configless(dir.path(), "an-idea", V2_NODE);
     let config = root.join("config.yaml");
+    std::os::unix::fs::symlink(dir.path().join("gone.yaml"), &config).unwrap();
+
+    let refused = Corpus::open(Some(root.clone())).expect_err("a dangling config is refused");
+    assert!(
+        !matches!(refused, Error::MissingConfig { .. }),
+        "{refused:?}"
+    );
+    assert!(refused.to_string().contains("config.yaml"), "{refused}");
+    assert!(
+        std::fs::symlink_metadata(&config)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(!dir.path().join("gone.yaml").exists());
+}
+
+/// `init` finishes a root it was interrupted in, where nothing has been
+/// written yet, and refuses one that already holds content: minting a
+/// config there is the same fabrication `open` no longer does.
+#[test]
+fn init_completes_an_interrupted_init_but_refuses_a_configless_corpus() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let interrupted = dir.path().join("interrupted");
+    std::fs::create_dir_all(interrupted.join("nodes")).unwrap();
+    Corpus::init(&interrupted).unwrap();
+    assert!(interrupted.join("inbox").is_dir());
+    let config = std::fs::read_to_string(interrupted.join("config.yaml")).unwrap();
+    assert!(config.contains("schema_version: 2"), "{config}");
+    assert!(config.contains("corpus_id: neb-"), "{config}");
+    Corpus::open(Some(interrupted)).unwrap();
+
+    let with_content = configless(&dir.path().join("content"), "an-idea", V2_NODE);
+    let before = every_file(&with_content);
+    let refused = Corpus::init(&with_content);
+    assert!(
+        matches!(&refused, Err(Error::MissingConfig { path }) if *path == with_content.join("config.yaml")),
+        "{refused:?}"
+    );
+    assert_eq!(
+        before,
+        every_file(&with_content),
+        "a refused init created something"
+    );
+
+    // Captures are content too: a corpus that has only ever been captured
+    // into has an identity of its own to lose.
+    let captured = dir.path().join("captured");
+    std::fs::create_dir_all(captured.join("nodes")).unwrap();
+    std::fs::create_dir_all(captured.join("inbox")).unwrap();
+    std::fs::write(
+        captured.join("inbox").join("2026-09.md"),
+        "- [0a1b] 2026-09-01T10:00:00Z a thought\n",
+    )
+    .unwrap();
+    let before = every_file(&captured);
+    assert!(matches!(
+        Corpus::init(&captured),
+        Err(Error::MissingConfig { .. })
+    ));
+    assert_eq!(before, every_file(&captured));
+}
+
+/// A writer re-reads `config.yaml` under its lock. When it is gone, that is
+/// a refusal: bringing it back with the id in hand would still turn a
+/// `commit: true` it no longer holds into off.
+#[test]
+fn a_config_deleted_under_a_writer_is_refused_not_recreated() {
+    let (dir, mut corpus) = corpus();
+    let root = dir.path().join("corpus");
+    let config = root.join("config.yaml");
+    ops::set_commit(&mut corpus, true).unwrap();
+    let mut corpus = Corpus::open(Some(root)).unwrap();
+    assert!(corpus.commit_setting().enabled);
+    std::fs::remove_file(&config).unwrap();
+
+    let committed = ops::commit(&corpus, "capture", &["x"]);
+    assert!(
+        matches!(&committed, Err(Error::MissingConfig { path }) if *path == config),
+        "{committed:?}"
+    );
     assert!(!config.exists());
 
-    Corpus::open(Some(root.clone())).unwrap();
-    let first = std::fs::read_to_string(&config).unwrap();
-    let first_id = first
-        .lines()
-        .find_map(|line| line.strip_prefix("corpus_id: "))
-        .expect("persisted corpus_id");
-
-    Corpus::open(Some(root)).unwrap();
-    let second = std::fs::read_to_string(config).unwrap();
-    let second_id = second
-        .lines()
-        .find_map(|line| line.strip_prefix("corpus_id: "))
-        .expect("reloaded corpus_id");
-    assert_eq!(second_id, first_id);
+    for enabled in [true, false] {
+        let set = ops::set_commit(&mut corpus, enabled);
+        assert!(
+            matches!(&set, Err(Error::MissingConfig { path }) if *path == config),
+            "{set:?}"
+        );
+        assert!(!config.exists());
+    }
 }
 
 // ------------------------------------------------------------------ commit --

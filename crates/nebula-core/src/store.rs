@@ -14,7 +14,7 @@
 //! never stages a path outside the root, and never undoes a write because the
 //! commit failed.
 
-use crate::config::{self, CommitSetting, Config, ObservatoryRoot};
+use crate::config::{self, CommitSetting, Config, Declared, ObservatoryRoot};
 use crate::error::{Error, Result};
 use crate::fs::{append_private, create_private_dir_all, write_private_atomic};
 use crate::git::{self, GitOutput};
@@ -287,37 +287,39 @@ impl Corpus {
         if !root.join("nodes").is_dir() {
             return Err(Error::NoCorpus(root));
         }
-        // A corpus at an older schema refuses to open until `neb migrate`
-        // has brought it forward.
-        let config = Config::load(&root, || corpus_id(&root))?;
+        // A read, so it never writes: a corpus at another schema, or with no
+        // config at all, refuses to open until `neb migrate` has brought it
+        // forward (STD-03 §R6).
+        let config = Config::load(&root)?;
         Ok(Self { root, config })
     }
 
     /// Create an empty corpus, or open an existing one without resetting it.
+    ///
+    /// Completes a root an earlier init was interrupted in: one with no
+    /// config yet and no content, or with a config and some directories
+    /// missing. A root that holds nodes or captures but no `config.yaml` is
+    /// refused with [`Error::MissingConfig`] and left as it is, since minting
+    /// a config there would give an existing corpus an id and settings it
+    /// never had.
+    ///
+    /// Takes the corpus lock before it creates anything inside the root, so
+    /// no two initializers write `config.yaml` at once and every path that
+    /// creates one holds the lock (STD-03 §R6).
     pub fn init(root: &Path) -> Result<Self> {
         refuse_nodes_symlink(root)?;
-        // Re-running init on a corpus is an open, not a reset. In particular,
-        // opening first validates an existing config before any directory or
-        // file can be created. The one setup repair it may make afterwards is
-        // adding the runtime lock to `.gitignore`.
-        if root.join("nodes").is_dir() {
-            let corpus = Self::open(Some(root.to_path_buf()))?;
-            ensure_lock_ignored(root)?;
-            return Ok(corpus);
-        }
-
-        // A config can survive an interrupted or partial initialization. Read
-        // it before creating anything so malformed and incompatible files are
-        // refused without mutation, while a valid identity and settings are
-        // preserved as the missing directories are completed.
-        let existing_config = root.join(config::FILE).exists();
-        let config = existing_config
-            .then(|| Config::load(root, || corpus_id(root)))
-            .transpose()?;
+        // Decided before anything is created, not even the lock file, so a
+        // refusal leaves the root exactly as it was.
+        Self::config_to_keep(root)?;
         // Each directory is named when it cannot be made: `capture` creates
         // corpora unasked, so a bare "Permission denied" would leave the
         // reader guessing which root it was aimed at.
-        for dir in [root.to_path_buf(), root.join("nodes"), root.join("inbox")] {
+        create_private_dir_all(root)?;
+        let _lock = CorpusLock::acquire(root)?;
+        // Decided again under the lock: another initializer may have written
+        // the config in between, and its identity is the one to keep.
+        let config = Self::config_to_keep(root)?;
+        for dir in [root.join("nodes"), root.join("inbox")] {
             create_private_dir_all(&dir)?;
         }
         let config = if let Some(config) = config {
@@ -327,6 +329,7 @@ impl Corpus {
             config.save(root)?;
             config
         };
+        // The one setup repair re-running init makes on an existing corpus.
         ensure_lock_ignored(root)?;
         Ok(Self {
             root: root.to_path_buf(),
@@ -334,13 +337,32 @@ impl Corpus {
         })
     }
 
+    /// The config `init` keeps, or `None` when it is to write a fresh one.
+    ///
+    /// A config that is there is validated before anything is created, so a
+    /// malformed or incompatible one is refused without mutation, while a
+    /// valid identity and settings survive an interrupted init.
+    fn config_to_keep(root: &Path) -> Result<Option<Config>> {
+        match config::declared(root)? {
+            Declared::Current { config, .. } => Ok(Some(config)),
+            Declared::Missing if holds_content(root)? => Err(Error::MissingConfig {
+                path: root.join(config::FILE),
+            }),
+            Declared::Missing => Ok(None),
+            Declared::Older { version, .. } | Declared::Newer { version } => {
+                Err(config::schema_mismatch(root, version))
+            }
+        }
+    }
+
     /// Open the corpus, creating it when there is none, and say whether this
     /// call created it.
     ///
     /// Capture is the reason this exists: being told to run a setup command is
     /// precisely the friction that loses the thought. A corpus that exists but
-    /// is at the wrong schema still refuses, because rewriting it blind would
-    /// be worse than the friction.
+    /// is at the wrong schema, or has lost its config, still refuses, because
+    /// rewriting it blind would be worse than the friction. The create is
+    /// [`Self::init`], so it runs under the corpus lock.
     ///
     /// The flag is `true` when there was no corpus at the root, so the caller
     /// can say where it made one: a mistyped root would otherwise split the
@@ -389,12 +411,12 @@ impl Corpus {
     /// file from the stale copy would erase that change, and deciding from it
     /// would decide on a configuration nobody holds any more.
     ///
-    /// The corpus id in hand is the fallback rather than a freshly synthesized
-    /// one, so a config deleted underneath a live corpus comes back with the
-    /// identity it had instead of a new one.
+    /// Never writes. A config deleted underneath a live corpus is
+    /// [`Error::MissingConfig`], not a file brought back from the snapshot:
+    /// the snapshot is exactly what may be stale, and a writer that put it
+    /// back would decide on settings nobody holds.
     fn current_config(&self) -> Result<Config> {
-        let id = self.config.corpus_id.clone();
-        Config::load(&self.root, || id)
+        Config::load(&self.root)
     }
 
     /// Re-read `config.yaml`, so the rewrite that follows starts from the
@@ -590,7 +612,7 @@ impl Corpus {
         if !path.exists() {
             return Err(Error::NoSuchNode(id.to_string()));
         }
-        let doc = model::read(&path)?;
+        let doc = self.read_node(&path)?;
         self.require_file_agrees(&path, &doc)?;
         Ok(doc)
     }
@@ -746,11 +768,30 @@ impl Corpus {
             .collect();
         paths.sort();
         for p in paths {
-            let doc = model::read(&p)?;
+            let doc = self.read_node(&p)?;
             self.require_file_agrees(&p, &doc)?;
             out.push(doc);
         }
         Ok(out)
+    }
+
+    /// Read one node file with the current model.
+    ///
+    /// A node that will not parse and reads as a v1 node is named as one
+    /// ([`Error::V1NodeUnderCurrentSchema`]): most likely an older `neb`
+    /// stamped this corpus's config over files from before it, and the
+    /// parser's unknown-field complaint alone does not lead anyone to the
+    /// repair.
+    fn read_node(&self, path: &Path) -> Result<Doc> {
+        model::read(path).map_err(|error| match error {
+            Error::Yaml { .. } => crate::migrate::v1_node_under_current_schema(
+                &self.root,
+                path,
+                self.config.schema_version,
+            )
+            .unwrap_or(error),
+            other => other,
+        })
     }
 
     /// Refuse a node file whose name is not the id it stores.
@@ -1003,6 +1044,33 @@ pub fn capture_line(text: &str) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Whether `root` holds anything a corpus is made of: a node file under
+/// `nodes/` or a month file under `inbox/`. What tells a root an init was
+/// interrupted in, which is still empty, from a corpus that has lost its
+/// config.
+fn holds_content(root: &Path) -> Result<bool> {
+    for (dir, is_content) in [
+        ("nodes", is_node_file_name as fn(&Path) -> bool),
+        ("inbox", |path: &Path| {
+            path.file_name().is_some_and(is_inbox_month_filename)
+        }),
+    ] {
+        let dir = root.join(dir);
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(Error::io_at("reading", &dir, error)),
+        };
+        for entry in entries {
+            let entry = entry.map_err(|error| Error::io_at("reading", &dir, error))?;
+            if is_content(&entry.path()) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Whether `dir` is a corpus root: [`Corpus::discover`]'s marker.

@@ -146,34 +146,21 @@ impl Config {
         self.observatory_root.as_deref()
     }
 
-    /// Read the config, or synthesize one for a corpus that predates it.
+    /// Read the config of the corpus at `root`, at this build's schema.
     ///
-    /// A missing file is not an error: corpora created before the config
-    /// existed must keep loading. A file at an older schema is, and the
-    /// error says which schema was found.
-    pub(crate) fn load(root: &Path, fallback_id: impl FnOnce() -> String) -> Result<Self> {
-        let path = root.join(FILE);
-        if !path.exists() {
-            let config = Self::fresh(fallback_id());
-            config.save(root)?;
-            return Ok(config);
+    /// Never writes. A missing file is [`Error::MissingConfig`] and a file
+    /// at another schema is [`Error::SchemaMismatch`]; what either means is
+    /// [`declared`]'s to say, and only `migrate` and `init` act on it.
+    pub(crate) fn load(root: &Path) -> Result<Self> {
+        match declared(root)? {
+            Declared::Current { config, .. } => Ok(config),
+            Declared::Missing => Err(Error::MissingConfig {
+                path: root.join(FILE),
+            }),
+            Declared::Older { version, .. } | Declared::Newer { version } => {
+                Err(schema_mismatch(root, version))
+            }
         }
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|error| Error::io_at("reading", &path, error))?;
-        // Probe the version before the strict parse, so a v1 file with its
-        // extra keys gets the migrate hint rather than an unknown-field error.
-        let version = schema_version_of(&raw)
-            .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))?
-            .unwrap_or(1);
-        if version != SCHEMA_VERSION {
-            return Err(Error::SchemaMismatch {
-                path,
-                found: version,
-                expected: SCHEMA_VERSION,
-            });
-        }
-        serde_yaml_ng::from_str(&raw)
-            .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))
     }
 
     /// Write the config atomically.
@@ -190,6 +177,79 @@ impl Config {
         out.push_str(&body);
         Ok(out)
     }
+}
+
+/// What a corpus root's `config.yaml` declares, read once and never written.
+///
+/// The one answer to "what is in `config.yaml`?" (STD-02 §R24): opening,
+/// initializing and migrating all ask here, and differ only in what they do
+/// with the answer. A missing file is a refusal to every reader, a corpus
+/// from before the file existed to `migrate`, and a root still to be set up
+/// to `init` when it holds nothing yet.
+#[derive(Debug)]
+pub(crate) enum Declared {
+    /// There is no `config.yaml`: looking it up said `NotFound`, and nothing
+    /// else does. A path that exists but cannot be followed or read (a
+    /// dangling symlink, a permission) is an [`Error::IoAt`] naming it.
+    Missing,
+    /// This build's schema, read with the strict model.
+    Current {
+        /// The config as it parsed.
+        config: Config,
+        /// The file's text, so a writer can tell whether a rewrite changes it.
+        raw: String,
+    },
+    /// An older schema, or no `schema_version` key, which is the first one.
+    Older {
+        /// The schema it declares.
+        version: u32,
+        /// The file's text, for `migrate` to read the legacy keys from.
+        raw: String,
+    },
+    /// A schema from a newer build.
+    Newer {
+        /// The schema it declares.
+        version: u32,
+    },
+}
+
+/// The refusal for a corpus at `root` that declares schema `found`.
+pub(crate) fn schema_mismatch(root: &Path, found: u32) -> Error {
+    Error::SchemaMismatch {
+        path: root.join(FILE),
+        found,
+        expected: SCHEMA_VERSION,
+    }
+}
+
+/// Read what `root`'s `config.yaml` declares. See [`Declared`].
+pub(crate) fn declared(root: &Path) -> Result<Declared> {
+    let path = root.join(FILE);
+    // Absent is decided on the entry itself, without following it: a read
+    // alone says `NotFound` for a symlink to nowhere too, and reading that as
+    // "no config" is what let a dangling link be replaced with a fabricated
+    // file (STD-02 §R29).
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Declared::Missing),
+        Err(error) => return Err(Error::io_at("inspecting", &path, error)),
+    }
+    let raw =
+        std::fs::read_to_string(&path).map_err(|error| Error::io_at("reading", &path, error))?;
+    // Probe the version before the strict parse, so a v1 file with its
+    // extra keys gets the migrate hint rather than an unknown-field error.
+    let version = schema_version_of(&raw)
+        .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))?
+        .unwrap_or(1);
+    Ok(match version.cmp(&SCHEMA_VERSION) {
+        std::cmp::Ordering::Less => Declared::Older { version, raw },
+        std::cmp::Ordering::Greater => Declared::Newer { version },
+        std::cmp::Ordering::Equal => Declared::Current {
+            config: serde_yaml_ng::from_str(&raw)
+                .map_err(|e| Error::yaml(format!("parsing {}", path.display()), e))?,
+            raw,
+        },
+    })
 }
 
 /// The `schema_version` of a config file of any vintage, ignoring every
