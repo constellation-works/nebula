@@ -51,7 +51,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const canvas = () => screen.getByRole("img", { name: "Graph" });
+const canvas = () => screen.getByRole("group", { name: "Graph" });
 const drawnNodes = () => canvas().querySelectorAll("g.node");
 
 beforeEach(() => {
@@ -124,6 +124,32 @@ describe("GraphView", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("complementary", { name: "Node" })).toBeNull());
     expect(canvas().querySelector("g.node--dim")).toBeNull();
+  });
+
+  it("tabs into a card, follows an edge with arrows, and selects with Enter", async () => {
+    const graph = synthetic(2);
+    graph.nodes.push({ ...graph.nodes[0]!, id: "isolated", title: "Standalone idea" });
+    mocked.graph.mockResolvedValue(graph);
+    render(<GraphView />);
+    const first = await screen.findByRole("button", { name: /Idea number 0.*seed/ });
+    const child = screen.getByRole("button", { name: /Idea number 1.*hypothesis/ });
+    const isolated = screen.getByRole("button", { name: "Standalone idea, seed" });
+    expect(first).toHaveAttribute("tabindex", "0");
+    expect(child).toHaveAttribute("tabindex", "0");
+    expect(isolated).toHaveAttribute("tabindex", "0");
+    const before = canvas().querySelector("g.scene")!.getAttribute("transform");
+    first.focus();
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(child).toHaveFocus();
+    expect(canvas().querySelector("g.scene")!.getAttribute("transform")).not.toBe(before);
+    fireEvent.keyDown(child, { key: "Enter" });
+    expect(child).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("complementary", { name: "Node" })).toBeInTheDocument();
+    fireEvent.keyDown(child, { key: "ArrowUp" });
+    expect(first).toHaveFocus();
+    isolated.focus();
+    fireEvent.keyDown(isolated, { key: "ArrowDown" });
+    expect(isolated).toHaveFocus();
   });
 
   it("double-click opens the file in the editor", async () => {
@@ -231,6 +257,7 @@ describe("GraphView", () => {
     render(<GraphView />);
     expect(await screen.findByText(/Capture: CmdOrCtrl\+Shift\+N/)).toHaveTextContent("Double-click a node to open");
     expect(screen.getByText(/Orange ancestors/)).toHaveTextContent("Ctrl+scroll to zoom");
+    expect(screen.getByText(/Orange ancestors/)).toHaveTextContent("arrow keys follow edges, Enter selects");
   });
 
   it("pans on plain wheel and zooms around the pointer on ctrl-wheel", async () => {

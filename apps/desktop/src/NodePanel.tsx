@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as api from "./api";
@@ -25,6 +25,7 @@ type LoadResult =
 
 export const PANEL_MIN = 280;
 export const PANEL_MAX = 720;
+const RESIZE_STEP = 20;
 
 /** Only these leave the app; a repo path or almanac wikilink is shown as text. */
 const isExternal = (uri: string): boolean => /^(https?:|mailto:)/i.test(uri);
@@ -139,6 +140,20 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
     resize.current = { x: e.clientX, w: width };
   }
 
+  function resizeWithKeyboard(e: ReactKeyboardEvent) {
+    let next: number;
+    switch (e.key) {
+      // The panel is on the right; moving its left edge left makes it wider.
+      case "ArrowLeft": next = width + RESIZE_STEP; break;
+      case "ArrowRight": next = width - RESIZE_STEP; break;
+      case "Home": next = PANEL_MIN; break;
+      case "End": next = PANEL_MAX; break;
+      default: return;
+    }
+    e.preventDefault();
+    onResize(Math.min(PANEL_MAX, Math.max(PANEL_MIN, next)));
+  }
+
   const titles = new Map(nodes.map((n) => [n.id, n.title]));
   const currentResult = result?.id === id && Object.is(result.revision, revision) ? result : null;
   const view = currentResult?.status === "loaded" ? currentResult.view : null;
@@ -148,12 +163,18 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
   const references = node?.references ?? [];
 
   return (
-    <aside className="panel" aria-label="Node" style={{ width }}>
+    <aside id="node-panel" className="panel" aria-label="Node" style={{ width }}>
       <div
         className="panel__handle"
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize panel"
+        aria-controls="node-panel"
+        aria-valuemin={PANEL_MIN}
+        aria-valuemax={PANEL_MAX}
+        aria-valuenow={width}
+        tabIndex={0}
+        onKeyDown={resizeWithKeyboard}
         onMouseDown={startResize}
       />
       <div className="panel__body">

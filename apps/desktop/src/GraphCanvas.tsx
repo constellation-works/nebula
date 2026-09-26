@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { MAX_CHIPS, truncate, type DrawnEdge, type Layout, type Lineage, type PlacedNode, type Point } from "./layout";
 
 /** Where the drawing sits in the canvas: a translate then a scale. */
@@ -148,8 +148,8 @@ const Nodes = memo(function Nodes({
             className={cls}
             transform={`translate(${n.x} ${n.y})`}
             role="button"
-            tabIndex={-1}
-            aria-label={n.title}
+            tabIndex={0}
+            aria-label={`${n.title}, ${n.status}`}
             aria-pressed={n.id === selected}
             data-id={n.id}
             data-status={n.status}
@@ -214,6 +214,8 @@ export function GraphCanvas({ layout, selected, lineage, matches, isolatedIds, f
   const svgRef = useRef<SVGSVGElement>(null);
   const [view, setView] = useState<Viewport>({ x: FIT_PADDING, y: FIT_PADDING, k: 1 });
   const [panning, setPanning] = useState(false);
+  const visibleNodes = isolatedIds === null ? layout.nodes : layout.nodes.filter((n) => isolatedIds.has(n.id));
+  const visibleEdges = isolatedIds === null ? layout.edges : layout.edges.filter((e) => isolatedIds.has(e.from) && isolatedIds.has(e.to));
   const viewRef = useRef(view);
   viewRef.current = view;
   const fitted = useRef(-1);
@@ -298,12 +300,47 @@ export function GraphCanvas({ layout, selected, lineage, matches, isolatedIds, f
     setPanning(false);
   }
 
+  function onCardKeyDown(e: ReactKeyboardEvent<SVGSVGElement>) {
+    const card = (e.target as Element).closest<SVGGElement>(".node");
+    const id = card?.dataset.id;
+    if (id === undefined) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onSelect(id);
+      return;
+    }
+    const direction = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" }[e.key];
+    if (direction === undefined) return;
+    e.preventDefault();
+    const current = visibleNodes.find((n) => n.id === id);
+    if (current === undefined) return;
+    const cx = current.x + current.width / 2;
+    const cy = current.y + current.height / 2;
+    const neighbours = new Set(visibleEdges.flatMap((edge) => edge.from === id ? [edge.to] : edge.to === id ? [edge.from] : []));
+    const next = visibleNodes
+      .filter((n) => neighbours.has(n.id))
+      .map((n) => ({ node: n, dx: n.x + n.width / 2 - cx, dy: n.y + n.height / 2 - cy }))
+      .filter(({ dx, dy }) => direction === "up" ? dy < 0 : direction === "down" ? dy > 0 : direction === "left" ? dx < 0 : dx > 0)
+      .sort((a, b) => a.dx * a.dx + a.dy * a.dy - b.dx * b.dx - b.dy * b.dy)[0]?.node;
+    if (next === undefined) return;
+    const target = [...(svgRef.current?.querySelectorAll<SVGGElement>(".node") ?? [])]
+      .find((element) => element.dataset.id === next.id);
+    target?.focus();
+    const k = viewRef.current.k;
+    setView({
+      x: (svgRef.current?.clientWidth ?? 0) / 2 - (next.x + next.width / 2) * k,
+      y: (svgRef.current?.clientHeight ?? 0) / 2 - (next.y + next.height / 2) * k,
+      k,
+    });
+  }
+
   return (
     <svg
       ref={svgRef}
       className={`canvas${panning ? " canvas--panning" : ""}`}
-      role="img"
+      role="group"
       aria-label="Graph"
+      onKeyDown={onCardKeyDown}
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}
@@ -327,8 +364,8 @@ export function GraphCanvas({ layout, selected, lineage, matches, isolatedIds, f
         ))}
       </defs>
       <g className="scene" transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
-        <Edges edges={isolatedIds === null ? layout.edges : layout.edges.filter((e) => isolatedIds.has(e.from) && isolatedIds.has(e.to))} selected={selected} lineage={lineage} />
-        <Nodes nodes={isolatedIds === null ? layout.nodes : layout.nodes.filter((n) => isolatedIds.has(n.id))} selected={selected} lineage={lineage} matches={matches} onSelect={onSelect} onOpen={onOpen} />
+        <Edges edges={visibleEdges} selected={selected} lineage={lineage} />
+        <Nodes nodes={visibleNodes} selected={selected} lineage={lineage} matches={matches} onSelect={onSelect} onOpen={onOpen} />
       </g>
     </svg>
   );

@@ -132,6 +132,28 @@ function renderPanel(onSelect = vi.fn(), onClose = vi.fn()) {
 }
 
 describe("NodePanel", () => {
+  it("resizes from the keyboard and exposes the current width", () => {
+    const onResize = vi.fn();
+    const { rerender } = render(
+      <NodePanel id={fixture.node.id} nodes={nodes} revision={1} width={380} onResize={onResize} onSelect={() => {}} onClose={() => {}} />,
+    );
+    const handle = screen.getByRole("separator", { name: "Resize panel" });
+    expect(handle).toHaveAttribute("tabindex", "0");
+    expect(handle).toHaveAttribute("aria-valuenow", "380");
+    expect(handle).toHaveAttribute("aria-controls", "node-panel");
+    handle.focus();
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(onResize).toHaveBeenLastCalledWith(400);
+    rerender(<NodePanel id={fixture.node.id} nodes={nodes} revision={1} width={400} onResize={onResize} onSelect={() => {}} onClose={() => {}} />);
+    expect(handle).toHaveAttribute("aria-valuenow", "400");
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(onResize).toHaveBeenLastCalledWith(380);
+    fireEvent.keyDown(handle, { key: "Home" });
+    expect(onResize).toHaveBeenLastCalledWith(280);
+    fireEvent.keyDown(handle, { key: "End" });
+    expect(onResize).toHaveBeenLastCalledWith(720);
+  });
+
   it("shows the frontmatter: title, status, kill, closed.why, tags", async () => {
     renderPanel();
     expect(await screen.findByRole("heading", { level: 2, name: fixture.node.title })).toBeInTheDocument();

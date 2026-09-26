@@ -53,6 +53,35 @@ afterEach(() => {
 });
 
 describe("InboxView", () => {
+  it("moves and activates tabs with arrows, Home, and End", async () => {
+    mocked.inbox.mockResolvedValue([]);
+    mocked.graph.mockResolvedValue({ nodes: [], edges: [] });
+    mocked.launchAtLogin.mockResolvedValue(false);
+    render(<App />);
+    const tabs = within(screen.getByRole("tablist", { name: "Views" }));
+    const inbox = tabs.getByRole("tab", { name: "Inbox" });
+    const graph = tabs.getByRole("tab", { name: "Graph" });
+    const settings = tabs.getByRole("tab", { name: "Settings" });
+    expect(inbox).toHaveAttribute("tabindex", "0");
+    expect(graph).toHaveAttribute("tabindex", "-1");
+    inbox.focus();
+    fireEvent.keyDown(inbox, { key: "ArrowRight" });
+    expect(graph).toHaveFocus();
+    expect(graph).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "Graph" })).toBeVisible();
+    fireEvent.keyDown(graph, { key: "End" });
+    expect(settings).toHaveFocus();
+    expect(screen.getByRole("tabpanel", { name: "Settings" })).toBeVisible();
+    fireEvent.keyDown(settings, { key: "ArrowRight" });
+    expect(inbox).toHaveFocus();
+    fireEvent.keyDown(inbox, { key: "ArrowLeft" });
+    expect(settings).toHaveFocus();
+    fireEvent.keyDown(settings, { key: "Home" });
+    expect(inbox).toHaveFocus();
+    expect(inbox).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "Inbox" })).toBeVisible();
+  });
+
   it("renders every unsettled entry with id, age and text", async () => {
     render(<Harness />);
     expect(await screen.findByText("capture must stay under five seconds")).toBeInTheDocument();
@@ -406,7 +435,7 @@ describe("App", () => {
     expect(mocked.graph).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("tab", { name: "Graph" }));
-    const graphCanvas = await screen.findByRole("img", { name: "Graph" });
+    const graphCanvas = await screen.findByRole("group", { name: "Graph" });
     await waitFor(() => expect(graphCanvas.querySelectorAll("g.node")).toHaveLength(2));
     fireEvent.click(graphCanvas.querySelector('g.node[data-id="n1"]')!);
     await screen.findByRole("complementary", { name: "Node" });
@@ -422,7 +451,7 @@ describe("App", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: /Inbox/ }));
     fireEvent.click(screen.getByRole("tab", { name: "Graph" }));
-    expect(screen.getByRole("img", { name: "Graph" })).toBe(graphCanvas);
+    expect(screen.getByRole("group", { name: "Graph" })).toBe(graphCanvas);
     expect(graphCanvas.querySelector("g.scene")).toHaveAttribute("transform", transform);
     expect(screen.getByRole("searchbox", { name: "Search graph" })).toHaveValue("Idea 1");
     expect(screen.getByRole("button", { name: "focus1" })).toHaveAttribute("aria-pressed", "true");
