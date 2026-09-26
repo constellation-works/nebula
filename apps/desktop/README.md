@@ -10,15 +10,16 @@ shows.
 make desktop-dev     # pnpm tauri dev with the development-only CSP overlay
 make desktop-check   # tsc + vitest
 make desktop         # pnpm tauri build: unsigned .app and .dmg under target/release/bundle/macos/
-pnpm test:webview    # build and exercise the production CSP in the native webview
+pnpm test:webview    # build and exercise the production CSP in the native webview (CI: `webview`)
 ```
 
 Needs pnpm 11.23.0, the version `packageManager` in `package.json` pins with
 its sha512 (`corepack enable` installs it and checks the hash), and the Rust
 toolchain `rust-toolchain.toml` names. On macOS, `make desktop` creates both
 `Nebula.app` and a versioned `Nebula_*.dmg` under
-`target/release/bundle/macos/`. The app and disk image are unsigned and not
-notarised.
+`target/release/bundle/macos/`; see Tauri's [DMG distribution
+guide](https://v2.tauri.app/distribute/dmg/) for that installer format. The
+app and disk image are unsigned and not notarised.
 
 ### Install on macOS
 
@@ -40,10 +41,17 @@ is free of known malware or has not been modified. See Apple's [safe app
 opening guidance](https://support.apple.com/102445).
 
 `make desktop-dev` layers `src-tauri/tauri.conf.dev.json` over the production
-configuration. The WebDriver check builds with the production CSP plus a
+configuration. `pnpm test:webview` builds with the production CSP plus a
 debug-only WebDriver capability, initializes an empty corpus in a temporary
-directory, and verifies that inline script injection is blocked while the
-Inbox/Graph UI and `graph` IPC command work.
+directory, and verifies that inline script injection and a remote image are
+both blocked while the Inbox/Graph UI and `graph` IPC command work. The app
+and `neb init` run with `HOME` and the XDG directories inside that temporary
+directory, so the check never touches your own settings; it fails unless the
+app wrote its `settings.json` there. CI's `webview` job runs it on Linux
+under `xvfb-run` on every change. Where it cannot run (no display, no
+webkit2gtk on Linux, no `cargo`, no `pnpm install`) it prints
+`skipped: <what is missing>` and exits 0 before building anything;
+`REQUIRE_WEBVIEW=1`, which CI sets, makes that skip a failure.
 
 ## The corpus
 
@@ -121,15 +129,15 @@ a few hundred nodes do not freeze the window, and rendered as plain SVG.
 
 ## Remote images
 
-Node bodies can include Markdown images hosted on the web. The production and
-development Content Security Policies allow images from HTTPS URLs
-(`img-src 'self' https:`), while scripts, connections, and other content stay
-restricted to their existing sources. Loading a remote image contacts its
-host directly from your Mac; that host can observe the request and its timing,
-so image URLs can also be used for tracking. Do not open node bodies with
-remote images unless that trade-off is acceptable. See Tauri's [DMG
-distribution guide](https://v2.tauri.app/distribute/dmg/) for the installer
-format used by `make desktop`.
+Opening a node makes no network request. A Markdown image hosted on the web
+(`http:` or `https:`) renders as a link, labelled with its alt text (or its
+URL when there is none), that opens in your default browser when you click
+it; it is never fetched into the panel. Bodies are often written by agents or
+synced from elsewhere, and fetching an image would tell its host, which you
+never chose, that and when you opened the node. The production and
+development Content Security Policies back this up with
+`img-src 'self' data:`, so an image from anywhere else is blocked, and
+`pnpm test:webview` checks that the production policy blocks one.
 
 ## Layout
 

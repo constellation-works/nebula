@@ -2,7 +2,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const desktopRoot = path.dirname(fileURLToPath(import.meta.url));
-const appBinary = path.resolve(desktopRoot, "../../target/debug/nebula-desktop");
+// `scripts/webview-test.mjs` names the binary it built, wherever cargo's
+// target directory is; the default is the workspace's own.
+const appBinary =
+  process.env.NEBULA_WEBVIEW_APP ?? path.resolve(desktopRoot, "../../target/debug/nebula-desktop");
 
 export const config = {
   runner: "local",
