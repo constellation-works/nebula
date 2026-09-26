@@ -21,9 +21,9 @@ use crate::render;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use nebula_core::triage::{Action, Step};
 use nebula_core::{
-    Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, InboxEntry, NEAR_DEFAULT,
-    NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, Origin, Promotion, Severity, Status, Triage, check,
-    graph, migrate, model, ops,
+    Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, Handoff, InboxEntry,
+    NEAR_DEFAULT, NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, ObservatoryRoot, Origin, Promotion,
+    Severity, Status, Triage, check, graph, migrate, model, ops,
 };
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -61,6 +61,7 @@ Nodes:
 
 References:
   cite         Attach context, with a note saying why it is here
+  handoff      Hand a node off to an Observatory record: cite it and close the node
 
 Query:
   show         Show one node in full
@@ -517,6 +518,37 @@ enum Command {
         commit: CommitArg,
     },
 
+    /// Hand a node off to an Observatory record: cite it and close the node.
+    ///
+    /// One write: an `observatory` reference to the record, and the node
+    /// moved to `abandoned` with `why: handed off to <RECORD>`. A refuted or
+    /// already closed node is refused. When this machine has an observatory
+    /// root, the record must resolve under it; with none, the id is accepted
+    /// and cannot be located yet, as with `cite --kind observatory`.
+    Handoff {
+        /// Node id.
+        node: String,
+        /// The Observatory record id: Q, H, T or R followed by digits, such
+        /// as `H012`.
+        record: String,
+        /// Why it goes there. The reference's note, and the only field that
+        /// matters in a year.
+        #[arg(long)]
+        note: Option<String>,
+        /// Who authored the text: `human`, or the agent's session or crew
+        /// label. Free text; defaults to `human`.
+        #[arg(long, value_name = "LABEL")]
+        by: Option<String>,
+        /// Orbit task that produced it.
+        #[arg(long)]
+        task: Option<String>,
+        /// Orbit run that produced it.
+        #[arg(long)]
+        run: Option<String>,
+        #[command(flatten)]
+        commit: CommitArg,
+    },
+
     /// Show one node in full.
     Show {
         /// Node id.
@@ -705,7 +737,8 @@ impl Command {
             | Self::Link { commit, .. }
             | Self::Tag { commit, .. }
             | Self::Note { commit, .. }
-            | Self::Cite { commit, .. } => commit.no_commit,
+            | Self::Cite { commit, .. }
+            | Self::Handoff { commit, .. } => commit.no_commit,
             Self::Init { .. }
             | Self::Check
             | Self::Completions { .. }
@@ -1128,6 +1161,41 @@ fn note_same_as(corpus: &Corpus, entry: &InboxEntry) -> std::result::Result<(), 
         eprintln!("note: same as {}, still waiting", earlier.id);
     }
     Ok(())
+}
+
+/// Say where an `observatory` reference's record is on this machine, or why
+/// it cannot be located: the lines `cite --kind observatory` and `handoff`
+/// print under their result.
+fn print_record_location(setting: &ObservatoryRoot, record: &str) {
+    match setting.root.as_deref() {
+        None => println!(
+            "\n{}",
+            render::dim(&format!(
+                "No observatory root set, so `{record}` cannot be located. \
+                 Set one with `neb config observatory-root <DIR>` or \
+                 ${OBSERVATORY_ROOT_ENV}."
+            ))
+        ),
+        Some(dir) => match setting.resolve(record) {
+            Some(path) => println!("{}", render::dim(&path.display().to_string())),
+            None => println!(
+                "\n{}",
+                render::dim(&format!(
+                    "`{record}` does not resolve under {}; `check` will keep \
+                     saying so until the checkout has it.",
+                    dir.display()
+                ))
+            ),
+        },
+    }
+}
+
+/// The nudge after a reference written without `--note`.
+fn print_bare_note() {
+    println!(
+        "\n{}",
+        render::dim("No note. Add one saying why it is here, or this is a link that rots.")
+    );
 }
 
 /// Commit the corpus after a write, if `config.yaml` asks for it.
@@ -1900,38 +1968,60 @@ fn run(cli: Cli) -> Outcome {
                         .find(|r| r.id == cited.reference)
                         .and_then(|r| r.uri.clone())
                         .unwrap_or_default();
-                    match setting.root.as_deref() {
-                        None => println!(
-                            "\n{}",
-                            render::dim(&format!(
-                                "No observatory root set, so `{record}` cannot be located. \
-                                 Set one with `neb config observatory-root <DIR>` or \
-                                 ${OBSERVATORY_ROOT_ENV}."
-                            ))
-                        ),
-                        Some(dir) => match setting.resolve(&record) {
-                            Some(path) => println!("{}", render::dim(&path.display().to_string())),
-                            None => println!(
-                                "\n{}",
-                                render::dim(&format!(
-                                    "`{record}` does not resolve under {}; `check` will keep \
-                                     saying so until the checkout has it.",
-                                    dir.display()
-                                ))
-                            ),
-                        },
-                    }
+                    print_record_location(setting, &record);
                 }
                 if bare {
-                    println!(
-                        "\n{}",
-                        render::dim(
-                            "No note. Add one saying why it is here, or this is a link that rots."
-                        )
-                    );
+                    print_bare_note();
                 }
             }
             commit(&corpus, commits, "cite", &[&node, &cited.reference])?;
+            Ok(ok)
+        }
+
+        Command::Handoff {
+            node,
+            record,
+            note,
+            by,
+            task,
+            run,
+            ..
+        } => {
+            let (corpus, _lock) = open_locked(root)?;
+            let bare = note.as_ref().is_none_or(|n| n.trim().is_empty());
+            // Read before the write, under `--json` too: the record has to
+            // resolve under this root, and a broken machine setting refuses
+            // the hand-off rather than failing it after the node has closed.
+            let setting = corpus.observatory_root()?;
+            let done = ops::handoff(
+                &corpus,
+                &node,
+                &Handoff {
+                    record,
+                    note,
+                    by,
+                    origin: Origin::of(task, run),
+                },
+                setting.root.as_deref(),
+            )
+            .map_err(|e| Failure::about(&e, &node))?;
+            if json {
+                out_json(&done)?;
+            } else {
+                println!(
+                    "{} {} -> {}, handed off to {} {}",
+                    render::bold(&node),
+                    render::dim(&done.from.to_string()),
+                    done.doc.node.status,
+                    render::bold(&done.record),
+                    render::dim(&format!("({})", done.reference))
+                );
+                print_record_location(&setting, &done.record);
+                if bare {
+                    print_bare_note();
+                }
+            }
+            commit(&corpus, commits, "handoff", &[&node, &done.record])?;
             Ok(ok)
         }
 
@@ -2166,7 +2256,7 @@ mod tests {
             assert!(flat.contains(&row), "help is missing the row {row:?}");
             seen += 1;
         }
-        assert_eq!(seen, 26, "template rows need updating for a new subcommand");
+        assert_eq!(seen, 27, "template rows need updating for a new subcommand");
         assert!(
             Cli::command().find_subcommand("help").is_none(),
             "clap's `help` subcommand should be disabled"
@@ -2225,7 +2315,7 @@ mod tests {
     /// are exactly the ones [`Command::no_commit`] reads it from.
     #[test]
     fn no_commit_is_offered_only_by_verbs_that_write() {
-        let writes: [&[&str]; 15] = [
+        let writes: [&[&str]; 16] = [
             &["migrate"],
             &["config", "observatory-root"],
             &["config", "commit"],
@@ -2241,6 +2331,7 @@ mod tests {
             &["tag"],
             &["note"],
             &["cite"],
+            &["handoff"],
         ];
         for path in writes {
             assert!(
@@ -2474,7 +2565,7 @@ mod tests {
             ["init", "check", "migrate", "config", "completions"].as_slice(),
             &["capture", "inbox", "promote", "drop", "triage"],
             &["new", "edit", "sharpen", "status", "link", "tag", "note"],
-            &["cite"],
+            &["cite", "handoff"],
             &["show", "log", "list", "near", "trace", "impact", "graph"],
             &["review"],
         ]

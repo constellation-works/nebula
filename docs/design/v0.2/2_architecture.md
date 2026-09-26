@@ -64,7 +64,7 @@ nebula-core/src/
   graph.rs        # Graph: an indexed snapshot of loaded nodes (by_id, parents, children)
                   # + pure queries: trace, impact, open, review, export
   ops.rs          # mutations: capture, promote, drop, new, sharpen, link, cite,
-                  # set_status, tag — each enforces its point-of-action invariants
+                  # set_status, handoff, tag — each enforces its point-of-action invariants
                   # and returns the changed Node(s)
   check.rs        # rules over a Graph → Vec<Finding { rule, severity, node, message }>
   migrate.rs      # v1 → v2, with its own lenient v1 model kept private to this module

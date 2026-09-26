@@ -65,7 +65,8 @@ pub use lock::{CorpusLock, LOCK_FILE, LOCK_WAIT};
 pub use migrate::{MigrationReport, NodeMigration};
 pub use model::{Closed, Doc, Edge, EdgeType, HUMAN, Node, Note, Origin, Reference, Status};
 pub use ops::{
-    Captured, Citation, Cited, CloseTag, Created, Initialized, NewNode, Promotion, StatusChange,
+    Captured, Citation, Cited, CloseTag, Created, HandedOff, Handoff, Initialized, NewNode,
+    Promotion, StatusChange,
 };
 pub use store::{Committed, Corpus, HistoryEntry, Inbox, InboxEntry, Settlement};
 pub use triage::Triage;
@@ -106,6 +107,7 @@ mod ts_export {
         Cited::export_all(&cfg).unwrap();
         CloseTag::export_all(&cfg).unwrap();
         StatusChange::export_all(&cfg).unwrap();
+        HandedOff::export_all(&cfg).unwrap();
         Initialized::export_all(&cfg).unwrap();
         Direction::export_all(&cfg).unwrap();
         ObservatoryRoot::export_all(&cfg).unwrap();

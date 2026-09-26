@@ -34,7 +34,7 @@ v0.2 behavior.
 | `domain` (field, `config.yaml` list, `neb domain`, `--domain`/`--all`) | One more decision per node. Tags do the job and keep everything in one place. |
 | `evidence` (field, `neb evidence`, `neb weigh`, `cite --promote`, `Verdict`, `Strength`) | The verdict/strength ladder was precision the corpus never earned. A reference with a good note carries the same information. |
 | `tasks` (field, `neb task`) | Orbit provenance stays in `origin`; forward links to work are a reference. |
-| `graduate` (verb, `graduated` status, `graduated_to`) | Downstream hand-off happens by the downstream artifact referencing the node, not by a status here. |
+| `graduate` (verb, `graduated` status, `graduated_to`) | Downstream hand-off happens by the downstream artifact referencing the node, not by a status here. For Observatory, `handoff` records the nebula side in one write: a reference to the record, and the node closed as `abandoned` (see [Hand-off](#hand-off)). |
 | statuses `testing`, `supported` | They were evidence states. Without evidence they cannot be entered honestly. |
 | edges `supports`, `undermines`, `depends-on` | The dependency graph was the evidence layer in edge form. `contradicts` survives because it is a relation between ideas, not a claim about truth. |
 | `check --online` and rules 3, 9, 10, 12, 13 | They validated fields that no longer exist. |
@@ -146,6 +146,7 @@ and Orbit provenance, and suppress nearest-node suggestions; run
 | `sharpen <id> --kill "..."` | seed becomes hypothesis |
 | `link <from> <type> <to>` | add an edge; refuses a genealogy cycle |
 | `cite <id> --kind --uri --note [--title]` | attach a reference |
+| `handoff <id> <record> [--note ..] [--by ..] [--task ..] [--run ..]` | hand the node off to an Observatory record: one `observatory` reference and `abandoned` with `why: handed off to <record>`, in one write; see [Hand-off](#hand-off) |
 | `status <id> <status> [--why ..]` | move status under the rules above; reopening requires a new node and a `reopens` edge (`new --reopens <id>`) |
 | `tag <id> [--add ..] [--remove ..]` / `tag list` | edit tags; list tags with counts |
 | `trace <id> [--down] [--depth ..]` | ancestry walk, or descent |
@@ -173,10 +174,10 @@ writes takes `--no-commit`; a read-only verb does not offer it.
 | 3 | Every edge target exists; no self-loop | error | `link`/`new`, `check` |
 | 4 | `contradicts` is mutual | error | `link`/`new` write both; `check` |
 | 5 | `refuted` carries `closed.why` | error | `status`, `check` |
-| 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status` |
+| 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status`, `handoff` |
 | 7 | A reference carries no `verdict`/`strength` | error | parse |
 | 8 | Non-discussion references have a URI; local URIs resolve relative to `nodes/` and are never absolute | error; warn for an absolute path already in the corpus | `cite` refuses both; `check` reports both |
-| 9 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`) |
+| 9 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`; `handoff` refuses a record that does not resolve under a set root) |
 | 10 | Every reference has a note | warn | `check` |
 | 11 | No two tags differ only by case or a trailing `s` | warn | `check`; noted at `new`/`promote`/`tag` |
 | 12 | `closed` is set only on a `refuted`/`abandoned` node, never an open one | error | `check` |
@@ -184,6 +185,37 @@ writes takes `--no-commit`; a read-only verb does not offer it.
 | 14 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
 | 15 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse (the shape); every read and write (the agreement) |
 | 16 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |
+
+## Hand-off
+
+`neb handoff <id> <record> --note "..."` is the nebula side of a node
+becoming an Observatory record. In one write it adds an `observatory`
+reference to the record (a bare id, normalised up, with the note) and moves
+the node to `abandoned` with `closed: {why: "handed off to <record>"}`.
+
+- It refuses, writing nothing: an unknown node (`NoSuchNode`); a node that is
+  already closed (`AlreadyClosed`), since a refuted node's verdict is final
+  (revive it with `new --reopens` and hand that off) and an abandoned one's
+  reason would be replaced; a record id of the wrong shape
+  (`InvalidObservatoryId`); and, when this machine has an observatory root,
+  a record that does not resolve under it (`UnresolvedObservatoryRecord`).
+- With no root set, the id is accepted on its shape alone and the verb says
+  it cannot be located, as `cite --kind observatory` does; `check` keeps
+  warning (rule 9) until this machine has a root.
+- A node is read as handed off when both halves are present: it is
+  `abandoned`, its `closed.why` is exactly `handed off to <record>`, and it
+  carries an `observatory` reference to that record. No field records it.
+  `show` prints where the record is under the `closed:` line, and `trace`
+  appends `handed off to <record>` to the node's line; both `--json` forms
+  carry `handed_off_to`, omitted when the node was not handed off.
+
+Decision (ORB-13077): nebula owns this verb; back-links from Observatory to
+the node (`nebula:<id>`) are Observatory's to write. The hand-off stays an
+existing reference plus an existing status, so the schema grows nothing and
+the two-verb form (`cite --kind observatory`, then `status abandoned --why
+"handed off to <record>"`) reads the same. Refusing an unresolved record
+only when a root is set keeps a machine without a checkout usable, as
+`cite` does.
 
 ## Machine settings
 

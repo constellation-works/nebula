@@ -10,7 +10,7 @@
 //! [`Error::code`], so a new core variant arrives with its code and message
 //! and no hint; giving it advice is one more arm in [`hint`].
 
-use nebula_core::{Error, Settlement};
+use nebula_core::{Error, Settlement, Status};
 
 /// A refusal as `neb` reports it: a code to match on, what is wrong, and what
 /// to do about it when the CLI knows.
@@ -174,6 +174,19 @@ fn hint(e: &Error) -> Option<String> {
              neb config commit off",
             root.display()
         ),
+        Error::AlreadyClosed {
+            id,
+            status: Status::Refuted,
+        } => format!(
+            "A refuted idea stays refuted. Revive it as a new node that reopens it, \
+             and hand that one off:\n  neb new \"...\" --reopens {id}"
+        ),
+        Error::AlreadyClosed { id, .. } => format!("See how it closed with:  neb show {id}"),
+        Error::UnresolvedObservatoryRecord { .. } => {
+            "Check the record id, or update the checkout until it carries the record. \
+             `neb config observatory-root` shows which root is in effect."
+                .to_owned()
+        }
         Error::ParentAndReopens(id) => {
             format!("`--reopens {id}` already records the descent, so drop `--parent {id}`.")
         }

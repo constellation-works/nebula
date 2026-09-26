@@ -1,6 +1,6 @@
 ---
 name: nebula
-description: nebula — the idea lineage graph and its `neb` CLI. Use when a human says "capture that", "that's a nebula seed", asks to triage the inbox, sharpen, link, cite or close an idea, trace where an idea came from, run `neb review`, or when an Orbit routine reads a nebula corpus unattended. Covers the corpus location, every verb and its `--json` shape, the rules in invariants.md and their refusals, and the two operating modes.
+description: nebula — the idea lineage graph and its `neb` CLI. Use when a human says "capture that", "that's a nebula seed", asks to triage the inbox, sharpen, link, cite, close or hand off an idea, trace where an idea came from, run `neb review`, or when an Orbit routine reads a nebula corpus unattended. Covers the corpus location, every verb and its `--json` shape, the rules in invariants.md and their refusals, and the two operating modes.
 ---
 
 # nebula
@@ -49,7 +49,7 @@ scratch corpus always use `neb --root <scratch-dir> init` and never pass
 ## The verbs
 
 Mutating: `capture`, `promote`, `drop`, `new`, `sharpen`, `status`, `link`,
-`tag`, `note`, `cite`, `migrate`, `config`. Read-only: `inbox`, `show`, `list`, `near`, `trace`,
+`tag`, `note`, `cite`, `handoff`, `migrate`, `config`. Read-only: `inbox`, `show`, `list`, `near`, `trace`,
 `impact`, `graph --json`, `review` (and `review --short`), `check`, `tag list`. Every corpus
 verb listed here (plus `init`) emits JSON on stdout under `--json`;
 [verbs.md](references/verbs.md) has each one's flags and its real shape. Shell
@@ -73,6 +73,14 @@ warning about this machine, not something to rewrite. A `check` warning that
 `config.yaml` carries `observatory_root` means an older `neb` stored one
 machine's path in the shared corpus: leave it to the human to set each
 machine's own and then run `neb config observatory-root --drop-legacy`.
+
+When the human says an idea has become an Observatory record, hand it off in
+one step: `neb handoff <node> H012 --note "why"`. It cites the record and
+closes the node as `abandoned` with `why: handed off to H012` in one write,
+and `show` and `trace` then say where the idea went. It refuses a node that
+is already closed and, when this machine has an observatory root, a record
+the checkout does not carry; never split it back into `cite` plus `status`
+to get past either refusal.
 
 ## Capture from conversation
 

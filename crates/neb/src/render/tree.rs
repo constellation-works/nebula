@@ -98,6 +98,13 @@ impl Tree<'_> {
             let _ = writeln!(self.out, "{branch}{} {}", bold(id), dim("[missing]"));
             return true;
         };
+        // Where the idea went when it left this graph: the lineage carries
+        // on downstream, so the walk says so on the node's own line.
+        let handoff = doc
+            .node
+            .handed_off_to()
+            .map(|record| dim(&format!("  handed off to {record}")))
+            .unwrap_or_default();
         // Drawn before, and either in full or from no further away: this
         // place could add nothing, so it only points back.
         if let Some(&(then, complete)) = self.seen.get(id)
@@ -105,7 +112,7 @@ impl Tree<'_> {
         {
             let _ = writeln!(
                 self.out,
-                "{branch}{}{}",
+                "{branch}{}{handoff}{}",
                 line(&doc.node),
                 dim("  (shown above)")
             );
@@ -117,11 +124,16 @@ impl Tree<'_> {
         let children = self.next(doc);
         if self.max.is_some_and(|max| depth >= max) && !children.is_empty() {
             let cut = format!("  ({} more beyond --depth)", children.len());
-            let _ = writeln!(self.out, "{branch}{}{}", line(&doc.node), dim(&cut));
+            let _ = writeln!(
+                self.out,
+                "{branch}{}{handoff}{}",
+                line(&doc.node),
+                dim(&cut)
+            );
             self.seen.insert(id.to_string(), (depth, false));
             return false;
         }
-        let _ = writeln!(self.out, "{branch}{}", line(&doc.node));
+        let _ = writeln!(self.out, "{branch}{}{handoff}", line(&doc.node));
         let child_prefix = match depth {
             0 => String::new(),
             _ => format!("{prefix}{}", if last { "   " } else { "│  " }),

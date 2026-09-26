@@ -31,10 +31,10 @@ and its "What is removed" table for the rules this replaced.
 | 3 | Every edge target exists; no self-loop | error | `link`/`new`, `check` |
 | 4 | `contradicts` is mutual | error | `link`/`new` write both; `check` |
 | 5 | `refuted` carries `closed.why` | error | `status`, `check` |
-| 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status` |
+| 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status`, `handoff` |
 | 7 | A reference carries no `verdict`/`strength` | error | parse |
 | 8 | Non-discussion references have a URI; local URIs resolve relative to `nodes/` and are never absolute | error; warn for an absolute path already in the corpus | `cite` refuses both; `check` reports both |
-| 9 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`) |
+| 9 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`; `handoff` refuses a record that does not resolve under a set root) |
 | 10 | Every reference has a note | warn | `check` |
 | 11 | No two tags differ only by case or a trailing `s` | warn | `check`; noted at `new`/`promote`/`tag` |
 | 12 | `closed` is set only on a `refuted`/`abandoned` node, never an open one | error | `check` |

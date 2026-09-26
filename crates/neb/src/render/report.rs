@@ -44,7 +44,22 @@ pub fn node(view: &NodeView) -> String {
         let _ = writeln!(out, "{} {k}{}\n", dim("kill:"), by(n.kill_by.as_deref()));
     }
     if let Some(c) = &n.closed {
-        let _ = writeln!(out, "{} {} {}\n", dim("closed:"), c.why, dim(&c.at));
+        let _ = writeln!(out, "{} {} {}", dim("closed:"), c.why, dim(&c.at));
+        // A hand-off names where the idea went, so where that record is on
+        // this machine belongs right under it.
+        if let Some(record) = &view.handed_off_to {
+            let located = view
+                .observatory
+                .iter()
+                .find(|l| &l.record == record)
+                .and_then(|l| l.path.as_ref())
+                .map_or_else(
+                    || dim("(does not resolve; check the observatory root)"),
+                    |path| dim(&path.display().to_string()),
+                );
+            let _ = writeln!(out, "        {located}");
+        }
+        out.push('\n');
     }
     if !view.body.is_empty() {
         let _ = writeln!(out, "{}\n", view.body);

@@ -73,6 +73,9 @@ one as a duplicate of `<id>`.
 - `cite --note "<why>"` always. Under Orbit add `--task`/`--run`.
 - `status <id> refuted --why "<how the kill fired>"`: quote the human. Refuted
   is final. `abandoned` may carry `--why` and should.
+- When the human says an idea became an Observatory record, `handoff <id>
+  <record> --note "<why>"`: one write that cites the record and closes the
+  node as `abandoned`. Under Orbit add `--task`/`--run`.
 - Never move a `refuted` node. Reviving it is `new "<title>" --reopens <old>`,
   without `--parent <old>`: `reopens` is already genealogy.
 - A node with a kill condition reopens as `hypothesis`, never `seed`: the kill

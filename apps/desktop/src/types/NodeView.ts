@@ -23,4 +23,9 @@ notes?: Array<Note>,
  * Where each `observatory` reference lands on this machine. Filled in
  * by [`NodeView::with_observatory`], and empty until a caller asks.
  */
-observatory?: Array<ObservatoryLink>, };
+observatory?: Array<ObservatoryLink>, 
+/**
+ * The Observatory record the node was handed off to, when it was; see
+ * [`Node::handed_off_to`]. Omitted otherwise.
+ */
+handed_off_to?: string | null, };
