@@ -1,0 +1,6 @@
+# The exact toolchain CI and local builds use (STD-05 §R23): a new stable
+# cannot turn CI red on its own. Keep in step with the `toolchain:` inputs in
+# .github/workflows/ci.yml. The MSRV is `rust-version` in Cargo.toml.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]

@@ -4,3 +4,20 @@ allowBuilds:
   edgedriver: false
   esbuild: true
   geckodriver: false
+
+# CI runs `pnpm audit --audit-level moderate` (STD-05 §R24). A fix goes here
+# as an override; an advisory with no fix goes in auditConfig with a date.
+overrides:
+  # GHSA-5c6j-r48x-rmvq (high) and GHSA-qj8w-gfj5-8c6v (moderate), both fixed
+  # in 7.0.5. mocha 10, pinned by @wdio/mocha-framework 9, still asks for ^6.
+  "serialize-javascript@<7.0.5": ^7.0.5
+
+auditConfig:
+  ignoreGhsas:
+    # extract-zip <=2.0.1 has no patched release. Dev-only: it unpacks the
+    # WebDriver browser for the `test:webview` harness (@wdio/cli >
+    # @puppeteer/browsers) and is never shipped. Re-review 2027-03-26.
+    - GHSA-jmr9-qjv8-65gv
+    # extract-zip, as above: dev-only, unpacks the WebDriver browser for the
+    # `test:webview` harness, never shipped. Re-review 2027-03-26.
+    - GHSA-7pqw-9j4j-h8q3

@@ -58,7 +58,8 @@ help:
 	@echo "  make dependency-direction Check crate dependency direction (manifests only)"
 	@echo "  make clippy        Lint with clippy (deny warnings)"
 	@echo "  make ci-lint       Run the clippy CI gate"
-	@echo "  make audit         Supply-chain audit (cargo-deny)"
+	@echo "  make audit         Supply-chain audit (cargo-deny; the desktop's pnpm pin and"
+	@echo "                     pnpm audit)"
 	@echo "  make tree          Print dependency tree"
 	@echo "  make ci            Full CI pass (ci-fast, tests, doctest, types-check,"
 	@echo "                     audit, desktop-check)"
@@ -151,10 +152,15 @@ clippy:
 
 ci-lint: clippy
 
-# Supply-chain audit: advisories + licenses via cargo-deny.
+# Supply-chain audit (STD-05 §R23, §R24): advisories, licenses and sources
+# via cargo-deny; the desktop's pnpm against its sha512 pin; advisories in its
+# npm tree, with the dated ignores in apps/desktop/pnpm-workspace.yaml. The
+# same checks as CI's `deny` and `desktop` jobs.
 audit:
 	@command -v cargo-deny >/dev/null 2>&1 || { echo "Install cargo-deny via: cargo install cargo-deny --locked"; exit 1; }
 	$(CARGO) deny check
+	PNPM="$(PNPM)" ./scripts/check-pnpm-pin.sh
+	$(PNPM) --dir $(DESKTOP) audit --audit-level moderate
 
 # Dependency tree inspection
 tree:
@@ -162,7 +168,7 @@ tree:
 
 # Full CI pass: every check .github/workflows/ci.yml runs, across its jobs.
 # Keep the two aligned. `audit` fetches the advisory database, so it needs the
-# network, and it fails when cargo-deny is not installed.
+# network, and it fails when cargo-deny or pnpm is not installed.
 ci: ci-fast test doctest types-check audit desktop-check
 
 # Pre-handoff gate: every cheap check CI runs, plus clippy (STD-02 §R22).

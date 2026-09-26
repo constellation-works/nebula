@@ -70,6 +70,15 @@ elsewhere; test fixtures opt out with an `#[allow]` that gives a reason. Take
 the machine-setting lock (`Corpus::lock_machine_settings`) before any corpus
 lock, never after one.
 
+Build inputs are pinned (STD-05 §R23). `rust-toolchain.toml` names the exact
+toolchain; rustup installs it on first use, and CI's `toolchain:` inputs must
+match it. CI actions are pinned by commit SHA, and pnpm by version and sha512
+in `apps/desktop/package.json`. Dependabot (`.github/dependabot.yml`) watches
+cargo, npm and the actions. `make audit` runs cargo-deny, the pnpm pin check
+and `pnpm audit`. Fix an npm advisory with an override in
+`apps/desktop/pnpm-workspace.yaml`; one with no fix gets an ignore there with
+its reason and a re-review date.
+
 In `crates/nebula-core/src/{model,ops,check}.rs`, invariants live in three
 places by design: deserialization, the point of action, and the checker.
 Moving a rule between them changes its strength. See
