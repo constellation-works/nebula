@@ -1,4 +1,6 @@
 # pnpm settings. esbuild is the one dependency with a postinstall worth running
 # (it checks its native binary); nothing else gets to run scripts.
 allowBuilds:
+  edgedriver: false
   esbuild: true
+  geckodriver: false

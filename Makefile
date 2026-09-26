@@ -140,7 +140,7 @@ desktop-deps:
 	$(PNPM) --dir $(DESKTOP) install --frozen-lockfile
 
 desktop-dev: desktop-deps
-	$(PNPM) --dir $(DESKTOP) tauri dev
+	$(PNPM) --dir $(DESKTOP) tauri dev --config src-tauri/tauri.conf.dev.json
 
 # A local .app under target/release/bundle/macos; not signed or notarised.
 desktop: desktop-deps

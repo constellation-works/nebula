@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+webdriver-test = ["dep:tauri-plugin-wdio-webdriver"]
+
 # Tauri's `run()` lives in the library so the crate has a test target that
 # does not need a window; `main.rs` is one line that calls it.
 [lib]
@@ -28,6 +31,7 @@ serde_json = { workspace = true }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
