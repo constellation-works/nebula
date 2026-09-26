@@ -70,3 +70,15 @@ desktop app draws the whole corpus as a graph and captures from a global
 shortcut on the same `nebula-core`, as documented in
 [docs/design/v0.2/](docs/design/v0.2/2_architecture.md). All three read and write the same `nodes/` and
 `inbox/` — there is one corpus underneath, never three.
+
+## Headless Linux tests
+
+To run the core and CLI tests without building the desktop app:
+
+```sh
+cargo test -p nebula-core -p neb --all-targets
+```
+
+`make test` runs `cargo test --workspace --all-targets`, which includes the
+Tauri desktop crate. On Linux, building that crate needs the desktop system
+development libraries, including GTK, WebKitGTK, and D-Bus.

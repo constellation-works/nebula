@@ -137,27 +137,34 @@ and Orbit provenance, and suppress nearest-node suggestions; run
 
 | verb | does |
 |---|---|
+| `init [<path>]` | create an empty corpus |
+| `config commit [on|off]` / `config observatory-root [<dir>]` | read or set the commit policy or machine-specific Observatory root |
+| `completions <shell>` | generate shell completion scripts |
+| `check` | check the corpus invariants |
+| `migrate` | bring a v1 corpus forward to v2, in place |
 | `capture <text>` | the five-second path |
 | `inbox [--limit ..]` | list unsettled captures |
 | `promote <ref> [--title ..] [--body ..] [--parent ..] [--tag ..] [--id ..] [--by ..] [--task ..] [--run ..] [--quiet]` | inbox entry becomes a seed node |
 | `drop <ref>` | settle an inbox entry without a node |
 | `triage [--by ..]` | interactive: each waiting entry, oldest first, with its age and numbered `near` candidates; one key promotes it as a root (`p`), under a candidate (`1`–`3`), titles it (`t`), drops (`d`), skips (`s`) or stops (`q`). Each decision is `promote` or `drop`, commit included; no `--json` |
 | `new <title> [--parent ..] [--reopens ..] [--contradicts ..] [--tag ..] [--kill ..]` | create a node directly, with its edges; `--contradicts` is written on both nodes |
+| `edit <id>` | edit a node's body in `$VISUAL` or `$EDITOR` |
 | `sharpen <id> --kill "..."` | seed becomes hypothesis |
+| `status <id> <status> [--why ..]` | move status under the rules above; reopening requires a new node and a `reopens` edge (`new --reopens <id>`) |
 | `link <from> <type> <to>` | add an edge; refuses a genealogy cycle |
+| `tag <id> [--add ..] [--remove ..]` / `tag list` | edit tags; list tags with counts |
+| `note <id> <text>` | append a dated paragraph of reasoning to a node |
 | `cite <id> --kind --uri --note [--title]` | attach a reference |
 | `handoff <id> <record> [--note ..] [--by ..] [--task ..] [--run ..]` | hand the node off to an Observatory record: one `observatory` reference and `abandoned` with `why: handed off to <record>`, in one write; see [Hand-off](#hand-off) |
-| `status <id> <status> [--why ..]` | move status under the rules above; reopening requires a new node and a `reopens` edge (`new --reopens <id>`) |
-| `tag <id> [--add ..] [--remove ..]` / `tag list` | edit tags; list tags with counts |
+| `show <id>` / `list [--tag ..] [--status ..] [--limit ..]` | read |
+| `log <id>` | list the commits that changed a node |
+| `near <text-or-id> [--limit ..]` | rank existing nodes by word overlap with text or a node; suggestions never create links |
 | `trace <id> [--down] [--depth ..]` | ancestry walk, or descent |
 | `impact <id>` | what `contradicts` or descends from this |
-| `show <id>` / `list [--tag ..] [--status ..] [--limit ..]` | read |
-| `review [--since] [--out] [--limit ..]` | weekly maintenance report; proposes, never mutates |
-| `review --short [--tag ..] [--limit ..]` | the quick glance: hypotheses with no references; seeds untouched ≥ 90 d; inbox entries ≥ 14 d |
 | `graph` | `--json` emits `{nodes: [...], edges: [...]}`; `--mermaid [--from <id>]` emits a diagram |
-| `check` | the invariants |
-| `migrate` | v1 corpus → v2, see below |
-| `completions <shell>` | unchanged |
+| `open [--tag ..]` | deprecated alias for `review --short`: hypotheses created at least 14 days ago with no references; seeds untouched for at least 90 days; inbox entries waiting at least 14 days |
+| `review [--since ..] [--out ..] [--limit ..]` | weekly report: stale hypotheses (default 30 days), untouched seeds (default 90 days), hypotheses created at least 14 days ago with no references, unconfirmed kills, and inbox entries waiting at least 14 days; proposes, never mutates |
+| `review --short [--tag ..] [--limit ..]` | quick glance: hypotheses created at least 14 days ago with no references; seeds untouched for at least 90 days; inbox entries waiting at least 14 days |
 
 Every read verb keeps `--json`. The JSON shape **is** the core library's
 return type serialised; see [2_architecture.md](2_architecture.md).
@@ -275,5 +282,6 @@ refused the same way, at the config.
 
 ## Out of scope for v0.2
 
-Search beyond `list`. Sync beyond git. Evidence weighting in any form.
+Full-text indexing, semantic search, or network search; `near` is a word-overlap
+query over existing nodes. Sync beyond git. Evidence weighting in any form.
 Multi-user. Automatic linking without review.
