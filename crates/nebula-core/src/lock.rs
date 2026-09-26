@@ -195,11 +195,13 @@ fn try_enter(gate: &Arc<Gate>, root: &Path) -> Result<Option<CorpusLock>> {
             // `truncate(false)`: the file is a lock, not a record. Nothing
             // is ever written into it, and emptying it would be a write to
             // a file another process may hold open.
+            let path = root.join(LOCK_FILE);
             let file = OpenOptions::new()
                 .create(true)
                 .write(true)
                 .truncate(false)
-                .open(root.join(LOCK_FILE))?;
+                .open(&path)
+                .map_err(|error| Error::io_at("opening", &path, error))?;
             match FileExt::try_lock(&file) {
                 Ok(()) => {
                     *held = Some(Held {
@@ -214,7 +216,7 @@ fn try_enter(gate: &Arc<Gate>, root: &Path) -> Result<Option<CorpusLock>> {
                 }
                 // Another process is mid-write.
                 Err(TryLockError::WouldBlock) => Ok(None),
-                Err(TryLockError::Error(e)) => Err(e.into()),
+                Err(TryLockError::Error(error)) => Err(Error::io_at("locking", path, error)),
             }
         }
     }
@@ -239,6 +241,20 @@ mod tests {
             "the file stays; deleting it would race a process holding the old inode"
         );
         CorpusLock::acquire(dir.path()).expect("the next writer gets in");
+    }
+
+    #[test]
+    fn a_lock_file_that_cannot_be_opened_is_named() {
+        let dir = root();
+        let missing = dir.path().join("missing");
+        let error = CorpusLock::acquire(&missing).expect_err("no directory to hold the lock");
+        assert!(
+            matches!(
+                &error,
+                Error::IoAt { action: "opening", path, .. } if *path == missing.join(LOCK_FILE)
+            ),
+            "expected the lock path in {error:?}"
+        );
     }
 
     /// The CLI holds the lock across a verb and the commit that records it,

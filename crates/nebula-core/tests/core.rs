@@ -993,6 +993,49 @@ fn opening_a_missing_corpus_is_a_typed_error() {
 }
 
 #[test]
+fn open_or_init_says_whether_it_created_the_corpus() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("fresh");
+
+    let (_, created) = Corpus::open_or_init(Some(root.clone())).expect("first open");
+    assert!(created, "there was no corpus, so this call made one");
+    assert!(root.join("nodes").is_dir() && root.join("inbox").is_dir());
+
+    let (_, created) = Corpus::open_or_init(Some(root)).expect("second open");
+    assert!(!created, "an existing corpus is opened, not created");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_corpus_that_cannot_be_created_names_the_root_it_aimed_at() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let parent = dir.path().join("read-only");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let root = parent.join("corpus");
+
+    let init = Corpus::init(&root).map(|_| ());
+    let open_or_init = Corpus::open_or_init(Some(root.clone())).map(|_| ());
+    let ops_init = ops::init(Some(root.clone()), None, false, false).map(|_| ());
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    for result in [init, open_or_init, ops_init] {
+        assert!(
+            matches!(
+                &result,
+                Err(Error::IoAt { action: "creating", path, source })
+                    if *path == root && source.kind() == std::io::ErrorKind::PermissionDenied
+            ),
+            "expected a creation failure naming {}, got {result:?}",
+            root.display()
+        );
+    }
+    assert!(!root.exists());
+}
+
+#[test]
 fn opening_a_configless_corpus_persists_its_synthesized_id() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");
@@ -1876,7 +1919,7 @@ fn a_symlinked_nodes_directory_refuses_open_init_reads_and_writes() {
     for result in [
         Corpus::open(Some(root.clone())),
         Corpus::init(&root),
-        Corpus::open_or_init(Some(root.clone())),
+        Corpus::open_or_init(Some(root.clone())).map(|(corpus, _)| corpus),
     ] {
         assert!(matches!(result, Err(Error::Corpus(message)) if message.contains("symlink")));
     }

@@ -69,7 +69,7 @@ for one invocation.
 
 | verb | does | flags |
 |---|---|---|
-| `neb capture <TEXT>...` | append a thought; prints the entry id, then the three nearest nodes; works on a corpus that does not exist yet | `--quiet`/`-q` (before or after the text) |
+| `neb capture <TEXT>...` | append a thought; prints the entry id, then the three nearest nodes; works on a corpus that does not exist yet, and then says so on stderr (`note: created a new corpus at <absolute path>`) | `--quiet`/`-q` (before or after the text) |
 | `neb inbox` | live entries (not promoted, not dropped) | — |
 | `neb promote <ENTRY>` | inbox entry → seed node; without `--parent`, prints the three nearest nodes and proceeds as a root | `--title`, `--body <TEXT\|->`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run`, `--quiet`/`-q` |
 | `neb drop <ENTRY>` | strike an entry through; never deleted | — |

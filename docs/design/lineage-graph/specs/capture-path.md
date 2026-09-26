@@ -1,7 +1,7 @@
 ---
 title: Capture Path
 owner: claude
-last_updated: 2026-09-12
+last_updated: 2026-09-26
 last_validated: 2026-09-25
 status: Accepted
 feature: lineage-graph
@@ -28,6 +28,22 @@ neb capture "ranking signal decay looks like a half-life, not a cliff"
 No parent, no type, no tags, no status. It works before a corpus exists: being
 told to run a setup command first is exactly the friction that loses the thought,
 so `capture` creates the corpus rather than refusing.
+
+Creating one is never silent. A mistyped `--root` or `$NEBULA_ROOT` looks exactly
+like a corpus that does not exist yet, and a quiet success would split the corpus
+with nothing to show for it. So whenever `capture` creates a corpus it prints one
+line on stderr naming the absolute path it created, in text and `--json` modes
+alike, and changes nothing on stdout:
+
+```
+note: created a new corpus at /home/you/.nebula
+```
+
+The path is made absolute lexically, against the working directory, and never
+resolved, so a relative typo shows where it landed. The notice asks nothing and
+refuses nothing, so the budget holds. A capture into an existing corpus prints
+no notice. When the corpus cannot be created, the error names the path it tried:
+`creating /nonexistent: Permission denied (os error 13)`.
 
 ## Inbox format
 

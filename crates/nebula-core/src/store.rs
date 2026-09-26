@@ -195,8 +195,12 @@ impl Corpus {
         let config = existing_config
             .then(|| Config::load(root, || corpus_id(root)))
             .transpose()?;
-        std::fs::create_dir_all(root.join("nodes"))?;
-        std::fs::create_dir_all(root.join("inbox"))?;
+        // Each directory is named when it cannot be made: `capture` creates
+        // corpora unasked, so a bare "Permission denied" would leave the
+        // reader guessing which root it was aimed at.
+        for dir in [root.to_path_buf(), root.join("nodes"), root.join("inbox")] {
+            std::fs::create_dir_all(&dir).map_err(|error| Error::io_at("creating", &dir, error))?;
+        }
         let config = if let Some(config) = config {
             config
         } else {
@@ -211,17 +215,22 @@ impl Corpus {
         })
     }
 
-    /// Open the corpus, creating it when there is none.
+    /// Open the corpus, creating it when there is none, and say whether this
+    /// call created it.
     ///
     /// Capture is the reason this exists: being told to run a setup command is
     /// precisely the friction that loses the thought. A corpus that exists but
     /// is at the wrong schema still refuses, because rewriting it blind would
     /// be worse than the friction.
-    pub fn open_or_init(explicit: Option<PathBuf>) -> Result<Self> {
+    ///
+    /// The flag is `true` when there was no corpus at the root, so the caller
+    /// can say where it made one: a mistyped root would otherwise split the
+    /// corpus with nothing to show for it.
+    pub fn open_or_init(explicit: Option<PathBuf>) -> Result<(Self, bool)> {
         let root = Self::resolve_root(explicit)?;
         match Self::open(Some(root.clone())) {
-            Err(Error::NoCorpus(_)) => Self::init(&root),
-            other => other,
+            Err(Error::NoCorpus(_)) => Self::init(&root).map(|corpus| (corpus, true)),
+            other => other.map(|corpus| (corpus, false)),
         }
     }
 

@@ -54,7 +54,9 @@ For each inbox entry, in order:
 "Capture that" / "that's a seed" → `neb capture "<their sentence>"`. Their
 words. If they said three things, ask which one. If they did not flag it,
 ask before capturing. `capture` works even when nothing else does; it is the
-five-second path and must stay one.
+five-second path and must stay one. If it prints `note: created a new corpus
+at <path>`, there was no corpus where it looked: tell the human the path, since
+a mistyped root is the usual cause and later captures would keep landing there.
 
 ## Linking, citing, closing
 

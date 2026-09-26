@@ -172,7 +172,7 @@ pub fn init(
     }
     // The lock lives inside the root, so the root has to exist before it can
     // be taken. `Corpus::init` would create it a moment later anyway.
-    std::fs::create_dir_all(&target)?;
+    std::fs::create_dir_all(&target).map_err(|error| Error::io_at("creating", &target, error))?;
     let _lock = CorpusLock::acquire(&target)?;
     Corpus::init(&target)?;
     if set_root {
