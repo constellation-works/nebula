@@ -44,6 +44,41 @@ habit. This cut keeps what a person actually uses.
   is refused, since `reopens` is already genealogy. Trying to reopen a
   refuted node with `status` now hints the one command that does it,
   `neb new "..." --reopens <id>`.
+- `new` and `promote` take `--id <slug>` to choose the id rather than derive
+  it from the title, which suits a long title, since an id never changes. It
+  follows the rules a derived id does (lowercase words joined by single
+  dashes, 60 characters or fewer) and is refused when it does not
+  (`invalid_id`) or when a node already has it (`node_exists`).
+- `neb note <id> <text>...` appends a dated paragraph of reasoning to a
+  node's body, `- YYYY-MM-DD: <text>` under a `## Notes` section at the end,
+  opening one when the body has none or other prose has closed the last. The
+  earlier prose, status, edges and tags are left as they are, `updated` is
+  bumped, and text over several lines is joined onto one. `show --json` and
+  `note --json` carry `notes: [{at, text, by}]`, read from every `## Notes`
+  section, oldest first. A note is reasoning rather than context, so it does
+  not count as a reference for `review`.
+- `neb edit <id>` opens the node's prose body, never its frontmatter, in
+  `$VISUAL`, else `$EDITOR`, and saves what the editor leaves once it exits
+  successfully. The value is split into words as a shell would, so
+  `code --wait` works. Unmatched quotes or no words are refused
+  (`editor_invalid_command`), neither variable set is refused naming both
+  (`editor_not_configured`), and an editor that fails leaves the node
+  unchanged (`editor_unsuccessful`). Removing, moving or changing any existing
+  `## Notes` section is refused (`notes_changed`), since notes are appended
+  with `note`. `--json` is the `show --json` view. `new --body <TEXT>` sets
+  the prose at creation, `promote --body <TEXT>` appends it after the captured
+  line, and `--body -` reads it from standard input.
+- `--by <label>` on `new`, `promote`, `sharpen`, `link`, `note`, `cite`,
+  `handoff` and `triage` records who wrote the words, per field: `title_by`,
+  `kill_by`, and `by` on each edge and reference, while a note carries it in
+  its line, `- YYYY-MM-DD (agent:crew): text`. It defaults to `human`, stored
+  by omission, so files written earlier need no migration; `show --json` and
+  `list --json` state it outright. A label cannot hold parentheses, a newline
+  or `: `. `edit` validates `--by` but stores nothing, since a body has no
+  author field. `sharpen <id> --confirm` adopts the kill condition already on
+  a node as the human's own and changes nothing else; it is what takes a node
+  off `review`'s unconfirmed-kill list. `--by` is not `--task`/`--run`, which
+  record the Orbit run behind a write.
 - Tags are normalised to lowercase kebab-case on every write path (`new`,
   `promote`, `tag`, `migrate`). `neb tag <id> --add <tag> --remove <tag>`
   edits them; `neb tag list` shows every tag with its node count; `--tag` on
@@ -53,6 +88,14 @@ habit. This cut keeps what a person actually uses.
   catch it at write time: a tag new to the corpus that is that close to one
   in use prints `note: tag physic is close to physics (2 nodes)` on stderr,
   in every output mode. It is a note, never a refusal; the write has landed.
+- `check` rules for what only a hand edit produces: a `closed` block on a
+  seed or hypothesis (rule 12, error); a seed carrying a kill condition
+  (rule 13, warning); and a `created`, `updated` or reference `added` that is
+  not a real calendar date in `YYYY-MM-DD` form, or an `updated` earlier than
+  `created` (rule 14, error). Rule 16 warns on a reference kind outside the
+  vocabulary (`paper`, `study`, `article`, `note`, `discussion`, `book`,
+  `dataset`, `thread`, `observatory`, `other`), which `cite` refuses for a
+  new reference (`unknown_reference_kind`).
 - `neb migrate`: one-shot, idempotent conversion of a v1 corpus. Refuses when
   the corpus is a git repository with a dirty tree. Reads nodes with a lenient
   private v1 model and re-labels losslessly: `domain` becomes a tag; each
@@ -65,7 +108,11 @@ habit. This cut keeps what a person actually uses.
   `closed` block saying no reason was recorded. `config.yaml` is rewritten to
   `schema_version: 2` with only `corpus_id` and `schema_version`, plus
   `observatory_root` and `commit` when they were set. Prints a
-  per-node summary of what changed; a second run rewrites nothing.
+  per-node summary of what changed; a second run rewrites nothing. Before it
+  writes anything it refuses a `config.yaml` at a schema it does not know
+  (`schema_mismatch`), and a corpus already at schema 2 that holds a node the
+  current model cannot read (`current_schema_unreadable`, naming the file),
+  which the lenient v1 reading would have rewritten without its unknown keys.
 - `config.yaml` is `schema_version: 2`; a v1 corpus refuses to open with a
   hint to run `neb migrate`.
 - `cite --kind observatory --uri Q002`: a portable link to an Observatory
@@ -87,6 +134,11 @@ habit. This cut keeps what a person actually uses.
   there, and `neb config observatory-root --drop-legacy` removes it (a corpus
   write, committed when `commit` is on). Run that once every machine sharing
   the corpus has its own setting.
+- A `discussion` reference may omit its URI:
+  `neb cite <id> --kind discussion --note "..."` records a conversation with
+  nowhere to link to. Every other kind still needs `--uri`, and an empty or
+  blank one counts as missing, refused at `cite` and an error under `check`
+  rule 8.
 - `neb handoff <id> <record> --note "..."`: the one-step form of "this idea
   became Observatory record `H012`". One save adds an `observatory` reference
   to the record and closes the node `abandoned` with
@@ -99,6 +151,31 @@ habit. This cut keeps what a person actually uses.
   under `closed:`, `trace` ends the node's line with `handed off to <record>`,
   and both `--json` forms carry `handed_off_to`, omitted for every other
   node. `handoff --json` is `{doc, reference, record, from}`.
+- One writer at a time. Every verb that writes, and the desktop's capture and
+  settle actions, hold an advisory lock on `<root>/.lock` for the whole write
+  and the commit that records it, so a terminal, an agent session and the
+  desktop app can no longer interleave one's load with another's save, leave
+  a `contradicts` edge on one side only, or strike the wrong inbox line.
+  Reads never take it. A writer waits up to five seconds and then refuses
+  before reading anything (`locked`), so the same command is safe to run
+  again; the lock goes with the process holding it, so there is never a
+  stale one to delete. `config.yaml` is re-read under the lock before a
+  setting is rewritten or a commit decided, so two writers no longer erase
+  each other's settings. `init` adds `/.lock` to the corpus's `.gitignore`,
+  which a `commit` stages with the corpus. Running `init` again on an older
+  corpus adds the rule and changes nothing else; a `.gitignore` that is a
+  symlink, which git does not read, becomes a regular file with the same
+  rules, its target untouched.
+- `neb init <dir> --set-root` makes that corpus the machine default, writing
+  its path to `~/.config/nebula/root`. The path must be absolute, and a
+  setting that already names another corpus is replaced only with `--force`
+  as well (`root_config_conflict`); both are refused before anything is
+  created. Plain `init` never touches the setting: it prints the
+  `--set-root` command when there is none, and warns on stderr when the
+  setting names a different corpus from the one it just made. `init` on an
+  existing corpus opens it rather than resetting it, and refuses without
+  changing anything a `config.yaml` there that will not parse or is at
+  another schema.
 - `neb config commit on|off`: with `commit: true` in `config.yaml` (off by
   default, absent from the file until set) and the corpus root inside a git
   work tree, every verb that writes (`capture`, `promote`, `drop`, `triage`,
@@ -115,9 +192,12 @@ habit. This cut keeps what a person actually uses.
   their `--help` offers it, and a verb that only reads refuses it as an
   unknown argument (exit 2); written before the verb, the spelling from when
   the flag was global, it is still honoured but hidden. `neb config commit`
-  reads the setting (`--json`: `{ "enabled": bool }`); `migrate` preserves it
-  and commits itself. The runbooks now recommend a private repository at the
-  corpus root and cover restoring from it.
+  with no argument reads the setting (`--json`: `{ "enabled": bool }`) and,
+  like every `config` that changes nothing in the corpus, commits nothing;
+  `migrate` preserves it and commits itself. With `commit` on, a node whose
+  file name is not ASCII commits like any other, where git's quoting of the
+  name used to make it look staged elsewhere. The runbooks now recommend a
+  private repository at the corpus root and cover restoring from it.
 - `neb near <TEXT>... | <NODE>` (`--limit K`/`-k`, default 3): the existing
   nodes closest to free text, or to a node (left out of its own answer), best
   first. Word overlap only — BM25 over title, tags and body, title and tags
@@ -166,6 +246,11 @@ habit. This cut keeps what a person actually uses.
   raise --limit for more`, `(1 more beyond --depth)`); under `--json` the
   arrays are cut to N (per `rule` for `review`) in the same shape, with no
   marker.
+- `--json` covers the writes as well as the reads: each verb that writes
+  prints the value it changed. `new` is `{doc, path}`; `sharpen` and `tag` a
+  `Doc`; `status` `{doc, from}`; `link` an array, since `contradicts` changes
+  both nodes; `cite` `{doc, reference}`; `drop` the settled entry; `note` and
+  `edit` the `show --json` view; `init` `{root}`.
 - Refusals under `--json` are data: one line on stderr,
   `{"error": "...", "code": "...", "hint": ...}`. `error` is the message,
   `code` a stable `snake_case` name (for a core refusal, the `nebula-core`
@@ -181,7 +266,23 @@ habit. This cut keeps what a person actually uses.
   Nodes (`new`, `edit`, `sharpen`, `status`, `link`, `tag`, `note`),
   References (`cite`, `handoff`), Query, Maintenance.
 - `neb graph --json`: the whole corpus as `{nodes, edges}`, for a tool that
-  draws it. JSON only; without `--json` it prints a hint and exits 2.
+  draws it. `neb graph --mermaid` prints a Mermaid `graph BT` block to paste
+  instead: nodes styled by status, edges labelled by kind, each `contradicts`
+  pair one dotted undirected line, and titles escaped (`&`, `<`, `>`, `"`,
+  `[`, `]`) so they stay label text. `--from <id>` narrows it to that node,
+  its ancestors and its descendants. `--mermaid` and `--from` conflict with
+  `--json` whether it is written before the verb or after it (exit 2), so
+  JSON is always the whole corpus. With neither format, `graph` prints a hint
+  and exits 2.
+- `neb log <id>` lists the commits that changed a node, newest first: short
+  hash, date and message, or `no commits touched this node` (`--json`:
+  `[{hash, date, message}]` with the full hash, or `[]`). `neb show <id> --at
+  <HASH|YYYY-MM-DD>` prints the node as it was then, in `show`'s own text and
+  JSON; a date means the last commit that day. Both read the history
+  `commit on` writes and are read-only. A corpus outside a git work tree is
+  refused (`not_git_work_tree`), a revision before the node existed is
+  `no_node_at_revision`, and an `--at` that is neither a date nor a hex
+  revision is refused naming the value.
 - `skills/nebula/`: the agent skill. `SKILL.md` states the two modes (session:
   act and `neb check` after every write; routine: read-only, proposals into
   `review.md`), corpus resolution, capture-from-conversation, provenance and
@@ -220,7 +321,9 @@ habit. This cut keeps what a person actually uses.
   frontmatter, `closed.why`, the body via `react-markdown` + `remark-gfm`
   with raw HTML shown as text and images loaded only from `https:` URLs,
   edges as two clickable lists, references as a table whose `http(s)`/`mailto`
-  URIs open through the opener plugin. `corpus-changed` refetches and
+  URIs open through the opener plugin. A non-human `by` is named beside the
+  title, kill condition, edges and references, and an Observatory reference
+  shows where its record is on this machine. `corpus-changed` refetches and
   re-lays out without losing the selection or the viewport, and so does
   switching to the Inbox tab and back.
 
@@ -245,6 +348,34 @@ habit. This cut keeps what a person actually uses.
   `Error::IdMismatch`). Ids are judged as written and nothing is
   canonicalized, so a symlinked root behaves as before, and the rule is about
   path structure rather than alphabet: `ünïcode-título-ok` is still an id.
+  Name and id agree only when they are one directory entry, as the
+  filesystem answers it: a byte-for-byte copy of another node is refused
+  like any other mismatch, and so is a second name for a node under
+  `nodes/`, a hard link or a symlink, which is named as the alias to remove
+  (`id_mismatch`). A name stored in another Unicode normalization is still
+  the same node.
+- A title's id keeps its Unicode letters and digits, lowercased
+  (`Ünïcode título → ok` is `ünïcode-título-ok`, and `시간은 프레임의 수다`
+  keeps its words); they used to be dropped, leaving a fragment of the title
+  or no id at all. Tags are normalised by the same rule. An id over 60
+  characters is cut at the last `-` at or before the limit rather than
+  mid-word.
+- `sharpen --kill` no longer replaces a kill condition already on an open
+  node. It refuses (`kill_already_set`) and prints the one in place: a
+  different falsifier is a different idea, and belongs on a new node. On a
+  refuted node, `sharpen --kill`, `sharpen --confirm` and a second
+  `status <id> refuted` are all refused as a status change is
+  (`refuted_cannot_reopen`); the last used to overwrite `closed.why` and its
+  date. An abandoned node is not a verdict, so `sharpen` still works on one
+  and a second `status <id> abandoned --why` replaces the reason. When
+  `sharpen` leaves the status where it was, text output says
+  `<id> kill condition set; status remains abandoned` rather than claiming a
+  move.
+- `capture`, `note` and `near` still take the remaining words as their
+  text, but a flag after the text is a flag: `neb capture an idea --quiet`
+  quiets and stores `an idea`, and `--no-commit`, `--by` or `--limit` there
+  take effect instead of being stored. A dash-leading word that belongs to
+  the thought goes in quotes or after `--`.
 - `neb open` is merged into `neb review --short`, which prints what `open`
   did, one line each: hypotheses created fourteen or more days ago with no
   references, seeds untouched for ninety days or more, and inbox entries
@@ -307,10 +438,6 @@ habit. This cut keeps what a person actually uses.
 
 ### Fixed
 
-- `neb edit` splits `$VISUAL` or `$EDITOR` into words as a shell would, so
-  `code --wait` works; the whole value used to be taken as the program's
-  name. A value with unmatched quotes, or with no words, is refused
-  (`editor_invalid_command`).
 - `capture` at a root with no corpus still creates one rather than refuse,
   but now says so on stderr, `note: created a new corpus at <absolute path>`,
   in text and `--json` alike, so a mistyped `--root` or `$NEBULA_ROOT` shows.
@@ -324,9 +451,38 @@ habit. This cut keeps what a person actually uses.
   it exists on this machine, with a hint at a path relative to `nodes/` or an
   Observatory id. `check` reports one already in the corpus as a rule-8
   warning instead of resolving it.
-- `neb --json graph --mermaid`, and `--from`, exit 2 with clap's conflict
-  error, as `neb graph --mermaid --json` always did. `--json` written before
-  the verb used to be missed, and the Mermaid path ran.
+- An exported but empty `$NEBULA_ROOT` is treated as unset rather than as
+  the current directory, where `capture` would have made a corpus. An empty
+  `--root ""` is refused naming the flag (exit 2), and a caller of the
+  library that passes an empty root gets `empty_root`.
+- A node file with missing or unterminated frontmatter, and a node or
+  `config.yaml` that cannot be read, are refused naming the file (`io_at` for
+  an operating-system error), where a bare message used to leave the whole
+  corpus unreadable with nothing to go and fix.
+- A corpus written by a newer `neb` says to upgrade this build, not to run
+  `neb migrate`, which could only fail the same way.
+- Unknown keys inside an edge or an `origin` block are a parse error, as
+  unknown keys elsewhere in a node already were, instead of being dropped by
+  the next write.
+- The inbox no longer loses or revives entries. Settling one rewrites its
+  month file atomically, and refuses when the line has moved. A capture after
+  a month file whose last line has no newline starts a line of its own
+  instead of joining it. Only `inbox/YYYY-MM.md` files are read, so a
+  leftover temporary file cannot bring a settled entry back. An entry id is
+  unique among every waiting entry in every month, and a capture is refused
+  only when all 65,536 ids are waiting. A corpus with `nodes/` but no
+  `config.yaml` has the one it is given written, so its `corpus_id` stays
+  the same from one run to the next.
+- Every file `neb` replaces goes through a temporary file it creates
+  exclusively, under a fresh name (`<file>.<pid>-<n>-<nanos>.tmp`): a symlink
+  planted at the temporary path is never written through, and a temporary
+  left by a killed process never blocks the next write.
+- Desktop: text typed into the capture box while an earlier capture is still
+  saving is kept, and the floating window stays open for it. The node panel
+  clears the previous node when the selection changes or a load fails, and
+  overlapping inbox or graph refreshes keep the newest result. The
+  missing-corpus screen says to run `neb init` at the path shown, or to set
+  `NEBULA_ROOT` and restart the app.
 - Desktop: a capture no longer freezes the window while another writer holds
   the corpus lock. Every corpus command runs off the webview thread, and a
   capture waits at most 150 ms for the lock, retries twice, then says
