@@ -2,7 +2,7 @@
 //! `session` functions the commands call. The line written is the one
 //! `neb capture` writes, so `neb inbox` lists it too.
 
-use nebula_core::{Corpus, Error};
+use nebula_core::{Corpus, Error, ops};
 use nebula_desktop::session;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
@@ -36,6 +36,49 @@ fn capture_then_inbox_round_trips() {
             entry.id, entry.at
         )
     );
+}
+
+#[test]
+fn capture_commits_each_entry_when_enabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("corpus");
+    let mut corpus = Corpus::init(&root).unwrap();
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.name", "neb-test"]);
+    git(&["config", "user.email", "neb-test@example.invalid"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    ops::set_commit(&mut corpus, true).unwrap();
+    ops::commit(&corpus, "config", &["commit"])
+        .unwrap()
+        .unwrap();
+
+    let first = session::capture(&corpus, "first thought").unwrap();
+    assert_eq!(
+        git(&["log", "-1", "--format=%s"]).trim(),
+        format!("neb capture {}", first.id)
+    );
+    assert_eq!(git(&["rev-list", "--count", "HEAD"]).trim(), "2");
+    let second = session::capture(&corpus, "second thought").unwrap();
+    assert_eq!(
+        git(&["log", "-1", "--format=%s"]).trim(),
+        format!("neb capture {}", second.id)
+    );
+    assert_eq!(git(&["rev-list", "--count", "HEAD"]).trim(), "3");
+    assert!(git(&["status", "--porcelain"]).is_empty());
 }
 
 #[test]
