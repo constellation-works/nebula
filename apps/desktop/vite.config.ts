@@ -14,5 +14,8 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: ["src/test/setup.ts"],
+    // Above testing-library's 10 s `asyncUtilTimeout` (src/test/setup.ts),
+    // with room for a test that waits more than once.
+    testTimeout: 30_000,
   },
 });
