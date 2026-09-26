@@ -668,6 +668,10 @@ fn every_error_kind_is_its_variant_name() {
             configured: path.clone(),
             requested: path.clone(),
         },
+        Error::RelativeObservatoryRoot {
+            root: "observatory".into(),
+            setting: Some(path.clone()),
+        },
         Error::SchemaMismatch {
             path: path.clone(),
             found: 1,
@@ -2158,6 +2162,73 @@ fn commit_on_in_a_corpus_the_containing_repository_ignores_is_a_typed_error() {
     assert!(corpus.node_path(&a).unwrap().exists());
 }
 
+// ------------------------------------------------------- observatory root --
+
+/// Give the corpus at `root` the `observatory_root` key an older `neb` wrote
+/// into `config.yaml`: another machine's absolute path. Written by hand
+/// because nothing in this build writes it any more. Returns the path.
+fn with_legacy_observatory_root(root: &std::path::Path) -> std::path::PathBuf {
+    let foreign = std::path::PathBuf::from("/Users/someone-else/workspace/observatory");
+    let config = root.join("config.yaml");
+    let raw = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        format!("{raw}observatory_root: {}\n", foreign.display()),
+    )
+    .unwrap();
+    foreign
+}
+
+/// A corpus written before the setting moved out of `config.yaml` still
+/// opens, and the key is reported as the legacy setting it is, whichever
+/// setting wins on this machine.
+#[test]
+fn a_legacy_observatory_root_in_config_yaml_still_loads_and_is_reported() {
+    let (dir, _corpus) = corpus();
+    let root = dir.path().join("corpus");
+    let foreign = with_legacy_observatory_root(&root);
+
+    let corpus = Corpus::open(Some(root)).unwrap();
+    let setting = corpus.observatory_root().unwrap();
+    assert_eq!(setting.legacy, Some(foreign));
+    assert!(setting.root.is_some(), "the legacy key is still a fallback");
+}
+
+/// Dropping the key rewrites `config.yaml` without it and keeps the rest;
+/// with no key there it writes nothing at all.
+#[test]
+fn dropping_the_legacy_observatory_root_keeps_every_other_setting() {
+    let (dir, mut corpus) = corpus();
+    let root = dir.path().join("corpus");
+    let config = root.join("config.yaml");
+    let pristine = std::fs::read(&config).unwrap();
+
+    assert_eq!(
+        ops::drop_legacy_observatory_root(&mut corpus)
+            .unwrap()
+            .legacy,
+        None
+    );
+    assert_eq!(pristine, std::fs::read(&config).unwrap(), "a no-op wrote");
+
+    with_legacy_observatory_root(&root);
+    let mut corpus = Corpus::open(Some(root)).unwrap();
+    ops::drop_legacy_observatory_root(&mut corpus).unwrap();
+    assert_eq!(pristine, std::fs::read(&config).unwrap());
+}
+
+/// The machine setting is read from any directory, so a relative one is
+/// refused before anything is written.
+#[test]
+fn a_relative_observatory_root_is_refused_before_it_is_written() {
+    let (_dir, corpus) = corpus();
+    let relative = std::path::Path::new("observatory");
+    assert!(matches!(
+        ops::set_observatory_root(&corpus, relative),
+        Err(Error::RelativeObservatoryRoot { root, setting: None }) if root == relative
+    ));
+}
+
 // -------------------------------------------- settings written under a lock --
 
 /// `Corpus::open` reads `config.yaml` without the lock, because a read must
@@ -2175,7 +2246,7 @@ fn commit_on_in_a_corpus_the_containing_repository_ignores_is_a_typed_error() {
 fn a_setting_landed_since_open_survives_the_next_writers_rewrite() {
     let (dir, _corpus) = corpus();
     let root = dir.path().join("corpus");
-    let observatory = dir.path().join("observatory");
+    let foreign = with_legacy_observatory_root(&root);
 
     // The waiter opens — and so snapshots the config — before the writer
     // ahead of it in the queue has written anything.
@@ -2186,43 +2257,49 @@ fn a_setting_landed_since_open_survives_the_next_writers_rewrite() {
     let mut ahead = Corpus::open(Some(root.clone())).unwrap();
     assert!(ops::set_commit(&mut ahead, true).unwrap().enabled);
 
-    // The waiter gets in and sets a different key.
-    let setting = ops::set_observatory_root(&mut waiting, observatory.clone()).unwrap();
-    assert_eq!(setting.root.as_deref(), Some(observatory.as_path()));
+    // The waiter gets in and removes a different key.
+    let setting = ops::drop_legacy_observatory_root(&mut waiting).unwrap();
+    assert_eq!(setting.legacy, None);
 
-    let reopened = Corpus::open(Some(root)).unwrap();
+    let reopened = Corpus::open(Some(root.clone())).unwrap();
     assert!(
         reopened.commit_setting().enabled,
         "the commit setting written after the waiter opened was erased by its rewrite"
     );
     assert_eq!(
-        reopened.observatory_root().root.as_deref(),
-        Some(observatory.as_path()),
-        "and the waiter's own setting must still have landed"
+        reopened.observatory_root().unwrap().legacy,
+        None,
+        "and the waiter's own change must still have landed"
     );
+    let raw = std::fs::read_to_string(root.join("config.yaml")).unwrap();
+    assert!(!raw.contains(foreign.to_str().unwrap()), "{raw}");
 }
 
 /// The same loss in the other direction, so neither setting is merely the one
-/// that happens to be written last.
+/// that happens to be written last: a stale snapshot that still holds the
+/// legacy key must not write it back.
 #[test]
-fn a_stale_commit_write_keeps_the_observatory_root_written_since_it_opened() {
+fn a_stale_commit_write_does_not_restore_the_legacy_key_dropped_since_it_opened() {
     let (dir, _corpus) = corpus();
     let root = dir.path().join("corpus");
-    let observatory = dir.path().join("observatory");
+    let foreign = with_legacy_observatory_root(&root);
 
     let mut waiting = Corpus::open(Some(root.clone())).unwrap();
-    assert!(waiting.observatory_root().root.is_none());
+    assert_eq!(
+        waiting.observatory_root().unwrap().legacy,
+        Some(foreign.clone())
+    );
 
     let mut ahead = Corpus::open(Some(root.clone())).unwrap();
-    ops::set_observatory_root(&mut ahead, observatory.clone()).unwrap();
+    ops::drop_legacy_observatory_root(&mut ahead).unwrap();
 
     assert!(ops::set_commit(&mut waiting, true).unwrap().enabled);
 
     let reopened = Corpus::open(Some(root)).unwrap();
     assert_eq!(
-        reopened.observatory_root().root.as_deref(),
-        Some(observatory.as_path()),
-        "the observatory root written after the waiter opened was erased"
+        reopened.observatory_root().unwrap().legacy,
+        None,
+        "the legacy key dropped after the waiter opened came back"
     );
     assert!(reopened.commit_setting().enabled);
 }

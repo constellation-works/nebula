@@ -84,6 +84,7 @@ refusal's `kind` (the envelope is in [verbs.md](verbs.md#refusals-under---json))
 | `\`X\` is an absolute local path; local references are relative to nodes/` | `AbsoluteUri` | 8 | An absolute path or `file:` URI names nothing on any other machine the corpus is synced to, so it is refused even when it exists here. Rewrite it relative to `nodes/` (`../../studies/x.md`), cite an Observatory record by its id with `--kind observatory`, or use a URL. |
 | `\`X\` is not an Observatory record id` | `InvalidObservatoryId` | 9 | `--kind observatory` takes the bare id (`Q002`, `H007`, `T003`, `R012`), never a path or a slug. Never fall back to `--uri <absolute path>`: it breaks on every other machine. |
 | `\`X\` is not an accepted reference kind; accepted kinds: ...` | `UnknownReferenceKind` | 16 | `--kind` takes one of the listed kinds. Pick the closest (`other` when none fits); never invent a kind. |
+| `the observatory root must be an absolute path, not \`X\`` | `RelativeObservatoryRoot { root, setting }` | 9 | The setting is per machine and read from any directory. With `(in <file>)`, this machine's setting file is empty or relative: tell the human, who sets it again with an absolute `neb config observatory-root <DIR>`. Otherwise pass the checkout's absolute path. Never write the path into `config.yaml` instead. |
 | `no open inbox entry \`X\`` | `NoSuchInboxEntry` | — | The id is wrong: no inbox line, waiting or settled, carries it. `neb inbox --json`. |
 | `\`X\` was already promoted to \`N\`` / `\`X\` was already dropped` | `InboxEntrySettled { id, settlement }` | — | The entry is settled and the verb has nothing to do. Promoted: work on node `N` (`neb show N`). Dropped: it stays dropped; if the human wants it back, capture it again. Do not retry. |
 | `node \`X\` already exists` | `NodeExists` | — | A node with that slug exists. Show it; the human decides whether this is a duplicate (drop) or a refinement (`new` with a different title + `refines`). |
@@ -103,7 +104,10 @@ refusal's `kind` (the envelope is in [verbs.md](verbs.md#refusals-under---json))
 - **Rule 9, observatory** — the record does not resolve, or no root is set.
   Never "fix" this by rewriting the reference as a path. Tell the human to run
   `neb config observatory-root <DIR>` or export `$OBSERVATORY_ROOT`; if the
-  root is right, the checkout simply does not carry that record yet.
+  root is right, the checkout simply does not carry that record yet. The same
+  rule, with no node, flags a legacy `observatory_root` key in `config.yaml`:
+  one machine's path in the shared corpus. Leave it to the human, who sets
+  each machine's own and then runs `neb config observatory-root --drop-legacy`.
 - **Rule 8, absolute path** — a reference whose URI is an absolute path or a
   `file:` URI, written by hand or carried over by `neb migrate`. It may
   resolve here and nowhere else. Propose rewriting it relative to `nodes/`, or

@@ -74,7 +74,9 @@ backstop for rules also enforced elsewhere, since node files are hand-editable.
 
 A reference of kind `observatory` carries a bare record id (`Q002`, `H007`,
 `T003`, `R012`) rather than a location, and where that record is comes from
-`observatory_root` in `config.yaml`, else `$OBSERVATORY_ROOT`. The split
+the machine: `$OBSERVATORY_ROOT`, else `~/.config/nebula/observatory-root`,
+else a legacy `observatory_root` key in `config.yaml` (see "Machine settings"
+in `docs/design/v0.2/1_spec.md`). The split
 follows from what each half means. The id's *shape* is the corpus's business,
 so `cite` refuses anything that is not one of the four letters followed by
 digits — a path stored there would never resolve, and the mistake is obvious
@@ -82,7 +84,9 @@ now and cryptic in a year. Whether the record is *on this machine* is not the
 corpus's business at all: an unset root or a checkout without the record says
 the machine is missing something, not that the citation is wrong, so `check`
 warns. Erroring would make one portable corpus fail on every machine that
-does not happen to have Observatory checked out.
+does not happen to have Observatory checked out. For the same reason the
+legacy key draws a warning of its own whenever `config.yaml` carries it: it is
+one machine's path in a file every machine reads.
 
 ## Rule 8 and absolute paths
 

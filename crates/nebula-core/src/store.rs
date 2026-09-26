@@ -79,6 +79,65 @@ impl Corpus {
         }
     }
 
+    /// The machine-local file that records where the Observatory checkout
+    /// is, beside [`Self::root_config_path`]. A machine setting rather than a
+    /// corpus one, because the corpus travels between machines and the
+    /// checkout's path does not.
+    pub fn observatory_root_config_path() -> Result<PathBuf> {
+        Ok(Self::home()?
+            .join(".config")
+            .join("nebula")
+            .join("observatory-root"))
+    }
+
+    /// Read this machine's Observatory checkout setting, if it has one.
+    ///
+    /// A machine with no `HOME` has no machine settings, which is not an
+    /// error: `$OBSERVATORY_ROOT` and an explicit `--root` still work there.
+    /// A file that is present but empty or relative is refused rather than
+    /// skipped, because falling through to the legacy key would resolve
+    /// records against another machine's path without a word.
+    pub fn configured_observatory_root() -> Result<Option<PathBuf>> {
+        let Ok(path) = Self::observatory_root_config_path() else {
+            return Ok(None);
+        };
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(Error::io_at("reading", &path, error)),
+        };
+        let root = PathBuf::from(raw.trim());
+        if !root.is_absolute() {
+            return Err(Error::RelativeObservatoryRoot {
+                root,
+                setting: Some(path),
+            });
+        }
+        Ok(Some(root))
+    }
+
+    /// Make `dir` this machine's Observatory checkout, for every corpus.
+    ///
+    /// Writes `~/.config/nebula/observatory-root` and nothing under any
+    /// corpus. The directory is not required to exist yet; `check` says so
+    /// when a reference fails to resolve under it. It must be absolute, since
+    /// the setting is read from whatever directory a command runs in.
+    pub(crate) fn write_observatory_root_config(dir: &Path) -> Result<PathBuf> {
+        if !dir.is_absolute() {
+            return Err(Error::RelativeObservatoryRoot {
+                root: dir.to_path_buf(),
+                setting: None,
+            });
+        }
+        let path = Self::observatory_root_config_path()?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| Error::corpus("observatory root configuration path has no parent"))?;
+        std::fs::create_dir_all(parent).map_err(|error| Error::io_at("creating", parent, error))?;
+        write_atomic(&path, format!("{}\n", dir.display()))?;
+        Ok(path)
+    }
+
     /// The machine-local setting that a new non-default corpus will write.
     pub fn root_config_path_if_absent(root: &Path) -> Result<Option<PathBuf>> {
         if root == Self::default_root()? {
@@ -285,37 +344,56 @@ impl Corpus {
         Ok(())
     }
 
-    /// Where `observatory` references resolve: `observatory_root` in
-    /// `config.yaml`, else `$OBSERVATORY_ROOT`, else nowhere.
+    /// Where `observatory` references resolve on this machine:
+    /// `$OBSERVATORY_ROOT`, else this machine's
+    /// `~/.config/nebula/observatory-root`, else the legacy `observatory_root`
+    /// key in `config.yaml`, else nowhere. The result names which one
+    /// answered, and carries the legacy key whenever the file has one.
     ///
-    /// The path is used as given and never canonicalized, like every other
+    /// The paths are used as given and never canonicalized, like every other
     /// path here.
     ///
-    /// The snapshot [`Self::open`] took, which is what a read wants: it
-    /// answers without waiting on a writer.
-    pub fn observatory_root(&self) -> ObservatoryRoot {
-        self.config.observatory_root()
+    /// The environment and the machine file are read now; the legacy key is
+    /// the snapshot [`Self::open`] took, which is what a read wants: it
+    /// answers without waiting on a writer. Fails only on a machine setting
+    /// that is unreadable, empty or relative.
+    pub fn observatory_root(&self) -> Result<ObservatoryRoot> {
+        let env = std::env::var_os(config::OBSERVATORY_ROOT_ENV).filter(|v| !v.is_empty());
+        // The environment outranks the machine file, which is then not read
+        // at all: a machine whose file is broken still works while the
+        // variable is exported.
+        let machine = match env {
+            Some(_) => None,
+            None => Self::configured_observatory_root()?,
+        };
+        Ok(ObservatoryRoot::from_settings(
+            env,
+            machine,
+            self.config.legacy_observatory_root().map(Path::to_path_buf),
+        ))
     }
 
-    /// Record where the Observatory checkout is, in `config.yaml`.
+    /// Remove the legacy `observatory_root` key from `config.yaml`. When the
+    /// file on disk no longer carries it, nothing is written.
     ///
     /// The file stays machine-written: this rewrites it whole, header and
-    /// all, rather than editing a line. The directory is not required to
-    /// exist yet; `check` says so when a reference fails to resolve under it.
-    ///
-    /// Rewriting it whole is why the reload comes first: this sets one key
-    /// and must carry every other key across as it stands under the caller's
-    /// lock, not as it stood when the corpus was opened.
-    pub(crate) fn set_observatory_root(&mut self, dir: PathBuf) -> Result<()> {
+    /// all, rather than editing a line — which is why the reload comes
+    /// first: this removes one key and must carry every other key across as
+    /// it stands under the caller's lock, not as it stood when the corpus was
+    /// opened.
+    pub(crate) fn drop_legacy_observatory_root(&mut self) -> Result<()> {
         self.reload_config()?;
-        self.config.observatory_root = Some(dir);
-        self.config.save(&self.root)
+        match self.config.observatory_root.take() {
+            Some(_) => self.config.save(&self.root),
+            None => Ok(()),
+        }
     }
 
     /// Whether a write is followed by a commit, per `config.yaml`.
     ///
-    /// The snapshot [`Self::open`] took, like [`Self::observatory_root`]: a
-    /// read of the setting never waits on a writer.
+    /// The snapshot [`Self::open`] took, like the legacy key in
+    /// [`Self::observatory_root`]: a read of the setting never waits on a
+    /// writer.
     pub fn commit_setting(&self) -> CommitSetting {
         CommitSetting {
             enabled: self.config.commit,
@@ -324,7 +402,7 @@ impl Corpus {
 
     /// Record in `config.yaml` whether writes are committed. Rewrites the
     /// file whole, like every other setting, and so reloads first for the
-    /// same reason [`Self::set_observatory_root`] does.
+    /// same reason [`Self::drop_legacy_observatory_root`] does.
     pub(crate) fn set_commit(&mut self, enabled: bool) -> Result<()> {
         self.reload_config()?;
         self.config.commit = enabled;

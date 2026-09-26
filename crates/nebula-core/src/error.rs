@@ -74,6 +74,22 @@ pub enum Error {
         requested: PathBuf,
     },
 
+    /// An observatory root that is not an absolute path, given to be stored
+    /// or read back from this machine's setting. A machine-wide setting is
+    /// read from whatever directory a command runs in, so a relative one
+    /// would name a different checkout from each.
+    #[error(
+        "the observatory root must be an absolute path, not `{}`{}",
+        .root.display(),
+        .setting.as_ref().map(|p| format!(" (in {})", p.display())).unwrap_or_default()
+    )]
+    RelativeObservatoryRoot {
+        /// The path as given, possibly empty.
+        root: PathBuf,
+        /// The machine setting file it was read from, when it was read.
+        setting: Option<PathBuf>,
+    },
+
     /// The corpus on disk follows a schema this build does not read.
     #[error("{} is schema_version {found}, and this build understands {expected}", .path.display())]
     SchemaMismatch {
@@ -346,6 +362,7 @@ impl Error {
             Self::NoNodeAtRevision { .. } => "NoNodeAtRevision",
             Self::EmptyRoot => "EmptyRoot",
             Self::RootConfigConflict { .. } => "RootConfigConflict",
+            Self::RelativeObservatoryRoot { .. } => "RelativeObservatoryRoot",
             Self::SchemaMismatch { .. } => "SchemaMismatch",
             Self::CurrentSchemaUnreadable { .. } => "CurrentSchemaUnreadable",
             Self::Cycle { .. } => "Cycle",

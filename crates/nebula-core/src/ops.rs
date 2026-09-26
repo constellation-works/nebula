@@ -35,7 +35,7 @@ use crate::lock::CorpusLock;
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
 use crate::store::{self, Committed, Corpus, InboxEntry};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A corpus that has just been created.
 #[derive(Debug, Clone, Serialize)]
@@ -724,14 +724,27 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
     Ok(Cited { doc, reference })
 }
 
-/// Record where the Observatory checkout is, in the corpus's `config.yaml`.
+/// Record where the Observatory checkout is on this machine, in
+/// `~/.config/nebula/observatory-root`. Nothing under the corpus changes, so
+/// no lock is taken: the checkout's path belongs to the machine, and the
+/// corpus travels between machines.
 ///
-/// Returns the setting as it now resolves, which is the config's value: a
-/// root written here takes precedence over `$OBSERVATORY_ROOT`.
-pub fn set_observatory_root(corpus: &mut Corpus, dir: PathBuf) -> Result<ObservatoryRoot> {
+/// Returns the setting as `corpus` now resolves it, which is the machine
+/// setting unless `$OBSERVATORY_ROOT` outranks it.
+pub fn set_observatory_root(corpus: &Corpus, dir: &Path) -> Result<ObservatoryRoot> {
+    Corpus::write_observatory_root_config(dir)?;
+    corpus.observatory_root()
+}
+
+/// Remove the legacy `observatory_root` key from the corpus's `config.yaml`,
+/// the one place a machine path was ever stored in the corpus. A no-op when
+/// the file does not carry it.
+///
+/// Returns the setting as it now resolves, without the key.
+pub fn drop_legacy_observatory_root(corpus: &mut Corpus) -> Result<ObservatoryRoot> {
     let _lock = corpus.lock()?;
-    corpus.set_observatory_root(dir)?;
-    Ok(corpus.observatory_root())
+    corpus.drop_legacy_observatory_root()?;
+    corpus.observatory_root()
 }
 
 /// Record in the corpus's `config.yaml` whether each write is committed.

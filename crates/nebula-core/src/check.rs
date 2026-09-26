@@ -9,6 +9,7 @@
 //! The checker reports; it never fixes and never prints. What an error costs
 //! the caller — an exit code, a red badge — is the caller's business.
 
+use crate::config::{OBSERVATORY_ROOT_ENV, ObservatorySource};
 use crate::error::Result;
 use crate::graph::Graph;
 use crate::model::{Doc, EdgeType, Status, is_iso_date};
@@ -110,10 +111,36 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
         nodes: docs.len(),
         ..Report::default()
     };
-    let observatory = corpus.observatory_root().root;
+    let observatory = corpus.observatory_root()?;
 
     for doc in docs {
-        check_node(doc, &ids, corpus, observatory.as_deref(), &mut r);
+        check_node(doc, &ids, corpus, observatory.root.as_deref(), &mut r);
+    }
+
+    // 9, for the Observatory setting itself: an `observatory_root` key in
+    //    `config.yaml` is one machine's path in a file every machine shares.
+    //    Still honoured as a fallback, so a warning rather than an error, and
+    //    one that says whether it is the value in force here.
+    if let Some(legacy) = &observatory.legacy {
+        let shadowed = |by: &str| {
+            format!(
+                "config.yaml still carries the machine-specific observatory_root {}, ignored \
+                 here in favour of {by}; once every machine has its own setting, remove it \
+                 with `neb config observatory-root --drop-legacy`",
+                legacy.display()
+            )
+        };
+        let message = match observatory.source {
+            ObservatorySource::Env => shadowed(&format!("${OBSERVATORY_ROOT_ENV}")),
+            ObservatorySource::Machine => shadowed("this machine's setting"),
+            ObservatorySource::Config | ObservatorySource::Unset => format!(
+                "config.yaml sets observatory_root to {}, a machine-specific path in a file \
+                 every machine shares; give this machine its own with `neb config \
+                 observatory-root <DIR>` or ${OBSERVATORY_ROOT_ENV}",
+                legacy.display()
+            ),
+        };
+        r.push(Severity::Warn, Rule::ObservatoryReference, None, message);
     }
 
     // 4. `contradicts` is a claim about both nodes, so a one-sided declaration
@@ -236,8 +263,8 @@ pub(crate) fn resolve_local(corpus: &Corpus, uri: &str) -> PathBuf {
 
 /// The reference kind whose `uri` is a bare Observatory record id rather
 /// than a location: `Q002`, `H007`, `T003`, `R012`. Where the record is on
-/// this machine is the corpus's `observatory_root` setting, so the reference
-/// itself carries nothing machine-specific.
+/// this machine is a machine setting ([`crate::Corpus::observatory_root`]),
+/// so the reference itself carries nothing machine-specific.
 pub const OBSERVATORY: &str = "observatory";
 
 /// The closed vocabulary accepted for new references. The model deliberately
@@ -525,8 +552,8 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
                         id,
                         format!(
                             "reference `{}` names Observatory record `{record}` but no \
-                             observatory root is set (config observatory_root or \
-                             $OBSERVATORY_ROOT)",
+                             observatory root is set (`neb config observatory-root <DIR>` \
+                             or $OBSERVATORY_ROOT)",
                             f.id
                         ),
                     ),
