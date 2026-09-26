@@ -141,6 +141,7 @@ a dirty tree excludes the ignored lock.
 neb/src/
   main.rs         # ExitCode from cli::run()
   cli.rs          # clap tree; the only file that knows clap
+  output.rs       # the one owner of stdout/stderr; a closed stdout exits 0
   render/         # text rendering of core types: tree, table, badges, colour
 ```
 
