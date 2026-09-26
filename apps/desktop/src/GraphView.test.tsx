@@ -57,6 +57,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocked.onCorpusChanged.mockResolvedValue(() => {});
   mocked.openInEditor.mockResolvedValue(undefined);
+  mocked.reload.mockResolvedValue(undefined);
   mocked.node.mockImplementation(async (id) => ({
     node: { id, title: `Idea ${id}`, status: "seed", created: "", updated: "" },
     body: "",
@@ -123,6 +124,31 @@ describe("GraphView", () => {
     await waitFor(() => expect(drawnNodes()).toHaveLength(3));
     fireEvent.doubleClick(canvas().querySelector('g.node[data-id="n2"]')!);
     expect(mocked.openInEditor).toHaveBeenCalledWith("n2");
+  });
+
+  it("shows a dismissible error when double-click cannot open the file", async () => {
+    mocked.graph.mockResolvedValue(synthetic(1));
+    mocked.openInEditor.mockRejectedValueOnce("no .md handler");
+    render(<GraphView />);
+    await waitFor(() => expect(drawnNodes()).toHaveLength(1));
+    fireEvent.doubleClick(canvas().querySelector('g.node[data-id="n0"]')!);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open file: no .md handler");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss open error" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows loading, then offers graph error guidance and Reload", async () => {
+    const request = deferred<GraphExport>();
+    mocked.graph.mockReturnValueOnce(request.promise).mockResolvedValueOnce(synthetic(2));
+    render(<GraphView />);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading graph");
+    await act(async () => request.reject("bad node frontmatter"));
+    expect(screen.getByRole("alert")).toHaveTextContent("bad node frontmatter");
+    expect(screen.getByRole("alert")).toHaveTextContent("neb check");
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(drawnNodes()).toHaveLength(2));
+    expect(mocked.reload).toHaveBeenCalledTimes(1);
+    expect(mocked.graph).toHaveBeenCalledTimes(2);
   });
 
   it("filters by title and by tag before layout, and says when nothing matches", async () => {

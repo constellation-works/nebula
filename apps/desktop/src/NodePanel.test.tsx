@@ -213,6 +213,25 @@ describe("NodePanel", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("shows and dismisses an editor-open failure", async () => {
+    mocked.openInEditor.mockRejectedValueOnce("no .md handler");
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Open file" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open file: no .md handler");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss open error" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows and dismisses an external-link failure", async () => {
+    mocked.openUrl.mockRejectedValueOnce("no browser");
+    renderPanel();
+    const link = await screen.findByRole("link", { name: "the survey" });
+    fireEvent.click(link);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open link: no browser");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss open error" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("shows the backend's message when the node cannot be read", async () => {
     mocked.node.mockRejectedValue("no such node: gone");
     renderPanel();

@@ -30,7 +30,15 @@ export const PANEL_MAX = 720;
 const isExternal = (uri: string): boolean => /^(https?:|mailto:)/i.test(uri);
 
 /** An `<a>` that hands the URL to the OS instead of navigating the webview. */
-function ExternalLink({ href, children }: { href?: string; children?: ReactNode }) {
+function ExternalLink({
+  href,
+  children,
+  onOpenError,
+}: {
+  href?: string;
+  children?: ReactNode;
+  onOpenError: (message: string) => void;
+}) {
   if (href === undefined || !isExternal(href)) return <code>{children ?? href}</code>;
   return (
     <a
@@ -38,7 +46,7 @@ function ExternalLink({ href, children }: { href?: string; children?: ReactNode 
       rel="noreferrer"
       onClick={(e) => {
         e.preventDefault();
-        void api.openUrl(href);
+        void api.openUrl(href).catch((error: unknown) => onOpenError(`Could not open link: ${String(error)}`));
       }}
     >
       {children}
@@ -88,10 +96,12 @@ function EdgeList({
  */
 export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onClose }: Props) {
   const [result, setResult] = useState<LoadResult | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
   const resize = useRef<{ x: number; w: number } | null>(null);
 
   useEffect(() => {
     let live = true;
+    setOpenError(null);
     api.node(id).then(
       (v) => {
         if (!live) return;
@@ -150,13 +160,28 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
         <header className="panel__top">
           <code className="panel__id">{id}</code>
           <span className="panel__spacer" />
-          <button type="button" className="panel__action" onClick={() => void api.openInEditor(id)}>
+          <button
+            type="button"
+            className="panel__action"
+            onClick={() => {
+              setOpenError(null);
+              void api.openInEditor(id).catch((e: unknown) => setOpenError(`Could not open file: ${String(e)}`));
+            }}
+          >
             Open file
           </button>
           <button type="button" className="panel__action" onClick={onClose} aria-label="Close panel">
             ×
           </button>
         </header>
+        {openError !== null && (
+          <div className="panel__open-error" role="alert">
+            <span>{openError}</span>
+            <button type="button" onClick={() => setOpenError(null)} aria-label="Dismiss open error">
+              Dismiss
+            </button>
+          </div>
+        )}
         {error !== null && (
           <p className="panel__error" role="alert">
             {error}
@@ -196,7 +221,10 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
             )}
             {view.body.trim() !== "" && (
               <section className="panel__section markdown">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ExternalLink }}>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{ a: (props) => <ExternalLink {...props} onOpenError={setOpenError} /> }}
+                >
                   {view.body}
                 </ReactMarkdown>
               </section>
@@ -229,7 +257,9 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
                           <td>{r.kind}</td>
                           <td>
                             {r.uri ? (
-                              <ExternalLink href={r.uri}>{r.title ?? r.uri}</ExternalLink>
+                              <ExternalLink href={r.uri} onOpenError={setOpenError}>
+                                {r.title ?? r.uri}
+                              </ExternalLink>
                             ) : (
                               r.title || r.kind || "—"
                             )}
