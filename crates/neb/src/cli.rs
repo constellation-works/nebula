@@ -197,6 +197,8 @@ enum Command {
     /// will skip at the exact moment the idea arrives. After the entry id it
     /// names the three existing nodes the thought reads closest to, for the
     /// triage that comes later; that is a suggestion, and nothing is linked.
+    /// With no corpus at the root it creates one rather than refuse, and
+    /// names the path it created on stderr.
     Capture {
         /// Print the entry id alone, without the nearest nodes.
         #[arg(long, short)]
@@ -924,8 +926,7 @@ fn run(cli: Cli) -> Outcome {
             // loses the thought.
             let resolved_root = Corpus::resolve_root(root)?;
             let default_root_warning = Corpus::warning_before_default_init(&resolved_root)?;
-            let corpus = Corpus::open_or_init(Some(resolved_root))?;
-            let _lock = corpus.lock()?;
+            let (corpus, created) = Corpus::open_or_init(Some(resolved_root.clone()))?;
             if let Some(configured) = default_root_warning {
                 eprintln!(
                     "warning: creating ~/.nebula while {} points to {}",
@@ -933,6 +934,15 @@ fn run(cli: Cli) -> Outcome {
                     configured.display()
                 );
             }
+            // Never silent, never a question: a mistyped `--root` or
+            // `$NEBULA_ROOT` would otherwise start a second corpus unnoticed.
+            // Absolute so a relative typo shows where it landed; made so
+            // lexically, because paths are used as given, never resolved.
+            if created {
+                let shown = std::path::absolute(&resolved_root).unwrap_or(resolved_root);
+                eprintln!("note: created a new corpus at {}", shown.display());
+            }
+            let _lock = corpus.lock()?;
             let k = if quiet { 0 } else { NEAR_DEFAULT };
             if json {
                 let captured = ops::capture_near(&corpus, &text, k)?;

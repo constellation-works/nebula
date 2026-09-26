@@ -523,6 +523,132 @@ fn capture_works_before_a_corpus_exists() {
     assert!(root.join("inbox").is_dir());
 }
 
+const CREATED_NOTICE: &str = "note: created a new corpus at ";
+
+/// A mistyped `--root` or `$NEBULA_ROOT` must not split the corpus silently.
+/// Capture still creates rather than refuses; it says where, on stderr, once.
+#[test]
+fn capture_names_the_corpus_it_creates_on_stderr_only_the_first_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let flagged = dir.path().join("typo-flag");
+    let environment = dir.path().join("typo-env");
+
+    for (root, nebula_root) in [
+        (Some(flagged.as_path()), None),
+        (None, Some(environment.as_path())),
+    ] {
+        let target = root.or(nebula_root).unwrap();
+        let first = run_from_home(&home, root, &["capture", "x"], nebula_root).assert_ok();
+        assert_eq!(
+            first.stderr(),
+            format!("{CREATED_NOTICE}{}\n", target.display()),
+            "exactly one line naming the new corpus"
+        );
+        let id = first.stdout_trim();
+        assert_eq!(
+            first.stdout(),
+            format!("{id}\n"),
+            "stdout is the entry id alone"
+        );
+        assert!(target.join("inbox").is_dir());
+
+        let again = run_from_home(&home, root, &["capture", "y"], nebula_root).assert_ok();
+        assert_eq!(again.stderr(), "", "an existing corpus is not news");
+    }
+}
+
+#[test]
+fn capture_json_names_the_corpus_it_creates_on_stderr_and_keeps_the_payload() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let root = dir.path().join("typo");
+
+    let first = run_from_home(&home, Some(&root), &["capture", "--json", "x"], None).assert_ok();
+    assert_eq!(
+        first.stderr(),
+        format!("{CREATED_NOTICE}{}\n", root.display())
+    );
+    let again = run_from_home(&home, Some(&root), &["capture", "--json", "y"], None).assert_ok();
+    assert_eq!(again.stderr(), "");
+
+    let keys = |run: &Run| {
+        let value: serde_json::Value = serde_json::from_str(&run.stdout()).expect("stdout is JSON");
+        let mut keys: Vec<String> = value
+            .as_object()
+            .expect("an object")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    };
+    assert_eq!(
+        keys(&first),
+        keys(&again),
+        "creating the corpus does not change the payload"
+    );
+}
+
+/// A relative root is shown absolute, so the notice says where it landed.
+#[test]
+fn capture_shows_a_relative_root_it_creates_as_an_absolute_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = Command::new(bin())
+        .current_dir(dir.path())
+        .args(["--root", "typo", "capture", "x"])
+        .env("HOME", dir.path().join("home"))
+        .env("NO_COLOR", "1")
+        .env_remove("NEBULA_ROOT")
+        .env_remove("OBSERVATORY_ROOT")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    let shown = stderr
+        .strip_suffix('\n')
+        .and_then(|line| line.strip_prefix(CREATED_NOTICE))
+        .unwrap_or_else(|| panic!("expected one notice line, got:\n{stderr}"));
+    // Compared by what is there, not by spelling: the child's working
+    // directory may read back resolved on macOS, where temp sits under a
+    // symlink.
+    let shown = Path::new(shown);
+    assert!(shown.is_absolute(), "{} is not absolute", shown.display());
+    assert!(shown.ends_with("typo"));
+    assert!(shown.join("inbox").is_dir());
+    assert!(dir.path().join("typo").join("inbox").is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn capture_that_cannot_create_its_corpus_names_the_path() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let parent = dir.path().join("read-only");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let root = parent.join("corpus");
+
+    let text = run_from_home(&home, Some(&root), &["capture", "x"], None);
+    let json = run_from_home(&home, Some(&root), &["capture", "--json", "x"], None);
+    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    for run in [text, json] {
+        let run = run
+            .assert_fails()
+            .says(&format!("creating {}", root.display()))
+            .says("Permission denied");
+        assert!(
+            !run.stderr().contains(CREATED_NOTICE),
+            "nothing was created, so nothing is announced"
+        );
+        assert_eq!(run.stdout(), "");
+    }
+    assert!(!root.exists());
+}
+
 #[test]
 fn root_discovery_prefers_flag_then_environment_then_config_then_default() {
     let dir = tempfile::tempdir().unwrap();
