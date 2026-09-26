@@ -60,6 +60,9 @@ pub mod ops;
 pub mod store;
 pub mod triage;
 
+#[cfg(test)]
+mod tests;
+
 pub use check::{Finding, OBSERVATORY, Report, Severity};
 pub use config::{
     CommitSetting, OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, SCHEMA_VERSION,
@@ -84,10 +87,6 @@ pub use ops::{
 };
 pub use store::{CommitOutcome, Committed, Corpus, HistoryEntry, Inbox, InboxEntry, Settlement};
 pub use triage::Triage;
-
-// Unit tests for the top-level modules, one file each (STD-02 §R19).
-#[cfg(test)]
-mod tests;
 
 /// Writes `apps/desktop/src/types/*.ts` from the types above.
 ///

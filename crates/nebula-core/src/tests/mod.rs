@@ -2,3 +2,4 @@
 //! (STD-02 §R19). They reach only what the crate itself can.
 
 mod migrate;
+mod store;

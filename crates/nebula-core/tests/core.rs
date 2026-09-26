@@ -1452,66 +1452,6 @@ fn whitespace_only_capture_is_refused_without_writing() {
     assert_eq!(corpus.inbox().unwrap().0.len(), 1);
 }
 
-fn inbox_id_candidates(stamp: &str, text: &str) -> Vec<String> {
-    fn fnv(s: &str) -> u64 {
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for b in s.as_bytes() {
-            h ^= u64::from(*b);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        h
-    }
-
-    let mut h = fnv(&format!("{stamp}{text}"));
-    let mut ids = Vec::new();
-    for _ in 0..64 {
-        let id = format!("{:04x}", (h & 0xffff) as u16);
-        if !ids.contains(&id) {
-            ids.push(id);
-        }
-        h = fnv(&format!("{h}"));
-    }
-    ids
-}
-
-#[test]
-fn capture_uses_a_free_id_after_the_hash_candidates_collide() {
-    const TEXT: &str = "the intended new thought";
-
-    for _ in 0..3 {
-        let (_dir, corpus) = corpus();
-        let probe = ops::capture(&corpus, TEXT).unwrap();
-        let occupied = inbox_id_candidates(&probe.at, TEXT);
-        let mut fixture = String::new();
-        for (i, id) in occupied.iter().enumerate() {
-            writeln!(fixture, "- [{id}] {} fixture {i}", probe.at).unwrap();
-        }
-        std::fs::write(&probe.file, fixture).unwrap();
-
-        let captured = ops::capture(&corpus, TEXT).unwrap();
-        if captured.at != probe.at {
-            continue;
-        }
-
-        assert!(!occupied.contains(&captured.id));
-        assert_eq!(corpus.inbox_entry(&captured.id).unwrap().text, TEXT);
-        let promoted = ops::promote(
-            &corpus,
-            &captured.id,
-            &Promotion {
-                title: Some("Intended new thought".into()),
-                ..Promotion::default()
-            },
-            0,
-        )
-        .unwrap();
-        assert_eq!(promoted.doc.body.trim(), TEXT);
-        assert_eq!(corpus.inbox().unwrap().0.len(), occupied.len());
-        return;
-    }
-    panic!("the clock crossed a second during all three collision fixtures");
-}
-
 #[test]
 fn capture_refuses_an_exhausted_id_namespace_without_writing() {
     let (_dir, corpus) = corpus();
@@ -1563,28 +1503,6 @@ fn capture_after_an_unterminated_record_stays_independent_and_promotes() {
     assert_eq!(promoted.doc.body.trim(), "the second thought");
     assert_eq!(corpus.inbox().unwrap().0.len(), 1);
     assert_eq!(corpus.inbox_entry(&first.id).unwrap().text, first.text);
-}
-
-#[test]
-fn capture_ids_are_unique_across_month_files_and_older_entries_still_resolve() {
-    for _ in 0..3 {
-        let (_dir, corpus) = corpus();
-        let first = ops::capture(&corpus, "the same thought").unwrap();
-        let older_file = first.file.with_file_name("2000-01.md");
-        std::fs::rename(&first.file, &older_file).unwrap();
-
-        let second = ops::capture(&corpus, "the same thought").unwrap();
-        if first.at != second.at {
-            continue;
-        }
-
-        assert_ne!(second.id, first.id, "ids are unique across month files");
-        let resolved = corpus.inbox_entry(&first.id).unwrap();
-        assert_eq!(resolved.file, older_file);
-        assert_eq!(resolved.text, first.text);
-        return;
-    }
-    panic!("the clock crossed a second during all three fixture attempts");
 }
 
 #[test]
