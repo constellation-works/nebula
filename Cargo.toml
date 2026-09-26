@@ -30,7 +30,8 @@ clap = { version = "4", default-features = false, features = [
 ] }
 clap_complete = "4"
 # Test-only: isolates each test process's environment before any test thread
-# starts (crates/nebula-core/tests/support). Already in the tree through Tauri.
+# starts (crates/nebula-core/tests/support). Already in the tree through Tauri,
+# so it stays on Tauri's major (the ctor ignore in .github/dependabot.yml).
 ctor = "0.8"
 # `flock` for the corpus write lock: std has no portable file lock, and this
 # is the thin cross-platform wrapper. Its own dependencies (rustix, windows-sys)

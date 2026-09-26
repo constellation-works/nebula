@@ -74,7 +74,9 @@ Build inputs are pinned (STD-05 §R23). `rust-toolchain.toml` names the exact
 toolchain; rustup installs it on first use, and CI's `toolchain:` inputs must
 match it. CI actions are pinned by commit SHA, and pnpm by version and sha512
 in `apps/desktop/package.json`. Dependabot (`.github/dependabot.yml`) watches
-cargo, npm and the actions. `make audit` runs cargo-deny, the pnpm pin check
+cargo, npm and the actions: one grouped PR per ecosystem for minor and patch
+updates, one PR per major. Adopt a major with the changes it needs, or defer it
+with an `ignore` entry there that gives the reason. `make audit` runs cargo-deny, the pnpm pin check
 and `pnpm audit`. Fix an npm advisory with an override in
 `apps/desktop/pnpm-workspace.yaml`; one with no fix gets an ignore there with
 its reason and a re-review date.

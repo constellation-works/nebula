@@ -2,17 +2,41 @@
 # repository (STD-05 §R23, §R24): crates through Cargo.lock, the desktop
 # frontend through apps/desktop/pnpm-lock.yaml, and the CI actions pinned by
 # SHA in .github/workflows/. Updates target the integration branch.
+#
+# Minor and patch updates arrive as one grouped PR per ecosystem, so a week's
+# safe bumps cost one CI run. Majors stay one PR each: each is adopted with
+# the code changes it needs, or deferred with an `ignore` rule and a reason.
 version: 2
 updates:
   - package-ecosystem: cargo
     directory: /
     target-branch: agent-main
     schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Deferred (ORB-13223): ctor 1.0 moves `#[dtor]` into a separate `dtor`
+      # crate, and Tauri (tauri-utils) still depends on ctor 0.8. Adopting it
+      # would add a second ctor plus link-section, linktime-proc-macro and
+      # dtor, for a test-only helper chosen because Tauri already brought it.
+      # Revisit when tauri-utils moves to ctor 1.
+      - dependency-name: ctor
+        update-types: [version-update:semver-major]
   - package-ecosystem: npm
     directory: /apps/desktop
     target-branch: agent-main
     schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
   - package-ecosystem: github-actions
     directory: /
     target-branch: agent-main
     schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
