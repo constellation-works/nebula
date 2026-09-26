@@ -1880,27 +1880,30 @@ fn near_says_so_when_nothing_matches() {
         .says("nothing to look near");
 }
 
-/// `--no-commit` after the query is a flag; `--quiet` is not a near flag, so
-/// it is refused rather than folded into the text.
+/// `--limit` after the query is a flag; `--quiet` is not a near flag, and
+/// `near` writes nothing so `--no-commit` is not one either: both are refused
+/// rather than folded into the text.
 #[test]
-fn near_trailing_no_commit_is_a_flag_and_quiet_is_refused() {
+fn near_trailing_limit_is_a_flag_and_quiet_and_no_commit_are_refused() {
     let c = Corpus::new();
     lexical_fixture(&c);
-    let with_flag = c
-        .run(&["near", "--json", "one global taxonomy", "--no-commit"])
+    let trailing = c
+        .run(&["near", "--json", "one global taxonomy", "--limit", "1"])
         .assert_ok()
         .stdout();
-    let without = c
-        .run(&["near", "--json", "one global taxonomy"])
+    let leading = c
+        .run(&["near", "--json", "--limit", "1", "one global taxonomy"])
         .assert_ok()
         .stdout();
     assert_eq!(
-        with_flag, without,
-        "trailing --no-commit must not join the query"
+        trailing, leading,
+        "trailing --limit must not join the query"
     );
-    c.run(&["near", "one global taxonomy", "--quiet"])
-        .assert_fails()
-        .says("--quiet");
+    for flag in ["--quiet", "--no-commit"] {
+        c.run(&["near", "one global taxonomy", flag])
+            .assert_fails()
+            .says(flag);
+    }
 }
 
 #[test]
@@ -2987,6 +2990,94 @@ fn trace_names_edge_kinds_and_draws_parallel_edges_as_one_line() {
     assert_eq!(walk.as_array().unwrap().len(), 4, "{json}");
 }
 
+/// `root <- branch <- cut <- deep`, with `cut` also descending from `root`
+/// directly: walking down, `cut` is two steps out through `branch` and one
+/// step out on its own.
+fn shortcut(c: &Corpus) {
+    c.run(&["new", "Root"]).assert_ok();
+    c.run(&["new", "Branch", "--parent", "root"]).assert_ok();
+    c.run(&["new", "Cut", "--parent", "branch", "--parent", "root"])
+        .assert_ok();
+    c.run(&["new", "Deep", "--parent", "cut"]).assert_ok();
+}
+
+/// `--depth` bounds the tree and the JSON alike, a line whose branches it
+/// cut says how many, and a node within reach along any path is kept.
+#[test]
+fn trace_depth_bounds_the_tree_and_the_json_alike() {
+    let c = Corpus::new();
+    shortcut(&c);
+    let tree = |args: &[&str]| c.run(args).assert_ok().stdout();
+    let walked = |args: &[&str]| -> Vec<String> {
+        let json: serde_json::Value = serde_json::from_str(&tree(args)).unwrap();
+        json.as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    let zero = tree(&["trace", "root", "--down", "--depth", "0"]);
+    assert_eq!(zero.lines().count(), 1, "{zero}");
+    assert!(
+        zero.contains("root Root  (2 more beyond --depth)"),
+        "{zero}"
+    );
+
+    let one = tree(&["trace", "root", "--down", "--depth", "1"]);
+    assert!(!one.contains(" deep "), "{one}");
+    assert_eq!(one.matches("(1 more beyond --depth)").count(), 2, "{one}");
+    assert_eq!(
+        walked(&["trace", "--json", "root", "--down", "--depth", "1"]),
+        ["root", "branch", "cut"]
+    );
+
+    // Through `branch`, `deep` is three steps out; through the shortcut, two.
+    let two = tree(&["trace", "root", "--down", "--depth", "2"]);
+    assert!(two.contains(" deep "), "{two}");
+    assert_eq!(
+        walked(&["trace", "--json", "root", "--down", "--depth", "2"]).len(),
+        4
+    );
+
+    for depth in ["0", "1", "2", "3"] {
+        let drawn = tree(&["trace", "root", "--down", "--depth", depth]);
+        let listed = walked(&["trace", "--json", "root", "--down", "--depth", depth]);
+        for id in ["root", "branch", "cut", "deep"] {
+            assert_eq!(
+                drawn.contains(&format!(" {id} ")),
+                listed.iter().any(|l| l == id),
+                "--depth {depth}: the tree and the JSON disagree about `{id}`:\n{drawn}"
+            );
+        }
+    }
+
+    let up = tree(&["trace", "deep", "--depth", "1"]);
+    assert_eq!(up.lines().count(), 2, "{up}");
+    assert!(up.contains("cut Cut  (2 more beyond --depth)"), "{up}");
+}
+
+/// Without `--depth` the walk is whole, and a bound the corpus never reaches
+/// draws exactly the same tree.
+#[test]
+fn trace_without_depth_is_unchanged_and_an_unreached_depth_matches_it() {
+    let c = Corpus::new();
+    shortcut(&c);
+    for args in [["trace", "root", "--down"].as_slice(), &["trace", "deep"]] {
+        let whole = c.run(args).assert_ok().stdout();
+        assert!(!whole.contains("--depth"), "{whole}");
+        assert!(
+            whole.contains(" root ") && whole.contains(" deep "),
+            "{whole}"
+        );
+        let bounded = c
+            .run(&[args, &["--depth", "10"]].concat())
+            .assert_ok()
+            .stdout();
+        assert_eq!(bounded, whole);
+    }
+}
+
 #[test]
 fn genealogy_cycles_are_refused_at_the_point_of_linking() {
     let c = Corpus::new();
@@ -3474,7 +3565,7 @@ fn check_warns_about_a_legacy_unexpected_reference_kind_without_rejecting_the_fi
         .says("[16]")
         .says("reference `r1` has unexpected kind `bogus`")
         .says("accepted kinds: paper, study, article, note, discussion, book, dataset, thread, observatory, other")
-        .says("0 errors, 1 warnings");
+        .says("0 errors, 1 warning");
 }
 
 #[test]
@@ -3497,7 +3588,7 @@ fn a_reference_with_no_note_warns_and_a_noted_one_does_not() {
         .says("[10]")
         .says("reference `r1` has no note saying why it is here")
         .says(&bare)
-        .says("0 errors, 1 warnings");
+        .says("0 errors, 1 warning");
 
     let omitted = Corpus::new();
     let omitted_id = omitted.seed("another idea", "Another idea");
@@ -3515,7 +3606,7 @@ fn a_reference_with_no_note_warns_and_a_noted_one_does_not() {
         .run(&["check"])
         .assert_ok()
         .says("[10]")
-        .says("0 errors, 1 warnings");
+        .says("0 errors, 1 warning");
 
     let noted = Corpus::new();
     let noted_id = noted.seed("a third idea", "A third idea");
@@ -3593,7 +3684,7 @@ fn a_discussion_reference_may_omit_its_uri_but_other_kinds_may_not() {
     c.run(&["check"])
         .assert_ok()
         .says("reference `r2` has no note saying why it is here")
-        .says("0 errors, 1 warnings");
+        .says("0 errors, 1 warning");
 
     let invalid = Corpus::new();
     let invalid_id = invalid.seed("another idea", "Another idea");
@@ -3618,7 +3709,7 @@ fn a_discussion_reference_may_omit_its_uri_but_other_kinds_may_not() {
         .run(&["check"])
         .assert_fails()
         .says("kind `paper` but no URI")
-        .says("1 errors, 0 warnings");
+        .says("1 error, 0 warnings");
 }
 
 #[test]
@@ -3646,7 +3737,7 @@ fn a_local_uri_must_resolve_and_external_urls_never_trip_it() {
         .assert_fails()
         .says("[8]")
         .says("points at a path that does not resolve: ./notes/missing.md")
-        .says("1 errors");
+        .says("1 error,");
 
     // Schemes and URLs are never resolved, so none of these trip rule 8.
     let online = Corpus::new();
@@ -3851,7 +3942,7 @@ fn a_closed_block_on_an_open_node_is_a_rule_12_error() {
         .assert_fails()
         .says("[12]")
         .says("status is `hypothesis` but a `closed` block is still set")
-        .says("1 errors");
+        .says("1 error,");
 }
 
 /// `new --kill` and `sharpen` always move status to `hypothesis` together
@@ -3870,7 +3961,7 @@ fn a_seed_with_a_kill_condition_is_a_rule_13_warning() {
         .assert_ok()
         .says("[13]")
         .says("status is seed but a kill condition is set")
-        .says("0 errors, 1 warnings");
+        .says("0 errors, 1 warning");
 }
 
 /// `ops.rs` only ever stamps `created`/`updated` from `store::today()`, so
@@ -3886,7 +3977,7 @@ fn an_unparsable_created_or_updated_date_is_a_rule_14_error() {
         .assert_fails()
         .says("[14]")
         .says("created `not-a-date` is not a YYYY-MM-DD date")
-        .says("1 errors");
+        .says("1 error,");
 }
 
 /// Calendar-looking strings must still name real Gregorian dates. Otherwise
@@ -3909,7 +4000,7 @@ fn impossible_calendar_dates_are_rule_14_errors() {
             .assert_fails()
             .says("[14]")
             .says(&format!("{field} `{date}` is not a YYYY-MM-DD date"))
-            .says("1 errors");
+            .says("1 error,");
     }
 
     let c = Corpus::new();
@@ -3936,7 +4027,7 @@ fn impossible_calendar_dates_are_rule_14_errors() {
         .assert_fails()
         .says("[14]")
         .says("reference `r1` has an added date `2026-02-29` that does not parse")
-        .says("1 errors");
+        .says("1 error,");
 }
 
 #[test]
@@ -3977,7 +4068,7 @@ fn updated_earlier_than_created_is_a_rule_14_error() {
         .says("[14]")
         .says("updated")
         .says("earlier than created")
-        .says("1 errors");
+        .says("1 error,");
 }
 
 /// A reference's `added` date is stamped the same way and can go wrong the
@@ -4008,7 +4099,7 @@ fn an_unparsable_reference_added_date_is_a_rule_14_error() {
         .assert_fails()
         .says("[14]")
         .says("reference `r1` has an added date `not-a-date` that does not parse")
-        .says("1 errors");
+        .says("1 error,");
 }
 
 // --------------------------------------------------------- --json refusals --
@@ -4398,7 +4489,7 @@ fn review_short_finds_inbox_captures_waiting_over_fourteen_days() {
 
     c.run(&["review", "--short"])
         .assert_ok()
-        .says("1 captures waiting over fourteen days; promote or drop them");
+        .says("1 capture waiting over fourteen days; promote or drop them");
 
     let json = c.run(&["review", "--short", "--json"]).assert_ok().stdout();
     let items: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
@@ -5037,6 +5128,75 @@ fn an_unattributed_write_is_the_humans_and_leaves_the_file_alone() {
 
 /// `--by` is free text — a session id, a crew name, anything the writer
 /// answers to — and lands on the field that write authored, not on the node.
+/// `show` opens with a header that labels what it prints: the status and id,
+/// the title with its author when that is not the human, the tags, and the
+/// dates. Edges and references name an agent author the same way.
+#[test]
+fn show_header_labels_tags_and_dates_and_names_an_agent_author() {
+    let c = Corpus::new();
+    let by = "agent:crew-alpha";
+    c.run(&["new", "Human idea"]).assert_ok();
+    c.run(&[
+        "new",
+        "Agent idea",
+        "--tag",
+        "physics",
+        "--tag",
+        "wake",
+        "--parent",
+        "human-idea",
+        "--kill",
+        "if Y",
+        "--by",
+        by,
+    ])
+    .assert_ok();
+    c.run(&[
+        "cite",
+        "agent-idea",
+        "--uri",
+        "http://example.com",
+        "--note",
+        "n",
+        "--by",
+        by,
+    ])
+    .assert_ok();
+    set_created(&c.node_file("agent-idea"), "2026-01-02");
+    set_updated(&c.node_file("agent-idea"), "2026-02-03");
+
+    let shown = c.run(&["show", "agent-idea"]).assert_ok().stdout();
+    let lines: Vec<&str> = shown.lines().collect();
+    assert_eq!(lines[0], "hypothesis agent-idea", "{shown}");
+    assert_eq!(lines[1], format!("Agent idea ({by})"), "{shown}");
+    assert_eq!(lines[2], "tags: physics, wake", "{shown}");
+    assert_eq!(
+        lines[3], "created: 2026-01-02  updated: 2026-02-03",
+        "{shown}"
+    );
+    assert_eq!(lines[4], "", "{shown}");
+    assert!(shown.contains(&format!("kill: if Y ({by})")), "{shown}");
+    assert!(
+        shown.contains(&format!("  derives-from   human-idea ({by})")),
+        "{shown}"
+    );
+    assert!(
+        shown.contains(&format!("http://example.com ({by})")),
+        "{shown}"
+    );
+
+    // The human's own node names nobody, and has no tags to label.
+    let shown = c.run(&["show", "human-idea"]).assert_ok().stdout();
+    let lines: Vec<&str> = shown.lines().collect();
+    assert_eq!(lines[0], "seed       human-idea", "{shown}");
+    assert_eq!(lines[1], "Human idea", "{shown}");
+    assert!(lines[2].starts_with("created: "), "{shown}");
+    assert!(
+        !shown.contains("(human)") && !shown.contains("tags:"),
+        "{shown}"
+    );
+}
+
 #[test]
 fn by_records_the_author_of_each_field_it_wrote() {
     let c = Corpus::new();
@@ -5572,7 +5732,7 @@ fn review_reports_stale_inbox_entries_on_both_sides_of_fourteen_days() {
     set_inbox_stamp_for(&c.root, "an old capture", &stamp_days_ago(20));
     let out = c.run(&["review"]).assert_ok().stdout();
     assert!(
-        out.contains("1 captures waiting over fourteen days; promote or drop them"),
+        out.contains("1 capture waiting over fourteen days; promote or drop them"),
         "{out}"
     );
 
@@ -5580,10 +5740,7 @@ fn review_reports_stale_inbox_entries_on_both_sides_of_fourteen_days() {
     fresh.run(&["capture", "a recent capture"]).assert_ok();
     set_inbox_stamp_for(&fresh.root, "a recent capture", &stamp_days_ago(10));
     let out = fresh.run(&["review"]).assert_ok().stdout();
-    assert!(
-        !out.contains("captures waiting over fourteen days"),
-        "{out}"
-    );
+    assert!(!out.contains("waiting over fourteen days"), "{out}");
 }
 
 #[test]
@@ -5662,6 +5819,179 @@ fn review_out_writes_the_report_and_prints_nothing_else() {
     let report = std::fs::read_to_string(&out_path).unwrap();
     assert!(report.contains(&format!("`{bare}`")));
     assert!(report.contains("## Nodes with no references"));
+}
+
+/// Status badges are one width, so the ids after them form a column.
+#[test]
+fn list_lines_up_its_ids_after_the_status() {
+    let c = Corpus::new();
+    c.run(&["new", "A seed"]).assert_ok();
+    c.run(&["new", "A hypothesis", "--kill", "if X"])
+        .assert_ok();
+    let out = c.run(&["list"]).assert_ok().stdout();
+    let starts: Vec<usize> = out
+        .lines()
+        .filter(|l| l.starts_with("seed") || l.starts_with("hypothesis"))
+        .map(|l| l.find("a-").expect("an id"))
+        .collect();
+    assert_eq!(starts, [11, 11], "{out}");
+}
+
+/// `--limit` cuts `list` to its first N matches and says how many it left
+/// out; without it every match is listed, as before. `--json` gets the cut
+/// list alone.
+#[test]
+fn list_limit_bounds_the_listing_and_defaults_to_all() {
+    let c = Corpus::new();
+    for title in ["One", "Two", "Three"] {
+        c.run(&["new", title, "--tag", "t"]).assert_ok();
+    }
+    c.run(&["new", "Untagged"]).assert_ok();
+
+    let all = c.run(&["list"]).assert_ok().stdout();
+    assert!(all.ends_with("\n4 of 4 nodes\n"), "{all}");
+    let tagged = c.run(&["list", "--tag", "t"]).assert_ok().stdout();
+    assert!(tagged.ends_with("\n3 of 4 nodes\n"), "{tagged}");
+
+    let cut = c
+        .run(&["list", "--tag", "t", "--limit", "2"])
+        .assert_ok()
+        .stdout();
+    assert_eq!(
+        cut.lines().filter(|l| l.starts_with("seed")).count(),
+        2,
+        "{cut}"
+    );
+    assert!(
+        cut.ends_with("\n2 of 3 matching nodes shown, of 4 in all; raise --limit for more\n"),
+        "{cut}"
+    );
+    let roomy = c
+        .run(&["list", "--tag", "t", "--limit", "3"])
+        .assert_ok()
+        .stdout();
+    assert_eq!(roomy, tagged, "a limit nobody reaches changes nothing");
+    let unfiltered = c.run(&["list", "--limit", "1"]).assert_ok().stdout();
+    assert!(
+        unfiltered.ends_with("\n1 of 4 nodes shown; raise --limit for more\n"),
+        "{unfiltered}"
+    );
+
+    let json = c
+        .run(&["list", "--json", "--limit", "1"])
+        .assert_ok()
+        .stdout();
+    let listed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1, "{json}");
+
+    let single = Corpus::new();
+    single.run(&["new", "Alone"]).assert_ok();
+    let one = single.run(&["list"]).assert_ok().stdout();
+    assert!(one.ends_with("\n1 of 1 node\n"), "{one}");
+}
+
+#[test]
+fn inbox_limit_shows_the_oldest_and_counts_the_rest() {
+    let c = Corpus::new();
+    for text in ["first thought", "second thought", "third thought"] {
+        c.run(&["capture", "--quiet", text]).assert_ok();
+    }
+    let all = c.run(&["inbox"]).assert_ok().stdout();
+    assert!(
+        all.contains("3 waiting. Promote or drop each one."),
+        "{all}"
+    );
+
+    let cut = c.run(&["inbox", "--limit", "2"]).assert_ok().stdout();
+    assert!(
+        cut.contains("first thought") && cut.contains("second thought"),
+        "{cut}"
+    );
+    assert!(!cut.contains("third thought"), "{cut}");
+    assert!(
+        cut.contains("2 of 3 waiting shown; raise --limit for more. Promote or drop each one."),
+        "{cut}"
+    );
+
+    let json = c
+        .run(&["inbox", "--json", "--limit", "1"])
+        .assert_ok()
+        .stdout();
+    let listed: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1, "{json}");
+    assert_eq!(listed[0]["text"], "first thought", "{json}");
+}
+
+/// `review --limit` keeps the first N findings under each heading, so a
+/// crowded section cannot push a short one out, and says what it cut. With
+/// `--short` it keeps the first N lines.
+#[test]
+fn review_limit_cuts_each_section_and_the_short_form() {
+    let c = Corpus::new();
+    for title in ["Cold one", "Cold two", "Cold three"] {
+        c.run(&["new", title]).assert_ok();
+    }
+    for id in ["cold-one", "cold-two", "cold-three"] {
+        set_updated(&c.node_file(id), &date_days_ago(100));
+    }
+    c.run(&["capture", "--quiet", "an old capture"]).assert_ok();
+    set_inbox_stamp_for(&c.root, "an old capture", &stamp_days_ago(20));
+
+    let whole = c.run(&["review"]).assert_ok().stdout();
+    assert_eq!(whole.matches("`cold-").count(), 3, "{whole}");
+    assert!(!whole.contains("--limit"), "{whole}");
+
+    let cut = c.run(&["review", "--limit", "1"]).assert_ok().stdout();
+    assert_eq!(cut.matches("`cold-").count(), 1, "{cut}");
+    assert!(
+        cut.contains("- _… and 2 more; raise --limit for more_"),
+        "{cut}"
+    );
+    assert!(
+        cut.contains("1 capture waiting over fourteen days"),
+        "the inbox section keeps its one finding:\n{cut}"
+    );
+    let json = c
+        .run(&["review", "--json", "--limit", "1"])
+        .assert_ok()
+        .stdout();
+    let items: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(items.as_array().unwrap().len(), 2, "{json}");
+
+    let short = c.run(&["review", "--short"]).assert_ok().stdout();
+    assert_eq!(short.lines().count(), 4, "{short}");
+    let short_cut = c
+        .run(&["review", "--short", "--limit", "2"])
+        .assert_ok()
+        .stdout();
+    let lines: Vec<&str> = short_cut.lines().collect();
+    assert_eq!(lines.len(), 3, "{short_cut}");
+    assert_eq!(lines[2], "… and 2 more; raise --limit for more");
+    let json = c
+        .run(&["review", "--short", "--json", "--limit", "2"])
+        .assert_ok()
+        .stdout();
+    let items: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(items.as_array().unwrap().len(), 2, "{json}");
+}
+
+/// Counts agree with their nouns wherever the reports print one.
+#[test]
+fn reports_count_in_the_singular_for_one() {
+    let c = Corpus::new();
+    c.run(&["new", "Alone"]).assert_ok();
+    c.run(&["check"])
+        .assert_ok()
+        .says("1 node, 0 errors, 0 warnings");
+    let review = c.run(&["review", "--since", "1"]).assert_ok().stdout();
+    assert!(
+        review.contains("## Hypotheses untouched for 1 day\n"),
+        "{review}"
+    );
+    assert!(
+        review.contains("## Seeds untouched for 1 day\n"),
+        "{review}"
+    );
 }
 
 #[test]
@@ -5842,7 +6172,7 @@ fn an_unresolved_observatory_record_warns_and_never_errors() {
         .says("[9]")
         .says("Observatory record `Q404`")
         .says("does not resolve under")
-        .says("0 errors, 1 warnings");
+        .says("0 errors, 1 warning");
 
     c.run(&["show", &id])
         .assert_ok()
@@ -5875,7 +6205,7 @@ fn an_observatory_reference_with_no_root_warns_and_the_env_supplies_one() {
         .says("warn")
         .says("[9]")
         .says("no observatory root is set")
-        .says("0 errors, 1 warnings");
+        .says("0 errors, 1 warning");
     c.run(&["show", &id])
         .assert_ok()
         .says("does not resolve; check the observatory root");
@@ -6079,14 +6409,14 @@ fn a_foreign_legacy_observatory_root_yields_to_this_machines_setting() {
     c.run_with_env(&["check"], &[("OBSERVATORY_ROOT", obs.to_str().unwrap())])
         .assert_ok()
         .says("ignored here in favour of $OBSERVATORY_ROOT")
-        .says("0 errors, 1 warnings");
+        .says("0 errors, 1 warning");
 
     c.run(&["config", "observatory-root", obs.to_str().unwrap()])
         .assert_ok();
     c.run(&["check"])
         .assert_ok()
         .says("ignored here in favour of this machine's setting")
-        .says("0 errors, 1 warnings");
+        .says("0 errors, 1 warning");
     c.run(&["show", &id])
         .assert_ok()
         .says(resolved.to_str().unwrap());
@@ -7134,6 +7464,37 @@ fn history_verbs_refuse_a_corpus_outside_a_git_work_tree() {
 /// The setting is off by default and the verbs behave as they always did;
 /// `neb config commit` reads and writes it, turning it on is itself the
 /// first commit, and turning it off leaves that rewrite for you.
+/// `--no-commit` is on the help of the verbs that write and nowhere else, as
+/// the built binary renders it. Before the verb it still parses, as it did
+/// when it was global; after a read-only verb it is a usage error.
+#[test]
+fn no_commit_is_offered_by_writing_verbs_only() {
+    let c = Corpus::new();
+    let offers = |args: &[&str]| {
+        c.run(args)
+            .assert_ok()
+            .stdout()
+            .lines()
+            .any(|l| l.trim_start().starts_with("--no-commit"))
+    };
+    assert!(!offers(&["--help"]), "the top-level help");
+    for verb in ["capture", "promote", "drop", "new", "note", "cite", "tag"] {
+        assert!(offers(&[verb, "--help"]), "{verb} writes");
+    }
+    assert!(offers(&["config", "commit", "--help"]));
+    for verb in ["show", "list", "trace", "review", "inbox", "near", "check"] {
+        assert!(!offers(&[verb, "--help"]), "{verb} only reads");
+    }
+
+    let run = c.run(&["list", "--no-commit"]);
+    assert_eq!(run.out.status.code(), Some(2), "a usage error");
+    run.says("unexpected argument '--no-commit'");
+    c.run(&["--no-commit", "capture", "--quiet", "still parses"])
+        .assert_ok();
+    c.run(&["capture", "--quiet", "and after", "--no-commit"])
+        .assert_ok();
+}
+
 #[test]
 fn commit_is_off_by_default_and_the_setting_reads_and_writes() {
     let (c, _remote) = corpus_repo();

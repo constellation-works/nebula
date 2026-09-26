@@ -61,7 +61,9 @@ impl fmt::Display for Status {
             Self::Refuted => "refuted",
             Self::Abandoned => "abandoned",
         };
-        f.write_str(s)
+        // `pad`, not `write_str`: a caller's width and fill (`{s:<10}` for a
+        // column) are part of the format, and `write_str` drops them.
+        f.pad(s)
     }
 }
 
@@ -116,7 +118,8 @@ impl fmt::Display for EdgeType {
             Self::Reopens => "reopens",
             Self::Contradicts => "contradicts",
         };
-        f.write_str(s)
+        // `pad` for the same reason as [`Status`]'s.
+        f.pad(s)
     }
 }
 
@@ -683,6 +686,18 @@ mod tests {
             normalize_tags(&["A".into(), "a".into(), String::new(), "B c".into()]),
             vec!["a", "b-c"]
         );
+    }
+
+    /// A column is a width specifier on the value itself, so `Display` has
+    /// to honour it; `write_str` would print the bare word and leave every
+    /// column after it ragged.
+    #[test]
+    fn statuses_and_edge_types_honour_width_and_fill() {
+        assert_eq!(format!("{:<10}|", Status::Seed), "seed      |");
+        assert_eq!(format!("{:>10}|", Status::Refuted), "   refuted|");
+        assert_eq!(format!("{:.<12}|", Status::Hypothesis), "hypothesis..|");
+        assert_eq!(format!("{:<14}|", EdgeType::Reopens), "reopens       |");
+        assert_eq!(Status::Abandoned.to_string(), "abandoned");
     }
 
     #[test]

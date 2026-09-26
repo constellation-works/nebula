@@ -159,54 +159,104 @@ pub struct TraceHop {
 
 /// Walk ancestry, or descent. The feature the whole system exists for.
 pub fn trace(graph: &Graph<'_>, id: &str, direction: Direction) -> Result<Trace> {
-    graph.require(id)?;
-    let mut acc = Vec::new();
-    let mut seen = HashSet::new();
-    collect(graph, id, None, direction, &mut seen, &mut acc);
-    Ok(Trace(acc))
+    trace_within(graph, id, direction, None)
 }
 
-fn collect(
+/// [`trace`], stopping `depth` steps from the start: `Some(0)` is the node
+/// alone, `Some(1)` adds its parents (or children), and `None` walks it all.
+///
+/// A bounded walk holds every node within `depth` steps along *some* path,
+/// not just along the first path the walk happened to take. A diamond can
+/// reach a node deep first and shallow later, so a node whose walk the bound
+/// cut short, met again nearer the start, is walked on from there; it is
+/// still reported once.
+pub fn trace_within(
     graph: &Graph<'_>,
     id: &str,
-    via: Option<TraceHop>,
     direction: Direction,
-    seen: &mut HashSet<String>,
-    acc: &mut Vec<TraceNode>,
-) {
-    if !seen.insert(id.to_string()) {
-        return;
-    }
-    let Some(doc) = graph.get(id) else { return };
-    acc.push(TraceNode {
-        id: doc.node.id.clone(),
-        title: doc.node.title.clone(),
-        status: doc.node.status,
-        parents: graph
-            .parents_of(id)
-            .iter()
-            .map(|p| (*p).to_string())
-            .collect(),
-        via,
-    });
-    let next: Vec<(String, Vec<EdgeType>)> = match direction {
-        Direction::Down => graph
-            .children_of(id)
-            .iter()
-            .map(|c| ((*c).to_string(), kinds_between(graph, c, id)))
-            .collect(),
-        Direction::Up => graph
-            .parents_of(id)
-            .iter()
-            .map(|p| ((*p).to_string(), kinds_between(graph, id, p)))
-            .collect(),
+    depth: Option<usize>,
+) -> Result<Trace> {
+    graph.require(id)?;
+    let mut walk = Walk {
+        graph,
+        direction,
+        max: depth,
+        seen: HashMap::new(),
+        acc: Vec::new(),
     };
-    for (n, kinds) in next {
-        let hop = TraceHop {
-            from: id.to_string(),
-            kinds,
+    walk.collect(id, None, 0);
+    Ok(Trace(walk.acc))
+}
+
+/// The state of one [`trace_within`].
+struct Walk<'g, 'a> {
+    graph: &'g Graph<'a>,
+    direction: Direction,
+    max: Option<usize>,
+    /// Each node reached: the fewest steps it has been walked on from, and
+    /// whether that walk reached everything below it.
+    seen: HashMap<String, (usize, bool)>,
+    acc: Vec<TraceNode>,
+}
+
+impl Walk<'_, '_> {
+    /// Walk on from `id`, `at` steps from the start, and say whether that
+    /// reached everything below it: `false` when the bound cut something.
+    fn collect(&mut self, id: &str, via: Option<TraceHop>, at: usize) -> bool {
+        // Walked before, and either in full or from no further away: this
+        // visit could reach nothing new. Unbounded, every walk is in full,
+        // which is the walk as it always was.
+        if let Some(&(then, complete)) = self.seen.get(id)
+            && (complete || then <= at)
+        {
+            return complete;
+        }
+        // Complete until shown otherwise, which is also what a cycle back to
+        // a node still being walked finds.
+        let first = self.seen.insert(id.to_string(), (at, true)).is_none();
+        let graph = self.graph;
+        let Some(doc) = graph.get(id) else {
+            return true;
         };
-        collect(graph, &n, Some(hop), direction, seen, acc);
+        if first {
+            self.acc.push(TraceNode {
+                id: doc.node.id.clone(),
+                title: doc.node.title.clone(),
+                status: doc.node.status,
+                parents: graph
+                    .parents_of(id)
+                    .iter()
+                    .map(|p| (*p).to_string())
+                    .collect(),
+                via,
+            });
+        }
+        let next: Vec<(String, Vec<EdgeType>)> = match self.direction {
+            Direction::Down => graph
+                .children_of(id)
+                .iter()
+                .map(|c| ((*c).to_string(), kinds_between(graph, c, id)))
+                .collect(),
+            Direction::Up => graph
+                .parents_of(id)
+                .iter()
+                .map(|p| ((*p).to_string(), kinds_between(graph, id, p)))
+                .collect(),
+        };
+        if self.max.is_some_and(|max| at >= max) && !next.is_empty() {
+            self.seen.insert(id.to_string(), (at, false));
+            return false;
+        }
+        let mut complete = true;
+        for (n, kinds) in next {
+            let hop = TraceHop {
+                from: id.to_string(),
+                kinds,
+            };
+            complete &= self.collect(&n, Some(hop), at + 1);
+        }
+        self.seen.insert(id.to_string(), (at, complete));
+        complete
     }
 }
 
@@ -303,7 +353,10 @@ pub fn open(graph: &Graph<'_>, inbox: &Inbox, tags: &[String]) -> Result<OpenRep
     if waiting > 0 {
         items.push(OpenItem {
             id: "inbox".into(),
-            why: format!("{waiting} captures waiting over fourteen days; promote or drop them"),
+            why: format!(
+                "{} waiting over fourteen days; promote or drop them",
+                count(waiting, "capture")
+            ),
         });
     }
     for d in graph.docs().iter().filter(|d| d.node.has_all_tags(&tags)) {
@@ -351,6 +404,37 @@ pub enum ReviewRule {
     StaleInbox,
 }
 
+impl ReviewReport {
+    /// Keep the first `limit` findings under each rule, in order, and drop
+    /// the rest. Returns how many each rule lost, leaving out any that lost
+    /// none, so a reader can say the list is cut and by how much.
+    ///
+    /// Per rule rather than overall, so four thousand cold seeds cannot
+    /// crowd a stale inbox out of the report.
+    pub fn truncate_per_rule(&mut self, limit: usize) -> Vec<(ReviewRule, usize)> {
+        /// Count one more under `rule`, and return the count so far.
+        fn bump(tally: &mut Vec<(ReviewRule, usize)>, rule: ReviewRule) -> usize {
+            if let Some((_, n)) = tally.iter_mut().find(|(r, _)| *r == rule) {
+                *n += 1;
+                return *n;
+            }
+            tally.push((rule, 1));
+            1
+        }
+
+        let mut seen = Vec::new();
+        let mut omitted = Vec::new();
+        self.0.retain(|item| {
+            if bump(&mut seen, item.rule) <= limit {
+                return true;
+            }
+            bump(&mut omitted, item.rule);
+            false
+        });
+        omitted
+    }
+}
+
 /// One finding from `review`.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -393,7 +477,7 @@ pub fn review(graph: &Graph<'_>, inbox: &Inbox, since: Option<i64>) -> Result<Re
                 rule: ReviewRule::StaleHypothesis,
                 id: n.id.clone(),
                 title: n.title.clone(),
-                reason: format!("hypothesis untouched for {hypothesis_days} days"),
+                reason: format!("hypothesis untouched for {}", count(hypothesis_days, "day")),
             });
         }
         if n.status == Status::Seed && older_than(&n.updated, seed_days) {
@@ -401,7 +485,10 @@ pub fn review(graph: &Graph<'_>, inbox: &Inbox, since: Option<i64>) -> Result<Re
                 rule: ReviewRule::UntouchedSeed,
                 id: n.id.clone(),
                 title: n.title.clone(),
-                reason: format!("seed untouched for {seed_days} days; propose: status abandoned"),
+                reason: format!(
+                    "seed untouched for {}; propose: status abandoned",
+                    count(seed_days, "day")
+                ),
             });
         }
         if n.status == Status::Hypothesis
@@ -438,10 +525,26 @@ pub fn review(graph: &Graph<'_>, inbox: &Inbox, since: Option<i64>) -> Result<Re
             rule: ReviewRule::StaleInbox,
             id: "inbox".into(),
             title: "inbox".into(),
-            reason: format!("{waiting} captures waiting over fourteen days; promote or drop them"),
+            reason: format!(
+                "{} waiting over fourteen days; promote or drop them",
+                count(waiting, "capture")
+            ),
         });
     }
     Ok(ReviewReport(items))
+}
+
+/// `1 capture`, `2 captures`: a count with its noun agreeing. Every noun
+/// these reports count takes a plain `s`.
+fn count<N>(n: N, noun: &str) -> String
+where
+    N: std::fmt::Display + PartialEq + From<u8> + Copy,
+{
+    if n == N::from(1) {
+        format!("{n} {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
 }
 
 /// The whole corpus as a drawable graph.

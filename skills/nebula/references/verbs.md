@@ -1,8 +1,11 @@
 # Verbs
 
-Every corpus verb below takes `--root <DIR>`, `--json` and `--no-commit`, and
-those flags may appear anywhere on the line — before the verb, after it, or
-after the free text of `capture`, `note` and `near`. Under `--json`, each emits
+Every corpus verb below takes `--root <DIR>` and `--json`, and those flags may
+appear anywhere on the line — before the verb, after it, or after the free
+text of `capture`, `note` and `near`. Every verb that writes also takes
+`--no-commit`, after the verb (or, as an older spelling, before it); a
+read-only verb such as `show`, `list` or `trace` refuses it as an unknown
+argument. Under `--json`, each emits
 one JSON value on stdout. Two commands are the exceptions: `completions`
 always emits a shell script, and `triage`, which takes its decisions from a
 person one key at a time, refuses `--json` (`Interactive`) and names the
@@ -124,7 +127,7 @@ for one invocation.
 | verb | does | flags |
 |---|---|---|
 | `neb capture <TEXT\|->...` | append a thought as one inbox line; prints the entry id, then the three nearest nodes; works on a corpus that does not exist yet, and then says so on stderr (`note: created a new corpus at <absolute path>`); a thought already waiting in the inbox is still captured, and stderr says `note: same as <id>, still waiting` | `--quiet`/`-q` (before or after the text) |
-| `neb inbox` | live entries (not promoted, not dropped) | — |
+| `neb inbox` | live entries (not promoted, not dropped), oldest first | `--limit <N>` |
 | `neb promote <ENTRY>` | inbox entry → seed node; without `--parent`, prints the three nearest nodes and proceeds as a root | `--title`, `--body <TEXT\|->`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run`, `--quiet`/`-q` |
 | `neb drop <ENTRY>` | strike an entry through; never deleted | — |
 | `neb triage` | walk the waiting entries oldest first and decide each with one key, through `promote` and `drop` | `--by <LABEL>` |
@@ -464,9 +467,9 @@ not who wrote the words. `check` enforces nothing about authorship.
 |---|---|---|
 | `neb show <NODE>` | one node in full, plus its body, currently or at a historical revision | `--at <HASH\|YYYY-MM-DD>` |
 | `neb log <NODE>` | commits that changed the node, newest first | — |
-| `neb list` | every node | `--status <S>`, `--tag <TAG>`× (every tag must match) |
+| `neb list` | every node | `--status <S>`, `--tag <TAG>`× (every tag must match), `--limit <N>` |
 | `neb near <QUERY>...` | the existing nodes closest to free text, or to a node (left out of its own answer), best first, each banded `strong`/`some`/`weak`; for a node, marks neighbours already linked to it | `--limit <K>`/`-k` (default 3); flags may follow the query |
-| `neb trace <NODE>` | ancestry as a tree, each line naming its edge kind(s) | `--down` for descendants |
+| `neb trace <NODE>` | ancestry as a tree, each line naming its edge kind(s) | `--down` for descendants, `--depth <N>` |
 | `neb impact <NODE>` | descendants plus `contradicts` neighbours | — |
 | `neb graph` | the whole corpus as `{nodes, edges}` or a Mermaid diagram | `--json`, or `--mermaid [--from <ID>]`; without a format, a hint and exit 2 |
 
@@ -497,6 +500,23 @@ not who wrote the words. `check` enforces nothing about authorship.
 }
 ```
 
+In text, `show` opens with a header: the status and id; the title, followed
+by `(<label>)` when an agent wrote it; `tags: a, b` when there are any; and
+`created: <date>  updated: <date>`. The kill condition, each edge and each
+reference likewise end in `(<label>)` when their author is not `human`.
+
+```
+// neb show tags-beat-domains
+hypothesis tags-beat-domains
+Tags beat domains
+tags: design, corpus
+created: 2026-09-12  updated: 2026-09-12
+
+kill: a corpus of 50+ nodes needs a cross-cutting query that tags cannot answer
+
+…the body, then the edges and references
+```
+
 `neb show <NODE> --at <HASH|YYYY-MM-DD>` has exactly the same text and JSON
 shape as current `show`; a date means the final commit on that date. A date
 before the node existed is refused. `neb log <NODE>` prints short hash, date,
@@ -519,6 +539,12 @@ read-only.
 `neb list --json` is an array of the same `node` objects (no `body`). A closed
 node carries `"closed": { "why": "...", "at": "2026-09-12" }`; optional fields
 (`kill`, `closed`, `origin`, empty lists) are omitted.
+
+`--limit <N>` on `list`, `inbox` and `review` bounds the output; without it
+everything is printed, as before. The text ends by saying what was left out
+(`2 of 3 matching nodes shown, of 4 in all; raise --limit for more`). Under
+`--json` the array is simply cut to N: same shape, no marker, so compare its
+length with N to know whether there may be more.
 
 `near` is word overlap — BM25 over title, tags and body, title and tags
 weighted up, plurals and `-ing` folded, no embeddings and no network — with
@@ -566,8 +592,8 @@ read; it never writes anything, and passing its first line straight to
 ]
 
 // neb near tags-beat-domains        (the node's own text is the query; it is not in the answer)
-strong abandoned a-single-global-taxonomy A single global taxonomy  linked: contradicts
-some   seed required-categorical-fields-drift Required categorical fields drift  linked: parent (derives-from)
+strong abandoned  a-single-global-taxonomy A single global taxonomy  linked: contradicts
+some   seed       required-categorical-fields-drift Required categorical fields drift  linked: parent (derives-from)
 ```
 
 `neb trace` prints a tree. Every line below the start names the genealogy
@@ -582,10 +608,16 @@ path but expanded only once, and later copies end in `(shown above)`.
 ```
 // neb trace retardation-in-the-wake
 hypothesis retardation-in-the-wake Retardation in the wake
-├─ derives-from, reopens  refuted scarcity-wake-retardation Scarcity wake retardation
-│  └─ derives-from  seed gravity-as-scarcity Gravity as scarcity
-└─ refines  seed gravity-as-scarcity Gravity as scarcity  (shown above)
+├─ derives-from, reopens  refuted    scarcity-wake-retardation Scarcity wake retardation
+│  └─ derives-from  seed       gravity-as-scarcity Gravity as scarcity
+└─ refines  seed       gravity-as-scarcity Gravity as scarcity  (shown above)
 ```
+
+`--depth <N>` stops the walk N steps out (`1` is the parents, or the children
+with `--down`; `0` the node alone), in the tree and in `--json` alike. A line
+whose branches it cut ends in `(K more beyond --depth)`. A node within N steps
+along any path is kept, even when the first path the walk took reached it
+further out. Without `--depth` the whole walk is printed, as before.
 
 `--json` lists each node once, in walk order. `parents` names each genealogical
 parent once, however many edges reach it. `via` is the step that first reached
@@ -643,8 +675,8 @@ graph BT
 
 | verb | does | flags |
 |---|---|---|
-| `neb review` | the weekly report: stale hypotheses (≥ 30 days), untouched seeds (≥ 90), hypotheses created ≥ 14 days ago with no references, hypotheses whose kill nobody human wrote, inbox waiting ≥ 14 | `--since <DAYS>`, `--out <FILE>` |
-| `neb review --short` | the quick glance, one line each: hypotheses created ≥ 14 days ago with no references, seeds untouched ≥ 90 days, inbox entries waiting ≥ 14 days | `--tag <TAG>`× |
+| `neb review` | the weekly report: stale hypotheses (≥ 30 days), untouched seeds (≥ 90), hypotheses created ≥ 14 days ago with no references, hypotheses whose kill nobody human wrote, inbox waiting ≥ 14 | `--since <DAYS>`, `--out <FILE>`, `--limit <N>` (per section) |
+| `neb review --short` | the quick glance, one line each: hypotheses created ≥ 14 days ago with no references, seeds untouched ≥ 90 days, inbox entries waiting ≥ 14 days | `--tag <TAG>`×, `--limit <N>` (lines) |
 
 Both forms are read-only by the spec's hard rule. `--short` refuses `--since`
 and `--out`, and `--tag` needs `--short`.
@@ -661,7 +693,11 @@ reference and does not close the no-references finding after the grace period.
 
 `neb review` without `--json` prints five `##` sections in that order, each
 `_none_` or a `- \`id\` Title — reason` list; `--out review.md` writes it to a
-file.
+file. `--limit <N>` keeps the first N findings under each heading, so a
+crowded section cannot push a short one out, and a cut section ends
+`- _… and K more; raise --limit for more_`; under `--json` it keeps the first
+N items of each `rule`. With `--short` it keeps the first N lines and ends
+`… and K more; raise --limit for more`.
 
 ```json
 // neb review --short --json
