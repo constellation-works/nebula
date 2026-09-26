@@ -94,8 +94,9 @@ impl CommitReport {
 /// Fails only when nothing was written; a refused commit is in the report.
 pub fn capture(corpus: &Corpus, text: &str) -> Result<Written<InboxEntry>> {
     // Hold the lock across the write and commit, just as the CLI does. Both
-    // core operations re-enter it on this thread without waiting again.
-    let _lock = corpus.lock_within(WRITE_LOCK_WAIT)?;
+    // core operations re-enter it on this thread without waiting again, and
+    // leave this label as the one a waiting writer is told about.
+    let _lock = corpus.lock_as(WRITE_LOCK_WAIT, "desktop capture")?;
     let entry = ops::capture(corpus, text)?;
     let commit = CommitReport::of(ops::commit(corpus, "capture", &[&entry.id]));
     Ok(Written {
@@ -112,7 +113,7 @@ pub fn inbox(corpus: &Corpus) -> Result<Vec<InboxEntry>> {
 /// Settle one entry through the same core op and commit as `neb drop`. As
 /// with [`capture`], a refused commit is reported, not raised.
 pub fn drop_entry(corpus: &Corpus, entry: &str) -> Result<Written<InboxEntry>> {
-    let _lock = corpus.lock_within(WRITE_LOCK_WAIT)?;
+    let _lock = corpus.lock_as(WRITE_LOCK_WAIT, &format!("desktop drop {entry}"))?;
     let dropped = ops::drop(corpus, entry)?;
     let commit = CommitReport::of(ops::commit(corpus, "drop", &[entry]));
     Ok(Written {
@@ -124,7 +125,7 @@ pub fn drop_entry(corpus: &Corpus, entry: &str) -> Result<Written<InboxEntry>> {
 /// Promote the captured text as an unlinked root, like `neb promote --quiet`.
 /// As with [`capture`], a refused commit is reported, not raised.
 pub fn promote_root(corpus: &Corpus, entry: &str) -> Result<Written<Created>> {
-    let _lock = corpus.lock_within(WRITE_LOCK_WAIT)?;
+    let _lock = corpus.lock_as(WRITE_LOCK_WAIT, &format!("desktop promote {entry}"))?;
     let created = ops::promote(corpus, entry, &ops::Promotion::default(), 0)?;
     let commit = CommitReport::of(ops::commit(
         corpus,

@@ -50,7 +50,22 @@
 //! The lock file is created once, `0600`, and never removed. Unlinking it
 //! would race: a second process can hold `flock` on an unlinked inode while a
 //! third creates a fresh file at the same path and locks that instead, and the
-//! two would not see each other.
+//! two would not see each other. It is opened without following a symlink, so
+//! a link planted at `.lock` is refused rather than written through.
+//!
+//! **Who holds it** (STD-03 §R7). Just after `flock` succeeds, the holder
+//! writes one short record into the lock file itself — its PID, when it took
+//! the lock, and a label saying which writer it is (`neb edit a-node`,
+//! `desktop capture`) — and empties the file again as the guard drops. A
+//! writer that times out reads that record into [`Error::Locked`], so the
+//! refusal names who to wait for. The record is **diagnostic only**: `flock`
+//! is the one authority on whether the lock is held, and nothing here decides
+//! ownership or liveness from the record or ever signals its PID
+//! (STD-03 §R14). It is written after the lock is taken and cleared before it
+//! is released, so a waiter can catch it empty, or still holding a crashed
+//! holder's record; an empty, oversized or unreadable record is
+//! `holder: None`, which is still contention, never a free lock. Keeping it
+//! in `.lock` keeps it where commits and the checker already never look.
 //!
 //! The same lock guards this machine's settings in `~/.config/nebula`, taken
 //! on that directory through
@@ -67,7 +82,7 @@
 //! cannot break the order.
 
 use crate::error::{Error, Result};
-use crate::fs::private_open_options;
+use crate::fs::{no_follow, overwrite_in_place, private_open_options, read_capped};
 use fs4::{FileExt, TryLockError};
 use std::collections::HashMap;
 use std::fs::File;
@@ -75,7 +90,9 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::ThreadId;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 /// The lock file's name, directly under the corpus root.
 ///
@@ -98,6 +115,57 @@ pub const LOCK_WAIT: Duration = Duration::from_secs(5);
 /// verb it is waiting for.
 const POLL: Duration = Duration::from_millis(20);
 
+/// The label a holder records when its process never named itself.
+const DEFAULT_LABEL: &str = "nebula";
+
+/// The most of a holder record a waiter reads. A record is a few dozen
+/// bytes; anything larger is not one, and is not read into memory to find
+/// that out.
+const RECORD_CAP: usize = 4096;
+
+/// The longest label a holder records, in characters. Enough for a verb and
+/// the id it names; a longer one is cut rather than refused, because the
+/// label only explains a wait.
+const LABEL_CAP: usize = 160;
+
+/// Who holds a lock, as the holder recorded it in the lock file.
+///
+/// **Diagnostic only** (STD-03 §R7, §R14): it names who to wait for in an
+/// [`Error::Locked`] and nothing more. Whether the lock is held is decided by
+/// `flock` alone, never by this record; the PID is never signalled and never
+/// probed for liveness. It can be stale — a holder that crashed leaves its
+/// record behind until the next holder overwrites it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockHolder {
+    /// The holding process's id.
+    pub pid: u32,
+    /// When it took the lock, to the second.
+    pub since: SystemTime,
+    /// Which writer it is: `neb edit a-node`, `desktop capture`, or
+    /// `nebula` when the writer did not say.
+    pub label: String,
+}
+
+impl LockHolder {
+    /// [`Self::since`] as RFC 3339 in UTC, as the record stores it.
+    pub fn since_rfc3339(&self) -> String {
+        OffsetDateTime::from(self.since)
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| "an unreadable time".to_owned())
+    }
+}
+
+/// The holder record as it sits in the lock file: one line of JSON.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Record {
+    pid: u32,
+    since: String,
+    label: String,
+}
+
+/// This process's label, for every lock taken without one of its own.
+static PROCESS_LABEL: OnceLock<String> = OnceLock::new();
+
 /// A held corpus write lock. Released when it drops.
 ///
 /// Take one with [`crate::store::Corpus::lock`], or with [`Self::acquire`]
@@ -108,6 +176,7 @@ const POLL: Duration = Duration::from_millis(20);
 /// decrement somebody else's count. A thread that wants the lock takes its
 /// own.
 #[derive(Debug)]
+#[must_use = "the corpus lock is released when this guard drops"]
 pub struct CorpusLock {
     gate: Arc<Gate>,
     /// Whether this take found the lock free rather than re-entering it.
@@ -130,19 +199,39 @@ impl CorpusLock {
     /// with its own idea of patience — a UI that would rather say "busy", or
     /// a test that would rather not wait — names its own.
     pub fn acquire_within(root: &Path, wait: Duration) -> Result<Self> {
+        Self::acquire_as(root, wait, process_label())
+    }
+
+    /// Take it with a bound and a label of its own, which the holder record
+    /// carries instead of the process's (see [`Self::label_process`]).
+    ///
+    /// For a process with more than one kind of writer, like the desktop,
+    /// whose commands each say which they are. A take that re-enters a lock
+    /// this thread already holds records nothing: the outermost label stays.
+    pub fn acquire_as(root: &Path, wait: Duration, label: &str) -> Result<Self> {
         let gate = gate_for(root);
         let deadline = Instant::now() + wait;
         loop {
-            if let Some(lock) = try_enter(&gate, root)? {
+            if let Some(lock) = try_enter(&gate, root, label)? {
                 return Ok(lock);
             }
             if Instant::now() >= deadline {
                 return Err(Error::Locked {
                     root: root.to_path_buf(),
+                    holder: read_holder(&root.join(LOCK_FILE)),
                 });
             }
             std::thread::sleep(POLL);
         }
+    }
+
+    /// Name this process in the record of every lock it takes without a
+    /// label of its own: `neb edit a-node`, say, set once from the parsed
+    /// command line. The first call wins and later ones are ignored, so a
+    /// label cannot change under a lock already held. A process that never
+    /// calls this records `nebula`.
+    pub fn label_process(label: &str) {
+        let _ = PROCESS_LABEL.set(clean_label(label));
     }
 }
 
@@ -165,6 +254,10 @@ impl Drop for CorpusLock {
         let Some(inner) = held.as_mut() else { return };
         inner.depth -= 1;
         if inner.depth == 0 {
+            // Empty the holder record while the lock is still held, so the
+            // next waiter does not read this one as its holder. A failure
+            // costs only that diagnosis, and a guard never fails a drop.
+            let _ = overwrite_in_place(&inner.file, b"");
             // Dropping the file closes the description and releases the
             // `flock` with it, which is the whole of the release.
             *held = None;
@@ -209,9 +302,9 @@ struct Held {
     thread: ThreadId,
     /// How many live [`CorpusLock`]s that thread has taken.
     depth: usize,
-    /// The open file description carrying the `flock`. Never read or
-    /// written; it is held so that dropping it releases the lock.
-    _file: File,
+    /// The open file description carrying the `flock`. Written only to
+    /// record and clear the holder; dropping it releases the lock.
+    file: File,
 }
 
 /// The process-wide gate table.
@@ -234,7 +327,7 @@ fn held(gate: &Gate) -> MutexGuard<'_, Option<Held>> {
 
 /// One attempt. `Ok(None)` means somebody else is mid-write and the caller
 /// should wait; `Err` is the lock file itself failing to open or lock.
-fn try_enter(gate: &Arc<Gate>, root: &Path) -> Result<Option<CorpusLock>> {
+fn try_enter(gate: &Arc<Gate>, root: &Path, label: &str) -> Result<Option<CorpusLock>> {
     let mut held = held(gate);
     let me = std::thread::current().id();
     match held.as_mut() {
@@ -251,22 +344,26 @@ fn try_enter(gate: &Arc<Gate>, root: &Path) -> Result<Option<CorpusLock>> {
         // Another thread of this process is mid-write.
         Some(_) => Ok(None),
         None => {
-            // `truncate(false)`: the file is a lock, not a record. Nothing
-            // is ever written into it, and emptying it would be a write to
-            // a file another process may hold open. Created `0600`.
+            // `truncate(false)`: another process may hold the lock and have
+            // its record in the file, and only a holder writes it. Created
+            // `0600`, and never through a symlink: the record written below
+            // would otherwise empty whatever the link names.
             let path = root.join(LOCK_FILE);
-            let file = private_open_options()
-                .create(true)
-                .write(true)
-                .truncate(false)
-                .open(&path)
-                .map_err(|error| Error::io_at("opening", &path, error))?;
+            let file = no_follow(
+                private_open_options()
+                    .create(true)
+                    .write(true)
+                    .truncate(false),
+            )
+            .open(&path)
+            .map_err(|error| Error::io_at("opening", &path, error))?;
             match FileExt::try_lock(&file) {
                 Ok(()) => {
+                    record_holder(&file, label);
                     *held = Some(Held {
                         thread: me,
                         depth: 1,
-                        _file: file,
+                        file,
                     });
                     Ok(Some(CorpusLock {
                         gate: Arc::clone(gate),
@@ -280,6 +377,73 @@ fn try_enter(gate: &Arc<Gate>, root: &Path) -> Result<Option<CorpusLock>> {
             }
         }
     }
+}
+
+/// Write this process into the lock file it has just locked.
+///
+/// Diagnostic only, so a failure is not the writer's problem: the lock is
+/// held either way, and a waiter that finds no record says the holder is
+/// unidentified. Only a regular file is written, so a FIFO or device planted
+/// at the name is locked but never written to.
+fn record_holder(file: &File, label: &str) {
+    if !file.metadata().is_ok_and(|meta| meta.is_file()) {
+        return;
+    }
+    let since = OffsetDateTime::now_utc()
+        .replace_nanosecond(0)
+        .unwrap_or_else(|_| OffsetDateTime::now_utc());
+    let Ok(since) = since.format(&Rfc3339) else {
+        return;
+    };
+    let record = Record {
+        pid: std::process::id(),
+        since,
+        label: clean_label(label),
+    };
+    let Ok(mut line) = serde_json::to_vec(&record) else {
+        return;
+    };
+    line.push(b'\n');
+    let _ = overwrite_in_place(file, &line);
+}
+
+/// The holder a waiter reads out of `path`, or `None` when there is no
+/// usable record: empty, oversized, a symlink, unparsable, or with a label
+/// no holder would write. `None` still means the lock is held.
+fn read_holder(path: &Path) -> Option<LockHolder> {
+    let bytes = read_capped(path, RECORD_CAP).ok()??;
+    let record: Record = serde_json::from_slice(&bytes).ok()?;
+    if record.label.is_empty() || record.label != clean_label(&record.label) {
+        return None;
+    }
+    let since = OffsetDateTime::parse(&record.since, &Rfc3339).ok()?;
+    Some(LockHolder {
+        pid: record.pid,
+        since: since.into(),
+        label: record.label,
+    })
+}
+
+/// A label as a record stores it: no control characters, which a terminal
+/// rendering the refusal would act on, cut to [`LABEL_CAP`] characters, and
+/// [`DEFAULT_LABEL`] when nothing is left.
+fn clean_label(label: &str) -> String {
+    let cleaned: String = label
+        .chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .take(LABEL_CAP)
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        DEFAULT_LABEL.to_owned()
+    } else {
+        cleaned.to_owned()
+    }
+}
+
+/// The label of a lock taken without one.
+fn process_label() -> &'static str {
+    PROCESS_LABEL.get().map_or(DEFAULT_LABEL, String::as_str)
 }
 
 #[cfg(test)]
@@ -300,7 +464,7 @@ mod tests {
             dir.path().join(LOCK_FILE).exists(),
             "the file stays; deleting it would race a process holding the old inode"
         );
-        CorpusLock::acquire(dir.path()).expect("the next writer gets in");
+        drop(CorpusLock::acquire(dir.path()).expect("the next writer gets in"));
     }
 
     #[cfg(unix)]
@@ -376,6 +540,181 @@ mod tests {
         );
     }
 
+    /// Hold `root`'s lock as `label` on another thread, run `waiter` on
+    /// this one while it is held, then let the holder go.
+    fn while_held_elsewhere<T>(root: &Path, label: &str, waiter: impl FnOnce() -> T) -> T {
+        let (held_tx, held_rx) = std::sync::mpsc::sync_channel(0);
+        let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<()>(0);
+        std::thread::scope(|scope| {
+            let holder = scope.spawn(move || {
+                let lock = CorpusLock::acquire_as(root, LOCK_WAIT, label).expect("the holder");
+                held_tx.send(()).expect("the waiter is listening");
+                // Until the waiter is done, or gone.
+                let _ = done_rx.recv();
+                drop(lock);
+            });
+            held_rx.recv().expect("the holder took the lock");
+            let out = waiter();
+            done_tx.send(()).expect("the holder is waiting");
+            holder.join().expect("the holder did not panic");
+            out
+        })
+    }
+
+    /// Replace the lock file's contents by hand, the way a torn write, a
+    /// crash or a stranger would leave them.
+    fn scribble(root: &Path, bytes: &[u8]) {
+        use std::io::Write as _;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(root.join(LOCK_FILE))
+            .and_then(|mut file| file.write_all(bytes))
+            .expect("scribbling on the lock file");
+    }
+
+    #[test]
+    fn a_timeout_names_the_holder() {
+        let dir = root();
+        let refused = while_held_elsewhere(dir.path(), "test holder", || {
+            CorpusLock::acquire_within(dir.path(), Duration::from_millis(50)).map(|_| ())
+        });
+        let Err(Error::Locked {
+            root,
+            holder: Some(holder),
+        }) = &refused
+        else {
+            panic!("expected a named holder, got {refused:?}");
+        };
+        assert_eq!(root, dir.path());
+        assert_eq!(holder.pid, std::process::id());
+        assert_eq!(holder.label, "test holder");
+        assert!(holder.since <= SystemTime::now(), "{holder:?}");
+        assert!(
+            SystemTime::now()
+                .duration_since(holder.since)
+                .is_ok_and(|age| age < Duration::from_secs(60)),
+            "taken just now: {holder:?}"
+        );
+        assert!(
+            refused
+                .as_ref()
+                .unwrap_err()
+                .to_string()
+                .contains("`test holder`, pid "),
+            "the message names it: {refused:?}"
+        );
+    }
+
+    /// The record only explains a wait. Whatever the file holds, a lock
+    /// somebody has is refused as held — never taken as free because its
+    /// record could not be read.
+    #[test]
+    fn an_unreadable_holder_record_is_still_contention() {
+        let oversized = format!(
+            r#"{{"pid":1,"since":"2026-09-26T00:00:00Z","label":"{}"}}"#,
+            "x".repeat(RECORD_CAP)
+        );
+        let cases: [(&str, &[u8]); 6] = [
+            ("garbage", b"\xff\x00 not a record at all"),
+            ("empty", b""),
+            ("truncated", br#"{"pid":1,"since":"2026-09-"#),
+            (
+                "a bad time",
+                br#"{"pid":1,"since":"yesterday","label":"neb"}"#,
+            ),
+            (
+                "a control character",
+                b"{\"pid\":1,\"since\":\"2026-09-26T00:00:00Z\",\"label\":\"\\u001b[2J\"}",
+            ),
+            ("oversized", oversized.as_bytes()),
+        ];
+        for (case, bytes) in cases {
+            let dir = root();
+            let refused = while_held_elsewhere(dir.path(), "test holder", || {
+                scribble(dir.path(), bytes);
+                CorpusLock::acquire_within(dir.path(), Duration::from_millis(50)).map(|_| ())
+            });
+            assert!(
+                matches!(&refused, Err(Error::Locked { holder: None, .. })),
+                "{case}: got {refused:?}"
+            );
+            assert!(
+                refused
+                    .unwrap_err()
+                    .to_string()
+                    .contains("(an unidentified writer)"),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_record_is_cleared_on_release_and_not_rewritten_on_reentry() {
+        let dir = root();
+        let path = dir.path().join(LOCK_FILE);
+        let outer = CorpusLock::acquire_as(dir.path(), Duration::ZERO, "outer").expect("outer");
+        let recorded = read_holder(&path).expect("the holder recorded itself");
+        assert_eq!(recorded.label, "outer");
+        assert_eq!(recorded.pid, std::process::id());
+
+        let inner = CorpusLock::acquire_as(dir.path(), Duration::ZERO, "inner").expect("re-entry");
+        assert_eq!(read_holder(&path), Some(recorded.clone()), "re-entry wrote");
+        drop(inner);
+        assert_eq!(
+            read_holder(&path),
+            Some(recorded),
+            "an inner release cleared the outer holder's record"
+        );
+
+        drop(outer);
+        assert_eq!(std::fs::metadata(&path).expect("the file stays").len(), 0);
+    }
+
+    /// The record is written into the file the lock opened, so a symlink at
+    /// `.lock` would have it empty the link's target. It is refused instead,
+    /// and the target is left as it was.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_lock_file_is_refused_and_its_target_untouched() {
+        let dir = root();
+        let target = dir.path().join("precious");
+        scribble_new(&target, b"keep me");
+        std::os::unix::fs::symlink(&target, dir.path().join(LOCK_FILE)).expect("symlink");
+
+        let error = CorpusLock::acquire(dir.path()).expect_err("a symlinked lock file");
+        assert!(
+            matches!(
+                &error,
+                Error::IoAt {
+                    action: "opening",
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert_eq!(std::fs::read(&target).expect("target"), b"keep me");
+    }
+
+    #[cfg(unix)]
+    fn scribble_new(path: &Path, bytes: &[u8]) {
+        use std::io::Write as _;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .and_then(|mut file| file.write_all(bytes))
+            .expect("writing a fixture");
+    }
+
+    #[test]
+    fn a_label_is_recorded_without_control_characters_and_within_bounds() {
+        assert_eq!(clean_label("neb edit a-node"), "neb edit a-node");
+        assert_eq!(clean_label("neb edit \u{1b}[2J"), "neb edit ?[2J");
+        assert_eq!(clean_label("  "), DEFAULT_LABEL);
+        assert_eq!(clean_label(&"x".repeat(1000)).chars().count(), LABEL_CAP);
+    }
+
     #[test]
     fn a_second_thread_waits_and_then_refuses_with_the_root_it_wanted() {
         let dir = root();
@@ -389,7 +728,7 @@ mod tests {
         .expect("the waiter did not panic");
 
         assert!(
-            matches!(&refused, Err(Error::Locked { root }) if root == dir.path()),
+            matches!(&refused, Err(Error::Locked { root, .. }) if root == dir.path()),
             "got {refused:?}"
         );
         drop(held_by_us);

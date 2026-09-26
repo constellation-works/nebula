@@ -199,6 +199,68 @@ pub(crate) fn remove_private(path: &Path) -> Result<()> {
     sync_parent(path)
 }
 
+/// Make `options` refuse a symlink at the last component of the path it
+/// opens, where the platform can say so (`O_NOFOLLOW`): the open fails
+/// instead of reaching whatever the link names.
+pub(crate) fn no_follow(options: &mut OpenOptions) -> &mut OpenOptions {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    options
+}
+
+/// Replace an open file's contents in place: truncate it, then write `bytes`
+/// from the start in one write, with no flush.
+///
+/// For the lock's holder record and nothing else (see `lock.rs`). The record
+/// lives in the lock file itself, which is never replaced: renaming a new
+/// file over it would move the `flock` to an inode no other writer opens. And
+/// it is not durable state, so STD-03 §R5's rule that a durable file is never
+/// rewritten in place does not reach it: it is cleared on release, means
+/// nothing after a crash, and a reader that finds it torn or empty treats it
+/// as no record at all. Written through the handle the caller holds, never
+/// by name, so it cannot follow a symlink planted since the open.
+pub(crate) fn overwrite_in_place(file: &File, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::{Seek as _, SeekFrom};
+    file.set_len(0)?;
+    if !bytes.is_empty() {
+        let mut file = file;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(bytes)?;
+    }
+    Ok(())
+}
+
+/// Read `path` whole if it is a regular file of at most `cap` bytes.
+///
+/// For a small record another process may be rewriting, like the lock's
+/// holder record. It never follows a symlink at `path` ([`no_follow`]), never
+/// blocks opening something that is not a regular file (a FIFO planted at
+/// the name), and never reads more than `cap` bytes plus one, however large
+/// the file has grown. `Ok(None)` when the file is not a regular file or is
+/// larger than `cap`.
+pub(crate) fn read_capped(path: &Path, cap: usize) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read as _;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        // Both flags at once: `custom_flags` replaces rather than adds.
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    file.take(u64::try_from(cap).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    Ok((bytes.len() <= cap).then_some(bytes))
+}
+
 /// Write the whole of `contents`, flush it to the device, and close the file,
 /// so the rename that follows moves complete bytes nobody still holds open.
 fn write_sync_and_close(

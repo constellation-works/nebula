@@ -119,9 +119,29 @@ struct Cli {
     command: Command,
 
     /// The verb as typed, a setting's name included (`config commit`), for
-    /// the messages that name it. Filled in by [`parse_from`].
+    /// the messages that name it and the lock's holder record. Filled in by
+    /// [`parse_from`].
     #[arg(skip)]
     verb: String,
+}
+
+impl Cli {
+    /// What this process records as the holder of any lock it takes:
+    /// `neb edit a-node`, `neb capture`. The verb and the one node or entry
+    /// it names, never the text it was given, which may be private and
+    /// would sit in a file every other writer reads.
+    fn lock_label(&self) -> String {
+        let mut label = String::from("neb");
+        for word in [Some(self.verb.as_str()), self.command.target()]
+            .into_iter()
+            .flatten()
+            .filter(|word| !word.is_empty())
+        {
+            label.push(' ');
+            label.push_str(word);
+        }
+        label
+    }
 }
 
 /// `--no-commit`, flattened into each verb that writes so its `--help` offers
@@ -806,6 +826,41 @@ impl Command {
             | Self::Open { .. } => None,
         }
     }
+
+    /// The one node or inbox entry a writing verb names, for the lock's
+    /// holder record. No wildcard arm, so a new verb says here whether it
+    /// has one.
+    fn target(&self) -> Option<&str> {
+        match self {
+            Self::Promote { entry, .. } | Self::Drop { entry, .. } => Some(entry),
+            Self::Edit { node, .. }
+            | Self::Sharpen { node, .. }
+            | Self::Status { node, .. }
+            | Self::Note { node, .. }
+            | Self::Cite { node, .. }
+            | Self::Handoff { node, .. } => Some(node),
+            Self::Link { from, .. } => Some(from),
+            Self::Tag { target, .. } => Some(target),
+            Self::Init { .. }
+            | Self::Check
+            | Self::Migrate { .. }
+            | Self::Config { .. }
+            | Self::Completions { .. }
+            | Self::Capture { .. }
+            | Self::Inbox { .. }
+            | Self::Triage { .. }
+            | Self::New { .. }
+            | Self::Show { .. }
+            | Self::Log { .. }
+            | Self::List { .. }
+            | Self::Near { .. }
+            | Self::Trace { .. }
+            | Self::Impact { .. }
+            | Self::Graph { .. }
+            | Self::Review { .. }
+            | Self::Open { .. } => None,
+        }
+    }
 }
 
 /// A boolean setting as the command line spells it.
@@ -1088,6 +1143,7 @@ impl GlobalConflict {
 /// done and only if the verb did not refuse first.
 pub fn main() -> ExitCode {
     let cli = parse_from(std::env::args_os()).unwrap_or_else(|e| e.exit());
+    CorpusLock::label_process(&cli.lock_label());
     let json = cli.json;
     let outcome = run(cli);
     let flushed = output::finish();
@@ -2738,6 +2794,30 @@ mod tests {
     /// Whether the verb's own `--no-commit` was given.
     fn skips(command: &Command) -> bool {
         command.commit_arg().is_some_and(|c| c.no_commit)
+    }
+
+    /// The lock's holder record names the verb as typed and the one node or
+    /// entry it acts on, and never the text a verb was given.
+    #[test]
+    fn the_lock_label_is_the_verb_and_its_target_only() {
+        let label = |argv: &[&str]| parse_cli(argv).expect("parses").lock_label();
+        assert_eq!(label(&["edit", "a-node"]), "neb edit a-node");
+        assert_eq!(
+            label(&["--root", "/c", "tag", "n", "--add", "x"]),
+            "neb tag n"
+        );
+        assert_eq!(label(&["link", "a", "refines", "b"]), "neb link a");
+        assert_eq!(label(&["drop", "i1", "--no-commit"]), "neb drop i1");
+        assert_eq!(
+            label(&["capture", "a", "private", "thought"]),
+            "neb capture"
+        );
+        assert_eq!(label(&["new", "A private title", "--body", "b"]), "neb new");
+        assert_eq!(
+            label(&["config", "observatory-root", "/obs"]),
+            "neb config observatory-root"
+        );
+        assert_eq!(label(&["migrate"]), "neb migrate");
     }
 
     /// After a writing verb the flag is that verb's; before any verb it is

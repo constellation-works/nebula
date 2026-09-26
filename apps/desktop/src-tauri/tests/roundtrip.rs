@@ -236,22 +236,30 @@ fn capture_refuses_a_busy_writer_quickly_and_can_be_retried() {
     let pending = session::capture(&corpus, "settle me").unwrap().value;
     let holder = LockHolder::start(&root);
 
+    // Each refusal names the other process and the label it recorded.
+    let names_the_holder = |refused: &Error| {
+        matches!(
+            refused,
+            Error::Locked { holder: Some(h), .. }
+                if h.pid == holder.pid() && h.label == lock_holder::LABEL
+        )
+    };
+
     let start = Instant::now();
     let result = session::capture(&corpus, "retry me");
-    assert!(matches!(result, Err(Error::Locked { .. })), "{result:?}");
+    assert!(result.as_ref().is_err_and(names_the_holder), "{result:?}");
     assert!(
         start.elapsed() < Duration::from_secs(1),
         "capture waited as long as the CLI's five-second lock timeout"
     );
     let start = Instant::now();
-    assert!(matches!(
-        session::drop_entry(&corpus, &pending.id),
-        Err(Error::Locked { .. })
-    ));
-    assert!(matches!(
-        session::promote_root(&corpus, &pending.id),
-        Err(Error::Locked { .. })
-    ));
+    let dropped = session::drop_entry(&corpus, &pending.id);
+    assert!(dropped.as_ref().is_err_and(names_the_holder), "{dropped:?}");
+    let promoted = session::promote_root(&corpus, &pending.id);
+    assert!(
+        promoted.as_ref().is_err_and(names_the_holder),
+        "{promoted:?}"
+    );
     assert!(start.elapsed() < Duration::from_secs(1));
 
     holder.release();

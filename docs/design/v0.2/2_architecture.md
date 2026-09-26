@@ -128,9 +128,24 @@ every op that writes holds it for its whole duration:
   again; counting the re-entry is what stops that deadlocking.
 
 Contention blocks for up to five seconds and then fails with
-`Error::Locked { root }` — before the op reads or writes anything, so
+`Error::Locked { root, holder }` — before the op reads or writes anything, so
 retrying is always safe. A writer that blocked forever on a stuck peer would
 be worse than one that says so.
+
+The refusal names who to wait for (STD-03 §R7). Just after `flock` succeeds,
+the holder writes one line of JSON into `.lock` itself — its PID, the time it
+took the lock (RFC 3339, UTC) and a label: the CLI's verb and the node or
+entry it names (`neb edit a-node`; never a verb's text), the desktop's own
+(`desktop capture`), or `nebula` for a caller that gave none. It empties the
+file again before the guard releases the lock, and a re-entrant take writes
+nothing. A waiter that times out reads it back, without following a symlink
+and at most 4 KiB, into `holder: Option<LockHolder>`; an empty, oversized or
+unparsable record is `None`, rendered as "an unidentified writer", and is
+still a held lock. The record is diagnostic only: `flock` alone decides who
+holds the lock, and the PID is never signalled. Keeping it in `.lock` keeps it
+inside the file commits and the checker already skip, and the lock file is
+opened without following a symlink so the record can never be written
+through one.
 
 The lock covers a verb's read-modify-write and its commit, and nothing slow
 (STD-03 §R1). `neb edit` opens `$EDITOR` with no lock held and saves with

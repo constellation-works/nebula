@@ -12,7 +12,8 @@
 //! How a refusal exits is decided here too, once: [`exit`] places every core
 //! variant, and the CLI's own refusals say which they are when they are made.
 
-use nebula_core::{EdgeType, Error, ErrorClass, Settlement, Status};
+use nebula_core::{EdgeType, Error, ErrorClass, LockHolder, Settlement, Status};
+use std::time::{Duration, SystemTime};
 
 /// How a refusal ends `neb` (STD-01 §R20).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,7 +142,31 @@ pub fn refusal(e: &Error) -> Refusal {
     Refusal {
         hint: hint(e),
         exit: exit(e),
-        ..Refusal::new(e.code(), e.to_string())
+        ..Refusal::new(e.code(), message(e))
+    }
+}
+
+/// What is wrong. Core's message, except where the CLI can say it better
+/// for a person at a prompt: a held lock names how long its holder has had
+/// it rather than the time it took it.
+fn message(e: &Error) -> String {
+    match e {
+        Error::Locked {
+            root,
+            holder: Some(holder),
+        } => {
+            let held = SystemTime::now()
+                .duration_since(holder.since)
+                .unwrap_or_default();
+            format!(
+                "another nebula writer is holding {} (`{}`, pid {}, for {}); nothing was written",
+                root.display(),
+                holder.label,
+                holder.pid,
+                age(held)
+            )
+        }
+        other => other.to_string(),
     }
 }
 
@@ -271,13 +296,7 @@ fn hint(e: &Error) -> Option<String> {
             root.display()
         ),
         Error::DuplicateEdge { from, .. } => format!("See its edges with:  neb show {from}"),
-        Error::Locked { .. } => {
-            "Another `neb`, an agent session, or the desktop app is mid-write. \
-             Nothing changed, so run it again in a moment.\n\n\
-             The lock goes with that writer's process, so there is no stale \
-             .lock to remove."
-                .to_owned()
-        }
+        Error::Locked { holder, .. } => locked_hint(holder.as_ref()),
         Error::EditConflict(id) => format!(
             "Another writer changed the body while it was open in the editor. \
              See what it holds now with:  neb show {id}\n\
@@ -435,6 +454,43 @@ fn interrupted_write_hint(e: &Error) -> Option<String> {
     })
 }
 
+/// The advice for a held lock: nothing was written, and who to wait for.
+/// Never "try again in a moment": the holder may be a long commit, and the
+/// record says which writer it is.
+fn locked_hint(holder: Option<&LockHolder>) -> String {
+    match holder {
+        Some(holder) => format!(
+            "Nothing was written. `{0}` (pid {1}) is mid-write: wait for it to \
+             finish, then run this again. If it does not finish, see what it is \
+             doing with:  ps -p {1}\n\n{LOCK_GOES_WITH_ITS_PROCESS}",
+            holder.label, holder.pid
+        ),
+        None => format!(
+            "Nothing was written. Another `neb`, an agent session, or the desktop \
+             app is mid-write and did not record which: wait for it to finish, \
+             then run this again. If it does not finish, look for a running `neb` \
+             or the desktop app.\n\n{LOCK_GOES_WITH_ITS_PROCESS}"
+        ),
+    }
+}
+
+/// Why a held lock never needs clearing by hand, in both of its hints.
+const LOCK_GOES_WITH_ITS_PROCESS: &str =
+    "The lock goes with that writer's process, so there is no stale .lock to remove.";
+
+/// How long something has been going, as a person reads it: `42s`, `3m`,
+/// `2h`, `5d`. Whole units, rounded down, and never the next unit up until
+/// two of it have passed, so `90s` stays `90s`.
+fn age(held: Duration) -> String {
+    let secs = held.as_secs();
+    match secs {
+        s if s < 120 => format!("{s}s"),
+        s if s < 120 * 60 => format!("{}m", s / 60),
+        s if s < 48 * 3600 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86400),
+    }
+}
+
 /// A byte count as a person reads it: `64 KiB`, `1 MiB`.
 fn size(bytes: usize) -> String {
     match bytes {
@@ -580,6 +636,83 @@ mod tests {
             timed_out("log").hint.as_deref(),
             Some("Run it by hand to see what it is waiting on:\n  git -C /c log")
         );
+    }
+
+    #[test]
+    fn a_locked_error_names_the_holder_and_its_age() {
+        let holder = nebula_core::LockHolder {
+            pid: 4242,
+            // Well inside the third hour, so the age cannot tick over while
+            // the test runs.
+            since: SystemTime::now() - Duration::from_secs(3 * 3600 + 1800),
+            label: "neb edit a-node".to_owned(),
+        };
+        let refused = refusal(&Error::Locked {
+            root: PathBuf::from("/c"),
+            holder: Some(holder),
+        });
+        assert_eq!(refused.code, "locked");
+        assert_eq!(
+            refused.message,
+            "another nebula writer is holding /c (`neb edit a-node`, pid 4242, for 3h); \
+             nothing was written"
+        );
+        let hint = refused.hint.as_deref().expect("a hint");
+        for named in [
+            "Nothing was written",
+            "`neb edit a-node` (pid 4242)",
+            "ps -p 4242",
+        ] {
+            assert!(hint.contains(named), "{named} in {hint}");
+        }
+        assert!(!hint.contains("in a moment"), "{hint}");
+        let value: serde_json::Value = serde_json::from_str(&refused.json()).unwrap();
+        assert_eq!(value["error"], refused.message.as_str());
+        assert_eq!(value["hint"], hint);
+    }
+
+    #[test]
+    fn a_locked_error_without_a_record_says_unidentified_writer() {
+        let refused = refusal(&Error::Locked {
+            root: PathBuf::from("/c"),
+            holder: None,
+        });
+        assert_eq!(
+            refused.message,
+            "another nebula writer is holding /c (an unidentified writer); nothing was written"
+        );
+        let hint = refused.hint.expect("a hint");
+        assert!(hint.starts_with("Nothing was written."), "{hint}");
+        assert!(hint.contains("no stale .lock"), "{hint}");
+        assert!(
+            !hint.contains("in a moment") && !hint.contains("pid"),
+            "{hint}"
+        );
+    }
+
+    #[test]
+    fn an_age_reads_in_whole_units() {
+        let age = |secs| age(Duration::from_secs(secs));
+        assert_eq!(age(0), "0s");
+        assert_eq!(age(90), "90s");
+        assert_eq!(age(120), "2m");
+        assert_eq!(age(119 * 60 + 59), "119m");
+        assert_eq!(age(2 * 3600), "2h");
+        assert_eq!(age(47 * 3600), "47h");
+        assert_eq!(age(5 * 86400), "5d");
+    }
+
+    #[test]
+    fn a_holder_whose_clock_runs_ahead_has_held_it_for_no_time() {
+        let refused = refusal(&Error::Locked {
+            root: PathBuf::from("/c"),
+            holder: Some(nebula_core::LockHolder {
+                pid: 1,
+                since: SystemTime::now() + Duration::from_secs(3600),
+                label: "nebula".to_owned(),
+            }),
+        });
+        assert!(refused.message.contains("for 0s"), "{}", refused.message);
     }
 
     #[test]

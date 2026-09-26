@@ -176,6 +176,7 @@ impl Corpus {
     /// setting and then writes it holds this across both, so two of them
     /// cannot both pass the check. Taken before any corpus lock, never after
     /// one; see the lock order in `lock.rs`.
+    #[must_use = "the machine-setting lock is released when this guard drops"]
     pub fn lock_machine_settings() -> Result<CorpusLock> {
         let dir = Self::machine_settings_dir()?;
         create_private_dir_all(&dir)?;
@@ -492,14 +493,31 @@ impl Corpus {
     /// outcome that write decided (STD-03 §R9; see `pending.rs`). A record
     /// that cannot be read refuses the lock, as
     /// [`Error::PendingWriteUnreadable`], and nothing is written.
+    #[must_use = "the corpus lock is released when this guard drops"]
     pub fn lock(&self) -> Result<CorpusLock> {
         self.lock_within(crate::LOCK_WAIT)
     }
 
     /// Take the write lock with a caller-chosen wait bound. A responsive UI
     /// can refuse a busy writer sooner while keeping the same critical section.
+    #[must_use = "the corpus lock is released when this guard drops"]
     pub fn lock_within(&self, wait: std::time::Duration) -> Result<CorpusLock> {
-        let lock = CorpusLock::acquire_within(&self.root, wait)?;
+        self.settled(CorpusLock::acquire_within(&self.root, wait)?)
+    }
+
+    /// Take the write lock with a wait bound and a label for its holder
+    /// record, for a process whose writers are not all one command: the
+    /// desktop's capture box says `desktop capture`, its inbox
+    /// `desktop drop <entry>`. A waiter that times out is told the label.
+    /// Otherwise [`Self::lock_within`], pending write and all.
+    #[must_use = "the corpus lock is released when this guard drops"]
+    pub fn lock_as(&self, wait: std::time::Duration, label: &str) -> Result<CorpusLock> {
+        self.settled(CorpusLock::acquire_as(&self.root, wait, label)?)
+    }
+
+    /// `lock`, once the take that entered the critical section first has
+    /// settled any write an earlier writer left pending.
+    fn settled(&self, lock: CorpusLock) -> Result<CorpusLock> {
         if lock.is_outermost() {
             self.finish_pending()?;
         }

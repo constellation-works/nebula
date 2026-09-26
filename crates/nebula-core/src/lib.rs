@@ -80,7 +80,7 @@ pub use graph::{
     ReviewItem, ReviewReport, ReviewRule, SEED_DAYS, TagCount, TagCounts, Touched, Trace, TraceHop,
     TraceNode, Via,
 };
-pub use lock::{CorpusLock, LOCK_FILE, LOCK_WAIT};
+pub use lock::{CorpusLock, LOCK_FILE, LOCK_WAIT, LockHolder};
 pub use migrate::{MigrationReport, NodeMigration};
 pub use model::{Closed, Doc, Edge, EdgeType, HUMAN, Node, Note, Origin, Reference, Status};
 pub use ops::{

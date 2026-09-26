@@ -132,8 +132,13 @@ fn capture_command_reports_busy_while_another_process_holds_the_lock() {
     assert_eq!(refused["code"], "locked", "{refused}");
     let message = refused["message"].as_str().expect("a message");
     assert!(
-        message.contains("another nebula writer is holding"),
-        "{message}"
+        message.contains("another nebula writer is holding")
+            && message.contains(&format!(
+                "`{}`, pid {}, since ",
+                lock_holder::LABEL,
+                holder.pid()
+            )),
+        "the message names the holder: {message}"
     );
     assert_eq!(
         refused.as_object().map(serde_json::Map::len),
@@ -337,6 +342,7 @@ fn every_core_error_translates_to_its_own_code() {
     let samples = [
         Error::Locked {
             root: PathBuf::from("/corpus"),
+            holder: None,
         },
         Error::NoCorpus(PathBuf::from("/nowhere")),
         Error::InboxEntrySettled {
