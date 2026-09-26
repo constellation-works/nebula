@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! `capture` followed by `inbox`, through a temporary corpus, using the same
 //! `session` functions the commands call. The line written is the one
 //! `neb capture` writes, so `neb inbox` lists it too.

@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Library-level tests: the graph queries and the point-of-action guards, as
 //! the desktop app and the agent skill see them.
 //!
@@ -69,6 +71,10 @@ fn current_model_refuses_unknown_fields_in_nested_node_data() {
 
 #[cfg(unix)]
 #[test]
+#[allow(
+    clippy::print_stderr,
+    reason = "report why the unreadable-file test is skipped as root"
+)]
 fn scan_reports_every_bad_file_and_returns_the_rest() {
     use std::os::unix::fs::PermissionsExt;
     if rustix::process::geteuid().is_root() {

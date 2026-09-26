@@ -873,7 +873,10 @@ enum OnOff {
 
 impl From<OnOff> for bool {
     fn from(s: OnOff) -> Self {
-        matches!(s, OnOff::On)
+        match s {
+            OnOff::On => true,
+            OnOff::Off => false,
+        }
     }
 }
 
@@ -1604,10 +1607,10 @@ fn triage(
         // One critical section per decision, as the single verb has: the
         // write and the commit that records it. Never across the wait for
         // the next line, which would hold every other writer off meanwhile.
-        let writes = matches!(
-            action,
-            Action::Promote | Action::PromoteUnder(_) | Action::Drop
-        );
+        let writes = match action {
+            Action::Promote | Action::PromoteUnder(_) | Action::Drop => true,
+            Action::Title(_) | Action::Skip | Action::Quit => false,
+        };
         let _lock = writes.then(|| corpus.lock()).transpose()?;
         match session.apply(corpus, action) {
             Ok(step) => {
@@ -3245,45 +3248,37 @@ mod tests {
     fn trailing_flags_after_free_text_are_flags() {
         let cli = parse_cli(&["capture", "an idea", "--quiet"]).expect("capture --quiet");
         assert!(!skips(&cli.command));
-        match cli.command {
-            Command::Capture { quiet, text, .. } => {
-                assert!(quiet);
-                assert_eq!(text, ["an idea"]);
-            }
-            _ => panic!("expected capture"),
-        }
+        let Command::Capture { quiet, text, .. } = cli.command else {
+            panic!("expected capture")
+        };
+        assert!(quiet);
+        assert_eq!(text, ["an idea"]);
 
         let cli =
             parse_cli(&["capture", "an", "idea", "--no-commit"]).expect("capture --no-commit");
         assert!(skips(&cli.command));
-        match cli.command {
-            Command::Capture { quiet, text, .. } => {
-                assert!(!quiet);
-                assert_eq!(text, ["an", "idea"]);
-            }
-            _ => panic!("expected capture"),
-        }
+        let Command::Capture { quiet, text, .. } = cli.command else {
+            panic!("expected capture")
+        };
+        assert!(!quiet);
+        assert_eq!(text, ["an", "idea"]);
 
         let cli = parse_cli(&["note", "alpha-beta", "a thought", "--no-commit"])
             .expect("note --no-commit");
         assert!(skips(&cli.command));
-        match cli.command {
-            Command::Note { node, by, text, .. } => {
-                assert_eq!(node, "alpha-beta");
-                assert_eq!(by, None);
-                assert_eq!(text, ["a thought"]);
-            }
-            _ => panic!("expected note"),
-        }
+        let Command::Note { node, by, text, .. } = cli.command else {
+            panic!("expected note")
+        };
+        assert_eq!(node, "alpha-beta");
+        assert_eq!(by, None);
+        assert_eq!(text, ["a thought"]);
 
         let cli = parse_cli(&["near", "some query", "--limit", "2"]).expect("near --limit");
-        match cli.command {
-            Command::Near { limit, query } => {
-                assert_eq!(limit, 2);
-                assert_eq!(query, ["some query"]);
-            }
-            _ => panic!("expected near"),
-        }
+        let Command::Near { limit, query } = cli.command else {
+            panic!("expected near")
+        };
+        assert_eq!(limit, 2);
+        assert_eq!(query, ["some query"]);
 
         let Err(err) = parse_cli(&["near", "some query", "--quiet"]) else {
             panic!("near has no --quiet")
@@ -3295,13 +3290,11 @@ mod tests {
 
         let cli = parse_cli(&["capture", "--", "an idea", "--quiet"]).expect("capture -- escape");
         assert!(!skips(&cli.command));
-        match cli.command {
-            Command::Capture { quiet, text, .. } => {
-                assert!(!quiet);
-                assert_eq!(text, ["an idea", "--quiet"]);
-            }
-            _ => panic!("expected capture"),
-        }
+        let Command::Capture { quiet, text, .. } = cli.command else {
+            panic!("expected capture")
+        };
+        assert!(!quiet);
+        assert_eq!(text, ["an idea", "--quiet"]);
     }
 
     /// Each key is one action, `t` is the only one that takes text, and

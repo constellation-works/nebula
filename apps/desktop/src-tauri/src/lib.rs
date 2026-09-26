@@ -1,3 +1,6 @@
+#![deny(clippy::print_stderr, clippy::print_stdout)]
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! Nebula's menu-bar app: the corpus, read through `nebula-core` and drawn in
 //! a webview. The library is linked; nothing here shells out to `neb`.
 //!
@@ -60,6 +63,14 @@ pub fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'stat
 ///
 /// When Tauri cannot start at all (no webview, no event loop); there is
 /// nothing to show an error in at that point.
+#[allow(
+    clippy::expect_used,
+    reason = "Tauri startup failure has no UI in which to report an error"
+)]
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "Tauri WindowEvent is a foreign non-exhaustive enum"
+)]
 pub fn run() {
     // The one subscriber, and the one place allowed to name stderr
     // (STD-02 §R15): a menu-bar app has nowhere else to say what went wrong

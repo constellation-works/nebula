@@ -1,3 +1,6 @@
+#![deny(clippy::print_stderr, clippy::print_stdout)]
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+
 //! `neb` — capture a half-formed thought in five seconds, and trace where any
 //! idea came from years later.
 //!

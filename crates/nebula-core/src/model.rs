@@ -36,20 +36,29 @@ impl Status {
     /// Statuses that must name what would falsify them. A refuted node is
     /// included because "the kill condition fired" presumes there was one.
     pub fn needs_kill(self) -> bool {
-        matches!(self, Self::Hypothesis | Self::Refuted)
+        match self {
+            Self::Seed | Self::Abandoned => false,
+            Self::Hypothesis | Self::Refuted => true,
+        }
     }
 
     /// Whether the inquiry is still live. Refuted and abandoned nodes stay in
     /// the graph forever but no longer ask anything of you.
     pub fn is_open(self) -> bool {
-        matches!(self, Self::Seed | Self::Hypothesis)
+        match self {
+            Self::Seed | Self::Hypothesis => true,
+            Self::Refuted | Self::Abandoned => false,
+        }
     }
 
     /// A node that has been ruled out cannot quietly return to active work.
     /// Reviving one takes a new node with a `reopens` edge, which keeps the
     /// fact that it was once dead visible in the graph.
     pub fn is_closed_by_verdict(self) -> bool {
-        self == Self::Refuted
+        match self {
+            Self::Refuted => true,
+            Self::Seed | Self::Hypothesis | Self::Abandoned => false,
+        }
     }
 }
 
@@ -102,10 +111,10 @@ impl EdgeType {
     /// Genealogy edges form the DAG that `trace` walks and `check` proves
     /// acyclic. `contradicts` is a relation between ideas, not a lineage.
     pub fn is_genealogy(self) -> bool {
-        matches!(
-            self,
-            Self::DerivesFrom | Self::Refines | Self::Generalizes | Self::Reopens
-        )
+        match self {
+            Self::DerivesFrom | Self::Refines | Self::Generalizes | Self::Reopens => true,
+            Self::Contradicts => false,
+        }
     }
 }
 
@@ -502,6 +511,10 @@ pub struct Doc {
 ///
 /// Only a regular file is read: a symlink, a FIFO, a device or a directory at
 /// `path` is [`Error::NotRegularFile`] before a byte is read from it.
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "all other parsing errors pass through unchanged"
+)]
 pub(crate) fn read(path: &Path) -> Result<Doc> {
     let raw = crate::fs::read_regular_text(path)?
         .ok_or_else(|| Error::io_at("reading", path, std::io::ErrorKind::NotFound.into()))?;
@@ -768,14 +781,14 @@ mod tests {
         ] {
             assert_eq!(e.to_string().parse::<EdgeType>().unwrap(), e);
         }
-        assert!(matches!(
-            "graduated".parse::<Status>(),
-            Err(Error::NotAStatus(s)) if s == "graduated"
-        ));
-        assert!(matches!(
-            "supports".parse::<EdgeType>(),
-            Err(Error::NotAnEdgeType(s)) if s == "supports"
-        ));
+        let Err(Error::NotAStatus(status)) = "graduated".parse::<Status>() else {
+            panic!("expected an unknown status")
+        };
+        assert_eq!(status, "graduated");
+        let Err(Error::NotAnEdgeType(kind)) = "supports".parse::<EdgeType>() else {
+            panic!("expected an unknown edge type")
+        };
+        assert_eq!(kind, "supports");
     }
 
     #[test]

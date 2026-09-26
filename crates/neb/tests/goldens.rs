@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 //! Byte-exact public CLI fixtures, captured from the built `neb` binary.
 //!
 //! The corpus and Observatory records used here exist only under each test's
