@@ -39,12 +39,18 @@ jobs:
       - run: ./scripts/release-check.sh
       - run: make standards-check
       - run: make terminal-guard
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-targets
-      # The desktop's types are generated from nebula-core and committed, so a
-      # Rust change that forgot `make types` shows up here as a diff.
-      - run: cargo test -p nebula-core --features ts --lib
-      - run: git diff --exit-code -- apps/desktop/src/types
+      - run: ./scripts/check-dependency-direction.sh
+      # `--locked` everywhere: a stale Cargo.lock fails instead of being
+      # silently rewritten.
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-targets
+      # `--all-targets` leaves doctests out.
+      - run: cargo test --locked --workspace --doc
+      # The desktop's types are generated from nebula-core and committed. The
+      # script exports into a fresh directory and compares the whole of
+      # apps/desktop/src/types with it, so a Rust change that forgot
+      # `make types` fails here whether it adds, removes or changes a file.
+      - run: ./scripts/check-types.sh
       # The same suites under a hostile HOME, TMPDIR inside a git repository
       # and GIT_DIR exported: no test may read or write the host's state.
       - if: runner.os == 'Linux'
@@ -71,10 +77,10 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/desktop/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      # src/types is generated from nebula-core and committed; a hand edit or
-      # a forgotten `make types` shows up as a diff.
-      - run: pnpm gen-types
-      - run: git diff --exit-code -- src/types
+      # src/types is generated from nebula-core and committed; a hand edit, a
+      # stale file or a forgotten `make types` fails here.
+      - run: ./scripts/check-types.sh
+        working-directory: .
       - run: pnpm tsc --noEmit
       - run: pnpm vitest run
-      - run: cargo clippy -p nebula-desktop --all-targets -- -D warnings
+      - run: cargo clippy --locked -p nebula-desktop --all-targets -- -D warnings

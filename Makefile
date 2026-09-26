@@ -1,14 +1,16 @@
-.PHONY: help build release run dev check test hostile-env-test types fmt fmt-check release-check standards-check terminal-guard clippy ci-lint audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
+.PHONY: help build release run dev check test doctest hostile-env-test types types-check fmt fmt-check release-check standards-check terminal-guard dependency-direction clippy ci-lint audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
 
 # ------------------------------------------------------------
 # Config
 # ------------------------------------------------------------
 CARGO ?= cargo
 BINARY := neb
-# The library crate; the binary is `neb` and lives beside it under crates/.
-CORE := nebula-core
 INSTALL_PROFILE ?= release
 INSTALL_BIN_DIR ?= $(HOME)/.cargo/bin
+# Every cargo call that resolves dependencies uses Cargo.lock as written and
+# fails if it is stale, rather than rewriting it (STD-05 §R23, STD-04 §R11).
+# `fmt`, `clean`, `deny` and `watch` resolve nothing and go without.
+LOCKED := --locked
 # The Tauri app. pnpm owns its frontend; cargo builds its shell as a
 # workspace member, so `make build`/`clippy`/`test` cover it too.
 DESKTOP := apps/desktop
@@ -45,21 +47,27 @@ help:
 	@echo "  make check         Type-check every crate"
 	@echo "  make test          Run all tests, every crate"
 	@echo "  make hostile-env-test  Run the suites under a hostile HOME, TMPDIR and GIT_DIR"
+	@echo "  make doctest       Run the documentation examples, every crate"
 	@echo "  make types         Regenerate apps/desktop/src/types from nebula-core"
+	@echo "  make types-check   Fail if apps/desktop/src/types differs from a fresh export"
 	@echo "  make fmt           Format code"
 	@echo "  make fmt-check     Check formatting"
 	@echo "  make release-check Verify Cargo/CHANGELOG version lockstep"
 	@echo "  make standards-check Verify the vendored constellation standards are unedited"
 	@echo "  make terminal-guard Verify only the CLI's output layer names stdout/stderr"
+	@echo "  make dependency-direction Check crate dependency direction (manifests only)"
 	@echo "  make clippy        Lint with clippy (deny warnings)"
 	@echo "  make ci-lint       Run the clippy CI gate"
 	@echo "  make audit         Supply-chain audit (cargo-deny)"
 	@echo "  make tree          Print dependency tree"
-	@echo "  make ci            Full CI pass (fmt-check, release-check, standards-check,"
-	@echo "                     terminal-guard, clippy, tests, types, desktop-check)"
-	@echo "  make ci-fast       Pre-handoff gate (fmt-check only; no compile)"
-	@echo "  make corpus-check  Run the invariant checker over your corpus"
-	@echo "                     (ROOT=/path optional; defaults to \$$NEBULA_ROOT or ~/.nebula)"
+	@echo "  make ci            Full CI pass (ci-fast, tests, doctest, types-check,"
+	@echo "                     audit, desktop-check)"
+	@echo "  make ci-fast       Pre-handoff gate (fmt-check, release-check, standards-check,"
+	@echo "                     terminal-guard, dependency-direction, clippy)"
+	@echo "  make corpus-check  Run the invariant checker over your corpus (ROOT=/path"
+	@echo "                     optional; else as neb resolves it: \$$NEBULA_ROOT, the nearest"
+	@echo "                     corpus at or above the current directory,"
+	@echo "                     ~/.config/nebula/root, ~/.nebula)"
 	@echo "  make desktop-dev   Run the desktop app with live reload (pnpm tauri dev)"
 	@echo "  make desktop       Build the unsigned desktop .app and .dmg on macOS"
 	@echo "  make desktop-check Type-check and unit-test the desktop frontend"
@@ -73,16 +81,16 @@ help:
 # Build
 # ------------------------------------------------------------
 build:
-	$(CARGO) build --workspace $(CARGO_PROFILE)
+	$(CARGO) build $(LOCKED) --workspace $(CARGO_PROFILE)
 
 release:
-	$(CARGO) build --bin $(BINARY) --release
+	$(CARGO) build $(LOCKED) --bin $(BINARY) --release
 
 # ------------------------------------------------------------
 # Run
 # ------------------------------------------------------------
 run:
-	$(CARGO) run --bin $(BINARY) -- $(ARGS)
+	$(CARGO) run $(LOCKED) --bin $(BINARY) -- $(ARGS)
 
 # Direct execution (after build)
 dev: build
@@ -92,10 +100,14 @@ dev: build
 # Quality
 # ------------------------------------------------------------
 check:
-	$(CARGO) check --workspace --all-targets --all-features
+	$(CARGO) check $(LOCKED) --workspace --all-targets --all-features
 
 test:
-	$(CARGO) test --workspace --all-targets
+	$(CARGO) test $(LOCKED) --workspace --all-targets
+
+# `--all-targets` leaves doctests out, so the examples in doc comments run here.
+doctest:
+	$(CARGO) test $(LOCKED) --workspace --doc
 
 # The suites under a hostile HOME, TMPDIR inside a git repository, and
 # GIT_DIR exported, checking that no test touched the host.
@@ -103,9 +115,15 @@ hostile-env-test:
 	CARGO="$(CARGO)" ./scripts/hostile-env-test.sh
 
 # The TypeScript bindings are generated, never edited: this is the only way
-# they change. Destination is TS_RS_EXPORT_DIR in .cargo/config.toml.
+# they change. The script exports into a fresh directory and replaces the
+# contents of apps/desktop/src/types, deleting stale files.
 types:
-	$(CARGO) test -p $(CORE) --features ts --lib
+	UPDATE=1 CARGO=$(CARGO) ./scripts/check-types.sh
+
+# The same export, compared with the committed directory: an added, removed
+# or changed file fails, and so does an export that wrote nothing.
+types-check:
+	CARGO=$(CARGO) ./scripts/check-types.sh
 
 fmt:
 	$(CARGO) fmt --all
@@ -124,8 +142,12 @@ standards-check:
 terminal-guard:
 	./scripts/check-terminal-guard.sh
 
+# Crate edges and grep bans from the manifests and sources alone; no build.
+dependency-direction:
+	./scripts/check-dependency-direction.sh
+
 clippy:
-	$(CARGO) clippy --workspace --all-targets --all-features -- -D warnings
+	$(CARGO) clippy $(LOCKED) --workspace --all-targets --all-features -- -D warnings
 
 ci-lint: clippy
 
@@ -136,19 +158,26 @@ audit:
 
 # Dependency tree inspection
 tree:
-	$(CARGO) tree -e features
+	$(CARGO) tree $(LOCKED) -e features
 
-# Full CI pass. Keep aligned with .github/workflows/ci.yml.
-ci: fmt-check release-check standards-check terminal-guard clippy test types desktop-check
+# Full CI pass: every check .github/workflows/ci.yml runs, across its jobs.
+# Keep the two aligned. `audit` fetches the advisory database, so it needs the
+# network, and it fails when cargo-deny is not installed.
+ci: ci-fast test doctest types-check audit desktop-check
 
-# Pre-handoff gate for agents: no compile.
-ci-fast: fmt-check
+# Pre-handoff gate: every cheap check CI runs, plus clippy (STD-02 §R22).
+# `test`, `doctest` and `types-check` each need a full build of their own (the
+# last with nebula-core's `ts` feature), so they stay in `ci` and CI
+# (STD-04@1 §R12).
+ci-fast: fmt-check release-check standards-check terminal-guard dependency-direction clippy
 
 # ------------------------------------------------------------
 # Corpus
 # ------------------------------------------------------------
-# The corpus never lives in this repository. ROOT overrides the usual
-# $NEBULA_ROOT / ~/.nebula resolution.
+# The corpus never lives in this repository. ROOT is passed as `--root`;
+# without it, `neb` resolves the corpus as usual: $NEBULA_ROOT, else the
+# nearest corpus at or above the current directory, else
+# ~/.config/nebula/root, else ~/.nebula.
 corpus-check: build
 	$(TARGET_DIR)/$(BINARY) $(if $(ROOT),--root $(ROOT),) check
 
@@ -175,7 +204,7 @@ desktop-check: desktop-deps
 # Install
 # ------------------------------------------------------------
 install:
-	$(CARGO) build --bin $(BINARY) $(INSTALL_CARGO_PROFILE)
+	$(CARGO) build $(LOCKED) --bin $(BINARY) $(INSTALL_CARGO_PROFILE)
 	install -d $(INSTALL_BIN_DIR)
 	install -m 755 $(INSTALL_TARGET_DIR)/$(BINARY) $(INSTALL_BIN_DIR)/$(BINARY)
 

@@ -5,6 +5,7 @@
  yanked = "deny"
  # Unmaintained crates deep in Tauri's tree (unic-*, proc-macro-error via gtk)
  # are not ours to replace; flag only what this workspace depends on directly.
+ # A relaxation, so it carries a date (STD-02 §R23): re-review 2027-03-26.
  unmaintained = "workspace"
 
 [licenses]

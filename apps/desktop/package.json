@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "gen-types": "cargo test -p nebula-core --features ts --lib",
+    "gen-types": "UPDATE=1 ../../scripts/check-types.sh",
     "check": "tsc --noEmit && vitest run",
     "test:webview": "node scripts/webview-test.mjs"
   },
