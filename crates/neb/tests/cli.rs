@@ -2935,6 +2935,75 @@ fn edit_exposes_only_body_saves_it_stamps_updated_and_commits() {
 
 #[cfg(unix)]
 #[test]
+fn edit_passes_editor_arguments_before_the_temp_file() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "Editor arguments", "--body", "the old body"])
+        .assert_ok()
+        .stdout_trim();
+    let script = editor_script(
+        &c,
+        "argument-editor.sh",
+        "#!/bin/sh\n[ \"$1\" = \"--wait\" ] || exit 71\n[ -f \"$2\" ] || exit 72\nprintf 'the editor received its arguments\\n' > \"$2\"\n",
+    );
+    let editor = format!("{} --wait", script.display());
+
+    c.run_with_env(&["edit", &id], &[("EDITOR", &editor)])
+        .assert_ok();
+
+    let node = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(
+        node.ends_with("the editor received its arguments\n"),
+        "{node}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn edit_honours_quoted_editor_path_with_spaces_and_arguments() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "Quoted editor path", "--body", "the old body"])
+        .assert_ok()
+        .stdout_trim();
+    let script = editor_script(
+        &c,
+        "editor with spaces.sh",
+        "#!/bin/sh\n[ \"$1\" = \"-w\" ] || exit 71\n[ -f \"$2\" ] || exit 72\nprintf 'the quoted editor ran\\n' > \"$2\"\n",
+    );
+    let editor = format!("\"{}\" -w", script.display());
+
+    c.run_with_env(&["edit", &id], &[("EDITOR", &editor)])
+        .assert_ok();
+
+    let node = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(node.ends_with("the quoted editor ran\n"), "{node}");
+}
+
+#[cfg(unix)]
+#[test]
+fn edit_refuses_when_the_editor_exits_unsuccessfully() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "Unsuccessful editor", "--body", "the old body"])
+        .assert_ok()
+        .stdout_trim();
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    let script = editor_script(&c, "fail-editor.sh", "#!/bin/sh\nexit 42\n");
+
+    c.run_with_env(&["edit", &id], &[("EDITOR", script.to_str().unwrap())])
+        .assert_fails()
+        .says("exited unsuccessfully; the node was not changed");
+
+    assert_eq!(
+        std::fs::read_to_string(c.node_file(&id)).unwrap(),
+        before,
+        "an editor failure must not change the node"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn edit_refuses_to_remove_notes_and_leaves_the_node_unchanged() {
     let c = Corpus::new();
     let id = c

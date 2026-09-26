@@ -568,6 +568,7 @@ struct Failure(String);
 #[derive(Debug)]
 enum EditorError {
     NotConfigured,
+    InvalidCommand(String),
     Start {
         editor: String,
         source: std::io::Error,
@@ -580,6 +581,10 @@ impl std::fmt::Display for EditorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotConfigured => f.write_str("neither $VISUAL nor $EDITOR names an editor"),
+            Self::InvalidCommand(editor) => write!(
+                f,
+                "editor command `{editor}` is empty or has unmatched quotes"
+            ),
             Self::Start { editor, source } => {
                 write!(f, "could not start editor `{editor}`: {source}")
             }
@@ -687,10 +692,15 @@ fn edit_body(body: &str) -> std::result::Result<String, Failure> {
         .find_map(|name| std::env::var_os(name).filter(|value| !value.is_empty()))
         .ok_or(EditorError::NotConfigured)?;
     let editor_name = editor.to_string_lossy().into_owned();
+    let mut words = shlex::split(&editor_name)
+        .filter(|words| !words.is_empty())
+        .ok_or_else(|| EditorError::InvalidCommand(editor_name.clone()))?;
+    let program = words.remove(0);
     let mut file = tempfile::NamedTempFile::new().map_err(Error::from)?;
     file.write_all(body.as_bytes()).map_err(Error::from)?;
     file.flush().map_err(Error::from)?;
-    let status = ProcessCommand::new(&editor)
+    let status = ProcessCommand::new(program)
+        .args(words)
         .arg(file.path())
         .status()
         .map_err(|source| EditorError::Start {
