@@ -29,6 +29,12 @@ No parent, no type, no tags, no status. It works before a corpus exists: being
 told to run a setup command first is exactly the friction that loses the thought,
 so `capture` creates the corpus rather than refusing.
 
+Where it is run never decides that. The working directory resolves to a corpus
+only when one already exists at or above it (`nodes/` beside a `config.yaml`
+naming a `corpus_id`); anywhere else resolution carries on to the configured
+root. So a corpus is only ever created at a root that was named: `--root`,
+`$NEBULA_ROOT`, `~/.config/nebula/root`, or the `~/.nebula` default.
+
 Creating one is never silent. A mistyped `--root` or `$NEBULA_ROOT` looks exactly
 like a corpus that does not exist yet, and a quiet success would split the corpus
 with nothing to show for it. So whenever `capture` creates a corpus it prints one

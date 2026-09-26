@@ -45,7 +45,10 @@ Inbox/Graph UI and `graph` IPC command work.
 
 ## The corpus
 
-Found from `$NEBULA_ROOT`, else `~/.config/nebula/root`, else `~/.nebula`.
+Found from `$NEBULA_ROOT`, else the nearest corpus at or above the working
+directory the app was launched from, else `~/.config/nebula/root`, else
+`~/.nebula`. An app opened from a launcher rather than a terminal starts in `/`
+or the home directory, where no corpus is found.
 Unlike the CLI, the desktop has no `--root` argument. It resolves this path
 once at startup and never creates a corpus. If that path has no corpus, the
 window says which path it tried; create the corpus at that same path and press

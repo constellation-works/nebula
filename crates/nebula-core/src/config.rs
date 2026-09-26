@@ -204,6 +204,20 @@ fn schema_version_of(raw: &str) -> std::result::Result<Option<u32>, serde_yaml_n
     Ok(probe.schema_version)
 }
 
+/// Whether a config file of any vintage names a corpus: it parses, and it
+/// carries a non-empty `corpus_id`. Every other key is ignored, so a corpus
+/// at an older schema still reads as one and `neb migrate` can be run from
+/// inside it.
+pub(crate) fn names_a_corpus(raw: &str) -> bool {
+    #[derive(Deserialize)]
+    struct Probe {
+        #[serde(default)]
+        corpus_id: Option<String>,
+    }
+    serde_yaml_ng::from_str::<Probe>(raw)
+        .is_ok_and(|probe| probe.corpus_id.is_some_and(|id| !id.is_empty()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ObservatoryRoot, ObservatorySource};

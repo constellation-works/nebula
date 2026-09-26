@@ -36,7 +36,13 @@ pub struct Corpus {
 
 impl Corpus {
     /// Where a corpus would be, given `--root`, else `NEBULA_ROOT`, else the
-    /// configured root, else `~/.nebula`.
+    /// corpus the working directory is in, else the configured root, else
+    /// `~/.nebula`.
+    ///
+    /// The working directory sits below the two settings that are typed on
+    /// purpose and above the two that are standing machine defaults, the way
+    /// git finds its repository: standing inside a corpus is itself a choice
+    /// of corpus. See [`Self::discover`] for what counts as being inside one.
     pub fn resolve_root(explicit: Option<PathBuf>) -> Result<PathBuf> {
         if let Some(p) = explicit {
             if p.as_os_str().is_empty() {
@@ -47,10 +53,39 @@ impl Corpus {
         if let Some(p) = std::env::var_os("NEBULA_ROOT").filter(|v| !v.is_empty()) {
             return Ok(PathBuf::from(p));
         }
+        if let Some(p) = working_dir().and_then(|cwd| Self::discover(&cwd)) {
+            return Ok(p);
+        }
         if let Some(p) = Self::configured_root()? {
             return Ok(p);
         }
         Self::default_root()
+    }
+
+    /// The nearest directory at or above `start` that already holds a corpus:
+    /// a `nodes/` directory beside a `config.yaml` that names a `corpus_id`.
+    /// `None` when no ancestor does.
+    ///
+    /// Only a corpus that exists is ever found, so discovery can never lead
+    /// `capture`, the one verb that creates a corpus, to create one: inside a
+    /// corpus it writes there, and anywhere else resolution carries on to the
+    /// configured root exactly as if discovery did not exist. Both halves of
+    /// the marker are required, so neither a half-initialized directory nor a
+    /// project that happens to have a `nodes/` folder and a `config.yaml` is
+    /// mistaken for one.
+    ///
+    /// The nearest corpus wins, so from inside a corpus nested in another the
+    /// inner one is found. The walk is lexical, parent by parent as `cd ..`
+    /// goes, and never resolves a symlink: the root comes back spelled the
+    /// way `start` spelled it. A `nodes/` that is itself a symlink still
+    /// counts, so that [`Self::open`] refuses it by name instead of the walk
+    /// quietly passing it by for some other corpus.
+    pub fn discover(start: &Path) -> Option<PathBuf> {
+        start
+            .ancestors()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .find(|dir| holds_corpus(dir))
+            .map(Path::to_path_buf)
     }
 
     /// The root used when no command, environment, or machine setting names one.
@@ -219,8 +254,9 @@ impl Corpus {
             .map_err(|_| Error::corpus("HOME is not set"))
     }
 
-    /// Open the corpus named by `--root`, else `NEBULA_ROOT`, else the
-    /// configured root, else `~/.nebula`.
+    /// Open the corpus named by `--root`, else `NEBULA_ROOT`, else the one
+    /// the working directory is in, else the configured root, else
+    /// `~/.nebula`.
     pub fn open(explicit: Option<PathBuf>) -> Result<Self> {
         let root = Self::resolve_root(explicit)?;
         refuse_nodes_symlink(&root)?;
@@ -948,6 +984,50 @@ pub fn capture_line(text: &str) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Whether `dir` is a corpus root: [`Corpus::discover`]'s marker.
+fn holds_corpus(dir: &Path) -> bool {
+    dir.join("nodes").is_dir()
+        && std::fs::read_to_string(dir.join(config::FILE))
+            .is_ok_and(|raw| config::names_a_corpus(&raw))
+}
+
+/// The working directory as the shell names it.
+///
+/// `$PWD` when it is absolute, has no `.` or `..` in it, and is the same
+/// directory as `.`, which is the rule `pwd -L` follows; otherwise what the
+/// OS reports. A corpus reached through a symlink is then found under the
+/// spelling the user typed rather than the one the kernel resolved, because
+/// paths are used as given. `None` when there is no working directory to
+/// speak of, as when it has been removed: there is nothing to discover from.
+fn working_dir() -> Option<PathBuf> {
+    let logical = std::env::var_os("PWD").map(PathBuf::from).filter(|pwd| {
+        pwd.is_absolute()
+            && !pwd
+                .components()
+                .any(|c| matches!(c, Component::CurDir | Component::ParentDir))
+            && same_dir(pwd, Path::new("."))
+    });
+    logical.or_else(|| std::env::current_dir().ok())
+}
+
+/// Whether two paths name the same directory, by identity rather than by
+/// spelling.
+#[cfg(unix)]
+fn same_dir(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(a), std::fs::metadata(b)) {
+        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+        _ => false,
+    }
+}
+
+/// Without inode identity there is no cheap way to tell, so `$PWD` is never
+/// trusted and the OS's answer stands.
+#[cfg(not(unix))]
+fn same_dir(_: &Path, _: &Path) -> bool {
+    false
 }
 
 /// Check the named inbox entry itself, without resolving the corpus root. A

@@ -42,7 +42,8 @@ nebula/
 
 The corpus still never lives here. Root resolution lives in
 `nebula-core::store`: the CLI accepts `--root`, then both consumers fall back
-to `NEBULA_ROOT`, `~/.config/nebula/root`, and `~/.nebula`. The desktop has no
+to `NEBULA_ROOT`, the nearest corpus at or above the working directory,
+`~/.config/nebula/root`, and `~/.nebula`. The desktop has no
 command-line argument parser, so it starts at the fallback path resolved once
 when its `AppState` is created.
 
