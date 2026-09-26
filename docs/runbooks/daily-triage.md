@@ -90,11 +90,12 @@ neb status gravity-as-scarcity refuted --why "Effect persists with coupling off,
 
 `refuted` requires `--why`; `abandoned` takes it optionally. A refuted node
 cannot be quietly reopened later. Reviving the idea takes a new node with a
-`reopens` edge, which keeps the fact that it once died visible.
+`reopens` edge, which keeps the fact that it once died visible. `--reopens`
+writes that edge with the node. It is genealogy already, so the refuted node
+is not also a `--parent`.
 
 ```sh
-neb new "Gravity as scarcity, take two" --parent gravity-as-scarcity --kill "..."
-neb link gravity-as-scarcity-take-two reopens gravity-as-scarcity
+neb new "Gravity as scarcity, take two" --reopens gravity-as-scarcity --kill "..."
 ```
 
 ## Before you stop

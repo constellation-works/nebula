@@ -117,11 +117,11 @@ pub fn refusal_about(e: &Error, node: &str) -> Refusal {
             .worded(prose)
         }
         Error::RefutedCannotReopen => {
+            // One command, so it runs as printed once the title is filled in:
+            // the new node's id never has to be copied out of `new`'s output.
             let message = format!("`{node}` is refuted and cannot simply reopen");
-            let hint = format!(
-                "Create the new idea and link it:\n  neb new \"...\" && neb link <new> reopens {node}"
-            );
-            let prose = format!("{message}.\n\n{hint}");
+            let hint = format!("neb new \"...\" --reopens {node}");
+            let prose = format!("{message}.\n\nRevive it as a new node that reopens it:\n  {hint}");
             Refusal {
                 hint: Some(hint),
                 ..Refusal::new(e.kind(), message)
@@ -176,6 +176,9 @@ fn hint(e: &Error) -> Option<String> {
              neb config commit off",
             root.display()
         ),
+        Error::ParentAndReopens(id) => {
+            format!("`--reopens {id}` already records the descent, so drop `--parent {id}`.")
+        }
         _ => return None,
     })
 }

@@ -204,7 +204,7 @@ way: no `near` key.
 
 | verb | does | flags |
 |---|---|---|
-| `neb new <TITLE>` | create a node directly | `--body <TEXT\|->`, `--parent <ID>`×, `--kill`, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run` |
+| `neb new <TITLE>` | create a node directly | `--body <TEXT\|->`, `--parent <ID>`×, `--reopens <ID>`, `--contradicts <ID>`×, `--kill`, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run` |
 | `neb edit <NODE>` | open the body, without frontmatter, in `$VISUAL` or `$EDITOR` | `--by <LABEL>` |
 | `neb sharpen <NODE> --kill <KILL>` | seed → hypothesis by naming the falsifier | `--by <LABEL>`, or `--confirm` instead of `--kill` |
 | `neb status <NODE> <STATUS>` | `seed`, `hypothesis`, `refuted`, `abandoned`, with guards | `--why` (required for refuted, optional for abandoned) |
@@ -216,6 +216,11 @@ way: no `near` key.
 `new --body <TEXT>` sets the prose at creation; `--body -` reads it from
 standard input. `new --kill "..."` starts the node as a hypothesis; without
 it, a seed.
+`new --reopens <ID>` revives a refuted node as a new one with a single
+`reopens` edge; that edge is genealogy, so naming the same node as `--parent`
+too is refused. `new --contradicts <ID>` writes the edge on both nodes, as
+`link` does. Every edge is checked before anything is written: a missing
+node, the same edge twice, or a genealogy loop refuses the whole `new`.
 `sharpen --kill` refuses to replace a kill condition already present on an open
 node and prints the existing falsifier. A changed falsifier is a changed idea:
 create a new node and relate it to the old one instead of overwriting the

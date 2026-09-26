@@ -69,7 +69,8 @@ one as a duplicate of `<id>`.
 - `cite --note "<why>"` always. Under Orbit add `--task`/`--run`.
 - `status <id> refuted --why "<how the kill fired>"`: quote the human. Refuted
   is final. `abandoned` may carry `--why` and should.
-- Never move a `refuted` node. Reviving it is `new` + `link <new> reopens <old>`.
+- Never move a `refuted` node. Reviving it is `new "<title>" --reopens <old>`,
+  without `--parent <old>`: `reopens` is already genealogy.
 - A node with a kill condition reopens as `hypothesis`, never `seed`: the kill
   stays, and `status <id> seed` refuses it.
 
