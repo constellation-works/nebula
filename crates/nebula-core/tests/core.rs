@@ -329,6 +329,178 @@ fn refuting_needs_a_reason_and_is_final() {
     assert_eq!(after.status, Status::Refuted);
 }
 
+/// A refuted idea, ready to be revived.
+fn refuted(corpus: &Corpus, title: &str) -> String {
+    let id = seed(corpus, title, &[]);
+    ops::sharpen(corpus, &id, "kill", None).unwrap();
+    ops::set_status(corpus, &id, Status::Refuted, Some("it fired")).unwrap();
+    id
+}
+
+/// How many node files are on disk, so a refusal can be shown to write none.
+fn node_count(corpus: &Corpus) -> usize {
+    corpus.load_all().unwrap().len()
+}
+
+#[test]
+fn a_new_node_can_reopen_a_refuted_one_with_exactly_one_edge() {
+    let (_dir, corpus) = corpus();
+    let dead = refuted(&corpus, "Dead");
+    let before = corpus.load(&dead).unwrap();
+    let created = ops::new_node(
+        &corpus,
+        &NewNode {
+            title: "Take two".into(),
+            reopens: Some(dead.clone()),
+            by: Some("agent:crew-alpha".into()),
+            ..NewNode::default()
+        },
+    )
+    .unwrap();
+    let edges = &corpus.load(&created.doc.node.id).unwrap().node.edges;
+    assert_eq!(edges.len(), 1, "{edges:?}");
+    assert_eq!(edges[0].kind, EdgeType::Reopens);
+    assert_eq!(edges[0].to, dead);
+    assert_eq!(edges[0].by.as_deref(), Some("agent:crew-alpha"));
+    // The refuted node is the record of the verdict, and reopening it from
+    // a new node leaves it exactly as it was.
+    let after = corpus.load(&dead).unwrap();
+    assert_eq!(after.node.status, Status::Refuted);
+    assert_eq!(after.node.edges, before.node.edges);
+    assert_eq!(after.node.updated, before.node.updated);
+}
+
+#[test]
+fn a_new_node_refuses_an_edge_to_a_missing_node_and_writes_nothing() {
+    let (_dir, corpus) = corpus();
+    seed(&corpus, "Present", &[]);
+    for (reopens, contradicts) in [(Some("absent"), vec![]), (None, vec!["absent".to_string()])] {
+        let refused = ops::new_node(
+            &corpus,
+            &NewNode {
+                title: "Orphan".into(),
+                reopens: reopens.map(String::from),
+                contradicts,
+                ..NewNode::default()
+            },
+        );
+        assert!(
+            matches!(&refused, Err(Error::NoSuchNode(id)) if id == "absent"),
+            "{refused:?}"
+        );
+        assert_eq!(node_count(&corpus), 1);
+    }
+}
+
+#[test]
+fn a_new_node_refuses_a_parent_it_also_reopens() {
+    let (_dir, corpus) = corpus();
+    let dead = refuted(&corpus, "Dead");
+    let refused = ops::new_node(
+        &corpus,
+        &NewNode {
+            title: "Take two".into(),
+            parents: vec![dead.clone()],
+            reopens: Some(dead.clone()),
+            ..NewNode::default()
+        },
+    );
+    assert!(
+        matches!(&refused, Err(Error::ParentAndReopens(id)) if *id == dead),
+        "{refused:?}"
+    );
+    assert_eq!(node_count(&corpus), 1, "nothing was written");
+}
+
+#[test]
+fn a_new_node_refuses_the_same_edge_twice() {
+    let (_dir, corpus) = corpus();
+    let a = seed(&corpus, "A", &[]);
+    for spec in [
+        NewNode {
+            parents: vec![a.clone(), a.clone()],
+            ..NewNode::default()
+        },
+        NewNode {
+            contradicts: vec![a.clone(), a.clone()],
+            ..NewNode::default()
+        },
+    ] {
+        let refused = ops::new_node(
+            &corpus,
+            &NewNode {
+                title: "Twice".into(),
+                ..spec
+            },
+        );
+        assert!(matches!(refused, Err(Error::DuplicateEdge)), "{refused:?}");
+        assert_eq!(node_count(&corpus), 1);
+        assert!(corpus.load(&a).unwrap().node.edges.is_empty());
+    }
+}
+
+#[test]
+fn a_new_node_refuses_a_genealogy_edge_that_closes_a_loop() {
+    // Nothing points at a node that does not exist yet, except an edge
+    // written by hand ahead of it. Reopening the node that carries it would
+    // make the new node its own ancestor.
+    let (_dir, corpus) = corpus();
+    let dead = refuted(&corpus, "Dead");
+    let unrelated = seed(&corpus, "Unrelated", &[]);
+    let mut doc = corpus.load(&dead).unwrap();
+    doc.node.edges.push(nebula_core::Edge {
+        kind: EdgeType::DerivesFrom,
+        to: "take-two".into(),
+        by: None,
+    });
+    corpus.save(&mut doc).unwrap();
+
+    let refused = ops::new_node(
+        &corpus,
+        &NewNode {
+            title: "Take two".into(),
+            parents: vec![unrelated],
+            reopens: Some(dead.clone()),
+            ..NewNode::default()
+        },
+    );
+    assert!(
+        matches!(&refused, Err(Error::Cycle { from, to }) if from == "take-two" && *to == dead),
+        "the refusal names the edge that closes the loop: {refused:?}"
+    );
+    assert_eq!(node_count(&corpus), 2, "nothing was written");
+}
+
+#[test]
+fn a_new_node_that_contradicts_one_records_it_on_both() {
+    let (_dir, corpus) = corpus();
+    let a = seed(&corpus, "A", &[]);
+    let b = seed(&corpus, "B", &[]);
+    let created = ops::new_node(
+        &corpus,
+        &NewNode {
+            title: "Rival".into(),
+            contradicts: vec![a.clone(), b.clone()],
+            by: Some("agent:crew-alpha".into()),
+            ..NewNode::default()
+        },
+    )
+    .unwrap();
+    let rival = created.doc.node.id;
+    let mine = corpus.load(&rival).unwrap().node;
+    assert_eq!(
+        mine.edges_of(EdgeType::Contradicts).collect::<Vec<_>>(),
+        [a.as_str(), b.as_str()]
+    );
+    for other in [&a, &b] {
+        let node = corpus.load(other).unwrap().node;
+        assert_eq!(node.edges.len(), 1, "{:?}", node.edges);
+        assert_eq!(node.edges[0].kind, EdgeType::Contradicts);
+        assert_eq!(node.edges[0].to, rival);
+        assert_eq!(node.edges[0].by.as_deref(), Some("agent:crew-alpha"));
+    }
+}
+
 #[test]
 fn a_node_with_a_kill_condition_reopens_as_a_hypothesis_not_a_seed() {
     let (_dir, corpus) = corpus();
@@ -517,6 +689,7 @@ fn every_error_kind_is_its_variant_name() {
         Error::KillAlreadySet("k".into()),
         Error::RefutedNeedsWhy,
         Error::RefutedCannotReopen,
+        Error::ParentAndReopens("x".into()),
         Error::SeedWithKill,
         Error::DuplicateId("x".into()),
         Error::NodeExists("x".into()),

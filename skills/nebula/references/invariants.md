@@ -7,10 +7,10 @@ exit non-zero; `warn` findings do not.
 
 | # | Rule | Level | Enforced by |
 |---|---|---|---|
-| 1 | Genealogy is acyclic | error | `link` refuses; `check` proves |
+| 1 | Genealogy is acyclic | error | `link`/`new` refuse; `check` proves |
 | 2 | `hypothesis` names a non-empty `kill` | error | `sharpen`/`status`, `check` |
-| 3 | Every edge target exists; no self-loop | error | `link`, `check` |
-| 4 | `contradicts` is mutual | error | `link` writes both; `check` |
+| 3 | Every edge target exists; no self-loop | error | `link`/`new`, `check` |
+| 4 | `contradicts` is mutual | error | `link`/`new` write both; `check` |
 | 5 | `refuted` carries `closed.why` | error | `status`, `check` |
 | 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status`/`sharpen` |
 | 7 | A reference carries no `verdict`/`strength` | error | parse |
@@ -65,12 +65,13 @@ refusal's `kind` (the envelope is in [verbs.md](verbs.md#refusals-under---json))
 | `that edge would make \`X\` its own ancestor` | `Cycle {from, to}` | 1 | The edge is backwards, or the relation is really `contradicts`. Run `neb trace X` and `neb trace Y --down` to see the existing line; propose the reverse edge or none. |
 | `a node cannot link to itself` | `SelfLoop` | 3 | You passed the same id twice. Check the ids with `neb list --json`. |
 | `no node \`X\`` | `NoSuchNode` | 3 | The id is wrong. Ids are title slugs; `neb list --json \| jq '.[].id'`. Never `neb new` a node to satisfy a link you meant for an existing one. |
-| `that edge already exists` | `DuplicateEdge` | — | Nothing to do; it is already recorded. |
+| `that edge already exists` | `DuplicateEdge` | — | From `link`, nothing to do; it is already recorded. From `new`, a flag named the same node twice and nothing was written: name it once. |
+| `\`X\` is named as both a parent and the node this reopens` | `ParentAndReopens(X)` | 1 | `reopens` is already genealogy, so drop `--parent X` and keep `--reopens X`. Nothing was written. |
 | `\`hypothesis\` needs a kill condition first` | `NeedsKill(hypothesis)` | 2 | `neb sharpen <id> --kill "..."` — it moves the status for you. Ask the human for the falsifier if you do not have one; do not invent it. |
 | `a kill condition cannot be empty` | `EmptyKill` | 2 | Same: write the falsifier. |
 | `kill condition is already \`X\`; it was not replaced` | `KillAlreadySet(X)` | 2 | An open node's falsifier is content, including after `sharpen --confirm`; `sharpen --kill` never overwrites it, regardless of `--by`. A materially different falsifier is a different idea, so create a new node and link the relationship. |
 | `refuted needs --why: say how the kill condition fired` | `RefutedNeedsWhy` | 5 | `neb status <id> refuted --why "..."`. The reason is the human's; quote them. |
-| `\`X\` is refuted and cannot simply reopen` | `RefutedCannotReopen` | 6 | Refuted is final, including its kill condition: `sharpen --kill` and `sharpen --confirm` refuse too, because rewriting the falsifier would orphan `closed.why`. A verdict is part of the record, so `status <id> refuted --why ...` on an already-refuted node is refused too, even with a new `--why`: that would silently replace `closed.why` and its date rather than leaving the recorded verdict alone. `neb new "..." && neb link <new> reopens X` so the fact that it once died stays visible. Only with the human's say-so. Abandoned is not a verdict and is revivable: `sharpen` on an abandoned node is allowed, and `status <id> abandoned --why ...` on an already-abandoned node is allowed too, replacing the reason. |
+| `\`X\` is refuted and cannot simply reopen` | `RefutedCannotReopen` | 6 | Refuted is final, including its kill condition: `sharpen --kill` and `sharpen --confirm` refuse too, because rewriting the falsifier would orphan `closed.why`. A verdict is part of the record, so `status <id> refuted --why ...` on an already-refuted node is refused too, even with a new `--why`: that would silently replace `closed.why` and its date rather than leaving the recorded verdict alone. `neb new "..." --reopens X` so the fact that it once died stays visible. Only with the human's say-so. Abandoned is not a verdict and is revivable: `sharpen` on an abandoned node is allowed, and `status <id> abandoned --why ...` on an already-abandoned node is allowed too, replacing the reason. |
 | `\`X\` names a kill condition, so it cannot go back to seed` | `SeedWithKill` | 13 | The kill is content and stays: moving the node to `seed` would leave a seed carrying a falsifier, which `check` reads as a hand edit. A node that names what would kill it reopens as a hypothesis: `neb status X hypothesis`, from `abandoned` too. Never delete or blank the kill to make `seed` succeed. |
 | `\`X\` cannot become \`Y\`` | `InvalidTransition` | — | A guard you have not seen. Report it verbatim; do not work around it. |
 | `duplicate node id \`X\`` | `DuplicateId` | — | The corpus has two documents claiming one id, so a verb cannot safely choose one. Report both paths; do not overwrite either document or retry the verb. |

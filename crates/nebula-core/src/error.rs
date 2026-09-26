@@ -124,6 +124,12 @@ pub enum Error {
     #[error("that edge already exists")]
     DuplicateEdge,
 
+    /// A new node names the same node as a parent and as the refuted idea it
+    /// reopens. `reopens` is genealogy already, so the pair would be two
+    /// parallel claims of one descent.
+    #[error("`{0}` is named as both a parent and the node this reopens")]
+    ParentAndReopens(String),
+
     /// The status must name what would falsify the idea, and none is named.
     #[error("`{0}` needs a kill condition first")]
     NeedsKill(Status),
@@ -345,6 +351,7 @@ impl Error {
             Self::Cycle { .. } => "Cycle",
             Self::SelfLoop => "SelfLoop",
             Self::DuplicateEdge => "DuplicateEdge",
+            Self::ParentAndReopens(_) => "ParentAndReopens",
             Self::NeedsKill(_) => "NeedsKill",
             Self::EmptyKill => "EmptyKill",
             Self::KillAlreadySet(_) => "KillAlreadySet",

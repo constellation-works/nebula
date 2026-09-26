@@ -2565,9 +2565,11 @@ fn a_refuted_idea_cannot_quietly_come_back() {
     // Reviving it takes a new node with a `reopens` edge, so the fact that it
     // was once ruled out stays visible in the graph. Not even abandoning it
     // is allowed: refuted is final.
-    c.run(&["status", &id, "hypothesis"])
+    let refused = c
+        .run(&["status", &id, "hypothesis"])
         .assert_fails()
         .says("cannot simply reopen");
+    let hint = reopen_hint(&refused.stderr(), &id);
     c.run(&["status", &id, "abandoned"])
         .assert_fails()
         .says("cannot simply reopen");
@@ -2604,14 +2606,128 @@ fn a_refuted_idea_cannot_quietly_come_back() {
     assert!(after.contains("kill: if X"), "{after}");
     assert!(after.contains("why: X happened"), "{after}");
     c.run(&["check"]).assert_ok().says("0 errors");
-    c.run(&["new", "Second attempt", "--kill", "if Y"])
-        .assert_ok();
+
+    // The hint runs as printed once the placeholder title is filled in: no
+    // id to copy out of one command's output into the next.
+    let mut revive: Vec<&str> = hint.iter().map(String::as_str).collect();
+    revive[1] = "Second attempt";
+    revive.extend(["--kill", "if Y"]);
+    c.run(&revive).assert_ok().says("second-attempt");
+    let edges = show_edges(&c, "second-attempt");
+    assert_eq!(edges, [("reopens".to_string(), id.clone())], "{edges:?}");
     c.run(&["show", "second-attempt"])
         .assert_ok()
         .says("hypothesis");
-    c.run(&["link", "second-attempt", "reopens", &id])
-        .assert_ok();
     c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+/// The command the refused-reopen hint offers, as `neb` arguments, with the
+/// title placeholder second. Asserts that the hint is one
+/// command, not a chain, and that it names the refuted node.
+fn reopen_hint(stderr: &str, id: &str) -> Vec<String> {
+    let line = stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("neb "))
+        .unwrap_or_else(|| panic!("no command in the hint:\n{stderr}"));
+    assert!(!line.contains("&&") && !line.contains('<'), "{line}");
+    let words = shlex::split(line).expect("the hint parses as shell words");
+    assert_eq!(words, ["neb", "new", "...", "--reopens", id], "{line}");
+    words[1..].to_vec()
+}
+
+/// A node's edges as `(type, to)` pairs, read through `show --json`.
+fn show_edges(c: &Corpus, id: &str) -> Vec<(String, String)> {
+    let shown: serde_json::Value =
+        serde_json::from_str(&c.run(&["show", id, "--json"]).assert_ok().stdout()).unwrap();
+    shown["node"]["edges"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no edges in {shown}"))
+        .iter()
+        .map(|e| {
+            (
+                e["type"].as_str().unwrap().to_string(),
+                e["to"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn new_writes_reopens_and_contradicts_edges_with_the_node() {
+    let c = Corpus::new();
+    let dead = c.seed("an idea", "An idea");
+    c.run(&["sharpen", &dead, "--kill", "if X"]).assert_ok();
+    c.run(&["status", &dead, "refuted", "--why", "X happened"])
+        .assert_ok();
+    let rival = c.seed("a rival", "A rival");
+    let files = || std::fs::read_dir(c.root.join("nodes")).unwrap().count();
+
+    // Every refusal comes before anything is written.
+    for (args, says) in [
+        (vec!["--reopens", "absent"], "no node `absent`"),
+        (vec!["--contradicts", "absent"], "no node `absent`"),
+        (
+            vec!["--parent", &dead, "--reopens", &dead],
+            "named as both a parent and the node this reopens",
+        ),
+        (
+            vec!["--contradicts", &rival, "--contradicts", &rival],
+            "that edge already exists",
+        ),
+    ] {
+        let mut argv = vec!["new", "Take two"];
+        argv.extend(args);
+        c.run(&argv).assert_fails().says(says);
+        assert_eq!(files(), 2, "`neb {}` wrote nothing", argv.join(" "));
+    }
+    c.run(&["new", "Take two", "--parent", &dead, "--reopens", &dead])
+        .assert_fails()
+        .says(&format!("drop `--parent {dead}`"));
+
+    c.run(&[
+        "new",
+        "Take two",
+        "--reopens",
+        &dead,
+        "--contradicts",
+        &rival,
+    ])
+    .assert_ok();
+    assert_eq!(
+        show_edges(&c, "take-two"),
+        [
+            ("reopens".to_string(), dead.clone()),
+            ("contradicts".to_string(), rival.clone())
+        ]
+    );
+    // `contradicts` is a claim about both nodes, as `link` records it.
+    assert_eq!(
+        show_edges(&c, &rival),
+        [("contradicts".to_string(), "take-two".to_string())]
+    );
+    c.run(&["check"]).assert_ok().says("0 errors");
+}
+
+#[test]
+fn new_refuses_a_reopens_edge_that_closes_a_loop() {
+    let c = Corpus::new();
+    let dead = c.seed("an idea", "An idea");
+    // A hand edit left a dangling edge to a node that does not exist yet.
+    let path = c.node_file(&dead);
+    let raw = std::fs::read_to_string(&path).unwrap();
+    write(
+        &path,
+        &raw.replacen(
+            "status: seed\n",
+            "status: seed\nedges:\n- type: derives-from\n  to: take-two\n",
+            1,
+        ),
+    );
+    c.run(&["new", "Take two", "--reopens", &dead])
+        .assert_fails()
+        .says("its own ancestor");
+    assert!(!c.node_file("take-two").exists());
 }
 
 #[test]
@@ -3372,11 +3488,10 @@ fn json_refusals_about_a_node_split_message_and_hint() {
             &["status", &dead, "seed"],
             "RefutedCannotReopen",
             format!("`{dead}` is refuted and cannot simply reopen"),
+            // The hint is the one command to run, and nothing else.
+            format!("neb new \"...\" --reopens {dead}"),
             format!(
-                "Create the new idea and link it:\n  neb new \"...\" && neb link <new> reopens {dead}"
-            ),
-            format!(
-                "error: `{dead}` is refuted and cannot simply reopen.\n\nCreate the new idea and link it:\n  neb new \"...\" && neb link <new> reopens {dead}\n"
+                "error: `{dead}` is refuted and cannot simply reopen.\n\nRevive it as a new node that reopens it:\n  neb new \"...\" --reopens {dead}\n"
             ),
         ),
     ];
@@ -6172,6 +6287,7 @@ fn commit_is_off_by_default_and_the_setting_reads_and_writes() {
 /// and touching only corpus paths; `--no-commit` waives that once; the
 /// remote is never touched.
 #[test]
+#[allow(clippy::too_many_lines)] // One step per mutating verb, so it grows with the verb set.
 fn commit_on_records_each_mutating_verb_and_never_pushes() {
     let (c, remote) = corpus_repo();
     let early = c.run(&["capture", "before the setting"]).stdout_trim();
@@ -6223,6 +6339,16 @@ fn commit_on_records_each_mutating_verb_and_never_pushes() {
         both,
         "contradicts is written on both ends, in one commit"
     );
+
+    // `new --contradicts` writes the other end too, and names it.
+    let rival = c
+        .run(&["new", "Rival", "--contradicts", &b])
+        .assert_ok()
+        .stdout_trim();
+    assert_eq!(log(&c.root)[0], format!("neb new {rival} {b}"));
+    let mut both = [format!("nodes/{b}.md"), format!("nodes/{rival}.md")];
+    both.sort();
+    assert_eq!(head_paths(&c.root), both, "both ends, in one commit");
 
     c.run(&["tag", &b, "--add", "physics"]).assert_ok();
     assert_eq!(log(&c.root)[0], format!("neb tag {b}"));

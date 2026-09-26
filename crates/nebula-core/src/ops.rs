@@ -104,6 +104,13 @@ pub struct NewNode {
     pub body: String,
     /// Ids this descends from. More than one is a merge.
     pub parents: Vec<String>,
+    /// A refuted node this revives, written as a `reopens` edge. That edge is
+    /// genealogy, so the same id is not also a parent.
+    #[serde(default)]
+    pub reopens: Option<String>,
+    /// Nodes this contradicts. Recorded on both ends, as [`link`] does.
+    #[serde(default)]
+    pub contradicts: Vec<String>,
     /// What would falsify it. Naming one starts the node as a hypothesis.
     pub kill: Option<String>,
     /// Labels, normalised on the way in.
@@ -113,8 +120,8 @@ pub struct NewNode {
     /// Explicit id, overriding the title's slug. Validated with the same
     /// rules a derived slug already follows, and refused on collision.
     pub id: Option<String>,
-    /// Who wrote the title, the kill condition and the parent edges. `None`
-    /// is the human, which is what an unattributed write means.
+    /// Who wrote the title, the kill condition and the edges. `None` is the
+    /// human, which is what an unattributed write means.
     pub by: Option<String>,
 }
 
@@ -272,6 +279,8 @@ pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion, near_k: usize) ->
             title,
             body: String::new(),
             parents: args.parents.clone(),
+            reopens: None,
+            contradicts: Vec::new(),
             kill: None,
             tags: args.tags.clone(),
             origin: args.origin.clone(),
@@ -323,6 +332,11 @@ fn free_capture_id(corpus: &Corpus, text: &str) -> Result<Option<String>> {
 /// Create a node directly, without going through the inbox.
 ///
 /// Naming a kill condition starts it as a hypothesis; without one it is a seed.
+///
+/// Every edge is written with the node, under the invariants [`link`] would
+/// apply to it afterwards: each end must exist, no edge is written twice, a
+/// genealogy edge may not close a loop, and a `contradicts` edge is recorded
+/// on the other node too. Every refusal comes before anything is written.
 pub fn new_node(corpus: &Corpus, args: &NewNode) -> Result<Created> {
     if args.kill.as_ref().is_some_and(|k| k.trim().is_empty()) {
         return Err(Error::EmptyKill);
@@ -334,7 +348,26 @@ pub fn new_node(corpus: &Corpus, args: &NewNode) -> Result<Created> {
         Status::Seed
     };
     let doc = build(corpus, args, status, &args.body)?;
+    // Read before the node is written, so a contradicted node that will not
+    // parse refuses the whole verb rather than leaving a one-sided edge.
+    let mut contradicted = args
+        .contradicts
+        .iter()
+        .map(|id| corpus.load(id))
+        .collect::<Result<Vec<_>>>()?;
     corpus.create(&doc)?;
+    // `contradicts` is a claim about both nodes, so record it on both.
+    let by = model::author(args.by.as_deref())?;
+    for other in &mut contradicted {
+        if !other.node.has_edge(EdgeType::Contradicts, &doc.node.id) {
+            other.node.edges.push(Edge {
+                kind: EdgeType::Contradicts,
+                to: doc.node.id.clone(),
+                by: by.clone(),
+            });
+            corpus.save(other)?;
+        }
+    }
     Ok(Created {
         path: corpus.node_path(&doc.node.id)?,
         doc,
@@ -342,7 +375,11 @@ pub fn new_node(corpus: &Corpus, args: &NewNode) -> Result<Created> {
     })
 }
 
-/// A fresh node, with its id, dates and parent edges filled in.
+/// A fresh node, with its id, dates and edges filled in.
+///
+/// Refuses, before anything is written, an id that is taken, an edge to a
+/// node that is not there, the same edge twice, a parent that is also the
+/// node this reopens, and a genealogy edge that would close a loop.
 fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<Doc> {
     let id = match &spec.id {
         Some(id) => {
@@ -356,14 +393,47 @@ fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<
     if id.is_empty() {
         return Err(Error::UnusableTitle(spec.title.clone()));
     }
+    // Refused here as well as in `Corpus::create`, so the cycle check below
+    // never has to reason about a node that is already on disk.
+    if corpus.node_path(&id)?.exists() {
+        return Err(Error::NodeExists(id));
+    }
     for p in &spec.parents {
         if !corpus.node_path(p)?.exists() {
             return Err(Error::MissingParent(p.clone()));
         }
     }
+    // Not parents, so a missing one is the refusal `link` gives.
+    for other in spec.reopens.iter().chain(&spec.contradicts) {
+        if !corpus.node_path(other)?.exists() {
+            return Err(Error::NoSuchNode(other.clone()));
+        }
+    }
+    // `reopens` is already genealogy: a `derives-from` beside it would be a
+    // second, parallel claim of the same descent.
+    if let Some(reopened) = spec.reopens.as_ref().filter(|r| spec.parents.contains(r)) {
+        return Err(Error::ParentAndReopens(reopened.clone()));
+    }
     let now = store::today();
     let by = model::author(spec.by.as_deref())?;
-    Ok(Doc {
+    let wanted = spec
+        .parents
+        .iter()
+        .map(|p| (EdgeType::DerivesFrom, p))
+        .chain(spec.reopens.iter().map(|r| (EdgeType::Reopens, r)))
+        .chain(spec.contradicts.iter().map(|c| (EdgeType::Contradicts, c)));
+    let mut edges: Vec<Edge> = Vec::new();
+    for (kind, to) in wanted {
+        if edges.iter().any(|e| e.kind == kind && e.to == *to) {
+            return Err(Error::DuplicateEdge);
+        }
+        edges.push(Edge {
+            kind,
+            to: to.clone(),
+            by: by.clone(),
+        });
+    }
+    let doc = Doc {
         node: Node {
             id,
             title: spec.title.clone(),
@@ -373,23 +443,44 @@ fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<
             updated: now,
             kill: spec.kill.clone(),
             // A node with no kill condition has nobody to credit for one.
-            kill_by: spec.kill.as_ref().and(by.clone()),
+            kill_by: spec.kill.as_ref().and(by),
             tags: model::normalize_tags(&spec.tags),
-            edges: spec
-                .parents
-                .iter()
-                .map(|p| Edge {
-                    kind: EdgeType::DerivesFrom,
-                    to: p.clone(),
-                    by: by.clone(),
-                })
-                .collect(),
+            edges,
             references: vec![],
             closed: None,
             origin: spec.origin.clone(),
         },
         body: body.trim().to_string(),
-    })
+    };
+    refuse_cycle(corpus, &doc)?;
+    Ok(doc)
+}
+
+/// Refuse a new node whose genealogy would make it its own ancestor.
+///
+/// Nothing points at a node that does not exist yet, except an edge somebody
+/// wrote by hand ahead of it: that dangling edge is what one of these closes
+/// into a loop. Each edge is tried alone, so the refusal names the one that
+/// does.
+fn refuse_cycle(corpus: &Corpus, doc: &Doc) -> Result<()> {
+    let mut genealogy = doc.node.edges.iter().filter(|e| e.kind.is_genealogy());
+    let Some(first) = genealogy.next() else {
+        return Ok(());
+    };
+    let mut docs = corpus.load_all()?;
+    let mut trial = doc.clone();
+    for edge in std::iter::once(first).chain(genealogy) {
+        trial.node.edges = vec![edge.clone()];
+        docs.push(trial.clone());
+        if graph::creates_cycle(&docs, &doc.node.id) {
+            return Err(Error::Cycle {
+                from: doc.node.id.clone(),
+                to: edge.to.clone(),
+            });
+        }
+        docs.pop();
+    }
+    Ok(())
 }
 
 /// Sharpen a seed into a hypothesis by naming what would kill it.

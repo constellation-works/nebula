@@ -278,6 +278,14 @@ enum Command {
         /// A parent this descends from. Repeat for a merge.
         #[arg(long = "parent", value_name = "ID")]
         parents: Vec<String>,
+        /// A refuted node this revives, written as a `reopens` edge. That
+        /// edge is genealogy already, so do not name the node as a parent too.
+        #[arg(long, value_name = "ID")]
+        reopens: Option<String>,
+        /// A node this contradicts, recorded on both nodes as `link` does.
+        /// Repeatable.
+        #[arg(long = "contradicts", value_name = "ID")]
+        contradicts: Vec<String>,
         /// What would falsify this. Naming one starts the node as a hypothesis.
         #[arg(long)]
         kill: Option<String>,
@@ -1108,6 +1116,8 @@ fn run(cli: Cli) -> Outcome {
             title,
             body,
             parents,
+            reopens,
+            contradicts,
             kill,
             tags,
             id,
@@ -1123,6 +1133,8 @@ fn run(cli: Cli) -> Outcome {
                     title,
                     body,
                     parents,
+                    reopens,
+                    contradicts,
                     kill,
                     tags,
                     origin: Origin::of(task, run),
@@ -1139,7 +1151,12 @@ fn run(cli: Cli) -> Outcome {
                     render::dim(&created.path.display().to_string())
                 );
             }
-            commit(&corpus, commits, "new", &[&created.doc.node.id])?;
+            // A contradicted node changed too, so the commit names it.
+            let node = &created.doc.node;
+            let ids: Vec<&str> = std::iter::once(node.id.as_str())
+                .chain(node.edges_of(EdgeType::Contradicts))
+                .collect();
+            commit(&corpus, commits, "new", &ids)?;
             Ok(ok)
         }
 

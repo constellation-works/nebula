@@ -138,11 +138,11 @@ and Orbit provenance, and suppress nearest-node suggestions; run
 | `inbox` | list unsettled captures |
 | `promote <ref> [--title ..] [--body ..] [--parent ..] [--tag ..] [--id ..] [--by ..] [--task ..] [--run ..] [--quiet]` | inbox entry becomes a seed node |
 | `drop <ref>` | settle an inbox entry without a node |
-| `new <title> [--parent ..] [--tag ..] [--kill ..]` | create a node directly |
+| `new <title> [--parent ..] [--reopens ..] [--contradicts ..] [--tag ..] [--kill ..]` | create a node directly, with its edges; `--contradicts` is written on both nodes |
 | `sharpen <id> --kill "..."` | seed becomes hypothesis |
 | `link <from> <type> <to>` | add an edge; refuses a genealogy cycle |
 | `cite <id> --kind --uri --note [--title]` | attach a reference |
-| `status <id> <status> [--why ..]` | move status under the rules above; reopening requires a new node and a `reopens` edge |
+| `status <id> <status> [--why ..]` | move status under the rules above; reopening requires a new node and a `reopens` edge (`new --reopens <id>`) |
 | `tag <id> [--add ..] [--remove ..]` / `tag list` | edit tags; list tags with counts |
 | `trace <id> [--down]` | ancestry walk, or descent |
 | `impact <id>` | what `contradicts` or descends from this |
@@ -161,10 +161,10 @@ return type serialised; see [2_architecture.md](2_architecture.md).
 
 | # | rule | level | enforced at |
 |---|---|---|---|
-| 1 | Genealogy is acyclic | error | `link` refuses; `check` proves |
+| 1 | Genealogy is acyclic | error | `link`/`new` refuse; `check` proves |
 | 2 | `hypothesis` names a non-empty `kill` | error | `sharpen`/`status`, `check` |
-| 3 | Every edge target exists; no self-loop | error | `link`, `check` |
-| 4 | `contradicts` is mutual | error | `link` writes both; `check` |
+| 3 | Every edge target exists; no self-loop | error | `link`/`new`, `check` |
+| 4 | `contradicts` is mutual | error | `link`/`new` write both; `check` |
 | 5 | `refuted` carries `closed.why` | error | `status`, `check` |
 | 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status` |
 | 7 | A reference carries no `verdict`/`strength` | error | parse |
