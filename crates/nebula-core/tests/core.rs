@@ -8,7 +8,8 @@
 use nebula_core::triage::{Action, Step, Tally};
 use nebula_core::{
     Band, Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, HUMAN, NEAR_DEFAULT,
-    NewNode, Promotion, ReviewRule, Settlement, Status, TraceHop, Triage, Via, graph, ops, store,
+    NewNode, Promotion, ReviewItem, ReviewReport, ReviewRule, Settlement, Status, TraceHop, Triage,
+    Via, graph, ops, store,
 };
 use std::fmt::Write as _;
 
@@ -183,6 +184,166 @@ fn trace_of_an_unknown_node_is_a_typed_error() {
         graph::trace(&graph, "nope", Direction::Up),
         Err(Error::NoSuchNode(id)) if id == "nope"
     ));
+}
+
+/// A chain with a shortcut: `root <- branch <- cut <- deep`, and `cut` also
+/// descends from `root` directly. Walking down from `root`, `cut` is met two
+/// steps out through `branch` before it is met one step out on its own.
+fn shortcut(corpus: &Corpus) -> [String; 4] {
+    let root = seed(corpus, "Root", &[]);
+    let branch = seed(corpus, "Branch", &[&root]);
+    let cut = seed(corpus, "Cut", &[&branch, &root]);
+    let deep = seed(corpus, "Deep", &[&cut]);
+    [root, branch, cut, deep]
+}
+
+#[test]
+fn trace_within_stops_at_the_depth_but_keeps_every_node_that_close() {
+    let (_dir, corpus) = corpus();
+    let [root, branch, cut, deep] = shortcut(&corpus);
+    let docs = corpus.load_all().unwrap();
+    let graph = Graph::build(&docs).unwrap();
+    let ids = |from: &str, direction, depth| -> Vec<String> {
+        graph::trace_within(&graph, from, direction, depth)
+            .unwrap()
+            .0
+            .into_iter()
+            .map(|n| n.id)
+            .collect()
+    };
+
+    assert_eq!(
+        ids(&root, Direction::Down, Some(0)),
+        std::slice::from_ref(&root)
+    );
+    assert_eq!(
+        ids(&root, Direction::Down, Some(1)),
+        [root.clone(), branch.clone(), cut.clone()],
+        "one step down is the children and nothing below them"
+    );
+    // Through `branch`, `cut` sits at the bound and `deep` beyond it; through
+    // the shortcut, `deep` is two steps out, so it belongs in the walk.
+    let two = ids(&root, Direction::Down, Some(2));
+    assert_eq!(two.len(), 4, "{two:?}");
+    assert!(two.contains(&deep), "{two:?}");
+    assert_eq!(
+        two.iter().filter(|id| **id == cut).count(),
+        1,
+        "met twice, reported once"
+    );
+
+    assert_eq!(
+        ids(&deep, Direction::Up, Some(1)),
+        [deep.clone(), cut.clone()]
+    );
+    assert_eq!(ids(&deep, Direction::Up, Some(2)).len(), 4);
+}
+
+#[test]
+fn an_unbounded_or_unreached_bound_walks_exactly_as_trace_does() {
+    let (_dir, corpus) = corpus();
+    let [root, ..] = shortcut(&corpus);
+    let [a, _, _, d] = diamond(&corpus);
+    let docs = corpus.load_all().unwrap();
+    let graph = Graph::build(&docs).unwrap();
+    let steps = |walk: graph::Trace| -> Vec<(String, Option<TraceHop>)> {
+        walk.0.into_iter().map(|n| (n.id, n.via)).collect()
+    };
+    for (from, direction) in [
+        (&root, Direction::Down),
+        (&a, Direction::Down),
+        (&d, Direction::Up),
+    ] {
+        let whole = steps(graph::trace(&graph, from, direction).unwrap());
+        for depth in [None, Some(3), Some(100)] {
+            assert_eq!(
+                steps(graph::trace_within(&graph, from, direction, depth).unwrap()),
+                whole,
+                "{from} {direction:?} {depth:?}"
+            );
+        }
+    }
+    assert!(matches!(
+        graph::trace_within(&graph, "nope", Direction::Up, Some(1)),
+        Err(Error::NoSuchNode(id)) if id == "nope"
+    ));
+}
+
+#[test]
+fn a_review_is_cut_per_rule_and_says_how_much_each_rule_lost() {
+    let item = |rule, id: &str| ReviewItem {
+        rule,
+        id: id.into(),
+        title: id.into(),
+        reason: String::new(),
+    };
+    let full = ReviewReport(vec![
+        item(ReviewRule::StaleHypothesis, "h1"),
+        item(ReviewRule::StaleHypothesis, "h2"),
+        item(ReviewRule::StaleHypothesis, "h3"),
+        item(ReviewRule::UntouchedSeed, "s1"),
+        item(ReviewRule::NoReferences, "n1"),
+        item(ReviewRule::NoReferences, "n2"),
+        item(ReviewRule::StaleInbox, "inbox"),
+    ]);
+    let ids = |r: &ReviewReport| r.0.iter().map(|i| i.id.clone()).collect::<Vec<_>>();
+
+    let mut one = full.clone();
+    let omitted = one.truncate_per_rule(1);
+    assert_eq!(
+        ids(&one),
+        ["h1", "s1", "n1", "inbox"],
+        "the first of each rule, in order"
+    );
+    assert_eq!(
+        omitted,
+        [
+            (ReviewRule::StaleHypothesis, 2),
+            (ReviewRule::NoReferences, 1)
+        ],
+        "only the rules that lost something, with how much"
+    );
+
+    let mut roomy = full.clone();
+    assert!(roomy.truncate_per_rule(3).is_empty());
+    assert_eq!(
+        ids(&roomy),
+        ids(&full),
+        "a bound nobody reaches cuts nothing"
+    );
+
+    let mut none = full.clone();
+    let omitted = none.truncate_per_rule(0);
+    assert!(none.0.is_empty());
+    assert_eq!(omitted.iter().map(|(_, n)| n).sum::<usize>(), full.0.len());
+}
+
+#[test]
+fn review_reasons_count_in_the_singular_for_one() {
+    let (dir, corpus) = corpus();
+    let id = seed(&corpus, "Cold seed", &[]);
+    let path = dir.path().join("corpus/nodes").join(format!("{id}.md"));
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let at = raw.find("\nupdated: ").unwrap() + "\nupdated: ".len();
+    let mut raw = raw;
+    raw.replace_range(at..at + 10, "2000-01-01");
+    std::fs::write(&path, raw).unwrap();
+    let docs = corpus.load_all().unwrap();
+    let report = graph::review(
+        &Graph::build(&docs).unwrap(),
+        &corpus.inbox().unwrap(),
+        Some(1),
+    )
+    .unwrap();
+    let seed = report
+        .0
+        .iter()
+        .find(|i| i.rule == ReviewRule::UntouchedSeed)
+        .expect("the seed is cold");
+    assert_eq!(
+        seed.reason,
+        "seed untouched for 1 day; propose: status abandoned"
+    );
 }
 
 #[test]

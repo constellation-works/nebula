@@ -1,6 +1,6 @@
 //! The multi-line renderings: one function per report the core returns.
 
-use super::{bold, dim, paint, status_badge};
+use super::{bold, count, dim, paint, status_badge};
 use nebula_core::{
     Band, CommitSetting, EdgeType, HUMAN, INBOX_DAYS, Impact, Inbox, MigrationReport, Near,
     Neighbour, NodeView, OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, OpenReport,
@@ -8,29 +8,40 @@ use nebula_core::{
 };
 use std::fmt::Write as _;
 
+/// Who wrote something, as a dimmed ` (label)` suffix, or nothing for the
+/// human: the view states `human` outright, and saying so on every line
+/// would bury the one line an agent wrote.
+fn by(label: Option<&str>) -> String {
+    match label.filter(|by| *by != HUMAN) {
+        Some(by) => format!(" {}", dim(&format!("({by})"))),
+        None => String::new(),
+    }
+}
+
 /// One node in full.
+///
+/// The header is the status and id, the title with its author when that is
+/// not the human, then a labelled line for the tags and one for the dates.
 pub fn node(view: &NodeView) -> String {
     let n = &view.node;
     let mut out = String::new();
+    let _ = writeln!(out, "{} {}", status_badge(n.status), bold(&n.id));
+    let _ = writeln!(out, "{}{}", n.title, by(n.title_by.as_deref()));
+    if !n.tags.is_empty() {
+        let _ = writeln!(out, "{} {}", dim("tags:"), n.tags.join(", "));
+    }
     let _ = writeln!(
         out,
-        "{} {} {}",
-        status_badge(n.status),
-        bold(&n.id),
-        dim(&n.tags.join(", "))
+        "{} {}  {} {}\n",
+        dim("created:"),
+        n.created,
+        dim("updated:"),
+        n.updated
     );
-    let _ = writeln!(out, "{}\n", n.title);
     if let Some(k) = &n.kill {
         // Whose falsifier this is decides how much the hypothesis is worth,
         // so an unconfirmed one says so where the human will read it.
-        match n.kill_by.as_deref().filter(|by| *by != HUMAN) {
-            Some(by) => {
-                let _ = writeln!(out, "{} {k} {}\n", dim("kill:"), dim(&format!("({by})")));
-            }
-            None => {
-                let _ = writeln!(out, "{} {k}\n", dim("kill:"));
-            }
-        }
+        let _ = writeln!(out, "{} {k}{}\n", dim("kill:"), by(n.kill_by.as_deref()));
     }
     if let Some(c) = &n.closed {
         let _ = writeln!(out, "{} {} {}\n", dim("closed:"), c.why, dim(&c.at));
@@ -41,7 +52,7 @@ pub fn node(view: &NodeView) -> String {
     if !n.edges.is_empty() {
         let _ = writeln!(out, "{}", dim("edges"));
         for e in &n.edges {
-            let _ = writeln!(out, "  {:<14} {}", e.kind.to_string(), e.to);
+            let _ = writeln!(out, "  {:<14} {}{}", e.kind, e.to, by(e.by.as_deref()));
         }
         out.push('\n');
     }
@@ -50,10 +61,16 @@ pub fn node(view: &NodeView) -> String {
         for r in &n.references {
             match &r.uri {
                 Some(uri) => {
-                    let _ = writeln!(out, "  {} {:<10} {uri}", bold(&r.id), r.kind);
+                    let _ = writeln!(
+                        out,
+                        "  {} {:<10} {uri}{}",
+                        bold(&r.id),
+                        r.kind,
+                        by(r.by.as_deref())
+                    );
                 }
                 None => {
-                    let _ = writeln!(out, "  {} {}", bold(&r.id), r.kind);
+                    let _ = writeln!(out, "  {} {}{}", bold(&r.id), r.kind, by(r.by.as_deref()));
                 }
             }
             // An observatory reference stores a record id, so where that
@@ -147,22 +164,26 @@ pub fn commit_setting(setting: CommitSetting) -> String {
     }
 }
 
-/// Captures waiting to be promoted or dropped.
-pub fn inbox(inbox: &Inbox) -> String {
-    if inbox.0.is_empty() {
+/// Captures waiting to be promoted or dropped. `waiting` is how many there
+/// are in all, which is more than `inbox` holds when `--limit` cut it.
+pub fn inbox(inbox: &Inbox, waiting: usize) -> String {
+    if waiting == 0 {
         return format!("{}\n", dim("inbox is empty"));
     }
     let mut out = String::new();
     for e in &inbox.0 {
         let _ = writeln!(out, "{} {} {}", bold(&e.id), dim(&e.at), e.text);
     }
+    let shown = inbox.0.len();
+    let tally = if shown < waiting {
+        format!("{shown} of {waiting} waiting shown; raise --limit for more.")
+    } else {
+        format!("{waiting} waiting.")
+    };
     let _ = writeln!(
         out,
         "\n{}",
-        dim(&format!(
-            "{} waiting. Promote or drop each one.",
-            inbox.0.len()
-        ))
+        dim(&format!("{tally} Promote or drop each one."))
     );
     out
 }
@@ -290,14 +311,21 @@ pub fn impact(report: &Impact, id: &str) -> String {
     out
 }
 
-/// Nodes that need attention.
-pub fn open(report: &OpenReport) -> String {
+/// Nodes that need attention. `omitted` is how many lines `--limit` cut.
+pub fn open(report: &OpenReport, omitted: usize) -> String {
     let mut out = String::new();
-    if report.0.is_empty() {
+    if report.0.is_empty() && omitted == 0 {
         let _ = writeln!(out, "{}", dim("nothing needs attention"));
     }
     for item in &report.0 {
         let _ = writeln!(out, "{} {}", bold(&item.id), item.why);
+    }
+    if omitted > 0 {
+        let _ = writeln!(
+            out,
+            "{}",
+            dim(&format!("… and {omitted} more; raise --limit for more"))
+        );
     }
     out
 }
@@ -339,9 +367,10 @@ pub fn check(report: &Report) -> String {
         .count();
     let _ = writeln!(
         out,
-        "\n{} nodes, {errors} errors, {} warnings",
-        report.nodes,
-        report.findings.len() - errors
+        "\n{}, {}, {}",
+        count(report.nodes, "node"),
+        count(errors, "error"),
+        count(report.findings.len() - errors, "warning")
     );
     out
 }
@@ -349,16 +378,22 @@ pub fn check(report: &Report) -> String {
 /// The weekly maintenance report, as the markdown that goes into `review.md`.
 ///
 /// Sectioned by rule, with the thresholds in the headings, so the file says
-/// what it was asking when it was written.
-pub fn review(report: &ReviewReport, hypothesis_days: i64, seed_days: i64) -> String {
+/// what it was asking when it was written. `omitted` is how many findings
+/// `--limit` cut from each rule, and each cut section ends saying so.
+pub fn review(
+    report: &ReviewReport,
+    hypothesis_days: i64,
+    seed_days: i64,
+    omitted: &[(ReviewRule, usize)],
+) -> String {
     let sections = [
         (
             ReviewRule::StaleHypothesis,
-            format!("Hypotheses untouched for {hypothesis_days} days"),
+            format!("Hypotheses untouched for {}", count(hypothesis_days, "day")),
         ),
         (
             ReviewRule::UntouchedSeed,
-            format!("Seeds untouched for {seed_days} days"),
+            format!("Seeds untouched for {}", count(seed_days, "day")),
         ),
         (ReviewRule::NoReferences, "Nodes with no references".into()),
         (
@@ -374,11 +409,18 @@ pub fn review(report: &ReviewReport, hypothesis_days: i64, seed_days: i64) -> St
     for (rule, heading) in sections {
         let _ = writeln!(text, "## {heading}\n");
         let items: Vec<&ReviewItem> = report.0.iter().filter(|i| i.rule == rule).collect();
-        if items.is_empty() {
+        let cut = omitted
+            .iter()
+            .find(|(r, _)| *r == rule)
+            .map_or(0, |(_, n)| *n);
+        if items.is_empty() && cut == 0 {
             text.push_str("_none_\n\n");
         } else {
             for item in items {
                 let _ = writeln!(text, "- `{}` {} — {}", item.id, item.title, item.reason);
+            }
+            if cut > 0 {
+                let _ = writeln!(text, "- _… and {cut} more; raise --limit for more_");
             }
             text.push('\n');
         }
@@ -410,9 +452,9 @@ pub fn migration(report: &MigrationReport) -> String {
             out,
             "\n{}",
             dim(&format!(
-                "{} of {} nodes rewritten; run `neb check` to confirm",
+                "{} of {} rewritten; run `neb check` to confirm",
                 report.rewritten.len(),
-                report.nodes
+                count(report.nodes, "node")
             ))
         );
     }

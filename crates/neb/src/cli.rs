@@ -18,7 +18,7 @@
 //! add its row to the template; a `#[test]` below checks the two stay in sync.
 
 use crate::render;
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use nebula_core::triage::{Action, Step};
 use nebula_core::{
     Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, InboxEntry, NEAR_DEFAULT,
@@ -103,12 +103,24 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
-    /// Skip the commit this once, where `neb config commit on` would make one.
-    #[arg(long, global = true)]
+    /// `--no-commit` written before the verb, the spelling from when it was
+    /// global. Still honoured so existing scripts keep working, but hidden:
+    /// each verb that writes offers the flag itself, and a verb that only
+    /// reads has nothing to skip.
+    #[arg(long = "no-commit", hide = true)]
     no_commit: bool,
 
     #[command(subcommand)]
     command: Command,
+}
+
+/// `--no-commit`, flattened into each verb that writes so its `--help` offers
+/// it and a read-only verb's does not.
+#[derive(Args, Debug, Clone, Copy)]
+struct CommitArg {
+    /// Skip the commit this once, where `neb config commit on` would make one.
+    #[arg(long)]
+    no_commit: bool,
 }
 
 /// [`Status`] as a command-line value.
@@ -177,7 +189,10 @@ enum Command {
     /// Idempotent, and refused while the corpus has uncommitted git changes
     /// so the migration lands as its own commit. Evidence, task links and
     /// the removed edge kinds become references; nothing is dropped.
-    Migrate,
+    Migrate {
+        #[command(flatten)]
+        commit: CommitArg,
+    },
 
     /// Read or set a corpus or machine setting.
     ///
@@ -220,10 +235,16 @@ enum Command {
         /// lone `-` reads the thought from standard input.
         #[arg(required = true, num_args = 1.., value_name = "TEXT|-")]
         text: Vec<String>,
+        #[command(flatten)]
+        commit: CommitArg,
     },
 
     /// List captures that have not been promoted or dropped.
-    Inbox,
+    Inbox {
+        /// Show at most N entries, oldest first. Defaults to every one.
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+    },
 
     /// Turn an inbox entry into a seed node. Suggests parents, never picks one.
     ///
@@ -267,12 +288,16 @@ enum Command {
         /// Orbit run that produced it.
         #[arg(long)]
         run: Option<String>,
+        #[command(flatten)]
+        commit: CommitArg,
     },
 
     /// Discard an inbox entry. Struck through, never deleted.
     Drop {
         /// Inbox entry id, from `neb inbox`.
         entry: String,
+        #[command(flatten)]
+        commit: CommitArg,
     },
 
     /// Work through the inbox oldest first, one key per entry.
@@ -299,6 +324,8 @@ enum Command {
         /// agent's session or crew label. Free text; defaults to `human`.
         #[arg(long, value_name = "LABEL")]
         by: Option<String>,
+        #[command(flatten)]
+        commit: CommitArg,
     },
 
     /// Create a node directly, without going through the inbox.
@@ -339,6 +366,8 @@ enum Command {
         /// Orbit run that produced it.
         #[arg(long)]
         run: Option<String>,
+        #[command(flatten)]
+        commit: CommitArg,
     },
 
     /// Edit a node's body in $VISUAL or $EDITOR.
@@ -352,6 +381,8 @@ enum Command {
         /// authorship is not represented in the schema and is not recorded.
         #[arg(long, value_name = "LABEL")]
         by: Option<String>,
+        #[command(flatten)]
+        commit: CommitArg,
     },
 
     /// Sharpen a seed into a hypothesis by naming what would kill it.
@@ -372,6 +403,8 @@ enum Command {
         /// Stand behind the kill condition already there, as the human.
         #[arg(long)]
         confirm: bool,
+        #[command(flatten)]
+        commit: CommitArg,
     },
 
     /// Move a node to a new status, with the transition guards applied.
@@ -388,6 +421,8 @@ enum Command {
         /// Why it closed. Required for refuted, optional for abandoned.
         #[arg(long)]
         why: Option<String>,
+        #[command(flatten)]
+        commit: CommitArg,
     },
 
     /// Add a typed edge between two nodes.
@@ -402,6 +437,8 @@ enum Command {
         /// label. Free text; defaults to `human`.
         #[arg(long, value_name = "LABEL")]
         by: Option<String>,
+        #[command(flatten)]
+        commit: CommitArg,
     },
 
     /// Edit a node's tags, or list every tag with its node count.
@@ -418,6 +455,8 @@ enum Command {
         /// A tag to remove. Repeatable.
         #[arg(long = "remove", value_name = "TAG")]
         remove: Vec<String>,
+        #[command(flatten)]
+        commit: CommitArg,
     },
 
     /// Append a dated paragraph of reasoning to a node body.
@@ -440,6 +479,8 @@ enum Command {
         /// flag. A dash-leading token belongs in quotes, or after `--`.
         #[arg(required = true, num_args = 1..)]
         text: Vec<String>,
+        #[command(flatten)]
+        commit: CommitArg,
     },
 
     /// Attach context, with a note saying why it is here.
@@ -472,6 +513,8 @@ enum Command {
         /// Orbit run that produced it.
         #[arg(long)]
         run: Option<String>,
+        #[command(flatten)]
+        commit: CommitArg,
     },
 
     /// Show one node in full.
@@ -497,6 +540,10 @@ enum Command {
         /// Only nodes carrying this tag. Repeat to require every one.
         #[arg(long = "tag", value_name = "TAG")]
         tags: Vec<String>,
+        /// Show at most N of the matching nodes, in corpus order. Defaults to
+        /// every one.
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
     },
 
     /// The existing nodes closest to some text, or to a node, and how close.
@@ -533,6 +580,10 @@ enum Command {
         /// Walk descendants instead of ancestors.
         #[arg(long)]
         down: bool,
+        /// Stop N steps from the node: 1 is its parents, or its children
+        /// with `--down`. Defaults to the whole walk.
+        #[arg(long, value_name = "N")]
+        depth: Option<usize>,
     },
 
     /// What descends from this node, and what contradicts it.
@@ -578,6 +629,10 @@ enum Command {
         /// Write the report here instead of stdout.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Show at most N findings under each heading, or N lines with
+        /// `--short`. Defaults to every one.
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
     },
 
     /// Deprecated alias for `review --short`, kept for one release so
@@ -608,6 +663,8 @@ enum ConfigSetting {
         /// once every machine that uses the corpus has its own setting.
         #[arg(long)]
         drop_legacy: bool,
+        #[command(flatten)]
+        commit: CommitArg,
     },
 
     /// Whether each mutating verb commits the corpus afterwards, when the
@@ -619,7 +676,51 @@ enum ConfigSetting {
     Commit {
         /// `on` or `off`. Omit to read the current setting.
         state: Option<OnOff>,
+        #[command(flatten)]
+        commit: CommitArg,
     },
+}
+
+impl Command {
+    /// Whether `--no-commit` was passed after the verb.
+    ///
+    /// No wildcard arm, so a new verb has to say here whether it writes: one
+    /// that does flattens a [`CommitArg`] and reads it here, one that does
+    /// not is listed as `false`.
+    fn no_commit(&self) -> bool {
+        match self {
+            Self::Migrate { commit }
+            | Self::Config {
+                setting:
+                    ConfigSetting::ObservatoryRoot { commit, .. } | ConfigSetting::Commit { commit, .. },
+            }
+            | Self::Capture { commit, .. }
+            | Self::Promote { commit, .. }
+            | Self::Drop { commit, .. }
+            | Self::Triage { commit, .. }
+            | Self::New { commit, .. }
+            | Self::Edit { commit, .. }
+            | Self::Sharpen { commit, .. }
+            | Self::Status { commit, .. }
+            | Self::Link { commit, .. }
+            | Self::Tag { commit, .. }
+            | Self::Note { commit, .. }
+            | Self::Cite { commit, .. } => commit.no_commit,
+            Self::Init { .. }
+            | Self::Check
+            | Self::Completions { .. }
+            | Self::Inbox { .. }
+            | Self::Show { .. }
+            | Self::Log { .. }
+            | Self::List { .. }
+            | Self::Near { .. }
+            | Self::Trace { .. }
+            | Self::Impact { .. }
+            | Self::Graph { .. }
+            | Self::Review { .. }
+            | Self::Open { .. } => false,
+        }
+    }
 }
 
 /// A boolean setting as the command line spells it.
@@ -1220,7 +1321,7 @@ fn run(cli: Cli) -> Outcome {
     let root = cli.root.clone();
     let json = cli.json;
     let commits = CommitOpts {
-        skip: cli.no_commit,
+        skip: cli.no_commit || cli.command.no_commit(),
         json,
     };
 
@@ -1297,7 +1398,7 @@ fn run(cli: Cli) -> Outcome {
             )
         }
 
-        Command::Migrate => {
+        Command::Migrate { .. } => {
             // `migrate` takes this lock itself; held out here it also covers
             // the commit that records the migration. Only once there is a
             // corpus to lock: a missing one is `migrate`'s error to report,
@@ -1321,7 +1422,10 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Config {
-            setting: ConfigSetting::ObservatoryRoot { dir, drop_legacy },
+            setting:
+                ConfigSetting::ObservatoryRoot {
+                    dir, drop_legacy, ..
+                },
         } => {
             let mut corpus = Corpus::open(root)?;
             // Setting the root writes this machine's file and nothing in the
@@ -1347,7 +1451,7 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Config {
-            setting: ConfigSetting::Commit { state },
+            setting: ConfigSetting::Commit { state, .. },
         } => {
             let mut corpus = Corpus::open(root)?;
             // As above: reading the setting is a read.
@@ -1374,7 +1478,7 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Capture { quiet, text } => {
+        Command::Capture { quiet, text, .. } => {
             let text = capture_text(&text)?;
             if text.trim().is_empty() {
                 return Err(Failure::say("nothing to capture"));
@@ -1425,13 +1529,14 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Inbox => {
+        Command::Inbox { limit } => {
             let corpus = Corpus::open(root)?;
-            let inbox = corpus.inbox()?;
+            let mut inbox = corpus.inbox()?;
+            let waiting = cap(&mut inbox.0, limit);
             if json {
                 out_json(&inbox)?;
             } else {
-                print!("{}", render::inbox(&inbox));
+                print!("{}", render::inbox(&inbox, waiting));
             }
             Ok(ok)
         }
@@ -1447,6 +1552,7 @@ fn run(cli: Cli) -> Outcome {
             by,
             task,
             run,
+            ..
         } => {
             let body = body_value(body)?;
             let (corpus, _lock) = open_locked(root)?;
@@ -1480,7 +1586,7 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Drop { entry } => {
+        Command::Drop { entry, .. } => {
             let (corpus, _lock) = open_locked(root)?;
             let dropped = ops::drop(&corpus, &entry)?;
             if json {
@@ -1492,7 +1598,7 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Triage { by } => {
+        Command::Triage { by, .. } => {
             // Refused before anything is read: there is no one payload a
             // session of keyed decisions could honestly be.
             if json {
@@ -1524,6 +1630,7 @@ fn run(cli: Cli) -> Outcome {
             by,
             task,
             run,
+            ..
         } => {
             let body = body_value(body)?;
             let (corpus, _lock) = open_locked(root)?;
@@ -1561,7 +1668,7 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Edit { node, by } => {
+        Command::Edit { node, by, .. } => {
             let (corpus, _lock) = open_locked(root)?;
             let before = corpus.load(&node).map_err(|e| Failure::about(&e, &node))?;
             let body = edit_body(&before.body)?;
@@ -1601,6 +1708,7 @@ fn run(cli: Cli) -> Outcome {
             kill,
             by,
             confirm: false,
+            ..
         } => {
             // Clap's `required_unless_present` guarantees the kill is here
             // without `--confirm`; saying so beats an unwrap.
@@ -1632,7 +1740,9 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Status { node, status, why } => {
+        Command::Status {
+            node, status, why, ..
+        } => {
             let status = Status::from(status);
             // `--why` is this command's flag, so what it does and does not
             // apply to is this command's rule to state.
@@ -1655,7 +1765,9 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Link { from, kind, to, by } => {
+        Command::Link {
+            from, kind, to, by, ..
+        } => {
             let (corpus, _lock) = open_locked(root)?;
             let kind = EdgeType::from(kind);
             let changed = ops::link(&corpus, &from, kind, &to, by.as_deref())?;
@@ -1677,6 +1789,7 @@ fn run(cli: Cli) -> Outcome {
             target,
             add,
             remove,
+            ..
         } if target == "list" && add.is_empty() && remove.is_empty() => {
             let corpus = Corpus::open(root)?;
             let docs = corpus.load_all()?;
@@ -1693,6 +1806,7 @@ fn run(cli: Cli) -> Outcome {
             target,
             add,
             remove,
+            ..
         } => {
             if add.is_empty() && remove.is_empty() {
                 return Err(Failure::say(
@@ -1721,7 +1835,7 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Note { node, by, text } => {
+        Command::Note { node, by, text, .. } => {
             let text = text.join(" ");
             if text.trim().is_empty() {
                 return Err(Failure::say("nothing to note"));
@@ -1749,6 +1863,7 @@ fn run(cli: Cli) -> Outcome {
             by,
             task,
             run,
+            ..
         } => {
             let (corpus, _lock) = open_locked(root)?;
             let bare = note.as_ref().is_none_or(|n| n.trim().is_empty());
@@ -1853,14 +1968,19 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::List { status, tags } => {
+        Command::List {
+            status,
+            tags,
+            limit,
+        } => {
             let corpus = Corpus::open(root)?;
             let docs = corpus.load_all()?;
-            let listing = graph::list(&Graph::build(&docs)?, status.map(Status::from), &tags)?;
+            let mut listing = graph::list(&Graph::build(&docs)?, status.map(Status::from), &tags)?;
+            let matched = cap(&mut listing.0, limit);
             if json {
                 out_json(&listing)?;
             } else {
-                print!("{}", render::list(&listing.0, docs.len()));
+                print!("{}", render::list(&listing.0, matched, docs.len()));
             }
             Ok(ok)
         }
@@ -1881,15 +2001,15 @@ fn run(cli: Cli) -> Outcome {
             Ok(ok)
         }
 
-        Command::Trace { node, down } => {
+        Command::Trace { node, down, depth } => {
             let corpus = Corpus::open(root)?;
             let docs = corpus.load_all()?;
             let direction = if down { Direction::Down } else { Direction::Up };
-            let walk = graph::trace(&Graph::build(&docs)?, &node, direction)?;
+            let walk = graph::trace_within(&Graph::build(&docs)?, &node, direction, depth)?;
             if json {
                 out_json(&walk)?;
             } else {
-                print!("{}", render::tree(&docs, &node, direction));
+                print!("{}", render::tree(&docs, &node, direction, depth));
             }
             Ok(ok)
         }
@@ -1929,9 +2049,12 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Review {
-            short: true, tags, ..
+            short: true,
+            tags,
+            limit,
+            ..
         } => {
-            short_review(root, json, &tags)?;
+            short_review(root, json, &tags, limit)?;
             Ok(ok)
         }
 
@@ -1939,11 +2062,13 @@ fn run(cli: Cli) -> Outcome {
             short: false,
             since,
             out,
+            limit,
             ..
         } => {
             let corpus = Corpus::open(root)?;
             let docs = corpus.load_all()?;
-            let report = graph::review(&Graph::build(&docs)?, &corpus.inbox()?, since)?;
+            let mut report = graph::review(&Graph::build(&docs)?, &corpus.inbox()?, since)?;
+            let omitted = limit.map_or_else(Vec::new, |n| report.truncate_per_rule(n));
             let text = if json {
                 serde_json::to_string_pretty(&report).map_err(Failure::from)?
             } else {
@@ -1951,6 +2076,7 @@ fn run(cli: Cli) -> Outcome {
                     &report,
                     since.unwrap_or(nebula_core::HYPOTHESIS_DAYS),
                     since.unwrap_or(nebula_core::SEED_DAYS),
+                    &omitted,
                 )
             };
             write_report(out.as_deref(), &text)?;
@@ -1959,7 +2085,7 @@ fn run(cli: Cli) -> Outcome {
 
         Command::Open { tags } => {
             eprintln!("warning: `neb open` is deprecated; use `neb review --short`");
-            short_review(root, json, &tags)?;
+            short_review(root, json, &tags, None)?;
             Ok(ok)
         }
     }
@@ -1971,16 +2097,29 @@ fn short_review(
     root: Option<PathBuf>,
     json: bool,
     tags: &[String],
+    limit: Option<usize>,
 ) -> std::result::Result<(), Failure> {
     let corpus = Corpus::open(root)?;
     let docs = corpus.load_all()?;
-    let report = graph::open(&Graph::build(&docs)?, &corpus.inbox()?, tags)?;
+    let mut report = graph::open(&Graph::build(&docs)?, &corpus.inbox()?, tags)?;
+    let all = cap(&mut report.0, limit);
     if json {
         out_json(&report)?;
     } else {
-        print!("{}", render::open(&report));
+        print!("{}", render::open(&report, all - report.0.len()));
     }
     Ok(())
+}
+
+/// Cut a listing to `--limit`, when one was given, and return how long it
+/// was before, so the text can say how much was left out. `--json` gets the
+/// cut list alone: its shape does not change with the flag.
+fn cap<T>(items: &mut Vec<T>, limit: Option<usize>) -> usize {
+    let all = items.len();
+    if let Some(n) = limit {
+        items.truncate(n);
+    }
+    all
 }
 
 /// Pretty JSON on stdout, which is what `--json` means everywhere.
@@ -2058,8 +2197,165 @@ mod tests {
         }
         assert!(text.contains("Usage: neb [OPTIONS] <COMMAND>"));
         assert!(text.contains("--root <DIR>"));
-        assert!(text.contains("--no-commit"));
+        assert!(
+            !text.contains("--no-commit"),
+            "--no-commit belongs to the verbs that write"
+        );
         assert!(text.contains("The corpus lives outside this repository"));
+    }
+
+    /// Whether `neb <path...> --help` lists `--no-commit` as an option, as
+    /// opposed to prose that merely mentions it.
+    fn offers_no_commit(path: &[&str]) -> bool {
+        let mut cmd = Cli::command();
+        cmd.build();
+        let mut at = &mut cmd;
+        for name in path {
+            at = at
+                .find_subcommand_mut(name)
+                .unwrap_or_else(|| panic!("no subcommand {name}"));
+        }
+        at.render_long_help()
+            .to_string()
+            .lines()
+            .any(|l| l.trim_start().starts_with("--no-commit"))
+    }
+
+    /// `--no-commit` is offered by exactly the verbs that can write, which
+    /// are exactly the ones [`Command::no_commit`] reads it from.
+    #[test]
+    fn no_commit_is_offered_only_by_verbs_that_write() {
+        let writes: [&[&str]; 15] = [
+            &["migrate"],
+            &["config", "observatory-root"],
+            &["config", "commit"],
+            &["capture"],
+            &["promote"],
+            &["drop"],
+            &["triage"],
+            &["new"],
+            &["edit"],
+            &["sharpen"],
+            &["status"],
+            &["link"],
+            &["tag"],
+            &["note"],
+            &["cite"],
+        ];
+        for path in writes {
+            assert!(
+                offers_no_commit(path),
+                "{path:?} writes, so its help offers --no-commit"
+            );
+        }
+        let reads: [&[&str]; 13] = [
+            &["init"],
+            &["check"],
+            &["config"],
+            &["completions"],
+            &["inbox"],
+            &["show"],
+            &["log"],
+            &["list"],
+            &["near"],
+            &["trace"],
+            &["impact"],
+            &["graph"],
+            &["review"],
+        ];
+        for path in reads {
+            assert!(
+                !offers_no_commit(path),
+                "{path:?} only reads, so its help does not offer --no-commit"
+            );
+        }
+        let visible = Cli::command()
+            .get_subcommands()
+            .filter(|s| !s.is_hide_set())
+            .count();
+        // Every verb is in one list; `config` is in `reads` as itself and in
+        // `writes` as its two settings.
+        assert_eq!(writes.len() - 2 + reads.len(), visible);
+    }
+
+    /// After a writing verb the flag is that verb's; before any verb it is
+    /// the old global spelling, still honoured; after a read-only verb it is
+    /// an unknown argument rather than a silent no-op.
+    #[test]
+    fn no_commit_parses_where_it_means_something() {
+        let after = parse_cli(&["drop", "i1", "--no-commit"]).expect("drop --no-commit");
+        assert!(!after.no_commit && after.command.no_commit());
+        let config = parse_cli(&["config", "commit", "on", "--no-commit"]).expect("config");
+        assert!(config.command.no_commit());
+        let before = parse_cli(&["--no-commit", "drop", "i1"]).expect("--no-commit drop");
+        assert!(before.no_commit && !before.command.no_commit());
+        let plain = parse_cli(&["drop", "i1"]).expect("drop");
+        assert!(!plain.no_commit && !plain.command.no_commit());
+        // Neither spelling is global, so `parse_from`'s check for a verb
+        // argument conflicting with a global before the verb never sees one,
+        // alone or beside `--json`.
+        let root = Cli::command();
+        let hidden = root
+            .get_arguments()
+            .find(|a| a.get_long() == Some("no-commit"))
+            .expect("the pre-verb spelling");
+        assert!(hidden.is_hide_set() && !hidden.is_global_set());
+        for args in [
+            ["--json", "--no-commit", "drop", "i1"].as_slice(),
+            &["--no-commit", "--json", "triage"],
+            &["--json", "drop", "i1", "--no-commit"],
+            &["drop", "--json", "i1", "--no-commit"],
+        ] {
+            let cli = parse_cli(args).unwrap_or_else(|e| panic!("{args:?}: {e}"));
+            assert!(
+                cli.json && (cli.no_commit || cli.command.no_commit()),
+                "{args:?}"
+            );
+        }
+        for args in [
+            ["show", "x", "--no-commit"].as_slice(),
+            &["trace", "x", "--no-commit"],
+            &["review", "--no-commit"],
+        ] {
+            let err = parse_cli(args).err().unwrap_or_default();
+            assert!(
+                err.contains("unexpected argument '--no-commit'"),
+                "{args:?}: {err}"
+            );
+        }
+    }
+
+    /// `--limit` and `--depth` are optional: without them nothing is cut.
+    #[test]
+    fn output_bounds_default_to_everything() {
+        assert!(matches!(
+            parse_cli(&["list"]).map(|c| c.command),
+            Ok(Command::List { limit: None, .. })
+        ));
+        assert!(matches!(
+            parse_cli(&["inbox"]).map(|c| c.command),
+            Ok(Command::Inbox { limit: None })
+        ));
+        assert!(matches!(
+            parse_cli(&["review"]).map(|c| c.command),
+            Ok(Command::Review { limit: None, .. })
+        ));
+        assert!(matches!(
+            parse_cli(&["trace", "x"]).map(|c| c.command),
+            Ok(Command::Trace { depth: None, .. })
+        ));
+        assert!(matches!(
+            parse_cli(&["review", "--short", "--limit", "3"]).map(|c| c.command),
+            Ok(Command::Review {
+                short: true,
+                limit: Some(3),
+                ..
+            })
+        ));
+        let err = parse_cli(&["list", "--limit", "all"])
+            .err()
+            .unwrap_or_default();
+        assert!(err.contains("--limit"), "{err}");
     }
 
     /// `open` is a deprecated alias for `review --short`: it still parses,
@@ -2200,9 +2496,9 @@ mod tests {
     #[test]
     fn trailing_flags_after_free_text_are_flags() {
         let cli = parse_cli(&["capture", "an idea", "--quiet"]).expect("capture --quiet");
-        assert!(!cli.no_commit);
+        assert!(!cli.command.no_commit());
         match cli.command {
-            Command::Capture { quiet, text } => {
+            Command::Capture { quiet, text, .. } => {
                 assert!(quiet);
                 assert_eq!(text, ["an idea"]);
             }
@@ -2211,9 +2507,9 @@ mod tests {
 
         let cli =
             parse_cli(&["capture", "an", "idea", "--no-commit"]).expect("capture --no-commit");
-        assert!(cli.no_commit);
+        assert!(cli.command.no_commit());
         match cli.command {
-            Command::Capture { quiet, text } => {
+            Command::Capture { quiet, text, .. } => {
                 assert!(!quiet);
                 assert_eq!(text, ["an", "idea"]);
             }
@@ -2222,9 +2518,9 @@ mod tests {
 
         let cli = parse_cli(&["note", "alpha-beta", "a thought", "--no-commit"])
             .expect("note --no-commit");
-        assert!(cli.no_commit);
+        assert!(cli.command.no_commit());
         match cli.command {
-            Command::Note { node, by, text } => {
+            Command::Note { node, by, text, .. } => {
                 assert_eq!(node, "alpha-beta");
                 assert_eq!(by, None);
                 assert_eq!(text, ["a thought"]);
@@ -2232,11 +2528,10 @@ mod tests {
             _ => panic!("expected note"),
         }
 
-        let cli = parse_cli(&["near", "some query", "--no-commit"]).expect("near --no-commit");
-        assert!(cli.no_commit);
+        let cli = parse_cli(&["near", "some query", "--limit", "2"]).expect("near --limit");
         match cli.command {
             Command::Near { limit, query } => {
-                assert_eq!(limit, NEAR_DEFAULT);
+                assert_eq!(limit, 2);
                 assert_eq!(query, ["some query"]);
             }
             _ => panic!("expected near"),
@@ -2251,9 +2546,9 @@ mod tests {
         );
 
         let cli = parse_cli(&["capture", "--", "an idea", "--quiet"]).expect("capture -- escape");
-        assert!(!cli.no_commit);
+        assert!(!cli.command.no_commit());
         match cli.command {
-            Command::Capture { quiet, text } => {
+            Command::Capture { quiet, text, .. } => {
                 assert!(!quiet);
                 assert_eq!(text, ["an idea", "--quiet"]);
             }

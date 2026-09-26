@@ -139,7 +139,7 @@ What it does, and does not do:
   [corpus-recovery.md](corpus-recovery.md#symptom-a-verb-writes-but-refuses-to-commit).
 - If the repository around the corpus ignores it, `neb` says so rather than
   silently commit nothing; the fix is the `git init` at the root above.
-- `--no-commit` on any verb skips the commit once; the next verb that commits
+- `--no-commit` on any verb that writes skips the commit once; the next verb that commits
   sweeps the earlier write up with its own.
 - `neb config commit off` turns it off. That last rewrite of `config.yaml` is
   left uncommitted, because off means off; commit it by hand.

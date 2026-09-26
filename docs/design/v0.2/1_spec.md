@@ -138,7 +138,7 @@ and Orbit provenance, and suppress nearest-node suggestions; run
 | verb | does |
 |---|---|
 | `capture <text>` | the five-second path |
-| `inbox` | list unsettled captures |
+| `inbox [--limit ..]` | list unsettled captures |
 | `promote <ref> [--title ..] [--body ..] [--parent ..] [--tag ..] [--id ..] [--by ..] [--task ..] [--run ..] [--quiet]` | inbox entry becomes a seed node |
 | `drop <ref>` | settle an inbox entry without a node |
 | `triage [--by ..]` | interactive: each waiting entry, oldest first, with its age and numbered `near` candidates; one key promotes it as a root (`p`), under a candidate (`1`–`3`), titles it (`t`), drops (`d`), skips (`s`) or stops (`q`). Each decision is `promote` or `drop`, commit included; no `--json` |
@@ -148,11 +148,11 @@ and Orbit provenance, and suppress nearest-node suggestions; run
 | `cite <id> --kind --uri --note [--title]` | attach a reference |
 | `status <id> <status> [--why ..]` | move status under the rules above; reopening requires a new node and a `reopens` edge (`new --reopens <id>`) |
 | `tag <id> [--add ..] [--remove ..]` / `tag list` | edit tags; list tags with counts |
-| `trace <id> [--down]` | ancestry walk, or descent |
+| `trace <id> [--down] [--depth ..]` | ancestry walk, or descent |
 | `impact <id>` | what `contradicts` or descends from this |
-| `show <id>` / `list [--tag ..] [--status ..]` | read |
-| `review [--since] [--out]` | weekly maintenance report; proposes, never mutates |
-| `review --short [--tag ..]` | the quick glance: hypotheses with no references; seeds untouched ≥ 90 d; inbox entries ≥ 14 d |
+| `show <id>` / `list [--tag ..] [--status ..] [--limit ..]` | read |
+| `review [--since] [--out] [--limit ..]` | weekly maintenance report; proposes, never mutates |
+| `review --short [--tag ..] [--limit ..]` | the quick glance: hypotheses with no references; seeds untouched ≥ 90 d; inbox entries ≥ 14 d |
 | `graph` | `--json` emits `{nodes: [...], edges: [...]}`; `--mermaid [--from <id>]` emits a diagram |
 | `check` | the invariants |
 | `migrate` | v1 corpus → v2, see below |
@@ -160,6 +160,9 @@ and Orbit provenance, and suppress nearest-node suggestions; run
 
 Every read verb keeps `--json`. The JSON shape **is** the core library's
 return type serialised; see [2_architecture.md](2_architecture.md).
+`--limit` and `--depth` bound the output and default to everything; under
+`--json` they cut the same array, whose shape does not change. Every verb that
+writes takes `--no-commit`; a read-only verb does not offer it.
 
 ## Invariants
 

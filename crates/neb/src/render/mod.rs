@@ -46,7 +46,22 @@ pub fn bold(s: &str) -> String {
     paint("1", s)
 }
 
+/// `1 node`, `2 nodes`: a count with its noun agreeing. Every noun counted
+/// here takes a plain `s`.
+pub(crate) fn count<N>(n: N, noun: &str) -> String
+where
+    N: std::fmt::Display + PartialEq + From<u8> + Copy,
+{
+    if n == N::from(1) {
+        format!("{n} {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}
+
 /// A status badge, coloured by whether the node still asks anything of you.
+///
+/// Padded to the longest status, so the ids after it line up in a column.
 pub fn status_badge(s: Status) -> String {
     let code = match s {
         Status::Seed => "36",       // cyan, unformed
@@ -73,19 +88,32 @@ pub fn line(n: &Node) -> String {
 }
 
 /// A listing of nodes, with the count of how many of the corpus it is.
-pub fn list(nodes: &[Node], total: usize) -> String {
-    if nodes.is_empty() {
+/// `matched` is how many the filter kept, which is more than `nodes` holds
+/// when `--limit` cut it.
+pub fn list(nodes: &[Node], matched: usize, total: usize) -> String {
+    if matched == 0 {
         return format!("{}\n", dim("no nodes match"));
     }
     let mut out = String::new();
     for n in nodes {
         let _ = writeln!(out, "{}", line(n));
     }
-    let _ = writeln!(
-        out,
-        "\n{}",
-        dim(&format!("{} of {total} nodes", nodes.len()))
-    );
+    let tally = if nodes.len() < matched && matched < total {
+        format!(
+            "{} of {} shown, of {total} in all; raise --limit for more",
+            nodes.len(),
+            count(matched, "matching node")
+        )
+    } else if nodes.len() < matched {
+        format!(
+            "{} of {} shown; raise --limit for more",
+            nodes.len(),
+            count(total, "node")
+        )
+    } else {
+        format!("{matched} of {}", count(total, "node"))
+    };
+    let _ = writeln!(out, "\n{}", dim(&tally));
     out
 }
 
@@ -202,4 +230,49 @@ fn mermaid_label(title: &str) -> String {
         .replace('"', "&quot;")
         .replace('[', "&#91;")
         .replace(']', "&#93;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The text with every ANSI escape removed, so a test reads what a
+    /// terminal shows whether or not colour happens to be on.
+    fn visible(s: &str) -> String {
+        let mut out = String::new();
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                chars.by_ref().find(|c| *c == 'm');
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// The badge is a column: every status comes out the same width, so the
+    /// id after it starts at the same place on every line.
+    #[test]
+    fn status_badges_are_padded_to_one_width() {
+        for s in [
+            Status::Seed,
+            Status::Hypothesis,
+            Status::Refuted,
+            Status::Abandoned,
+        ] {
+            let badge = visible(&status_badge(s));
+            assert_eq!(badge.chars().count(), 10, "{badge:?}");
+            assert!(badge.starts_with(&s.to_string()), "{badge:?}");
+        }
+        assert_eq!(visible(&status_badge(Status::Seed)), "seed      ");
+    }
+
+    #[test]
+    fn counts_agree_with_their_nouns() {
+        assert_eq!(count(0_usize, "warning"), "0 warnings");
+        assert_eq!(count(1_usize, "warning"), "1 warning");
+        assert_eq!(count(2_usize, "warning"), "2 warnings");
+        assert_eq!(count(1_i64, "day"), "1 day");
+    }
 }
