@@ -236,7 +236,7 @@ describe("NodePanel", () => {
   });
 
   it("shows and dismisses an editor-open failure", async () => {
-    mocked.openInEditor.mockRejectedValueOnce("no .md handler");
+    mocked.openInEditor.mockRejectedValueOnce({ code: "open_failed", message: "no .md handler" });
     renderPanel();
     fireEvent.click(screen.getByRole("button", { name: "Open file" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not open file: no .md handler");
@@ -255,9 +255,9 @@ describe("NodePanel", () => {
   });
 
   it("shows the backend's message when the node cannot be read", async () => {
-    mocked.node.mockRejectedValue("no such node: gone");
+    mocked.node.mockRejectedValue({ code: "no_such_node", message: "no node `gone`" });
     renderPanel();
-    expect(await screen.findByRole("alert")).toHaveTextContent("no such node: gone");
+    expect(await screen.findByRole("alert")).toHaveTextContent("no node `gone`");
   });
 
   it("hides the prior node while a new selection loads and after it fails", async () => {
@@ -293,8 +293,8 @@ describe("NodePanel", () => {
     expect(screen.queryByText("First node")).toBeNull();
     expect(screen.queryByText("Body from first")).toBeNull();
 
-    await act(async () => second.reject("no such node: second"));
-    expect(await screen.findByRole("alert")).toHaveTextContent("no such node: second");
+    await act(async () => second.reject({ code: "no_such_node", message: "no node `second`" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("no node `second`");
     expect(screen.queryByText("First node")).toBeNull();
     expect(screen.queryByText("Body from first")).toBeNull();
   });

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as api from "./api";
 import { GraphCanvas } from "./GraphCanvas";
+import { errorMessage } from "./ipcError";
 import { fromElkLayout, lineage, matchingIds, tagCounts, toElkGraph, type Layout } from "./layout";
 import { layoutGraph } from "./layoutClient";
 import { NodePanel } from "./NodePanel";
@@ -59,7 +60,7 @@ export function GraphView({ active = true }: { active?: boolean }) {
         setSearchResult({ graph, query: appliedQuery, ids: new Set(ids) });
         setSearchError(null);
       },
-      (e: unknown) => { if (live) setSearchError(`Search failed: ${String(e)}`); },
+      (e: unknown) => { if (live) setSearchError(`Search failed: ${errorMessage(e)}`); },
     );
     return () => { live = false; };
   }, [graph, appliedQuery]);
@@ -138,7 +139,7 @@ export function GraphView({ active = true }: { active?: boolean }) {
 
   const open = useCallback((id: string) => {
     setOpenError(null);
-    void api.openInEditor(id).catch((e: unknown) => setOpenError(`Could not open file: ${String(e)}`));
+    void api.openInEditor(id).catch((e: unknown) => setOpenError(`Could not open file: ${errorMessage(e)}`));
   }, []);
   const reload = async () => {
     setReloading(true);

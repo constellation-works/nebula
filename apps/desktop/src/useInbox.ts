@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
+import { errorMessage } from "./ipcError";
 import type { InboxEntry } from "./types/InboxEntry";
 
 /** What the inbox looks like right now, and how to ask again. */
@@ -32,7 +33,7 @@ export function useInbox(): InboxState {
       setError(null);
     } catch (e) {
       if (!mounted.current || request !== latestRequest.current) return;
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       if (mounted.current && request === latestRequest.current) setLoaded(true);
     }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import * as api from "./api";
+import { errorMessage } from "./ipcError";
 import { isGenealogy } from "./layout";
 import type { Edge } from "./types/Edge";
 import type { NodeSummary } from "./types/NodeSummary";
@@ -47,7 +48,7 @@ function ExternalLink({
       rel="noreferrer"
       onClick={(e) => {
         e.preventDefault();
-        void api.openUrl(href).catch((error: unknown) => onOpenError(`Could not open link: ${String(error)}`));
+        void api.openUrl(href).catch((error: unknown) => onOpenError(`Could not open link: ${errorMessage(error)}`));
       }}
     >
       {children}
@@ -109,7 +110,7 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
         setResult({ id, revision, status: "loaded", view: v });
       },
       (e: unknown) => {
-        if (live) setResult({ id, revision, status: "error", message: String(e) });
+        if (live) setResult({ id, revision, status: "error", message: errorMessage(e) });
       },
     );
     return () => {
@@ -186,7 +187,7 @@ export function NodePanel({ id, nodes, revision, width, onResize, onSelect, onCl
             className="panel__action"
             onClick={() => {
               setOpenError(null);
-              void api.openInEditor(id).catch((e: unknown) => setOpenError(`Could not open file: ${String(e)}`));
+              void api.openInEditor(id).catch((e: unknown) => setOpenError(`Could not open file: ${errorMessage(e)}`));
             }}
           >
             Open file

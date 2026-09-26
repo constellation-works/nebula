@@ -55,7 +55,9 @@ Unlike the CLI, the desktop has no `--root` argument. It resolves this path
 once at startup and never creates a corpus. If that path has no corpus, the
 window says which path it tried; create the corpus at that same path and press
 Reload. Changing `$NEBULA_ROOT` or the configured-root file requires restarting
-the app before Reload can use the new path.
+the app before Reload can use the new path. If no path can be resolved at all
+(for example `~/.config/nebula/root` is empty or unreadable), the window, the
+tray's startup warnings and every command report that error instead of a path.
 
 Nothing is stored in this repository; the corpus is private and lives outside.
 

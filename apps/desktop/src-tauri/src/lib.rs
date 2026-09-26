@@ -4,6 +4,7 @@
 //! - [`session`]  one function per command, each a single core call
 //! - [`state`]    the corpus root and the lazily opened corpus
 //! - [`commands`] the `#[tauri::command]` wrappers
+//! - [`error`]    the typed error, and the `{ code, message }` the webview gets
 //! - [`watcher`]  `corpus-changed` on `nodes/` and `inbox/` writes
 //! - [`tray`]     the menu-bar item with the inbox count
 //! - [`shortcut`] the global shortcut and the capture window it toggles
@@ -13,6 +14,7 @@
 //! [`run`]; everything else is plain and tested without one.
 
 pub mod commands;
+pub mod error;
 pub mod session;
 pub mod settings;
 pub mod shortcut;
@@ -22,7 +24,31 @@ pub mod watcher;
 
 use state::AppState;
 use std::path::Path;
-use tauri::{Manager, WindowEvent};
+use tauri::ipc::Invoke;
+use tauri::{Manager, Runtime, WindowEvent};
+
+/// Every command the webview can call. One table, used by [`run`] and by
+/// `tests/commands.rs` under the mock runtime, so the test calls exactly what
+/// the app registers.
+pub fn handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool + Send + Sync + 'static {
+    tauri::generate_handler![
+        commands::capture,
+        commands::inbox,
+        commands::drop_entry,
+        commands::promote_root,
+        commands::graph,
+        commands::graph_search,
+        commands::capture_shortcut,
+        commands::set_capture_shortcut,
+        commands::launch_at_login,
+        commands::set_launch_at_login,
+        commands::node,
+        commands::open_in_editor,
+        commands::corpus_path,
+        commands::startup_warnings,
+        commands::reload,
+    ]
+}
 
 /// Build and run the app. Returns when the user quits.
 ///
@@ -45,23 +71,7 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
 
     builder
-        .invoke_handler(tauri::generate_handler![
-            commands::capture,
-            commands::inbox,
-            commands::drop_entry,
-            commands::promote_root,
-            commands::graph,
-            commands::graph_search,
-            commands::capture_shortcut,
-            commands::set_capture_shortcut,
-            commands::launch_at_login,
-            commands::set_launch_at_login,
-            commands::node,
-            commands::open_in_editor,
-            commands::corpus_path,
-            commands::startup_warnings,
-            commands::reload,
-        ])
+        .invoke_handler(handler())
         .setup(|app| {
             // A menu-bar app: no dock icon, no app switcher entry.
             #[cfg(target_os = "macos")]
@@ -71,21 +81,23 @@ pub fn run() {
             let config_dir = app.path().app_config_dir()?;
             let settings_path = config_dir.join(settings::FILE_NAME);
             let (settings, warning) = settings::load(&config_dir);
-            let mut startup_warnings = warning.into_iter().collect::<Vec<_>>();
+            let mut setup_warnings = warning.into_iter().collect::<Vec<_>>();
             if let Err(e) = shortcut::register(handle, &settings.capture_shortcut) {
-                startup_warnings.push(shortcut_warning(
+                setup_warnings.push(shortcut_warning(
                     &settings_path,
                     &settings.capture_shortcut,
-                    e,
+                    &e,
                 ));
-            }
-            for warning in &startup_warnings {
-                eprintln!("startup: {warning}");
             }
 
             let state = app.state::<AppState>();
             state.set_capture_shortcut(settings.capture_shortcut.clone());
-            state.set_startup_warnings(startup_warnings.clone());
+            state.set_startup_warnings(setup_warnings);
+            // Read back, so an unresolved corpus root is among them.
+            let startup_warnings = state.startup_warnings();
+            for warning in &startup_warnings {
+                eprintln!("startup: {warning}");
+            }
             tray::build(handle, &startup_warnings)?;
 
             // A missing corpus is reported by every command; the watcher
@@ -112,7 +124,11 @@ pub fn run() {
         .expect("failed to start the Nebula desktop app");
 }
 
-fn shortcut_warning(settings_path: &Path, shortcut: &str, error: impl std::fmt::Display) -> String {
+fn shortcut_warning(
+    settings_path: &Path,
+    shortcut: &str,
+    error: &shortcut::ShortcutError,
+) -> String {
     format!(
         "could not register capture shortcut `{shortcut}` (settings: {}): {error}",
         settings_path.display()
@@ -121,16 +137,17 @@ fn shortcut_warning(settings_path: &Path, shortcut: &str, error: impl std::fmt::
 
 #[cfg(test)]
 mod tests {
-    use super::shortcut_warning;
+    use super::{shortcut, shortcut_warning};
     use std::path::Path;
 
     #[test]
     fn shortcut_registration_warning_names_shortcut_and_settings_path() {
         let path = Path::new("/user/config/settings.json");
-        let warning = shortcut_warning(path, "CmdOrCtrl+Shift+N", "already registered");
+        let refused = shortcut::parse("CmdOrCtrl+Shift+NoSuchKey").unwrap_err();
+        let warning = shortcut_warning(path, "CmdOrCtrl+Shift+NoSuchKey", &refused);
 
-        assert!(warning.contains("CmdOrCtrl+Shift+N"));
+        assert!(warning.contains("CmdOrCtrl+Shift+NoSuchKey"));
         assert!(warning.contains("/user/config/settings.json"));
-        assert!(warning.contains("already registered"));
+        assert!(warning.contains("invalid accelerator"), "{warning}");
     }
 }

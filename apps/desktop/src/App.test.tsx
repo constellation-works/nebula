@@ -42,18 +42,18 @@ describe("Settings", () => {
 
   it("shows invalid accelerator errors and leaves login state unchanged on failure", async () => {
     mocked.startupWarnings.mockResolvedValue([]);
-    mocked.setCaptureShortcut.mockRejectedValue("Invalid accelerator: unknown key");
-    mocked.setLaunchAtLogin.mockRejectedValue("permission denied");
+    mocked.setCaptureShortcut.mockRejectedValue({ code: "shortcut_unparsable", message: "invalid accelerator `bogus`: unknown key" });
+    mocked.setLaunchAtLogin.mockRejectedValue({ code: "launch_at_login_failed", message: "launch at login: permission denied" });
     render(<App />);
     fireEvent.click(screen.getByRole("tab", { name: "Settings" }));
     const input = await screen.findByRole("textbox", { name: "Capture shortcut" });
     await waitFor(() => expect(input).toHaveValue("Alt+Space"));
     fireEvent.change(input, { target: { value: "bogus" } });
     fireEvent.click(screen.getByRole("button", { name: "Save shortcut" }));
-    expect(await screen.findByText(/Invalid accelerator: unknown key/)).toBeInTheDocument();
+    expect(await screen.findByText("Shortcut not changed: invalid accelerator `bogus`: unknown key")).toBeInTheDocument();
     const checkbox = screen.getByRole("checkbox", { name: "Launch at login" });
     fireEvent.click(checkbox);
-    expect(await screen.findByText(/Launch at login not changed: permission denied/)).toBeInTheDocument();
+    expect(await screen.findByText("Launch at login not changed: launch at login: permission denied")).toBeInTheDocument();
     expect(checkbox).not.toBeChecked();
   });
 

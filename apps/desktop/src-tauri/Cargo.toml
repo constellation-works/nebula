@@ -34,10 +34,14 @@ tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 ctor = { workspace = true }
 tempfile = { workspace = true }
+# `tauri::test`: the mock runtime `tests/commands.rs` drives the real command
+# table through, so the IPC contract is tested where the webview meets it.
+tauri = { version = "2", features = ["tray-icon", "test"] }
 
 [lints]
 workspace = true

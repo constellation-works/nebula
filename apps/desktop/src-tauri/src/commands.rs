@@ -1,203 +1,229 @@
-//! The IPC surface. Each command is one [`crate::session`] call with the
-//! library's error turned into the string the frontend shows.
+//! The IPC surface. Each command is one [`crate::session`] call, and every
+//! failure reaches the webview as an [`IpcError`] built by its one translator,
+//! so the frontend branches on `code` and shows `message`.
 //!
 //! The names and shapes are the ones `apps/desktop/src/api.ts` wraps; the
 //! payload types are `nebula-core`'s own, so the TypeScript side imports the
-//! generated bindings rather than restating them.
+//! generated bindings rather than restating them. Every command is generic
+//! over the runtime so `tests/commands.rs` drives this same table through
+//! Tauri's mock runtime.
 
 // Tauri injects `State` and `AppHandle` by value; that is the command
 // signature, not a choice this module gets to make.
 #![allow(clippy::needless_pass_by_value)]
 
+use crate::error::{DesktopError, IpcError};
 use crate::state::AppState;
 use crate::{session, shortcut, tray, watcher};
-use nebula_core::{Created, Error, GraphExport, InboxEntry, NodeView};
-use tauri::{AppHandle, Manager};
+use nebula_core::{Created, GraphExport, InboxEntry, NodeView};
+use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
-fn err(e: impl std::fmt::Display) -> String {
-    e.to_string()
+/// Run `work` off the webview's thread and translate its failure, or the
+/// worker's, once.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, DesktopError> + Send + 'static,
+) -> Result<T, IpcError> {
+    Ok(tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(DesktopError::Worker)??)
 }
 
-/// Append one line to this month's inbox file.
+/// Append one line to this month's inbox file. A held corpus lock is the
+/// `locked` code, which the capture box retries.
 #[tauri::command]
-pub async fn capture(app: AppHandle, text: String) -> Result<InboxEntry, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn capture<R: Runtime>(app: AppHandle<R>, text: String) -> Result<InboxEntry, IpcError> {
+    blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
-        session::capture(&corpus, &text).map_err(|e| match e {
-            Error::Locked { .. } => "corpus busy".to_string(),
-            other => err(other),
-        })
+        Ok(session::capture(&corpus, &text)?)
     })
     .await
-    .map_err(err)?
 }
 
 /// Every unsettled capture, oldest first.
 #[tauri::command]
-pub async fn inbox(app: AppHandle) -> Result<Vec<InboxEntry>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn inbox<R: Runtime>(app: AppHandle<R>) -> Result<Vec<InboxEntry>, IpcError> {
+    blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
-        session::inbox(&corpus).map_err(err)
+        Ok(session::inbox(&corpus)?)
     })
     .await
-    .map_err(err)?
 }
 
 /// Drop one unsettled entry without blocking the webview on the corpus lock.
 #[tauri::command]
-pub async fn drop_entry(app: AppHandle, entry: String) -> Result<InboxEntry, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn drop_entry<R: Runtime>(
+    app: AppHandle<R>,
+    entry: String,
+) -> Result<InboxEntry, IpcError> {
+    blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
-        let dropped = session::drop_entry(&corpus, &entry).map_err(err)?;
+        let dropped = session::drop_entry(&corpus, &entry)?;
         tray::refresh(&app);
         Ok(dropped)
     })
     .await
-    .map_err(err)?
 }
 
 /// Promote one entry as an unlinked root node.
 #[tauri::command]
-pub async fn promote_root(app: AppHandle, entry: String) -> Result<Created, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn promote_root<R: Runtime>(
+    app: AppHandle<R>,
+    entry: String,
+) -> Result<Created, IpcError> {
+    blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
-        let created = session::promote_root(&corpus, &entry).map_err(err)?;
+        let created = session::promote_root(&corpus, &entry)?;
         tray::refresh(&app);
         Ok(created)
     })
     .await
-    .map_err(err)?
 }
 
 /// The whole corpus as nodes and edges.
 #[tauri::command]
-pub async fn graph(app: AppHandle) -> Result<GraphExport, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn graph<R: Runtime>(app: AppHandle<R>) -> Result<GraphExport, IpcError> {
+    blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
-        session::graph(&corpus).map_err(err)
+        Ok(session::graph(&corpus)?)
     })
     .await
-    .map_err(err)?
 }
 
 /// IDs matching id, title, body, or status in the current corpus.
 #[tauri::command]
-pub async fn graph_search(app: AppHandle, query: String) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn graph_search<R: Runtime>(
+    app: AppHandle<R>,
+    query: String,
+) -> Result<Vec<String>, IpcError> {
+    blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
-        session::graph_search(&corpus, &query).map_err(err)
+        Ok(session::graph_search(&corpus, &query)?)
     })
     .await
-    .map_err(err)?
 }
 
 /// The capture shortcut loaded and registered at startup.
 #[tauri::command]
-pub fn capture_shortcut(app: AppHandle) -> String {
+pub fn capture_shortcut<R: Runtime>(app: AppHandle<R>) -> String {
     app.state::<AppState>().capture_shortcut()
 }
 
 /// Replace the global capture shortcut without restarting the app.
 #[tauri::command]
-pub async fn set_capture_shortcut(app: AppHandle, shortcut: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || shortcut::change(&app, &shortcut))
-        .await
-        .map_err(err)?
+pub async fn set_capture_shortcut<R: Runtime>(
+    app: AppHandle<R>,
+    shortcut: String,
+) -> Result<String, IpcError> {
+    blocking(move || Ok(shortcut::change(&app, &shortcut)?)).await
 }
 
 /// Read the OS login registration, which persists outside settings.json.
 #[tauri::command]
-pub async fn launch_at_login(app: AppHandle) -> Result<bool, String> {
-    tauri::async_runtime::spawn_blocking(move || app.autolaunch().is_enabled().map_err(err))
-        .await
-        .map_err(err)?
+pub async fn launch_at_login<R: Runtime>(app: AppHandle<R>) -> Result<bool, IpcError> {
+    blocking(move || {
+        app.autolaunch()
+            .is_enabled()
+            .map_err(DesktopError::LaunchAtLogin)
+    })
+    .await
 }
 
 /// Enable or disable OS login registration and return the resulting state.
 #[tauri::command]
-pub async fn set_launch_at_login(app: AppHandle, enabled: bool) -> Result<bool, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn set_launch_at_login<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+) -> Result<bool, IpcError> {
+    blocking(move || {
         let manager = app.autolaunch();
         if enabled {
             manager.enable()
         } else {
             manager.disable()
         }
-        .map_err(err)?;
-        let actual = manager.is_enabled().map_err(err)?;
+        .map_err(DesktopError::LaunchAtLogin)?;
+        let actual = manager.is_enabled().map_err(DesktopError::LaunchAtLogin)?;
         if actual != enabled {
-            return Err("The OS did not apply the launch-at-login change".to_string());
+            return Err(DesktopError::LaunchAtLoginNotApplied { actual });
         }
         Ok(actual)
     })
     .await
-    .map_err(err)?
 }
 
 /// One node in full.
 #[tauri::command]
-pub async fn node(app: AppHandle, id: String) -> Result<NodeView, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn node<R: Runtime>(app: AppHandle<R>, id: String) -> Result<NodeView, IpcError> {
+    blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
-        session::node(&corpus, &id).map_err(err)
+        Ok(session::node(&corpus, &id)?)
     })
     .await
-    .map_err(err)?
 }
 
 /// Hand the node's file to whatever the OS opens `.md` with.
 #[tauri::command]
-pub async fn open_in_editor(app: AppHandle, id: String) -> Result<(), String> {
+pub async fn open_in_editor<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), IpcError> {
     let lookup = app.clone();
-    let path = tauri::async_runtime::spawn_blocking(move || {
+    let path = blocking(move || {
         let corpus = lookup.state::<AppState>().corpus()?;
-        session::node_file(&corpus, &id).map_err(err)
+        Ok(session::node_file(&corpus, &id)?)
     })
-    .await
-    .map_err(err)??;
+    .await?;
     app.opener()
         .open_path(path.to_string_lossy(), None::<&str>)
-        .map_err(err)
+        .map_err(|source| DesktopError::Open { path, source }.into())
 }
 
-/// Where the corpus was looked for, whether or not it was found.
+/// Where the corpus is looked for, whether or not it was found; `null` when
+/// the root could not be resolved, whose reason `startup_warnings` and every
+/// corpus command report.
 #[tauri::command]
-pub async fn corpus_path(app: AppHandle) -> String {
-    app.state::<AppState>().corpus_root.display().to_string()
+pub async fn corpus_path<R: Runtime>(app: AppHandle<R>) -> Option<String> {
+    app.state::<AppState>()
+        .corpus_root()
+        .ok()
+        .map(|root| root.display().to_string())
 }
 
-/// Startup issues captured before the webview opened, such as settings or
-/// global-shortcut failures.
+/// Startup issues captured before the webview opened, such as an unresolved
+/// corpus root or settings and global-shortcut failures.
 #[tauri::command]
-pub async fn startup_warnings(app: AppHandle) -> Vec<String> {
+pub async fn startup_warnings<R: Runtime>(app: AppHandle<R>) -> Vec<String> {
     app.state::<AppState>().startup_warnings()
 }
 
 /// Try the corpus again after the user has fixed the path. Starts the watcher
 /// if this is the first time the corpus could be opened.
 #[tauri::command]
-pub async fn reload(app: AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn reload<R: Runtime>(app: AppHandle<R>) -> Result<(), IpcError> {
+    blocking(move || {
         let state = app.state::<AppState>();
         ensure_watching(&app, &state)?;
         tray::refresh(&app);
         Ok(())
     })
     .await
-    .map_err(err)?
 }
 
 /// Start the watcher once the corpus can be opened; idempotent. Opening
 /// first matters: the watcher creates `inbox/` if it is missing, and that
 /// must never happen under a root that is not a corpus.
-pub fn ensure_watching(app: &AppHandle, state: &AppState) -> Result<(), String> {
+pub fn ensure_watching<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &AppState,
+) -> Result<(), DesktopError> {
     if state.watching() {
         return Ok(());
     }
     state.corpus()?;
-    let watcher = watcher::start(app.clone(), &state.corpus_root).map_err(err)?;
+    let root = state.corpus_root()?;
+    let watcher = watcher::start(app.clone(), root).map_err(|source| DesktopError::Watch {
+        root: root.to_path_buf(),
+        source,
+    })?;
     state.keep_watcher(watcher);
     Ok(())
 }
