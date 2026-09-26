@@ -88,7 +88,8 @@ Field rules:
   condition fired; the reference that convinced you goes in `references`).
   `abandoned` accepts `closed.why` but does not require it. A `refuted` node
   never returns to `seed`/`hypothesis`; reviving it means a **new** node with a
-  `reopens` edge to it.
+  `reopens` edge to it. A node with a `kill` never returns to `seed` either,
+  since the kill stays; it reopens as a `hypothesis`.
 - `tags`: free strings, lowercase kebab-case enforced on write (`Physics` →
   `physics`), using the same Unicode letter-and-digit rule as ids. No declared
   list. `check` warns on two tags that differ only by case or a trailing `s`,
@@ -158,7 +159,7 @@ return type serialised; see [2_architecture.md](2_architecture.md).
 | 10 | Every reference has a note | warn | `check` |
 | 11 | No two tags differ only by case or a trailing `s` | warn | `check` |
 | 12 | `closed` is set only on a `refuted`/`abandoned` node, never an open one | error | `check` |
-| 13 | A `seed` does not carry a `kill` condition | warn | `check` |
+| 13 | A `seed` does not carry a `kill` condition | warn | `status` refuses the move to `seed`; `check` |
 | 14 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
 | 15 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse (the shape); every read and write (the agreement) |
 | 16 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |

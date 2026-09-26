@@ -163,6 +163,9 @@ create a new node and relate it to the old one instead of overwriting the
 record. On a refuted node, the stricter final-verdict refusal still applies.
 `sharpen --confirm` takes no text: it adopts the kill condition already on the
 node as the human's own, changing nothing else and appending nothing.
+`status <id> seed` refuses a node that names a kill condition
+(`SeedWithKill`), because the kill would stay and leave a seed carrying one;
+reopen it with `status <id> hypothesis` instead, including from `abandoned`.
 `contradicts` is written on both nodes. `link` prints `<from> <kind> <to>`.
 `note` creates a `## Notes` section at the end of the body if needed, then
 appends `- YYYY-MM-DD: <text>`. Repeated notes accumulate in order; earlier

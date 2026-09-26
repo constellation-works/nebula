@@ -628,7 +628,9 @@ pub fn commit(corpus: &Corpus, verb: &str, ids: &[&str]) -> Result<Option<Commit
 /// Move a node to a new status, with the transition guards applied.
 ///
 /// `why` is required for [`Status::Refuted`], optional for
-/// [`Status::Abandoned`], and meaningless on an open status.
+/// [`Status::Abandoned`], and meaningless on an open status. A node that
+/// names a kill condition cannot move to [`Status::Seed`]; it reopens as a
+/// [`Status::Hypothesis`] instead.
 pub fn set_status(
     corpus: &Corpus,
     id: &str,
@@ -662,6 +664,13 @@ pub fn set_status(
     // `reopens` edge, so the fact that it was once dead stays visible.
     if from.is_closed_by_verdict() {
         return Err(Error::RefutedCannotReopen);
+    }
+    // Rule 13 at the point of action: nothing is deleted, so a move to seed
+    // would keep the kill condition, and a seed carrying one is what `check`
+    // reads as a hand edit. A node that already names its falsifier is open
+    // as a hypothesis, which is the honest way back.
+    if status == Status::Seed && doc.node.kill.is_some() {
+        return Err(Error::SeedWithKill);
     }
     doc.node.status = status;
     doc.node.closed = match status {
