@@ -1,7 +1,7 @@
 ---
 codebase: nebula
 owner: daniel
-summary: Idea lineage graph — a Rust CLI (`neb`) that captures half-formed ideas in seconds and traces their genealogy later; the tool only, the corpus lives in observatory.
+summary: Idea lineage graph — a Rust CLI (`neb`) that captures half-formed ideas in seconds and traces their genealogy later; the tool only, the corpus lives in almanac.
 status: active
 stack: Rust
 gate: direct

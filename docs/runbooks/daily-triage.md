@@ -53,10 +53,10 @@ thought you discarded is still findable by grep a year later.
 neb review --short
 ```
 
-This reports hypotheses with no references, seeds untouched for ninety days or
-more, and inbox entries waiting fourteen days or more; the inbox finding is
-listed first. Narrow it to a slice of the corpus with `--tag` (repeatable,
-every one required):
+This reports hypotheses created at least fourteen days ago with no references,
+seeds untouched for ninety days or more, and inbox entries waiting fourteen
+days or more; the inbox finding is listed first. Narrow it to a slice of the
+corpus with `--tag` (repeatable, every one required):
 
 ```sh
 neb review --short --tag ranking
@@ -66,10 +66,10 @@ Drop `--short` for the full weekly report, which adds hypotheses nobody has
 touched in thirty days and kill conditions an agent wrote that no human has
 confirmed yet.
 
-The finding that matters most is a hypothesis with no references at all. That
-is an idea you committed to running down and then did not attach anything to.
-Close the gap by citing whatever you find, or by moving its status once you
-actually know the answer:
+The no-references finding appears once a hypothesis is at least fourteen days
+old. That is an idea you committed to running down and then did not attach
+anything to. Close the gap by citing whatever you find, or by moving its status
+once you actually know the answer:
 
 ```sh
 neb cite ranking-decay-half-life --kind study --uri "../orrery/lab/sims/coupling-off-control/" \

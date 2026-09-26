@@ -12,6 +12,13 @@ Allowed read-only corpus commands: `check`, `inbox`, `show`, `log`, `list`,
 `tag`, `note`, `cite`, `migrate`, `config`, or `init`. `completions` only
 generates shell scripts and is not part of a routine corpus review.
 
+`open` is a deprecated alias for `review --short`. Both raise hypotheses
+created at least fourteen days ago with no references, seeds untouched for at
+least ninety days, and inbox captures waiting at least fourteen days. Full
+`review` also reports hypotheses untouched for thirty days by default and
+unconfirmed kills; `--since` overrides the stale-hypothesis and untouched-seed
+thresholds.
+
 Proposals go in `nebula-review.md`, attached to the current Orbit task with
 `orbit.task.artifact.put`. Draft it at `$ORBIT_SCRATCH_DIR/nebula-review.md`,
 then attach it; this run scratch directory is outside the corpus. Without an
@@ -64,7 +71,7 @@ Orbit run: <run-id>
 - `neb link required-categorical-fields-drift refines tags-beat-domains --by agent:nebula-routine` — its body restates the parent's second sentence
 
 ## cite
-- `neb cite tags-beat-domains --uri "..." --kind note --note "Source for the categorical-fields claim" --by agent:nebula-routine` — `review` no-references rule for an aged hypothesis; the human knows the source
+- `neb cite tags-beat-domains --uri "..." --kind note --note "Source for the categorical-fields claim" --by agent:nebula-routine` — `review` no-references rule for a hypothesis created at least fourteen days ago; the human knows the source
 
 ## abandon
 - `neb status tags-beat-domains abandoned --why "..."` — aged hypothesis has no reference; the human supplies the closure reason
@@ -111,6 +118,9 @@ $ neb list --json | jq -c '.[] | {id, status, tags, kill}'
 {"id":"tags-beat-domains","status":"hypothesis","tags":["design","corpus"],"kill":"a corpus of 50+ nodes needs a cross-cutting query that tags cannot answer"}
 ```
 
+This sample finding represents a hypothesis created at least fourteen days
+earlier; newer hypotheses without references are still within the grace period.
+
 Drafted in `$ORBIT_SCRATCH_DIR/nebula-review.md`, then attached to the current
 Orbit task as `nebula-review.md`:
 
@@ -132,7 +142,7 @@ Orbit run: <run-id>
 - `neb sharpen required-categorical-fields-drift --kill "..." --by human` — seed with no falsifier; `tags-beat-domains` derives from it, so a kill here matters downstream
 
 ## cite
-- `neb cite tags-beat-domains --uri "..." --kind note --note "Source for the categorical-fields claim" --by agent:nebula-routine` — `review` no-references for an aged hypothesis; the v0.1 domain-list drift is the obvious source
+- `neb cite tags-beat-domains --uri "..." --kind note --note "Source for the categorical-fields claim" --by agent:nebula-routine` — `review` no-references for a hypothesis created at least fourteen days ago; the v0.1 domain-list drift is the obvious source
 ```
 
 Nothing was written inside the corpus, including `nodes/`, `inbox/`, or its
