@@ -85,8 +85,8 @@ Design rules for core:
 - **Typed errors.** `Error::Cycle { from, to }`, `Error::NeedsKill(status)`,
   `Error::NoSuchNode(id)`, `Error::RefutedNeedsWhy`, `Error::Io`, ... The CLI
   maps them to messages and exit codes, and under `--json` to an envelope
-  whose `kind` is `Error::kind()`, the variant's name; the desktop maps them
-  to UI. Neither parses strings.
+  whose `code` is `Error::code()`, the variant's name in `snake_case`; the
+  desktop maps them to UI. Neither parses strings.
 - **`ts` feature.** `#[cfg_attr(feature = "ts", derive(ts_rs::TS))]` on every
   exported type, so `apps/desktop/src/types/` is generated from Rust and the
   frontend never hand-writes a shape.

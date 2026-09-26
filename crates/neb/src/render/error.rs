@@ -6,19 +6,19 @@
 //! refusal renders to is byte-for-byte what it printed then, so a script
 //! grepping for a line keeps working.
 //!
-//! Under `--json` the same refusal is one JSON object instead. Its `kind` is
-//! [`Error::kind`], so a new core variant arrives with its name and message
+//! Under `--json` the same refusal is one JSON object instead. Its `code` is
+//! [`Error::code`], so a new core variant arrives with its code and message
 //! and no hint; giving it advice is one more arm in [`hint`].
 
 use nebula_core::{Error, Settlement};
 
-/// A refusal as `neb` reports it: a name to match on, what is wrong, and what
+/// A refusal as `neb` reports it: a code to match on, what is wrong, and what
 /// to do about it when the CLI knows.
 #[derive(Debug)]
 pub struct Refusal {
-    /// A core error's [`Error::kind`], or the name of one of the CLI's own
-    /// refusals. Stable: scripts match on it.
-    pub kind: &'static str,
+    /// A core error's [`Error::code`], or the `snake_case` code of one of the
+    /// CLI's own refusals. Stable: scripts match on it.
+    pub code: &'static str,
     /// What is wrong.
     pub message: String,
     /// What to do about it, or `null` when there is nothing to add.
@@ -30,9 +30,9 @@ pub struct Refusal {
 
 impl Refusal {
     /// A refusal with no hint.
-    pub fn new(kind: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
-            kind,
+            code,
             message: message.into(),
             hint: None,
             prose: None,
@@ -48,15 +48,13 @@ impl Refusal {
         }
     }
 
-    /// The `--json` form: `{"error": {"kind", "message", "hint"}}`, on one
-    /// line, with a `null` hint when there is none.
+    /// The `--json` form: `{"error", "code", "hint"}` on one line, where
+    /// `error` is the message and `hint` is `null` when there is none.
     pub fn json(&self) -> String {
         serde_json::json!({
-            "error": {
-                "kind": self.kind,
-                "message": self.message,
-                "hint": self.hint,
-            }
+            "error": self.message,
+            "code": self.code,
+            "hint": self.hint,
         })
         .to_string()
     }
@@ -73,7 +71,7 @@ impl Refusal {
 pub fn refusal(e: &Error) -> Refusal {
     Refusal {
         hint: hint(e),
-        ..Refusal::new(e.kind(), e.to_string())
+        ..Refusal::new(e.code(), e.to_string())
     }
 }
 
@@ -97,7 +95,7 @@ pub fn refusal_about(e: &Error, node: &str) -> Refusal {
             let prose = format!("{message}\n\n  {hint}");
             Refusal {
                 hint: Some(hint),
-                ..Refusal::new(e.kind(), message)
+                ..Refusal::new(e.code(), message)
             }
             .worded(prose)
         }
@@ -112,7 +110,7 @@ pub fn refusal_about(e: &Error, node: &str) -> Refusal {
             let prose = format!("{message}.\n\n{hint}");
             Refusal {
                 hint: Some(hint),
-                ..Refusal::new(e.kind(), message)
+                ..Refusal::new(e.code(), message)
             }
             .worded(prose)
         }
@@ -124,7 +122,7 @@ pub fn refusal_about(e: &Error, node: &str) -> Refusal {
             let prose = format!("{message}.\n\nRevive it as a new node that reopens it:\n  {hint}");
             Refusal {
                 hint: Some(hint),
-                ..Refusal::new(e.kind(), message)
+                ..Refusal::new(e.code(), message)
             }
             .worded(prose)
         }
@@ -214,7 +212,7 @@ mod tests {
             refused.prose(),
             "no node `nope`\n\nList what exists with:  neb list"
         );
-        assert_eq!(refused.kind, "NoSuchNode");
+        assert_eq!(refused.code, "no_such_node");
     }
 
     #[test]
@@ -246,14 +244,21 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(
             value,
-            serde_json::json!({"error": {
-                "kind": "NoCorpus",
-                "message": "no corpus at /x",
+            serde_json::json!({
+                "error": "no corpus at /x",
+                "code": "no_corpus",
                 "hint": "Create one with:  neb init /x",
-            }})
+            })
         );
         let bare: serde_json::Value =
             serde_json::from_str(&refusal(&Error::SelfLoop).json()).unwrap();
-        assert_eq!(bare["error"]["hint"], serde_json::Value::Null);
+        assert_eq!(
+            bare,
+            serde_json::json!({
+                "error": "a node cannot link to itself",
+                "code": "self_loop",
+                "hint": null,
+            })
+        );
     }
 }

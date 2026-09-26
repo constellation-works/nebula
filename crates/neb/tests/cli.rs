@@ -224,8 +224,8 @@ impl Run {
         self
     }
     /// The refusal `--json` reports: exit 1, and stderr exactly one line
-    /// holding `{"error": {kind, message, hint}}` and nothing else. Returns
-    /// the inner object.
+    /// holding `{"error", "code", "hint"}` and nothing else, with a
+    /// `snake_case` code. Returns the envelope.
     fn refusal(&self) -> serde_json::Value {
         let stderr = self.stderr();
         assert_eq!(
@@ -242,20 +242,28 @@ impl Run {
         let value: serde_json::Value = serde_json::from_str(&stderr)
             .unwrap_or_else(|e| panic!("`neb {}` stderr is not JSON ({e}):\n{stderr}", self.args));
         let envelope = value.as_object().expect("the envelope is an object");
-        assert_eq!(envelope.keys().collect::<Vec<_>>(), ["error"], "{value}");
-        let error = value["error"].as_object().expect("`error` is an object");
         assert_eq!(
-            error.keys().collect::<Vec<_>>(),
-            ["hint", "kind", "message"],
+            envelope.keys().collect::<Vec<_>>(),
+            ["code", "error", "hint"],
             "{value}"
         );
-        assert!(error["kind"].is_string(), "{value}");
-        assert!(error["message"].is_string(), "{value}");
+        assert!(value["error"].is_string(), "{value}");
+        let code = value["code"].as_str().expect("`code` is a string");
         assert!(
-            error["hint"].is_string() || error["hint"].is_null(),
+            !code.is_empty()
+                && code.split('_').all(|word| {
+                    word.starts_with(|c: char| c.is_ascii_lowercase())
+                        && word
+                            .chars()
+                            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                }),
+            "`{code}` is not snake_case: {value}"
+        );
+        assert!(
+            value["hint"].is_string() || value["hint"].is_null(),
             "{value}"
         );
-        value["error"].clone()
+        value
     }
 }
 
@@ -716,16 +724,16 @@ fn promote_and_drop_on_a_settled_entry_say_how_it_was_settled() {
         assert_eq!(
             json.refusal(),
             serde_json::json!({
-                "kind": "InboxEntrySettled",
-                "message": format!("`{keep}` was already promoted to `worth-keeping`"),
+                "error": format!("`{keep}` was already promoted to `worth-keeping`"),
+                "code": "inbox_entry_settled",
                 "hint": "See the node with:  neb show worth-keeping",
             })
         );
         assert_eq!(
             c.run(&[verb, &toss, "--json"]).refusal(),
             serde_json::json!({
-                "kind": "InboxEntrySettled",
-                "message": format!("`{toss}` was already dropped"),
+                "error": format!("`{toss}` was already dropped"),
+                "code": "inbox_entry_settled",
                 "hint": "See what is still waiting with:  neb inbox",
             })
         );
@@ -3610,8 +3618,8 @@ fn a_json_refusal_is_one_envelope_on_stderr_and_the_prose_is_unchanged() {
     assert_eq!(
         run.refusal(),
         serde_json::json!({
-            "kind": "NoSuchNode",
-            "message": "no node `nope`",
+            "error": "no node `nope`",
+            "code": "no_such_node",
             "hint": "List what exists with:  neb list",
         })
     );
@@ -3626,7 +3634,7 @@ fn a_json_refusal_is_one_envelope_on_stderr_and_the_prose_is_unchanged() {
     assert!(run.stdout().is_empty(), "{}", run.stdout());
 }
 
-/// Each point-of-action guard reports its core variant as `kind`.
+/// Each point-of-action guard reports its core variant as `code`.
 #[test]
 fn json_refusals_name_the_link_or_cite_that_was_refused() {
     let c = Corpus::new();
@@ -3637,14 +3645,14 @@ fn json_refusals_name_the_link_or_cite_that_was_refused() {
         .stdout_trim();
 
     let self_loop = c.run(&["--json", "link", &a, "refines", &a]).refusal();
-    assert_eq!(self_loop["kind"], "SelfLoop");
-    assert_eq!(self_loop["message"], "a node cannot link to itself");
+    assert_eq!(self_loop["code"], "self_loop");
+    assert_eq!(self_loop["error"], "a node cannot link to itself");
     assert_eq!(self_loop["hint"], serde_json::Value::Null);
 
     let cycle = c.run(&["--json", "link", &a, "derives-from", &b]).refusal();
-    assert_eq!(cycle["kind"], "Cycle");
+    assert_eq!(cycle["code"], "cycle");
     assert_eq!(
-        cycle["message"],
+        cycle["error"],
         format!("that edge would make `{a}` its own ancestor")
     );
 
@@ -3661,9 +3669,9 @@ fn json_refusals_name_the_link_or_cite_that_was_refused() {
             "n",
         ])
         .refusal();
-    assert_eq!(unknown["kind"], "UnknownReferenceKind");
+    assert_eq!(unknown["code"], "unknown_reference_kind");
     assert_eq!(
-        unknown["message"],
+        unknown["error"],
         "`bogus` is not an accepted reference kind; accepted kinds: paper, study, article, note, discussion, book, dataset, thread, observatory, other"
     );
 
@@ -3678,8 +3686,8 @@ fn json_refusals_name_the_link_or_cite_that_was_refused() {
             "n",
         ])
         .refusal();
-    assert_eq!(unresolved["kind"], "UnresolvedUri");
-    let message = unresolved["message"].as_str().unwrap();
+    assert_eq!(unresolved["code"], "unresolved_uri");
+    let message = unresolved["error"].as_str().unwrap();
     assert!(
         message.starts_with("`./notes/missing.md` does not resolve from")
             && message.ends_with("local references are relative to nodes/"),
@@ -3699,11 +3707,11 @@ fn json_refusals_about_a_node_split_message_and_hint() {
     c.run(&["sharpen", &dead, "--kill", "if Y"]).assert_ok();
     c.run(&["status", &dead, "refuted", "--why", "Y happened"])
         .assert_ok();
-    // (arguments, kind, message, hint, the prose without --json)
+    // (arguments, code, message, hint, the prose without --json)
     let guards: [(&[&str], &str, String, String, String); 3] = [
         (
             &["status", &a, "hypothesis"],
-            "NeedsKill",
+            "needs_kill",
             "`hypothesis` needs a kill condition first".to_string(),
             format!("neb sharpen {a} --kill \"...\""),
             format!(
@@ -3712,7 +3720,7 @@ fn json_refusals_about_a_node_split_message_and_hint() {
         ),
         (
             &["status", &b, "refuted"],
-            "RefutedNeedsWhy",
+            "refuted_needs_why",
             "refuted needs --why: say how the kill condition fired".to_string(),
             format!("neb status {b} refuted --why \"...\""),
             format!(
@@ -3721,7 +3729,7 @@ fn json_refusals_about_a_node_split_message_and_hint() {
         ),
         (
             &["status", &dead, "seed"],
-            "RefutedCannotReopen",
+            "refuted_cannot_reopen",
             format!("`{dead}` is refuted and cannot simply reopen"),
             // The hint is the one command to run, and nothing else.
             format!("neb new \"...\" --reopens {dead}"),
@@ -3730,13 +3738,13 @@ fn json_refusals_about_a_node_split_message_and_hint() {
             ),
         ),
     ];
-    for (args, kind, message, hint, prose) in guards {
+    for (args, code, message, hint, prose) in guards {
         let mut with_json = vec!["--json"];
         with_json.extend_from_slice(args);
         let refused = c.run(&with_json).refusal();
         assert_eq!(
             refused,
-            serde_json::json!({"kind": kind, "message": message, "hint": hint}),
+            serde_json::json!({"error": message, "code": code, "hint": hint}),
             "neb {}",
             args.join(" ")
         );
@@ -3752,9 +3760,9 @@ fn json_refusals_about_a_node_split_message_and_hint() {
 fn json_refusals_for_a_schema_too_old_or_too_new_carry_the_direction_in_the_hint() {
     let old = v1_corpus();
     let refused = old.run(&["list", "--json"]).refusal();
-    assert_eq!(refused["kind"], "SchemaMismatch");
+    assert_eq!(refused["code"], "schema_mismatch");
     assert!(
-        refused["message"]
+        refused["error"]
             .as_str()
             .unwrap()
             .ends_with("is schema_version 1, and this build understands 2"),
@@ -3773,7 +3781,7 @@ fn json_refusals_for_a_schema_too_old_or_too_new_carry_the_direction_in_the_hint
         &raw.replacen("schema_version: 2", "schema_version: 3", 1),
     );
     let refused = new.run(&["list", "--json"]).refusal();
-    assert_eq!(refused["kind"], "SchemaMismatch");
+    assert_eq!(refused["code"], "schema_mismatch");
     assert_eq!(
         refused["hint"],
         "This corpus was written by a newer nebula. Upgrade this build."
@@ -3800,9 +3808,9 @@ fn json_commit_refusals_leave_the_payload_on_stdout() {
 
     let run = c.run(&["new", "An idea", "--json"]);
     let refused = run.refusal();
-    assert_eq!(refused["kind"], "StagedElsewhere");
+    assert_eq!(refused["code"], "staged_elsewhere");
     assert!(
-        refused["message"]
+        refused["error"]
             .as_str()
             .unwrap()
             .contains("has staged changes outside the corpus (README.md)"),
@@ -3825,7 +3833,7 @@ fn json_commit_refusals_leave_the_payload_on_stdout() {
     write(&outer.join(".gitignore"), "corpus/\n");
     let run = c.run(&["config", "commit", "on", "--json"]);
     let refused = run.refusal();
-    assert_eq!(refused["kind"], "CorpusIgnored");
+    assert_eq!(refused["code"], "corpus_ignored");
     assert!(
         refused["hint"]
             .as_str()
@@ -3845,12 +3853,12 @@ fn json_covers_the_clis_own_refusals_but_not_clap_usage_errors() {
     let empty = c.run(&["capture", "  ", "--json"]).refusal();
     assert_eq!(
         empty,
-        serde_json::json!({"kind": "Usage", "message": "nothing to capture", "hint": null})
+        serde_json::json!({"error": "nothing to capture", "code": "usage", "hint": null})
     );
 
     let id = c.seed("an idea", "An idea");
     let editor = c.run(&["edit", &id, "--json"]).refusal();
-    assert_eq!(editor["kind"], "EditorNotConfigured");
+    assert_eq!(editor["code"], "editor_not_configured");
 
     let run = c.run(&["show", "--json"]);
     assert_eq!(run.out.status.code(), Some(2));
@@ -5554,9 +5562,9 @@ fn the_observatory_root_is_a_machine_setting_that_never_reaches_the_corpus() {
     let refused = c
         .run(&["--json", "config", "observatory-root", "observatory"])
         .refusal();
-    assert_eq!(refused["kind"], "RelativeObservatoryRoot");
+    assert_eq!(refused["code"], "relative_observatory_root");
     assert_eq!(
-        refused["message"],
+        refused["error"],
         "the observatory root must be an absolute path, not `observatory`"
     );
     assert!(
@@ -5579,7 +5587,7 @@ fn the_observatory_root_is_a_machine_setting_that_never_reaches_the_corpus() {
         .says(machine.to_str().unwrap())
         .says("Set it again with an absolute path");
     let refused = c.run(&["--json", "config", "observatory-root"]).refusal();
-    assert_eq!(refused["kind"], "RelativeObservatoryRoot");
+    assert_eq!(refused["code"], "relative_observatory_root");
     assert!(
         refused["hint"]
             .as_str()

@@ -56,8 +56,9 @@ and never something to delete or edit.
 ## What each refusal means and what to do
 
 Refusals are typed. The message is what the CLI prints; the variant is what
-`nebula-core` returns to the desktop app, and what `--json` reports as the
-refusal's `kind` (the envelope is in [verbs.md](verbs.md#refusals-under---json)).
+`nebula-core` returns to the desktop app, and its name in `snake_case` is what
+`--json` reports as the refusal's `code`: `NeedsKill` is `needs_kill`, `IoAt`
+is `io_at` (the envelope is in [verbs.md](verbs.md#refusals-under---json)).
 **Do not retry the same command.**
 
 | Message | Variant | Rule | Do instead |
