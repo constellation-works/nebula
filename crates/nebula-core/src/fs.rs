@@ -88,6 +88,31 @@ pub fn write_private_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<(
     sync_parent(path)
 }
 
+/// Create `path` holding `contents`, durably and owner-only, where no file of
+/// that name exists yet.
+///
+/// For a file that must never replace another, such as an edit kept after a
+/// refused save: a second one kept under the same name would lose the first.
+/// The name is opened `create_new` (`O_EXCL`), so a name that is taken — a
+/// symlink included — is refused as [`Error::IoAt`] with the source
+/// [`std::io::ErrorKind::AlreadyExists`], and the caller picks another. The
+/// bytes are flushed, then the directory. A write that fails part-way removes
+/// the file it created rather than leave half of it behind.
+pub fn create_private_new(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
+    let file = private_open_options()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| Error::io_at("creating", path, error))?;
+    if let Err(error) = write_sync_and_close(file, path, contents.as_ref()) {
+        // This call created the file a moment ago, so it is ours to remove;
+        // if even that fails, the write's own error is the one to report.
+        let _ = std::fs::remove_file(path);
+        return Err(Error::io_at("writing", path, error));
+    }
+    sync_parent(path)
+}
+
 /// Create `path` and any missing parents, each one `0700`.
 ///
 /// A directory that already exists, `path` included, is left alone: its mode
@@ -407,6 +432,30 @@ mod tests {
                 .is_file()
         );
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+    }
+
+    #[test]
+    fn a_new_file_is_flushed_owner_only_and_never_replaces_a_taken_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("kept.md");
+        let (result, steps) = recording(|| create_private_new(&file, "the text"));
+        result.unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "the text");
+        assert!(steps.contains(&Step::SyncAll(file.clone())), "{steps:?}");
+        #[cfg(unix)]
+        assert_eq!(mode(&file), PRIVATE_FILE_MODE);
+
+        let taken = create_private_new(&file, "another text").expect_err("the name is taken");
+        assert!(
+            matches!(&taken, Error::IoAt { source, .. }
+                if source.kind() == std::io::ErrorKind::AlreadyExists),
+            "{taken:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "the text",
+            "the first file is untouched"
+        );
     }
 
     #[test]

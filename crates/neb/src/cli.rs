@@ -1041,6 +1041,8 @@ type Outcome = std::result::Result<ExitCode, Failure>;
 /// `check` rule 11 reports the same drift later. The write has landed by the
 /// time this runs, so a corpus that cannot be read for the comparison costs
 /// the note, not the command; `check` is where an unreadable node surfaces.
+/// It reads every node, so it runs once the write lock is released
+/// (STD-03 §R1).
 fn note_close_tags(corpus: &Corpus, node: &str, tags: &[String]) {
     let Ok(close) = ops::close_tags(corpus, node, tags) else {
         return;
@@ -1060,7 +1062,7 @@ fn note_close_tags(corpus: &Corpus, node: &str, tags: &[String]) {
 fn body_value(value: Option<String>) -> std::result::Result<String, Failure> {
     match value.as_deref() {
         None => Ok(String::new()),
-        Some("-") => read_stdin(),
+        Some("-") => read_stdin("a body", ops::BODY_INPUT_LIMIT),
         Some(_) => Ok(value.unwrap_or_default()),
     }
 }
@@ -1072,20 +1074,18 @@ fn body_value(value: Option<String>) -> std::result::Result<String, Failure> {
 /// the core joins its lines, so a pipe and a paste store the same line.
 fn capture_text(words: &[String]) -> std::result::Result<String, Failure> {
     match words {
-        [dash] if dash == "-" => read_stdin(),
+        [dash] if dash == "-" => read_stdin("a capture", ops::CAPTURE_INPUT_LIMIT),
         _ => Ok(words.join(" ")),
     }
 }
 
-/// All of standard input, as text.
-fn read_stdin() -> std::result::Result<String, Failure> {
-    use std::io::Read;
-
-    let mut text = String::new();
-    std::io::stdin()
-        .read_to_string(&mut text)
-        .map_err(Error::from)?;
-    Ok(text)
+/// All of standard input, as text, refused past `limit` bytes.
+///
+/// Every caller reads it before opening the corpus for writing, so a pipe
+/// that is slow or enormous holds no lock while it drains, and one over the
+/// ceiling is refused with nothing written (STD-03 §R22).
+fn read_stdin(what: &'static str, limit: usize) -> std::result::Result<String, Failure> {
+    Ok(ops::read_bounded(std::io::stdin().lock(), what, limit)?)
 }
 
 /// Existing notes are immutable through `edit`; `note` is their append path.
@@ -1113,8 +1113,21 @@ fn preserve_notes(before: &str, after: &str) -> std::result::Result<(), EditorEr
     Ok(())
 }
 
+/// The body as the editor left it, and the temporary file it is still in.
+///
+/// The file is deleted when this drops, so a refusal keeps the text first
+/// with [`keep_refused`].
+struct Edited {
+    text: String,
+    file: tempfile::NamedTempFile,
+}
+
 /// Let the configured editor rewrite body prose in a temporary file.
-fn edit_body(body: &str) -> std::result::Result<String, Failure> {
+///
+/// No lock is held here: a person may type for as long as they like, and
+/// every other writer carries on meanwhile (STD-03 §R1). The caller checks
+/// the result and saves it with [`ops::set_body_if`].
+fn edit_body(body: &str) -> std::result::Result<Edited, Failure> {
     use std::io::Write;
 
     let editor = ["VISUAL", "EDITOR"]
@@ -1143,9 +1156,29 @@ fn edit_body(body: &str) -> std::result::Result<String, Failure> {
     if !status.success() {
         return Err(EditorError::Unsuccessful(editor_name).into());
     }
-    let edited = std::fs::read_to_string(file.path()).map_err(Error::from)?;
-    preserve_notes(body, &edited)?;
-    Ok(edited)
+    let text = std::fs::read_to_string(file.path()).map_err(Error::from)?;
+    Ok(Edited { text, file })
+}
+
+/// `refused`, after keeping the text the person typed (STD-03 §R30).
+///
+/// Everything after the editor exits can refuse — the notes check, the wait
+/// for the lock, a body another writer changed, the save itself — and the
+/// text is then in memory and in a temporary file about to be deleted, and
+/// nowhere else. So before the refusal is returned it is kept as a new
+/// owner-only file under [`Corpus::kept_edits_dir`], outside the corpus, and
+/// the refusal names it. Should that fail, the temporary file is kept where it
+/// is instead. Only when both fail is the text lost, and the refusal says so
+/// and why.
+fn keep_refused(refused: Failure, node: &str, edited: Edited) -> Failure {
+    let Failure(refusal) = refused;
+    Failure(match Corpus::keep_edit(node, &edited.text) {
+        Ok(path) => refusal.kept_at(&path),
+        Err(not_kept) => match edited.file.keep() {
+            Ok((_, path)) => refusal.kept_at(&path),
+            Err(also) => refusal.not_kept(&format!("{not_kept}; {}", also.error)),
+        },
+    })
 }
 
 /// What every mutating arm needs to decide whether to commit and how to say
@@ -1159,11 +1192,15 @@ struct CommitOpts {
 
 /// Open the corpus and hold its write lock until the returned guard drops.
 ///
-/// Every mutating arm opens this way, so the verb and the [`commit`] that
-/// records it are one critical section and no other writer can land a verb
-/// between the two. The op underneath takes the same lock again, which costs
-/// nothing: it is re-entrant on one thread. A read-only arm opens with plain
-/// [`Corpus::open`] and waits for nobody.
+/// Every mutating arm holds the lock this way, so the verb and the [`commit`]
+/// that records it are one critical section and no other writer can land a
+/// verb between the two. The op underneath takes the same lock again, which
+/// costs nothing: it is re-entrant on one thread. A read-only arm opens with
+/// plain [`Corpus::open`] and waits for nobody.
+///
+/// Only the write and the commit: an arm drops the guard before any advice
+/// it reads afterwards (STD-03 §R1). `edit` and `promote` open without it and
+/// take it themselves, because the editor and the suggestions come first.
 fn open_locked(root: Option<PathBuf>) -> std::result::Result<(Corpus, CorpusLock), Failure> {
     let corpus = Corpus::open(root)?;
     let lock = corpus.lock()?;
@@ -1175,11 +1212,31 @@ fn open_locked(root: Option<PathBuf>) -> std::result::Result<(Corpus, CorpusLock
 /// The capture has landed either way: capture never refuses for content, and
 /// the two entries are for the triage to settle. It goes to stderr so the id,
 /// or the `--json` payload, on stdout reads the same as for any capture.
-fn note_same_as(corpus: &Corpus, entry: &InboxEntry) -> std::result::Result<(), Failure> {
-    if let Some(earlier) = corpus.inbox()?.same_as(entry) {
-        errln!("note: same as {}, still waiting", earlier.id);
+///
+/// A side channel, so it fails open (STD-02 §R31): an inbox that cannot be
+/// read back costs the note, said as a warning, and never the capture.
+fn note_same_as(corpus: &Corpus, entry: &InboxEntry) {
+    match corpus.inbox() {
+        Ok(inbox) => {
+            if let Some(earlier) = inbox.same_as(entry) {
+                errln!("note: same as {}, still waiting", earlier.id);
+            }
+        }
+        Err(e) => errln!("warning: could not check the inbox for a repeat: {e}"),
     }
-    Ok(())
+}
+
+/// The `k` nodes closest to a capture just made, for the triage after it.
+///
+/// A side channel, so it fails open (STD-02 §R31): the capture is in the
+/// inbox and committed by the time this runs, and a `nodes/` that cannot be
+/// read for suggestions costs the suggestions, said on stderr with the
+/// reason, and never the capture's exit status. Run with the lock released.
+fn suggestions(corpus: &Corpus, text: &str, k: usize) -> Vec<nebula_core::Neighbour> {
+    ops::suggest(corpus, text, k).unwrap_or_else(|e| {
+        errln!("warning: suggestions unavailable: {e}");
+        Vec::new()
+    })
 }
 
 /// Say where an `observatory` reference's record is on this machine: the
@@ -1624,26 +1681,28 @@ fn run(cli: Cli) -> Outcome {
                 let shown = std::path::absolute(&resolved_root).unwrap_or(resolved_root);
                 errln!("note: created a new corpus at {}", shown.display());
             }
-            let _lock = corpus.lock()?;
             let k = if quiet { 0 } else { NEAR_DEFAULT };
-            if json {
-                let captured = ops::capture_near(&corpus, &text, k)?;
-                out_json(&json::Captured::from(&captured))?;
-                note_same_as(&corpus, &captured.entry)?;
-                commit(&corpus, commits, "capture", &[&captured.entry.id])?;
-                return Ok(ok);
-            }
-            // The id goes out before `nodes/` is read for the suggestions:
-            // the capture never depended on the rest of the corpus parsing,
-            // and a node file that will not must not read as a lost thought.
+            // The capture and its commit are the critical section. The
+            // suggestions are a read of every node, so they wait until the
+            // lock is released (STD-03 §R1), and the id goes out before
+            // them: the capture never depended on the rest of the corpus
+            // parsing, and a node file that will not must not read as a
+            // lost thought.
+            let lock = corpus.lock()?;
             let entry = ops::capture(&corpus, &text)?;
-            outln!("{}", render::bold(&entry.id));
-            note_same_as(&corpus, &entry)?;
-            out!(
-                "{}",
-                render::suggestions(&ops::suggest(&corpus, &entry.text, k)?)
-            );
-            commit(&corpus, commits, "capture", &[&entry.id])?;
+            if !json {
+                outln!("{}", render::bold(&entry.id));
+            }
+            let committed = commit(&corpus, commits, "capture", &[&entry.id]);
+            drop(lock);
+            note_same_as(&corpus, &entry);
+            let near = suggestions(&corpus, &entry.text, k);
+            if json {
+                out_json(&json::Captured::from(&ops::Captured { entry, near }))?;
+            } else {
+                out!("{}", render::suggestions(&near));
+            }
+            committed?;
             Ok(ok)
         }
 
@@ -1675,22 +1734,22 @@ fn run(cli: Cli) -> Outcome {
             ..
         } => {
             let body = body_value(body)?;
-            let (corpus, _lock) = open_locked(root)?;
+            let promotion = Promotion {
+                title,
+                body,
+                parents,
+                tags,
+                origin: Origin::of(task, run),
+                id,
+                by,
+            };
+            // The suggestions are read before the lock is taken (STD-03 §R1);
+            // the promotion and its commit are the critical section.
+            let corpus = Corpus::open(root)?;
             let k = if quiet { 0 } else { NEAR_DEFAULT };
-            let created = ops::promote(
-                &corpus,
-                &entry,
-                &Promotion {
-                    title,
-                    body,
-                    parents,
-                    tags,
-                    origin: Origin::of(task, run),
-                    id,
-                    by,
-                },
-                k,
-            )?;
+            let near = ops::promotion_near(&corpus, &entry, &promotion, k)?;
+            let lock = corpus.lock()?;
+            let created = ops::promote_with(&corpus, &entry, &promotion, near)?;
             if json {
                 out_json(&json::Created::from(&created))?;
             } else if quiet {
@@ -1703,8 +1762,10 @@ fn run(cli: Cli) -> Outcome {
                 );
                 out!("{}", render::suggestions(&created.near));
             }
+            let committed = commit(&corpus, commits, "promote", &[&entry, &created.doc.node.id]);
+            drop(lock);
             note_close_tags(&corpus, &created.doc.node.id, &created.doc.node.tags);
-            commit(&corpus, commits, "promote", &[&entry, &created.doc.node.id])?;
+            committed?;
             Ok(ok)
         }
 
@@ -1754,7 +1815,7 @@ fn run(cli: Cli) -> Outcome {
             ..
         } => {
             let body = body_value(body)?;
-            let (corpus, _lock) = open_locked(root)?;
+            let (corpus, lock) = open_locked(root)?;
             let created = ops::new_node(
                 &corpus,
                 &NewNode {
@@ -1784,25 +1845,46 @@ fn run(cli: Cli) -> Outcome {
             let ids: Vec<&str> = std::iter::once(node.id.as_str())
                 .chain(node.edges_of(EdgeType::Contradicts))
                 .collect();
+            let committed = commit(&corpus, commits, "new", &ids);
+            drop(lock);
             note_close_tags(&corpus, &node.id, &node.tags);
-            commit(&corpus, commits, "new", &ids)?;
+            committed?;
             Ok(ok)
         }
 
         Command::Edit { node, by, .. } => {
-            let (corpus, _lock) = open_locked(root)?;
+            // No lock while the person types (STD-03 §R1). The body is
+            // loaded now, edited for as long as it takes, and saved under
+            // the lock only if nobody changed it meanwhile. `--by` is
+            // checked first, so a bad label is refused before anyone types.
+            model::author(by.as_deref())?;
+            let corpus = Corpus::open(root)?;
             let before = corpus.load(&node).map_err(|e| Failure::about(&e, &node))?;
-            let body = edit_body(&before.body)?;
-            ops::set_body(&corpus, &node, &body, by.as_deref())
-                .map_err(|e| Failure::about(&e, &node))?;
-            if json {
-                let docs = corpus.load_all()?;
-                let view = graph::node(&Graph::build(&docs)?, &node)?;
-                out_json(&json::NodeView::from(&view))?;
-            } else {
+            let edited = edit_body(&before.body)?;
+            if let Err(e) = preserve_notes(&before.body, &edited.text) {
+                return Err(keep_refused(e.into(), &node, edited));
+            }
+            let saved = corpus.lock().and_then(|lock| {
+                ops::set_body_if(&corpus, &node, &before.body, &edited.text, by.as_deref())
+                    .map(|_| lock)
+            });
+            let lock = match saved {
+                Ok(lock) => lock,
+                Err(e) => return Err(keep_refused(Failure::about(&e, &node), &node, edited)),
+            };
+            drop(edited);
+            if !json {
                 outln!("{}", render::bold(&node));
             }
-            commit(&corpus, commits, "edit", &[&node])?;
+            let committed = commit(&corpus, commits, "edit", &[&node]);
+            drop(lock);
+            let shown = if json {
+                out_node_view(&corpus, &node)
+            } else {
+                Ok(())
+            };
+            committed?;
+            shown?;
             Ok(ok)
         }
 
@@ -1937,7 +2019,7 @@ fn run(cli: Cli) -> Outcome {
             }
             // One lock over both edits: `--remove x --add y` is one change
             // to the node's tags, not two a second writer may split.
-            let (corpus, _lock) = open_locked(root)?;
+            let (corpus, lock) = open_locked(root)?;
             let mut doc = ops::tag_remove(&corpus, &target, &remove)?;
             if !add.is_empty() {
                 doc = ops::tag_add(&corpus, &target, &add)?;
@@ -1952,8 +2034,10 @@ fn run(cli: Cli) -> Outcome {
                 };
                 outln!("{} {shown}", render::bold(&target));
             }
+            let committed = commit(&corpus, commits, "tag", &[&target]);
+            drop(lock);
             note_close_tags(&corpus, &target, &add);
-            commit(&corpus, commits, "tag", &[&target])?;
+            committed?;
             Ok(ok)
         }
 
@@ -1962,17 +2046,21 @@ fn run(cli: Cli) -> Outcome {
             if text.trim().is_empty() {
                 return Err(Failure::say("nothing to note"));
             }
-            let (corpus, _lock) = open_locked(root)?;
+            let (corpus, lock) = open_locked(root)?;
             ops::note(&corpus, &node, &text, by.as_deref())
                 .map_err(|e| Failure::about(&e, &node))?;
-            if json {
-                let docs = corpus.load_all()?;
-                let view = graph::node(&Graph::build(&docs)?, &node)?;
-                out_json(&json::NodeView::from(&view))?;
-            } else {
+            if !json {
                 outln!("{}", render::bold(&node));
             }
-            commit(&corpus, commits, "note", &[&node])?;
+            let committed = commit(&corpus, commits, "note", &[&node]);
+            drop(lock);
+            let shown = if json {
+                out_node_view(&corpus, &node)
+            } else {
+                Ok(())
+            };
+            committed?;
+            shown?;
             Ok(ok)
         }
 
@@ -2301,6 +2389,16 @@ fn cap<T>(items: &mut Vec<T>, limit: Option<usize>) -> (usize, bool) {
 fn out_json<T: serde::Serialize>(v: &T) -> std::result::Result<(), Failure> {
     outln!("{}", serde_json::to_string_pretty(v)?);
     Ok(())
+}
+
+/// `node` as `show --json` prints it, over the corpus as it is now: what
+/// `edit --json` and `note --json` print once their write is committed. It
+/// builds the whole graph, so it runs with the lock released
+/// (STD-03 §R1).
+fn out_node_view(corpus: &Corpus, node: &str) -> std::result::Result<(), Failure> {
+    let docs = corpus.load_all()?;
+    let view = graph::node(&Graph::build(&docs)?, node)?;
+    out_json(&json::NodeView::from(&view))
 }
 
 /// Send a rendered report to a file, or print it, per `--out`.

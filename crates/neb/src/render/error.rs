@@ -59,6 +59,26 @@ impl Refusal {
         .to_string()
     }
 
+    /// This refusal, naming where the text a person typed was kept: an edit
+    /// refused after the editor exited (STD-03 §R30). The path goes into the
+    /// message, so it is in the prose and in the `--json` `error` alike.
+    pub fn kept_at(self, path: &std::path::Path) -> Self {
+        self.also(&format!("your edited text is kept at {}", path.display()))
+    }
+
+    /// This refusal, saying the typed text could not be kept, and why.
+    pub fn not_kept(self, why: &str) -> Self {
+        self.also(&format!("your edited text could not be kept: {why}"))
+    }
+
+    fn also(self, clause: &str) -> Self {
+        Self {
+            message: format!("{}; {clause}", self.message),
+            prose: self.prose.map(|prose| format!("{prose}\n\n{clause}")),
+            ..self
+        }
+    }
+
     fn worded(self, prose: String) -> Self {
         Self {
             prose: Some(prose),
@@ -162,6 +182,17 @@ fn hint(e: &Error) -> Option<String> {
              .lock to remove."
                 .to_owned()
         }
+        Error::EditConflict(id) => format!(
+            "Another writer changed the body while it was open in the editor. \
+             See what it holds now with:  neb show {id}\n\
+             then run  neb edit {id}  again and carry your text over."
+        ),
+        Error::InputTooLarge { .. } => format!(
+            "Standard input takes up to {} for a capture and {} for a body. \
+             Keep longer text in a file and cite it with `neb cite`.",
+            size(nebula_core::ops::CAPTURE_INPUT_LIMIT),
+            size(nebula_core::ops::BODY_INPUT_LIMIT)
+        ),
         Error::GitTimedOut { root, context, .. } if context == "commit" => format!(
             "A git hook is the likely cause: `git commit` runs the repository's \
              pre-commit and commit-msg hooks, and one did not finish. Run it by \
@@ -253,6 +284,15 @@ fn schema_hint(e: &Error) -> Option<String> {
     })
 }
 
+/// A byte count as a person reads it: `64 KiB`, `1 MiB`.
+fn size(bytes: usize) -> String {
+    match bytes {
+        b if b >= 1 << 20 && b % (1 << 20) == 0 => format!("{} MiB", b >> 20),
+        b if b >= 1 << 10 && b % (1 << 10) == 0 => format!("{} KiB", b >> 10),
+        b => format!("{b} bytes"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,6 +352,55 @@ mod tests {
             refused.hint.as_deref(),
             Some("neb sharpen n --kill \"...\"")
         );
+    }
+
+    #[test]
+    fn a_kept_edit_is_named_in_the_message_the_prose_and_the_envelope() {
+        let kept = std::path::Path::new("/state/nebula/edits/n-20260926T000000Z.md");
+        let refused = refusal_about(&Error::EditConflict("n".into()), "n").kept_at(kept);
+        assert_eq!(refused.code, "edit_conflict");
+        assert_eq!(
+            refused.message,
+            "`n`'s body changed while it was being edited; nothing was written; \
+             your edited text is kept at /state/nebula/edits/n-20260926T000000Z.md"
+        );
+        assert!(
+            refused.prose().starts_with(&refused.message),
+            "{}",
+            refused.prose()
+        );
+        assert!(refused.hint.as_deref().unwrap().contains("neb show n"));
+        let value: serde_json::Value = serde_json::from_str(&refused.json()).unwrap();
+        assert_eq!(value["error"], refused.message.as_str());
+
+        // A reworded refusal carries it in its own prose too.
+        let reworded = refusal_about(&Error::RefutedNeedsWhy, "n").kept_at(kept);
+        assert!(
+            reworded
+                .prose()
+                .ends_with("kept at /state/nebula/edits/n-20260926T000000Z.md")
+        );
+
+        let lost = refusal(&Error::SelfLoop).not_kept("disk full");
+        assert!(
+            lost.message
+                .ends_with("your edited text could not be kept: disk full")
+        );
+    }
+
+    #[test]
+    fn an_input_limit_hint_names_both_ceilings_readably() {
+        let refused = refusal(&Error::InputTooLarge {
+            what: "a capture",
+            limit: nebula_core::ops::CAPTURE_INPUT_LIMIT,
+        });
+        assert_eq!(
+            refused.message,
+            "a capture on standard input is larger than 65536 bytes; nothing was written"
+        );
+        let hint = refused.hint.expect("a hint");
+        assert!(hint.contains("64 KiB") && hint.contains("1 MiB"), "{hint}");
+        assert_eq!(size(1000), "1000 bytes");
     }
 
     #[test]

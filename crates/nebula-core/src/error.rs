@@ -367,6 +367,24 @@ pub enum Error {
         root: PathBuf,
     },
 
+    /// A body edited outside the lock — in `$EDITOR` — was about to be saved
+    /// over a body another writer changed since it was loaded. Nothing was
+    /// written: saving would erase that writer's change. A change to the
+    /// frontmatter alone is not a conflict; the edit lands on top of it.
+    #[error("`{0}`'s body changed while it was being edited; nothing was written")]
+    EditConflict(String),
+
+    /// Text read from standard input was larger than the ceiling for what it
+    /// is. Refused before the corpus is opened for writing, so nothing was
+    /// written and no other writer waited on the read.
+    #[error("{what} on standard input is larger than {limit} bytes; nothing was written")]
+    InputTooLarge {
+        /// What the text was for: `a capture` or `a body`.
+        what: &'static str,
+        /// The ceiling, in bytes.
+        limit: usize,
+    },
+
     /// `commit` is on, but the repository containing the corpus ignores it,
     /// so there is nothing git would ever record.
     #[error("{} is ignored by the git repository that contains it; nothing can be committed", .0.display())]
@@ -520,6 +538,8 @@ impl Error {
         UnsafeId => "unsafe_id",
         IdMismatch => "id_mismatch",
         Locked => "locked",
+        EditConflict => "edit_conflict",
+        InputTooLarge => "input_too_large",
         CorpusIgnored => "corpus_ignored",
         Git => "git",
         GitTimedOut => "git_timed_out",

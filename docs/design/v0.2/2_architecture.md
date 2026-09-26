@@ -128,6 +128,16 @@ Contention blocks for up to five seconds and then fails with
 retrying is always safe. A writer that blocked forever on a stuck peer would
 be worse than one that says so.
 
+The lock covers a verb's read-modify-write and its commit, and nothing slow
+(STD-03 §R1). `neb edit` opens `$EDITOR` with no lock held and saves with
+`ops::set_body_if`, a compare-and-set that refuses as `Error::EditConflict`
+when the body changed meanwhile; a refused edit keeps the typed text under
+`$XDG_STATE_HOME/nebula/edits/` first (STD-03 §R30). Standard input is read,
+and bounded, before the corpus is opened for writing. Suggestions, close-tag
+notes and `--json` node views are read before the lock is taken or after it
+drops, and `ops::suggest` and `ops::close_tags` `debug_assert!` that the
+calling thread does not hold it.
+
 Deliberately **not** taken by `Corpus::open`, by any query, or by the
 desktop's file watcher. Readers see a corpus a writer may be part-way
 through, which is the trade: writers wait for each other, readers never wait

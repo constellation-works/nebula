@@ -64,7 +64,8 @@ scarcity, not curvature"
 ```
 
 A lone `-` reads the thought from standard input, as `--body -` does
-elsewhere; a dash among other words is part of the thought. Either way, every
+elsewhere, up to 64 KiB; more is refused (`input_too_large`) before anything
+is written. A dash among other words is part of the thought. Either way, every
 line break (`\n` or `\r`) becomes a single space together with the whitespace
 around it, blank lines vanish, and the ends are trimmed, so both commands above
 store `gravity might be about scarcity, not curvature`. Whitespace inside a

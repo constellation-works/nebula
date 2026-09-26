@@ -2104,6 +2104,71 @@ fn capture_and_promote_suggest_but_never_link() {
     );
 }
 
+/// `suggest` and `close_tags` scan every node for advice, and a writer that
+/// ran them under the lock would make every other writer wait on advice
+/// (STD-03 §R1). A debug build refuses that outright, so any caller that
+/// regresses fails its own tests; `capture_and_promote_suggest_but_never_link`
+/// above and the CLI's capture, promote and tag tests passing is the proof
+/// that the real callers run them with the lock released.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "must not run under the corpus lock")]
+fn advisory_reads_refuse_to_run_under_the_write_lock() {
+    let (_dir, corpus) = corpus();
+    lexical_fixture(&corpus);
+    let _held = corpus.lock().expect("holding the lock");
+
+    let close_tags = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ops::close_tags(&corpus, "tags-beat-domains", &["designs".to_string()])
+    }));
+    assert!(close_tags.is_err(), "close_tags ran under the lock");
+
+    // With nothing to look for, nothing is scanned, so that is allowed:
+    // the desktop's promote runs it that way inside its own lock.
+    assert!(ops::suggest(&corpus, "tags", 0).unwrap().is_empty());
+    let _ = ops::suggest(&corpus, "a taxonomy for tags", NEAR_DEFAULT);
+}
+
+/// `promote` reads its suggestions before it takes the lock; a caller that
+/// holds the lock across the promotion and its commit reads them first with
+/// `promotion_near` and hands them to `promote_with`, which returns them as
+/// given.
+#[test]
+fn promotion_near_is_read_ahead_of_the_lock_and_promote_with_carries_it() {
+    let (_dir, corpus) = corpus();
+    lexical_fixture(&corpus);
+    let entry = ops::capture(&corpus, "a taxonomy for tags").unwrap();
+
+    let near =
+        ops::promotion_near(&corpus, &entry.id, &Promotion::default(), NEAR_DEFAULT).unwrap();
+    assert_eq!(
+        near.first().map(|n| n.id.as_str()),
+        Some("a-single-global-taxonomy"),
+        "{near:?}"
+    );
+    let with_parent = Promotion {
+        parents: vec!["tags-beat-domains".into()],
+        ..Promotion::default()
+    };
+    assert!(
+        ops::promotion_near(&corpus, &entry.id, &with_parent, NEAR_DEFAULT)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(matches!(
+        ops::promotion_near(&corpus, "nope", &Promotion::default(), NEAR_DEFAULT),
+        Err(Error::NoSuchInboxEntry(_))
+    ));
+
+    let _held = corpus.lock().expect("the caller's own lock");
+    let created = ops::promote_with(&corpus, &entry.id, &Promotion::default(), near.clone())
+        .expect("promoted under the caller's lock");
+    assert_eq!(
+        created.near.iter().map(|n| &n.id).collect::<Vec<_>>(),
+        near.iter().map(|n| &n.id).collect::<Vec<_>>()
+    );
+}
+
 /// The capture from the v0.2 evaluation, whose sentence slug is 60 characters.
 const LONG_CAPTURE: &str = "gravity might be a scarcity gradient in some shared resource";
 const LONG_CAPTURE_SLUG: &str = "gravity-might-be-a-scarcity-gradient-in-some-shared-resource";
@@ -3905,6 +3970,113 @@ fn two_concurrent_tag_adds_on_one_node_both_survive() {
     let mut tags = corpus.load(&id).unwrap().node.tags;
     tags.sort();
     assert_eq!(tags, ["alpha", "beta"], "one writer's tag was lost");
+}
+
+/// `neb edit` saves a body it read before the editor opened, with no lock
+/// held while the person typed. The compare-and-set under the lock is what
+/// stops that save erasing a note another writer appended meanwhile; a
+/// frontmatter-only change is not a conflict, and the edit lands on top.
+#[test]
+fn set_body_if_refuses_a_changed_body_and_keeps_a_changed_frontmatter() {
+    let (_dir, corpus) = corpus();
+    let id = seed(&corpus, "Edited elsewhere", &[]);
+    let read = corpus.load(&id).unwrap().body;
+
+    // A tag lands while the editor is open: the edit still goes through,
+    // and keeps it.
+    ops::tag_add(&corpus, &id, &["x".to_string()]).unwrap();
+    let saved = ops::set_body_if(&corpus, &id, &read, "the new body\n", None).unwrap();
+    assert_eq!(saved.body, "the new body");
+    let on_disk = corpus.load(&id).unwrap();
+    assert_eq!(on_disk.body.trim(), "the new body");
+    assert_eq!(on_disk.node.tags, ["x"]);
+
+    // A note lands while the editor is open: the body is no longer the one
+    // that was edited, so nothing is written.
+    let read = on_disk.body;
+    ops::note(&corpus, &id, "a concurrent note", None).unwrap();
+    let before = std::fs::read_to_string(corpus.node_path(&id).unwrap()).unwrap();
+    let refused = ops::set_body_if(&corpus, &id, &read, "an edit made blind", None);
+    assert!(
+        matches!(&refused, Err(Error::EditConflict(node)) if *node == id),
+        "got {refused:?}"
+    );
+    assert_eq!(refused.unwrap_err().code(), "edit_conflict");
+    assert_eq!(
+        std::fs::read_to_string(corpus.node_path(&id).unwrap()).unwrap(),
+        before,
+        "the concurrent note survives"
+    );
+}
+
+/// What a refused edit is kept as: a new owner-only file outside the corpus,
+/// never one that replaces an earlier kept edit.
+#[test]
+fn a_kept_edit_is_a_new_owner_only_file_outside_the_corpus() {
+    let dir = Corpus::kept_edits_dir().unwrap();
+    assert_eq!(
+        dir,
+        support::home().join(".local/state/nebula/edits"),
+        "with no XDG_STATE_HOME, under ~/.local/state"
+    );
+    let first = Corpus::keep_edit("kept-edit-fixture", "the first text").unwrap();
+    let second = Corpus::keep_edit("kept-edit-fixture", "the second text").unwrap();
+    assert_ne!(first, second, "a second edit never replaces the first");
+    for (path, text) in [(&first, "the first text"), (&second, "the second text")] {
+        assert_eq!(path.parent(), Some(dir.as_path()));
+        let name = path.file_name().unwrap().to_string_lossy();
+        assert!(
+            name.starts_with("kept-edit-fixture-") && name.ends_with(".md"),
+            "{name}"
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), text);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{}", path.display());
+        }
+    }
+    assert!(matches!(
+        Corpus::keep_edit("../escape", "text"),
+        Err(Error::UnsafeId(_))
+    ));
+}
+
+/// Standard input is read up to a ceiling and no further: exactly the limit
+/// is taken whole, one byte more is a typed refusal naming the limit.
+#[test]
+fn read_bounded_takes_the_limit_and_refuses_one_byte_more() {
+    let at = "a".repeat(16);
+    assert_eq!(
+        ops::read_bounded(at.as_bytes(), "a capture", 16).unwrap(),
+        at
+    );
+    let over = "a".repeat(17);
+    let refused = ops::read_bounded(over.as_bytes(), "a capture", 16).unwrap_err();
+    assert!(
+        matches!(
+            refused,
+            Error::InputTooLarge {
+                what: "a capture",
+                limit: 16
+            }
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(refused.code(), "input_too_large");
+    assert!(refused.to_string().contains("16 bytes"), "{refused}");
+    // An endless source is refused after limit + 1 bytes rather than read
+    // to the end that never comes.
+    let endless = std::io::repeat(b'a');
+    assert!(matches!(
+        ops::read_bounded(endless, "a body", ops::BODY_INPUT_LIMIT),
+        Err(Error::InputTooLarge { .. })
+    ));
+    assert!(matches!(
+        ops::read_bounded(&[0xff, 0xfe][..], "a body", 16),
+        Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::InvalidData
+    ));
 }
 
 /// Past the bounded wait the writer refuses rather than proceeding, and
