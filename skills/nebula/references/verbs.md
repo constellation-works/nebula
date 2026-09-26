@@ -27,6 +27,14 @@ by single dashes, 60 characters or fewer) and is refused, as a typed error,
 if it breaks those rules or collides with an existing node.
 The `--json` excerpts below are real output from a three-node fixture corpus.
 
+Every field a `--json` payload documents is present in it: an absent value is
+`null` and an empty list `[]`, never a missing key, so one kind of record has
+one key set whichever verb returned it. A node is always
+`{id, title, title_by, status, created, updated, kill, kill_by, tags, edges,
+references, closed, origin}`, and every author label is stated, `"human"`
+where nobody passed `--by`, from a write verb exactly as from `show`. A list
+that a limit cut says so: see [capped lists](#capped-lists).
+
 ## Refusals under `--json`
 
 Under `--json` a refusal is data too: one JSON object on one line, the last
@@ -218,7 +226,9 @@ standard input.
 {
   "doc": {
     "node": { "id": "required-fields-drift-domains", "title": "Required fields drift domains",
-              "status": "seed", "created": "2026-09-21", "updated": "2026-09-21" },
+              "title_by": "human", "status": "seed", "created": "2026-09-21", "updated": "2026-09-21",
+              "kill": null, "kill_by": null, "tags": [], "edges": [], "references": [],
+              "closed": null, "origin": null },
     "body": "domains drift when a field is required"
   },
   "path": "/Users/you/.nebula/nodes/required-fields-drift-domains.md",
@@ -236,9 +246,9 @@ standard input.
 { "id": "5572", "at": "2026-09-21T02:56", "text": "duplicate thought" }
 ```
 
-`near` is omitted from both when it would be empty, so `--quiet`, a
-`--parent`, and a thought unlike anything in the corpus all read the same
-way: no `near` key.
+`near` is `[]` in both when it would be empty, so `--quiet`, a `--parent`,
+and a thought unlike anything in the corpus all read the same way:
+`"near": []`.
 
 ## Nodes
 
@@ -290,11 +300,11 @@ every one of them is protected. `--by` is accepted and validated, but records no
 body has no per-field author in the current schema. With neither environment
 variable set, `edit` refuses and names both variables.
 Unknown nodes are refused (`NoSuchNode`). `--json` is the same `NodeView` as
-`show --json`: `notes` is a list of `{at, text, by}`, oldest first, omitted
-when empty.
+`show --json`: `notes` is a list of `{at, text, by}`, oldest first, and `[]`
+when there are none.
 
 The write verbs return the core value they changed. `new` returns `{doc,
-path}`; `sharpen` (including `--confirm`) and `tag` return a `Doc`; `status`
+path, near}`, `near` always `[]`; `sharpen` (including `--confirm`) and `tag` return a `Doc`; `status`
 returns `{doc, from}`; and `link` returns an array because `contradicts`
 changes both nodes.
 
@@ -302,20 +312,24 @@ changes both nodes.
 // neb new "Tags beat domains" --tag design --json
 {
   "doc": {
-    "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "seed",
-              "created": "2026-09-21", "updated": "2026-09-21", "tags": ["design"] },
+    "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "title_by": "human",
+              "status": "seed", "created": "2026-09-21", "updated": "2026-09-21",
+              "kill": null, "kill_by": null, "tags": ["design"], "edges": [], "references": [],
+              "closed": null, "origin": null },
     "body": ""
   },
-  "path": "/Users/you/.nebula/nodes/tags-beat-domains.md"
+  "path": "/Users/you/.nebula/nodes/tags-beat-domains.md",
+  "near": []
 }
 ```
 
 ```json
 // neb sharpen tags-beat-domains --kill "a corpus of 50 nodes needs a query tags cannot answer" --json
 {
-  "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis",
-            "created": "2026-09-21", "updated": "2026-09-21",
-            "kill": "a corpus of 50 nodes needs a query tags cannot answer", "tags": ["design"] },
+  "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "title_by": "human",
+            "status": "hypothesis", "created": "2026-09-21", "updated": "2026-09-21",
+            "kill": "a corpus of 50 nodes needs a query tags cannot answer", "kill_by": "human",
+            "tags": ["design"], "edges": [], "references": [], "closed": null, "origin": null },
   "body": ""
 }
 ```
@@ -324,9 +338,11 @@ changes both nodes.
 // neb status a-single-taxonomy abandoned --why "tags preserve the useful cross-cuts" --json
 {
   "doc": {
-    "node": { "id": "a-single-taxonomy", "title": "A single taxonomy", "status": "abandoned",
-              "created": "2026-09-21", "updated": "2026-09-21",
-              "closed": { "why": "tags preserve the useful cross-cuts", "at": "2026-09-21" } },
+    "node": { "id": "a-single-taxonomy", "title": "A single taxonomy", "title_by": "human",
+              "status": "abandoned", "created": "2026-09-21", "updated": "2026-09-21",
+              "kill": null, "kill_by": null, "tags": [], "edges": [], "references": [],
+              "closed": { "why": "tags preserve the useful cross-cuts", "at": "2026-09-21" },
+              "origin": null },
     "body": ""
   },
   "from": "seed"
@@ -336,21 +352,29 @@ changes both nodes.
 ```json
 // neb link tags-beat-domains contradicts a-single-taxonomy --json
 [
-  { "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis",
-                "created": "2026-09-21", "updated": "2026-09-21",
-                "edges": [{ "type": "contradicts", "to": "a-single-taxonomy" }] }, "body": "" },
-  { "node": { "id": "a-single-taxonomy", "title": "A single taxonomy", "status": "seed",
-                "created": "2026-09-21", "updated": "2026-09-21",
-                "edges": [{ "type": "contradicts", "to": "tags-beat-domains" }] }, "body": "" }
+  { "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "title_by": "human",
+              "status": "hypothesis", "created": "2026-09-21", "updated": "2026-09-21",
+              "kill": "a corpus of 50 nodes needs a query tags cannot answer", "kill_by": "human",
+              "tags": ["design"],
+              "edges": [{ "type": "contradicts", "to": "a-single-taxonomy", "by": "human" }],
+              "references": [], "closed": null, "origin": null }, "body": "" },
+  { "node": { "id": "a-single-taxonomy", "title": "A single taxonomy", "title_by": "human",
+              "status": "seed", "created": "2026-09-21", "updated": "2026-09-21",
+              "kill": null, "kill_by": null, "tags": [],
+              "edges": [{ "type": "contradicts", "to": "tags-beat-domains", "by": "human" }],
+              "references": [], "closed": null, "origin": null }, "body": "" }
 ]
 ```
 
 ```json
 // neb tag tags-beat-domains --add corpus --json
 {
-  "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis",
-            "created": "2026-09-21", "updated": "2026-09-21",
-            "tags": ["design", "corpus"] },
+  "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "title_by": "human",
+            "status": "hypothesis", "created": "2026-09-21", "updated": "2026-09-21",
+            "kill": "a corpus of 50 nodes needs a query tags cannot answer", "kill_by": "human",
+            "tags": ["design", "corpus"],
+            "edges": [{ "type": "contradicts", "to": "a-single-taxonomy", "by": "human" }],
+            "references": [], "closed": null, "origin": null },
   "body": ""
 }
 ```
@@ -358,7 +382,7 @@ changes both nodes.
 ```json
 // neb --json note tags-beat-domains "folksonomy is the argument, not a taxonomy with extra steps"
 {
-  "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis" },
+  "node": { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis", … },
   "body": "tags beat domains because a category you must pick is a decision you skip\n\n## Notes\n\n- 2026-09-21: folksonomy is the argument, not a taxonomy with extra steps",
   "notes": [
     { "at": "2026-09-21", "text": "folksonomy is the argument, not a taxonomy with extra steps",
@@ -394,12 +418,17 @@ that matters in a year.
 {
   "doc": {
     "node": {
-      "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis",
-      "created": "2026-09-21", "updated": "2026-09-21",
+      "id": "tags-beat-domains", "title": "Tags beat domains", "title_by": "human",
+      "status": "hypothesis", "created": "2026-09-21", "updated": "2026-09-21",
+      "kill": "a corpus of 50 nodes needs a query tags cannot answer", "kill_by": "human",
+      "tags": ["design", "corpus"],
+      "edges": [{ "type": "contradicts", "to": "a-single-taxonomy", "by": "human" }],
       "references": [
         { "id": "r1", "kind": "article", "uri": "https://example.org/folksonomy",
-          "note": "the drift argument", "added": "2026-09-21" }
-      ]
+          "title": null, "note": "the drift argument", "added": "2026-09-21",
+          "by": "human", "origin": null }
+      ],
+      "closed": null, "origin": null
     },
     "body": ""
   },
@@ -427,17 +456,20 @@ letter names — `questions/`, `hypotheses/`, `theories/`, `research/` — so
 resolve: the citation is still true, and the machine is merely missing or
 behind the checkout. `show` prints the resolved path under the reference, and
 `show --json` carries an `observatory` array of
-`{reference, record, path}` (`path` omitted when it does not resolve).
+`{reference, record, path}` (`path` is `null` when it does not resolve).
 
 ```json
 // neb cite proper-time-is-a-count --kind observatory --uri Q002 --note "the question this became"
 // then: neb show proper-time-is-a-count --json
 {
   "node": {
+    …,
     "references": [
-      { "id": "r1", "kind": "observatory", "uri": "Q002",
-        "note": "the question this became", "added": "2026-09-21", "by": "human" }
-    ]
+      { "id": "r1", "kind": "observatory", "uri": "Q002", "title": null,
+        "note": "the question this became", "added": "2026-09-21", "by": "human",
+        "origin": null }
+    ],
+    …
   },
   "observatory": [
     { "reference": "r1", "record": "Q002",
@@ -475,13 +507,16 @@ stored, and the status it left:
 {
   "doc": {
     "node": {
-      "id": "scarcity-wake", "title": "Scarcity wake", "status": "abandoned",
-      "created": "2026-09-26", "updated": "2026-09-26",
+      "id": "scarcity-wake", "title": "Scarcity wake", "title_by": "human",
+      "status": "abandoned", "created": "2026-09-26", "updated": "2026-09-26",
+      "kill": null, "kill_by": null, "tags": [], "edges": [],
       "references": [
-        { "id": "r1", "kind": "observatory", "uri": "H012",
-          "note": "the hypothesis this became", "added": "2026-09-26" }
+        { "id": "r1", "kind": "observatory", "uri": "H012", "title": null,
+          "note": "the hypothesis this became", "added": "2026-09-26", "by": "human",
+          "origin": null }
       ],
-      "closed": { "why": "handed off to H012", "at": "2026-09-26" }
+      "closed": { "why": "handed off to H012", "at": "2026-09-26" },
+      "origin": null
     },
     "body": ""
   },
@@ -496,7 +531,7 @@ exactly `handed off to <RECORD>`, and it carries an `observatory` reference
 to that record, so the two-verb form reads the same. `show` then prints the
 record's location under its `closed:` line, `trace` appends
 `handed off to <RECORD>` to its line, and both `--json` forms carry
-`"handed_off_to": "<RECORD>"`, omitted for every other node.
+`"handed_off_to": "<RECORD>"`, and `null` for every other node.
 
 ## Authorship
 
@@ -546,10 +581,15 @@ not who wrote the words. `check` enforces nothing about authorship.
     "references": [
       { "id": "r1", "kind": "article", "uri": "https://example.org/folksonomy",
         "title": "Folksonomies", "note": "the drift argument, made for web tagging",
-        "added": "2026-09-12", "by": "human" }
-    ]
+        "added": "2026-09-12", "by": "human", "origin": null }
+    ],
+    "closed": null,
+    "origin": null
   },
-  "body": "tags beat domains because a category you must pick is a decision you skip"
+  "body": "tags beat domains because a category you must pick is a decision you skip",
+  "notes": [],
+  "observatory": [],
+  "handed_off_to": null
 }
 ```
 
@@ -589,15 +629,33 @@ touched this node`; its JSON stays `[]`. Otherwise its JSON keeps the full hash:
 Both historical verbs require the corpus to be inside a git work tree and are
 read-only.
 
-`neb list --json` is an array of the same `node` objects (no `body`). A closed
-node carries `"closed": { "why": "...", "at": "2026-09-12" }`; optional fields
-(`kill`, `closed`, `origin`, empty lists) are omitted.
+`neb list --json` is an array of the same `node` objects (no `body`), every
+field present. A closed node carries
+`"closed": { "why": "...", "at": "2026-09-12" }`; an open one `"closed": null`,
+and likewise `null` for no `kill` or `origin` and `[]` for no tags, edges or
+references.
 
-`--limit <N>` on `list`, `inbox` and `review` bounds the output; without it
+### Capped lists
+
+`--limit <N>` on `list`, `inbox` and `review` (per section; lines with
+`--short`) and `--depth <N>` on `trace` bound the output; without them
 everything is printed, as before. The text ends by saying what was left out
-(`2 of 3 matching nodes shown, of 4 in all; raise --limit for more`). Under
-`--json` the array is simply cut to N: same shape, no marker, so compare its
-length with N to know whether there may be more.
+(`2 of 3 matching nodes shown, of 4 in all; raise --limit for more`).
+
+Under `--json`, the flag changes the shape: with it, the list is an envelope
+whether or not anything was cut, and without it the list is the bare array.
+
+```json
+// neb list --tag design --limit 1 --json
+{ "items": [ { "id": "a-single-global-taxonomy", … } ], "total": 3, "truncated": true }
+```
+
+`items` is what was kept, `total` how many matched before the cut, and
+`truncated` whether the cut dropped any. For `review`, `total` counts the
+findings of every rule before each kept its first N; for `trace --depth`, it
+is how many nodes the whole walk reaches. `near` always has a limit (`-k`,
+default 3), so its `--json` is always the envelope, and a cut also says
+`K of N shown; raise -k for more` on stderr, in text mode too.
 
 `near` is word overlap — BM25 over title, tags and body, title and tags
 weighted up, plurals and `-ing` folded, no embeddings and no network — with
@@ -629,7 +687,8 @@ text appends `linked: parent (<kinds>)`, `linked: child (<kinds>)` or
 for free text (and so for the `near` of `capture` and `promote`). A linked
 neighbour is a link that exists, not one to make.
 
-Nodes sharing no word are left out, so an empty answer (`[]`; in text,
+Nodes sharing no word are left out, so an empty answer (`"items": []` with
+`"total": 0`; in text,
 `nothing near: no node shares a word with this`) is a real finding: the
 thought is unlike anything in the corpus. It ranks candidates for a human to
 read; it never writes anything, and passing its first line straight to
@@ -637,12 +696,16 @@ read; it never writes anything, and passing its first line straight to
 
 ```json
 // neb near --json "one global taxonomy for every domain"
-[
-  { "id": "a-single-global-taxonomy", "title": "A single global taxonomy",
-    "status": "abandoned", "tags": ["design"], "score": 0.301, "band": "strong", "linked": null },
-  { "id": "tags-beat-domains", "title": "Tags beat domains",
-    "status": "hypothesis", "tags": ["design", "corpus"], "score": 0.138, "band": "some", "linked": null }
-]
+{
+  "items": [
+    { "id": "a-single-global-taxonomy", "title": "A single global taxonomy",
+      "status": "abandoned", "tags": ["design"], "score": 0.301, "band": "strong", "linked": null },
+    { "id": "tags-beat-domains", "title": "Tags beat domains",
+      "status": "hypothesis", "tags": ["design", "corpus"], "score": 0.138, "band": "some", "linked": null }
+  ],
+  "total": 2,
+  "truncated": false
+}
 
 // neb near tags-beat-domains        (the node's own text is the query; it is not in the answer)
 strong abandoned  a-single-global-taxonomy A single global taxonomy  linked: contradicts
@@ -678,16 +741,17 @@ parent once, however many edges reach it. `via` is the step that first reached
 the node: `from` is the node it was reached from, and `kinds` lists every edge
 kind between the two, in declared order. It is `null` for the start.
 `handed_off_to` names the Observatory record a node was handed off to, and is
-omitted for every other node.
+`null` for every other node. With `--depth` the list is the
+[capped-list](#capped-lists) envelope.
 
 ```json
 // neb trace tags-beat-domains --json
 [
   { "id": "tags-beat-domains", "title": "Tags beat domains", "status": "hypothesis",
-    "parents": ["required-categorical-fields-drift"], "via": null },
+    "parents": ["required-categorical-fields-drift"], "via": null, "handed_off_to": null },
   { "id": "required-categorical-fields-drift", "title": "Required categorical fields drift",
     "status": "seed", "parents": [],
-    "via": { "from": "tags-beat-domains", "kinds": ["derives-from"] } }
+    "via": { "from": "tags-beat-domains", "kinds": ["derives-from"] }, "handed_off_to": null }
 ]
 
 // neb impact required-categorical-fields-drift --json     (via: descends | contradicts)
@@ -752,8 +816,9 @@ reference and does not close the no-references finding after the grace period.
 file. `--limit <N>` keeps the first N findings under each heading, so a
 crowded section cannot push a short one out, and a cut section ends
 `- _… and K more; raise --limit for more_`; under `--json` it keeps the first
-N items of each `rule`. With `--short` it keeps the first N lines and ends
-`… and K more; raise --limit for more`.
+N items of each `rule`, in the [capped-list](#capped-lists) envelope whose
+`total` counts every rule's findings. With `--short` it keeps the first N
+lines and ends `… and K more; raise --limit for more`.
 
 ```json
 // neb review --short --json

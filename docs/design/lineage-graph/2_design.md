@@ -100,7 +100,8 @@ The repository is a Cargo workspace of two crates. Dependencies point one way:
 
 Core never prints, never colours, never exits, and does not depend on clap or
 `anyhow`. Every value it returns is `Serialize`, so `neb --json` and the
-desktop app's IPC are one schema; with the `ts` feature,
+desktop app's IPC are one schema (`neb` states absent fields as `null`, in
+`render::json`); with the `ts` feature,
 `apps/desktop/src/types/*.ts` is generated from those types (`make types`).
 The reasoning is in
 [docs/design/v0.2/2_architecture.md](../v0.2/2_architecture.md).

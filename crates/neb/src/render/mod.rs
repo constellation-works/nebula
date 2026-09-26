@@ -4,6 +4,7 @@
 //! piping into a file or an agent yields clean text.
 
 mod error;
+pub mod json;
 mod report;
 mod tree;
 mod triage;

@@ -10,7 +10,8 @@
 //! public function returns [`Result<T, Error>`](Error) and every value it
 //! returns is `serde::Serialize`, so the CLI's `--json` output and the
 //! desktop's IPC payload are the same value and there is no second schema to
-//! drift.
+//! drift. (The CLI serialises it with every absent field stated as `null`,
+//! where these types leave out what the corpus files store by omission.)
 //!
 //! Module map:
 //!

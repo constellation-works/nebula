@@ -898,14 +898,23 @@ const STOPWORDS: &[&str] = &[
 /// list is the honest answer for a thought unlike anything in the corpus.
 /// Ties are broken by id, so the same corpus and query give the same order.
 pub fn near(graph: &Graph<'_>, query: &str, k: usize) -> Result<Near> {
+    near_counted(graph, query, k).map(|(near, _)| near)
+}
+
+/// [`near`], with how many nodes matched before the cut to `k`: every node
+/// sharing a word with the query, so a caller can say the answer is capped.
+///
+/// A count beside [`Near`] rather than inside it, so the list keeps the
+/// bare shape the desktop reads.
+pub fn near_counted(graph: &Graph<'_>, query: &str, k: usize) -> Result<(Near, usize)> {
     let query = query.trim();
     let (text, exclude) = match graph.get(query) {
         Some(doc) => (node_text(doc), Some(doc.node.id.as_str())),
         None => (query.to_string(), None),
     };
     let terms: BTreeSet<String> = tokens(&text).into_iter().collect();
-    if terms.is_empty() || k == 0 {
-        return Ok(Near(Vec::new()));
+    if terms.is_empty() {
+        return Ok((Near(Vec::new()), 0));
     }
 
     // Index every candidate: weighted term frequencies and weighted length.
@@ -915,7 +924,7 @@ pub fn near(graph: &Graph<'_>, query: &str, k: usize) -> Result<Near> {
         .filter(|d| exclude != Some(d.node.id.as_str()))
         .collect();
     if candidates.is_empty() {
-        return Ok(Near(Vec::new()));
+        return Ok((Near(Vec::new()), 0));
     }
     let indexed: Vec<(&Doc, HashMap<String, f64>, f64)> = candidates
         .iter()
@@ -943,7 +952,7 @@ pub fn near(graph: &Graph<'_>, query: &str, k: usize) -> Result<Near> {
         .collect();
     let ceiling = (BM25_K1 + 1.0) * idf.iter().map(|(_, w)| w).sum::<f64>();
     if ceiling <= 0.0 {
-        return Ok(Near(Vec::new()));
+        return Ok((Near(Vec::new()), 0));
     }
 
     let mut scored: Vec<(f64, &Doc)> = indexed
@@ -961,8 +970,9 @@ pub fn near(graph: &Graph<'_>, query: &str, k: usize) -> Result<Near> {
         b.0.total_cmp(&a.0)
             .then_with(|| a.1.node.id.cmp(&b.1.node.id))
     });
+    let matched = scored.len();
     scored.truncate(k);
-    Ok(Near(
+    let near = Near(
         scored
             .into_iter()
             .map(|(score, d)| {
@@ -980,7 +990,8 @@ pub fn near(graph: &Graph<'_>, query: &str, k: usize) -> Result<Near> {
                 }
             })
             .collect(),
-    ))
+    );
+    Ok((near, matched))
 }
 
 /// Every edge between two nodes, either way round, each distinct claim

@@ -1968,6 +1968,44 @@ fn near_is_capped_at_k_and_empty_for_a_thought_unlike_anything() {
     );
 }
 
+/// The count beside the answer is every node that shared a word with the
+/// query, before `k` cut it: what a caller needs to say the answer is capped.
+#[test]
+fn near_counted_reports_the_matches_before_the_cut() {
+    let (_dir, corpus) = corpus();
+    lexical_fixture(&corpus);
+    let docs = corpus.load_all().unwrap();
+    let graph = Graph::build(&docs).unwrap();
+
+    let (all, matched) = graph::near_counted(&graph, "tags taxonomy ranking", 100).unwrap();
+    assert!(
+        matched > 2,
+        "the fixture has more than two matches: {all:?}"
+    );
+    assert_eq!(all.0.len(), matched, "an uncut answer is every match");
+
+    let (cut, total) = graph::near_counted(&graph, "tags taxonomy ranking", 2).unwrap();
+    assert_eq!(cut.0.len(), 2);
+    assert_eq!(total, matched, "the count is taken before the cut");
+    let ids = |near: &nebula_core::Near| near.0.iter().map(|n| n.id.clone()).collect::<Vec<_>>();
+    assert_eq!(ids(&cut), ids(&all)[..2], "the cut keeps the best");
+    assert_eq!(
+        ids(&cut),
+        ids(&graph::near(&graph, "tags taxonomy ranking", 2).unwrap()),
+        "`near` is the same answer without the count"
+    );
+
+    let (none, total) = graph::near_counted(&graph, "tags taxonomy ranking", 0).unwrap();
+    assert!(none.0.is_empty());
+    assert_eq!(total, matched, "k of zero still counts what it left out");
+    assert_eq!(
+        graph::near_counted(&graph, "quantum gravity", NEAR_DEFAULT)
+            .unwrap()
+            .1,
+        0
+    );
+}
+
 #[test]
 fn capture_and_promote_suggest_but_never_link() {
     let (_dir, corpus) = corpus();

@@ -149,7 +149,7 @@ habit. This cut keeps what a person actually uses.
   (`unresolved_observatory_record`); with no root set it accepts the id and
   says the record cannot be located. `show` prints the record's location
   under `closed:`, `trace` ends the node's line with `handed off to <record>`,
-  and both `--json` forms carry `handed_off_to`, omitted for every other
+  and both `--json` forms carry `handed_off_to`, `null` for every other
   node. `handoff --json` is `{doc, reference, record, from}`.
 - One writer at a time. Every verb that writes, and the desktop's capture and
   settle actions, hold an advisory lock on `<root>/.lock` for the whole write
@@ -212,10 +212,12 @@ habit. This cut keeps what a person actually uses.
   three under the entry id, and `promote` without `--parent` prints them and
   proceeds as a root; `--quiet`/`-q` on either leaves them out. Suggestion
   only: nothing here ever writes an edge, by the v0.2 rule against automatic
-  linking. `--json` shapes: `near` is a bare list of
-  `{id, title, status, tags, score, band, linked}`, where `linked` is a list
-  of `{from, type, to}` or `null`, and always `null` for free text; `capture`
-  is `{entry, near}`; `promote` is `{doc, path, near}`, `near` omitted when
+  linking. `--json` shapes: `near` is `{items, total, truncated}`, `items`
+  a list of `{id, title, status, tags, score, band, linked}`, where `linked`
+  is a list of `{from, type, to}` or `null`, and always `null` for free
+  text; `total` counts every node sharing a word with the query, and a cut
+  says `K of N shown; raise -k for more` on stderr. `capture` is
+  `{entry, near}`; `promote` is `{doc, path, near}`, `near` `[]` when
   empty. The skill's triage heuristic now runs `near`, picks a parent only
   when one is defensible, and otherwise promotes as a root.
 - `neb capture -` reads the thought from standard input. Text over several
@@ -243,9 +245,11 @@ habit. This cut keeps what a person actually uses.
 - `--limit N` on `list`, `inbox` and `review` (per section, or lines with
   `--short`) and `trace --depth N` bound long output; without them everything
   is printed, as before. Text says what was left out (`2 of 5 nodes shown;
-  raise --limit for more`, `(1 more beyond --depth)`); under `--json` the
-  arrays are cut to N (per `rule` for `review`) in the same shape, with no
-  marker.
+  raise --limit for more`, `(1 more beyond --depth)`); under `--json` a
+  bounded list is `{items, total, truncated}`, `items` cut to N (per `rule`
+  for `review`) and `total` counting every match (every rule's findings for
+  `review`, the whole walk for `trace`). Without the flag the list is the
+  bare array it always was.
 - `--json` covers the writes as well as the reads: each verb that writes
   prints the value it changed. `new` is `{doc, path}`; `sharpen` and `tag` a
   `Doc`; `status` `{doc, from}`; `link` an array, since `contradicts` changes

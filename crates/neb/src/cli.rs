@@ -2,8 +2,9 @@
 //! arguments to `nebula_core`. Nothing else in the crate knows about clap.
 //!
 //! Dispatch is a table. Each arm parses, makes one core call, and either
-//! writes the returned value as JSON or hands it to `render`. A command that
-//! wants to do anything else belongs in core.
+//! writes the returned value as JSON, through [`render::json`]'s view where
+//! core's serialisation would leave a field out, or hands it to `render`. A
+//! command that wants to do anything else belongs in core.
 //!
 //! [`StatusArg`] and [`EdgeKindArg`] exist because core does not depend on
 //! clap: they are the `ValueEnum` wrappers that keep `--help` listing the
@@ -18,7 +19,7 @@
 //! add its row to the template; a `#[test]` below checks the two stay in sync.
 
 use crate::output::{self, errln, out, outln};
-use crate::render;
+use crate::render::{self, json};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use nebula_core::triage::{Action, Step};
 use nebula_core::{
@@ -1603,7 +1604,7 @@ fn run(cli: Cli) -> Outcome {
             let k = if quiet { 0 } else { NEAR_DEFAULT };
             if json {
                 let captured = ops::capture_near(&corpus, &text, k)?;
-                out_json(&captured)?;
+                out_json(&json::Captured::from(&captured))?;
                 note_same_as(&corpus, &captured.entry)?;
                 commit(&corpus, commits, "capture", &[&captured.entry.id])?;
                 return Ok(ok);
@@ -1625,10 +1626,11 @@ fn run(cli: Cli) -> Outcome {
         Command::Inbox { limit } => {
             let corpus = Corpus::open(root)?;
             let mut inbox = corpus.inbox()?;
-            let waiting = cap(&mut inbox.0, limit);
+            let cut = cap(&mut inbox.0, limit);
             if json {
-                out_json(&inbox)?;
+                out_json(&json::List::new(inbox.0, limit.map(|_| cut)))?;
             } else {
+                let (waiting, _) = cut;
                 out!("{}", render::inbox(&inbox, waiting));
             }
             Ok(ok)
@@ -1665,7 +1667,7 @@ fn run(cli: Cli) -> Outcome {
                 k,
             )?;
             if json {
-                out_json(&created)?;
+                out_json(&json::Created::from(&created))?;
             } else {
                 outln!(
                     "{} {}",
@@ -1743,7 +1745,7 @@ fn run(cli: Cli) -> Outcome {
                 },
             )?;
             if json {
-                out_json(&created)?;
+                out_json(&json::Created::from(&created))?;
             } else {
                 outln!(
                     "{} {}",
@@ -1770,7 +1772,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 let docs = corpus.load_all()?;
                 let view = graph::node(&Graph::build(&docs)?, &node)?;
-                out_json(&view)?;
+                out_json(&json::NodeView::from(&view))?;
             } else {
                 outln!("{}", render::bold(&node));
             }
@@ -1788,7 +1790,7 @@ fn run(cli: Cli) -> Outcome {
             let (corpus, _lock) = open_locked(root)?;
             let doc = ops::confirm_kill(&corpus, &node).map_err(|e| Failure::about(&e, &node))?;
             if json {
-                out_json(&doc)?;
+                out_json(&json::Doc::from(&doc))?;
             } else {
                 outln!("{} kill condition confirmed as yours", render::bold(&node));
             }
@@ -1813,7 +1815,7 @@ fn run(cli: Cli) -> Outcome {
             let doc = ops::sharpen(&corpus, &node, &kill, by.as_deref())
                 .map_err(|e| Failure::about(&e, &node))?;
             if json {
-                out_json(&doc)?;
+                out_json(&json::Doc::from(&doc))?;
             } else if before.node.status != doc.node.status {
                 outln!("{} is now {}", render::bold(&node), doc.node.status);
             } else if before.node.kill.is_some() {
@@ -1846,7 +1848,7 @@ fn run(cli: Cli) -> Outcome {
             let changed = ops::set_status(&corpus, &node, status, why.as_deref())
                 .map_err(|e| Failure::about(&e, &node))?;
             if json {
-                out_json(&changed)?;
+                out_json(&json::StatusChange::from(&changed))?;
             } else {
                 outln!(
                     "{} {} -> {status}",
@@ -1865,7 +1867,7 @@ fn run(cli: Cli) -> Outcome {
             let kind = EdgeType::from(kind);
             let changed = ops::link(&corpus, &from, kind, &to, by.as_deref())?;
             if json {
-                out_json(&changed)?;
+                out_json(&changed.iter().map(json::Doc::from).collect::<Vec<_>>())?;
             } else {
                 outln!(
                     "{} {} {}",
@@ -1914,7 +1916,7 @@ fn run(cli: Cli) -> Outcome {
                 doc = ops::tag_add(&corpus, &target, &add)?;
             }
             if json {
-                out_json(&doc)?;
+                out_json(&json::Doc::from(&doc))?;
             } else {
                 let shown = if doc.node.tags.is_empty() {
                     render::dim("(no tags)")
@@ -1939,7 +1941,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 let docs = corpus.load_all()?;
                 let view = graph::node(&Graph::build(&docs)?, &node)?;
-                out_json(&view)?;
+                out_json(&json::NodeView::from(&view))?;
             } else {
                 outln!("{}", render::bold(&node));
             }
@@ -1981,7 +1983,7 @@ fn run(cli: Cli) -> Outcome {
             )
             .map_err(|e| Failure::about(&e, &node))?;
             if json {
-                out_json(&cited)?;
+                out_json(&json::Cited::from(&cited))?;
             } else {
                 outln!("{} {}", render::bold(&node), render::bold(&cited.reference));
                 if let Some(setting) = &observatory {
@@ -2031,7 +2033,7 @@ fn run(cli: Cli) -> Outcome {
             )
             .map_err(|e| Failure::about(&e, &node))?;
             if json {
-                out_json(&done)?;
+                out_json(&json::HandedOff::from(&done))?;
             } else {
                 outln!(
                     "{} {} -> {}, handed off to {} {}",
@@ -2065,7 +2067,7 @@ fn run(cli: Cli) -> Outcome {
             let view =
                 graph::node(&Graph::build(&docs)?, &node)?.with_observatory(observatory.as_deref());
             if json {
-                out_json(&view)?;
+                out_json(&json::NodeView::from(&view))?;
             } else {
                 out!("{}", render::node(&view));
             }
@@ -2091,10 +2093,12 @@ fn run(cli: Cli) -> Outcome {
             let corpus = Corpus::open(root)?;
             let docs = corpus.load_all()?;
             let mut listing = graph::list(&Graph::build(&docs)?, status.map(Status::from), &tags)?;
-            let matched = cap(&mut listing.0, limit);
+            let cut = cap(&mut listing.0, limit);
             if json {
-                out_json(&listing)?;
+                let nodes = listing.0.iter().map(json::Node::from).collect();
+                out_json(&json::List::new(nodes, limit.map(|_| cut)))?;
             } else {
+                let (matched, _) = cut;
                 out!("{}", render::list(&listing.0, matched, docs.len()));
             }
             Ok(ok)
@@ -2107,9 +2111,16 @@ fn run(cli: Cli) -> Outcome {
             }
             let corpus = Corpus::open(root)?;
             let docs = corpus.load_all()?;
-            let near = graph::near(&Graph::build(&docs)?, &query, limit)?;
+            let (near, matched) = graph::near_counted(&Graph::build(&docs)?, &query, limit)?;
+            let truncated = near.0.len() < matched;
+            // On stderr in every mode, so a capped answer never reads as
+            // the whole one and the payload stays all stdout holds (STD-01
+            // §R34, §R12).
+            if truncated {
+                errln!("{} of {matched} shown; raise -k for more", near.0.len());
+            }
             if json {
-                out_json(&near)?;
+                out_json(&json::Capped::new(near.0, (matched, truncated)))?;
             } else {
                 out!("{}", render::near(&near));
             }
@@ -2120,9 +2131,16 @@ fn run(cli: Cli) -> Outcome {
             let corpus = Corpus::open(root)?;
             let docs = corpus.load_all()?;
             let direction = if down { Direction::Down } else { Direction::Up };
-            let walk = graph::trace_within(&Graph::build(&docs)?, &node, direction, depth)?;
+            let graph = Graph::build(&docs)?;
+            let walk = graph::trace_within(&graph, &node, direction, depth)?;
             if json {
-                out_json(&walk)?;
+                // A bounded walk's `total` is what the whole walk reaches.
+                let cut = depth
+                    .map(|_| graph::trace(&graph, &node, direction))
+                    .transpose()?
+                    .map(|whole| (whole.0.len(), walk.0.len() < whole.0.len()));
+                let steps = walk.0.iter().map(json::TraceNode::from).collect();
+                out_json(&json::List::new(steps, cut))?;
             } else {
                 out!("{}", render::tree(&docs, &node, direction, depth));
             }
@@ -2183,9 +2201,12 @@ fn run(cli: Cli) -> Outcome {
             let corpus = Corpus::open(root)?;
             let docs = corpus.load_all()?;
             let mut report = graph::review(&Graph::build(&docs)?, &corpus.inbox()?, since)?;
+            // Every rule's findings, counted before the cut keeps each rule's first N.
+            let found = report.0.len();
             let omitted = limit.map_or_else(Vec::new, |n| report.truncate_per_rule(n));
             let text = if json {
-                serde_json::to_string_pretty(&report).map_err(Failure::from)?
+                let listed = json::List::new(report.0, limit.map(|_| (found, !omitted.is_empty())));
+                serde_json::to_string_pretty(&listed).map_err(Failure::from)?
             } else {
                 render::review(
                     &report,
@@ -2217,24 +2238,26 @@ fn short_review(
     let corpus = Corpus::open(root)?;
     let docs = corpus.load_all()?;
     let mut report = graph::open(&Graph::build(&docs)?, &corpus.inbox()?, tags)?;
-    let all = cap(&mut report.0, limit);
+    let cut = cap(&mut report.0, limit);
     if json {
-        out_json(&report)?;
+        out_json(&json::List::new(report.0, limit.map(|_| cut)))?;
     } else {
+        let (all, _) = cut;
         out!("{}", render::open(&report, all - report.0.len()));
     }
     Ok(())
 }
 
-/// Cut a listing to `--limit`, when one was given, and return how long it
-/// was before, so the text can say how much was left out. `--json` gets the
-/// cut list alone: its shape does not change with the flag.
-fn cap<T>(items: &mut Vec<T>, limit: Option<usize>) -> usize {
-    let all = items.len();
+/// Cut a listing to `--limit`, when one was given, and return how many
+/// matched before the cut and whether it dropped any, so the text can say
+/// how much was left out. `--json` puts both in the [`json::List`] envelope
+/// whenever the flag is given (STD-01 §R34).
+fn cap<T>(items: &mut Vec<T>, limit: Option<usize>) -> (usize, bool) {
+    let total = items.len();
     if let Some(n) = limit {
         items.truncate(n);
     }
-    all
+    (total, items.len() < total)
 }
 
 /// Pretty JSON on stdout, which is what `--json` means everywhere.
