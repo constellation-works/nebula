@@ -362,10 +362,10 @@ mod tests {
     fn only_a_walk_the_bound_cut_has_a_notice() {
         assert_eq!(trace_notice(4, 4, Some(1)), None);
         assert_eq!(trace_notice(4, 4, None), None);
-        let cut = trace_notice(1, 2, Some(0)).unwrap();
+        let cut = trace_notice(2, 3, Some(1)).unwrap();
         assert_eq!(
             cut.line(true).map(|l| visible(&l)).as_deref(),
-            Some("1 more node beyond --depth 0; raise --depth for more"),
+            Some("1 more node beyond --depth 1; raise --depth for more"),
             "said under --json too"
         );
     }

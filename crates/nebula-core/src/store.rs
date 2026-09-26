@@ -181,19 +181,44 @@ impl Corpus {
     }
 
     /// Read the configured corpus root, if this machine has one.
+    ///
+    /// A setting that is there but fails [`Self::root_setting`] is refused
+    /// by name rather than skipped or used: skipping would send every
+    /// command to `~/.nebula` without a word, and a relative path would name
+    /// a different corpus from each working directory (STD-02 §R28).
     pub fn configured_root() -> Result<Option<PathBuf>> {
         let path = Self::root_config_path()?;
-        match std::fs::read_to_string(path) {
-            Ok(raw) => {
-                let root = raw.trim();
-                if root.is_empty() {
-                    return Err(Error::corpus("configured nebula root is empty"));
-                }
-                Ok(Some(PathBuf::from(root)))
-            }
+        match std::fs::read_to_string(&path) {
+            Ok(raw) => Self::root_setting(&path, &raw).map(Some),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// The one rule for what the corpus root setting at `path` may hold:
+    /// a single absolute path, surrounding whitespace aside. Loading the
+    /// setting and writing it both go through here, so the file can only be
+    /// given what it will later be read as (STD-02 §R24, §R28).
+    ///
+    /// Pure over its arguments: `path` only names the file in the error.
+    pub(crate) fn root_setting(path: &Path, contents: &str) -> Result<PathBuf> {
+        let root = contents.trim();
+        if root.is_empty() {
+            return Err(Error::EmptyRootSetting(path.to_path_buf()));
+        }
+        let root = PathBuf::from(root);
+        if !root.is_absolute() {
+            return Err(Error::RelativeRootSetting {
+                setting: path.to_path_buf(),
+                root,
+            });
+        }
+        Ok(root)
+    }
+
+    /// What the corpus root setting holds when it names `root`.
+    fn root_setting_contents(root: &Path) -> String {
+        format!("{}\n", root.display())
     }
 
     /// The machine-local file that records where the Observatory checkout
@@ -279,22 +304,28 @@ impl Corpus {
             .parent()
             .ok_or_else(|| Error::corpus("root configuration path has no parent"))?;
         create_private_dir_all(parent)?;
-        write_private_atomic(&path, format!("{}\n", root.display()))?;
+        write_private_atomic(&path, Self::root_setting_contents(root))?;
         Ok(path)
     }
 
     /// Refuse a conflicting machine-local default before initializing a
     /// corpus. The write is deliberately separate so a refused `--set-root`
     /// cannot create or rewrite the requested corpus first.
+    ///
+    /// `root` is checked by [`Self::root_setting`] as the contents it would
+    /// be written as, the same function that reads it back. A setting already
+    /// there that fails that rule names no corpus, since every command
+    /// refuses it, so replacing it redirects nothing and needs no `force`:
+    /// it is the remedy that refusal suggests.
     pub(crate) fn check_root_config(root: &Path, force: bool) -> Result<()> {
-        if !root.is_absolute() {
-            return Err(Error::corpus(format!(
-                "--set-root requires an absolute corpus path, not {}; rerun with an absolute path",
-                root.display()
-            )));
-        }
         let path = Self::root_config_path()?;
-        if let Some(configured) = Self::configured_root()?
+        Self::root_setting(&path, &Self::root_setting_contents(root))?;
+        let configured = match Self::configured_root() {
+            Ok(configured) => configured,
+            Err(Error::EmptyRootSetting(_) | Error::RelativeRootSetting { .. }) => None,
+            Err(error) => return Err(error),
+        };
+        if let Some(configured) = configured
             && configured != root
             && !force
         {
@@ -1885,6 +1916,54 @@ fn hard_links_beside(_path: &Path) -> Result<Vec<PathBuf>> {
 mod tests {
     use super::*;
     use crate::fs::{Step, create_temporary_sibling, recording};
+
+    /// Load and `--set-root` share this one rule, and it reads only what it
+    /// is handed: no `HOME`, no file.
+    #[test]
+    fn root_setting_is_validated_by_one_function() {
+        let setting = Path::new("/h/.config/nebula/root");
+
+        for contents in ["", "\n", "  \t\n"] {
+            let error = Corpus::root_setting(setting, contents).unwrap_err();
+            assert!(
+                matches!(&error, Error::EmptyRootSetting(path) if path == setting),
+                "{contents:?}: {error:?}"
+            );
+            assert!(
+                error.to_string().contains("/h/.config/nebula/root"),
+                "{error}"
+            );
+        }
+
+        for contents in ["relcorpus", "relcorpus\n", "./corpus\n", "~/corpus\n"] {
+            let error = Corpus::root_setting(setting, contents).unwrap_err();
+            assert!(
+                matches!(
+                    &error,
+                    Error::RelativeRootSetting { setting: path, root }
+                        if path == setting && root == Path::new(contents.trim())
+                ),
+                "{contents:?}: {error:?}"
+            );
+            let message = error.to_string();
+            assert!(message.contains("/h/.config/nebula/root"), "{message}");
+            assert!(message.contains(contents.trim()), "{message}");
+        }
+
+        for contents in ["/srv/corpus", "/srv/corpus\n", "  /srv/my corpus \n"] {
+            assert_eq!(
+                Corpus::root_setting(setting, contents).unwrap(),
+                PathBuf::from(contents.trim())
+            );
+        }
+
+        // The write path hands it exactly what it would write.
+        let root = Path::new("/srv/corpus");
+        assert_eq!(
+            Corpus::root_setting(setting, &Corpus::root_setting_contents(root)).unwrap(),
+            root
+        );
+    }
 
     #[test]
     fn atomic_write_removes_its_temporary_file_when_rename_fails() {

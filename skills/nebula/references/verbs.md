@@ -156,7 +156,10 @@ every machine that shares the corpus has its own setting.
 Plain `init` never writes `~/.config/nebula/root`. For a primary non-default
 corpus, pass `--set-root`; it refuses to replace a setting that names another
 corpus unless `--force` is also explicit. Scratch corpora use `--root` and
-never `--set-root`.
+never `--set-root`. The setting must hold one absolute path: an empty or
+relative one is refused by every command that reads it
+(`empty_root_setting`, `relative_root_setting`), and `--set-root` replaces
+such a setting without `--force`, since it names no corpus.
 
 ```json
 // neb config observatory-root --json     (source: env | machine | config | unset)
@@ -731,7 +734,9 @@ references.
 
 `--limit <N>` on `list`, `inbox` and `review` (per section; lines with
 `--short`) and `--depth <N>` on `trace` bound the output; without them
-everything is printed, as before. stdout holds the records alone, and stderr
+everything is printed, as before. N is at least 1, as is `near`'s `-k`, and
+`review --since` is at least 0: a value below is a usage error (exit 2, stdout
+empty) rather than an empty answer that reads as a real one. stdout holds the records alone, and stderr
 says what was left out (`2 of 3 matching nodes shown, of 4 in all; raise
 --limit for more`), in text mode and under `--json` alike. Uncut, text
 mode's stderr carries the count instead (`3 of 4 nodes`). A filter that
@@ -842,8 +847,8 @@ status, the title, and the kinds of the step that reached it joined by `,`
 2	gravity-as-scarcity	seed	Gravity as scarcity	derives-from
 ```
 
-`--depth <N>` stops the walk N steps out (`1` is the parents, or the children
-with `--down`; `0` the node alone), in the tree, the lines and `--json` alike.
+`--depth <N>` stops the walk N steps out (`1`, the least, is the parents, or
+the children with `--down`), in the tree, the lines and `--json` alike.
 When it left nodes out, stderr says how many, in every mode (`2 more nodes
 beyond --depth 1; raise --depth for more`). A node within N steps along any
 path is kept, even when the first path the walk took reached it further out.

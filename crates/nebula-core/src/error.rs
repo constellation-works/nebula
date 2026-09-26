@@ -72,6 +72,28 @@ pub enum Error {
     #[error("--root cannot be empty")]
     EmptyRoot,
 
+    /// This machine's corpus root setting, `~/.config/nebula/root`, is there
+    /// but names nothing. Refused rather than skipped: skipping would send
+    /// every command to `~/.nebula` without a word.
+    #[error("the corpus root setting {} is empty", .0.display())]
+    EmptyRootSetting(PathBuf),
+
+    /// This machine's corpus root setting holds, or was about to be given, a
+    /// relative path. The setting is read from whatever directory a command
+    /// runs in, so a relative one would find or create a different corpus
+    /// from each.
+    #[error(
+        "the corpus root setting {} must be an absolute path, not `{}`",
+        .setting.display(),
+        .root.display()
+    )]
+    RelativeRootSetting {
+        /// The machine setting file.
+        setting: PathBuf,
+        /// The path it holds or would hold.
+        root: PathBuf,
+    },
+
     /// A machine-local root setting already names a different corpus. The
     /// caller must opt in to replacing it rather than redirecting commands
     /// silently.
@@ -512,6 +534,8 @@ impl Error {
         NoNodeAtRevision => "no_node_at_revision",
         UnknownRevision => "unknown_revision",
         EmptyRoot => "empty_root",
+        EmptyRootSetting => "empty_root_setting",
+        RelativeRootSetting => "relative_root_setting",
         RootConfigConflict => "root_config_conflict",
         RelativeObservatoryRoot => "relative_observatory_root",
         MissingConfig => "missing_config",

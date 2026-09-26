@@ -251,8 +251,9 @@ enum Command {
 
     /// List captures that have not been promoted or dropped.
     Inbox {
-        /// Show at most N entries, oldest first. Defaults to every one.
-        #[arg(long, value_name = "N")]
+        /// Show at most N entries, oldest first, N at least 1. Defaults to
+        /// every one.
+        #[arg(long, value_name = "N", value_parser = count)]
         limit: Option<usize>,
     },
 
@@ -604,9 +605,9 @@ enum Command {
         /// Only nodes carrying this tag. Repeat to require every one.
         #[arg(long = "tag", value_name = "TAG")]
         tags: Vec<String>,
-        /// Show at most N of the matching nodes, in corpus order. Defaults to
-        /// every one.
-        #[arg(long, value_name = "N")]
+        /// Show at most N of the matching nodes, in corpus order, N at least
+        /// 1. Defaults to every one.
+        #[arg(long, value_name = "N", value_parser = count)]
         limit: Option<usize>,
     },
 
@@ -628,8 +629,14 @@ enum Command {
   neb near <id> -k 5
   neb near <id> --json")]
     Near {
-        /// How many to return.
-        #[arg(long, short = 'k', value_name = "K", default_value_t = NEAR_DEFAULT)]
+        /// How many to return, at least 1.
+        #[arg(
+            long,
+            short = 'k',
+            value_name = "K",
+            default_value_t = NEAR_DEFAULT,
+            value_parser = count
+        )]
         limit: usize,
         /// Free text, or the id of an existing node (which is then left out
         /// of the answer).
@@ -653,8 +660,8 @@ enum Command {
         #[arg(long)]
         down: bool,
         /// Stop N steps from the node: 1 is its parents, or its children
-        /// with `--down`. Defaults to the whole walk.
-        #[arg(long, value_name = "N")]
+        /// with `--down`, and N is at least 1. Defaults to the whole walk.
+        #[arg(long, value_name = "N", value_parser = count)]
         depth: Option<usize>,
     },
 
@@ -695,16 +702,16 @@ enum Command {
         #[arg(long = "tag", value_name = "TAG", requires = "short")]
         tags: Vec<String>,
         /// Override the day thresholds for stale hypotheses (default 30) and
-        /// untouched seeds (default 90). The inbox's fourteen-day rule is
-        /// unaffected.
-        #[arg(long)]
+        /// untouched seeds (default 90), in days, at least 0. The inbox's
+        /// fourteen-day rule is unaffected.
+        #[arg(long, value_parser = days)]
         since: Option<i64>,
         /// Write the report here instead of stdout.
         #[arg(long)]
         out: Option<PathBuf>,
         /// Show at most N findings under each heading, or N lines with
-        /// `--short`. Defaults to every one.
-        #[arg(long, value_name = "N")]
+        /// `--short`, N at least 1. Defaults to every one.
+        #[arg(long, value_name = "N", value_parser = count)]
         limit: Option<usize>,
     },
 
@@ -2507,10 +2514,41 @@ fn short_review(
     Ok(())
 }
 
+/// The least a count flag takes: `--limit`, `near -k` and `trace --depth`.
+/// Zero would ask for an answer that is empty, or the node alone, and still
+/// reads as a real one (STD-02 §R29), so it is a usage error (STD-01 §R20).
+const MIN_COUNT: usize = 1;
+
+/// The least `review --since` takes, in days.
+const MIN_DAYS: i64 = 0;
+
+/// Parse a count flag's value: at least [`MIN_COUNT`].
+fn count(value: &str) -> std::result::Result<usize, String> {
+    at_least(value, MIN_COUNT)
+}
+
+/// Parse a day threshold: at least [`MIN_DAYS`].
+fn days(value: &str) -> std::result::Result<i64, String> {
+    at_least(value, MIN_DAYS)
+}
+
+/// A whole number no smaller than `min`. Every bounded flag refuses through
+/// here, so clap reports the flag and this one wording for all of them.
+fn at_least<T>(value: &str, min: T) -> std::result::Result<T, String>
+where
+    T: std::str::FromStr + PartialOrd + std::fmt::Display + Copy,
+{
+    match value.parse::<T>() {
+        Ok(n) if n >= min => Ok(n),
+        _ => Err(format!("must be a whole number, at least {min}")),
+    }
+}
+
 /// Cut a listing to `--limit`, when one was given, and return how many
 /// matched before the cut and whether it dropped any, so the text can say
 /// how much was left out. `--json` puts both in the [`json::List`] envelope
-/// whenever the flag is given (STD-01 §R34).
+/// whenever the flag is given (STD-01 §R34). The flag is at least
+/// [`MIN_COUNT`], so a cut never empties a listing that had anything in it.
 fn cap<T>(items: &mut Vec<T>, limit: Option<usize>) -> (usize, bool) {
     let total = items.len();
     if let Some(n) = limit {
@@ -2780,6 +2818,69 @@ mod tests {
             .err()
             .unwrap_or_default();
         assert!(err.contains("--limit"), "{err}");
+    }
+
+    /// Every count flag goes through the one bounded parser, found by walking
+    /// the whole command tree so a new `--limit` cannot opt out: each refuses
+    /// the value under its minimum, takes the minimum, and says it in `--help`.
+    #[test]
+    fn count_flags_share_one_lower_bound() {
+        fn walk(cmd: &clap::Command, found: &mut Vec<(String, clap::Arg)>) {
+            for arg in cmd.get_arguments() {
+                let bounded = matches!(arg.get_long(), Some("limit" | "depth" | "since"))
+                    || arg.get_short() == Some('k');
+                if bounded {
+                    found.push((cmd.get_name().to_owned(), arg.clone()));
+                }
+            }
+            for sub in cmd.get_subcommands() {
+                walk(sub, found);
+            }
+        }
+        let mut found = Vec::new();
+        walk(&Cli::command(), &mut found);
+
+        let mut seen = Vec::new();
+        for (verb, arg) in &found {
+            let flag = arg.get_long().unwrap_or_default();
+            let (below, least) = if flag == "since" {
+                ("-1", MIN_DAYS.to_string())
+            } else {
+                ("0", MIN_COUNT.to_string())
+            };
+            // The argument alone, as its verb declares it, so the verb's
+            // other required arguments and conflicts are not in the way.
+            let parse = |value: &str| {
+                clap::Command::new("probe")
+                    .arg(arg.clone())
+                    .try_get_matches_from(["probe".to_owned(), format!("--{flag}={value}")])
+            };
+            let refused = parse(below).expect_err(&format!("{verb} --{flag} {below}"));
+            assert!(
+                refused.to_string().contains(&format!("at least {least}")),
+                "{verb} --{flag}: {refused}"
+            );
+            assert!(parse(&least).is_ok(), "{verb} --{flag} {least}");
+            let help = arg.get_help().map(ToString::to_string).unwrap_or_default();
+            assert!(
+                help.contains(&format!("at least {least}")),
+                "{verb} --{flag} help does not state its minimum: {help}"
+            );
+            seen.push(format!("{verb} --{flag}"));
+        }
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                "inbox --limit",
+                "list --limit",
+                "near --limit",
+                "review --limit",
+                "review --since",
+                "trace --depth",
+            ],
+            "the bounded flags this walk found"
+        );
     }
 
     /// `open` is a deprecated alias for `review --short`: it still parses,

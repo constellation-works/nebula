@@ -1650,6 +1650,45 @@ fn resolve_root_refuses_an_empty_explicit_path() {
     assert_eq!(err.to_string(), "--root cannot be empty");
 }
 
+/// A relative `~/.config/nebula/root` would name a different corpus from
+/// every working directory, and `capture` would create each one. It is
+/// refused at load, by name, before anything is created.
+#[test]
+fn relative_machine_root_is_refused_naming_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let setting = home.join(".config/nebula/root");
+    std::fs::create_dir_all(setting.parent().unwrap()).unwrap();
+    std::fs::write(&setting, "relcorpus\n").unwrap();
+
+    for cwd in ["w1", "w2"].map(|name| dir.path().join(name)) {
+        std::fs::create_dir_all(&cwd).unwrap();
+        let refused = run_in(&cwd, &home, None, &["capture", "x"], None);
+        assert_eq!(refused.out.status.code(), Some(1), "{}", refused.stderr());
+        assert!(
+            refused.stderr().contains(&setting.display().to_string())
+                && refused.stderr().contains("relcorpus"),
+            "the refusal names the setting file and its value:\n{}",
+            refused.stderr()
+        );
+        assert!(
+            !cwd.join("relcorpus").exists(),
+            "a relative setting must not create a corpus under {}",
+            cwd.display()
+        );
+
+        let json = run_in(&cwd, &home, None, &["--json", "capture", "x"], None);
+        let envelope = json.refusal();
+        assert_eq!(envelope["code"], "relative_root_setting", "{envelope}");
+        let error = envelope["error"].as_str().unwrap();
+        assert!(
+            error.contains(&setting.display().to_string()) && error.contains("relcorpus"),
+            "{envelope}"
+        );
+        assert!(!cwd.join("relcorpus").exists());
+    }
+}
+
 #[test]
 fn plain_init_never_changes_the_machine_root_setting() {
     let dir = tempfile::tempdir().unwrap();
@@ -1723,6 +1762,71 @@ fn set_root_requires_force_to_replace_a_different_corpus() {
         std::fs::read_to_string(&config_path).unwrap(),
         format!("{}\n", second.display())
     );
+}
+
+/// The remedy for a relative setting runs even though every other command
+/// refuses on it: `--set-root --force` replaces it.
+#[test]
+fn set_root_force_replaces_a_relative_machine_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let target = dir.path().join("corpus");
+    let setting = home.join(".config/nebula/root");
+    std::fs::create_dir_all(setting.parent().unwrap()).unwrap();
+    std::fs::write(&setting, "relcorpus\n").unwrap();
+
+    run_from_home(
+        &home,
+        None,
+        &[
+            "init",
+            &target.display().to_string(),
+            "--set-root",
+            "--force",
+        ],
+        None,
+    )
+    .assert_ok();
+    assert_eq!(
+        std::fs::read_to_string(&setting).unwrap(),
+        format!("{}\n", target.display())
+    );
+    run_from_home(&home, None, &["check"], None)
+        .assert_ok()
+        .says("0 nodes");
+}
+
+/// A setting that fails the rule names no corpus, so replacing it redirects
+/// nothing and needs no `--force`, which the refusal's hint leaves out. A
+/// valid setting naming another corpus still does.
+#[test]
+fn set_root_replaces_an_invalid_machine_root_without_force() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let setting = home.join(".config/nebula/root");
+    std::fs::create_dir_all(setting.parent().unwrap()).unwrap();
+
+    for (invalid, name) in [("relcorpus\n", "first"), ("\n", "second")] {
+        std::fs::write(&setting, invalid).unwrap();
+        let refused = run_from_home(&home, None, &["list"], None).assert_fails();
+        assert!(
+            refused.stderr().contains("neb init <DIR> --set-root")
+                && !refused.stderr().contains("--force"),
+            "{}",
+            refused.stderr()
+        );
+        let target = dir.path().join(name);
+        run_from_home(&home, Some(&target), &["init", "--set-root"], None).assert_ok();
+        assert_eq!(
+            std::fs::read_to_string(&setting).unwrap(),
+            format!("{}\n", target.display())
+        );
+    }
+
+    let other = dir.path().join("other");
+    run_from_home(&home, Some(&other), &["init", "--set-root"], None)
+        .assert_fails()
+        .says("pass --force to replace it");
 }
 
 /// Two `init --set-root` at once could both find the setting free and both
@@ -1921,8 +2025,8 @@ fn set_root_refuses_a_relative_path_before_mutating_anything() {
         out,
     }
     .assert_fails()
-    .says("--set-root requires an absolute corpus path")
-    .says("rerun with an absolute path");
+    .says("must be an absolute path, not `relative`")
+    .says("neb init <DIR> --set-root");
 
     assert!(
         !from.join("relative").exists(),
@@ -2718,6 +2822,31 @@ fn near_trailing_limit_is_a_flag_and_quiet_and_no_commit_are_refused() {
         c.run(&["near", "one global taxonomy", flag])
             .assert_fails()
             .says(flag);
+    }
+}
+
+/// `-k 0` would answer "nothing near" for a query with a strong match: a
+/// false empty answer. It is a usage error under either spelling.
+#[test]
+fn near_k_zero_is_a_usage_error() {
+    let c = Corpus::new();
+    lexical_fixture(&c);
+    for flag in ["-k", "--limit"] {
+        for json in [false, true] {
+            let json = if json { ["--json"].as_slice() } else { &[] };
+            let zero = c.run(&[json, &["near", flag, "0", "one global taxonomy"]].concat());
+            assert_eq!(zero.out.status.code(), Some(2), "{}", zero.stderr());
+            assert_eq!(zero.stdout(), "", "`neb {}`", zero.args);
+            // clap names the flag by its long form, whichever was typed.
+            assert!(
+                zero.stderr().contains("'--limit <K>'") && zero.stderr().contains("at least 1"),
+                "`neb {}`: {}",
+                zero.args,
+                zero.stderr()
+            );
+        }
+        c.run(&["near", flag, "1", "one global taxonomy"])
+            .assert_ok();
     }
 }
 
@@ -3950,15 +4079,6 @@ fn trace_depth_bounds_the_tree_and_the_json_alike() {
             .collect()
     };
 
-    let zero = c
-        .run(&["trace", "root", "--down", "--depth", "0"])
-        .assert_ok();
-    assert_eq!(traced_ids(&zero.stdout()), ["root"]);
-    assert_eq!(
-        zero.stderr(),
-        "3 more nodes beyond --depth 0; raise --depth for more\n"
-    );
-
     let one = c
         .run(&["trace", "root", "--down", "--depth", "1"])
         .assert_ok();
@@ -3987,7 +4107,7 @@ fn trace_depth_bounds_the_tree_and_the_json_alike() {
         4
     );
 
-    for depth in ["0", "1", "2", "3"] {
+    for depth in ["1", "2", "3"] {
         let drawn = c
             .run(&["trace", "root", "--down", "--depth", depth])
             .assert_ok()
@@ -4007,6 +4127,29 @@ fn trace_depth_bounds_the_tree_and_the_json_alike() {
         up.stderr(),
         "2 more nodes beyond --depth 1; raise --depth for more\n"
     );
+}
+
+/// `--depth 0` would print the node alone, although the help says 1 is its
+/// parents: it is a usage error, and the least depth still walks.
+#[test]
+fn trace_depth_zero_is_a_usage_error() {
+    let c = Corpus::new();
+    shortcut(&c);
+    for json in [false, true] {
+        let json = if json { ["--json"].as_slice() } else { &[] };
+        let zero = c.run(&[json, &["trace", "root", "--depth", "0"]].concat());
+        assert_eq!(zero.out.status.code(), Some(2), "{}", zero.stderr());
+        assert_eq!(zero.stdout(), "");
+        assert!(
+            zero.stderr().contains("--depth") && zero.stderr().contains("at least 1"),
+            "{}",
+            zero.stderr()
+        );
+    }
+    let one = c
+        .run(&["trace", "root", "--down", "--depth", "1"])
+        .assert_ok();
+    assert_eq!(traced_ids(&one.stdout()), ["root", "branch", "cut"]);
 }
 
 /// Without `--depth` the walk is whole, and a bound the corpus never reaches
@@ -5750,6 +5893,27 @@ fn review_short_refuses_the_full_reports_since_and_out_and_tag_needs_it() {
     c.run(&["review", "--tag", "physics"])
         .assert_fails()
         .says("--short");
+}
+
+/// A negative `--since` would call a seed made today untouched for -1 days
+/// and propose abandoning it. It is a usage error; zero days is a threshold.
+#[test]
+fn review_since_negative_is_a_usage_error() {
+    let c = Corpus::new();
+    c.seed("made today", "Made today");
+    for since in ["--since=-1", "--since=-9223372036854775808"] {
+        let refused = c.run(&["review", since]);
+        assert_eq!(refused.out.status.code(), Some(2), "{}", refused.stderr());
+        assert_eq!(refused.stdout(), "");
+        assert!(
+            refused.stderr().contains("--since") && refused.stderr().contains("at least 0"),
+            "{}",
+            refused.stderr()
+        );
+    }
+    c.run(&["review", "--since", "0"])
+        .assert_ok()
+        .says("## Seeds untouched for 0 days");
 }
 
 /// `open` is kept for one release so routines that call it keep working: the
@@ -7680,6 +7844,38 @@ fn piped_list_has_one_line_per_record() {
     assert_eq!(listed.stderr(), "150 of 151 nodes\n");
 }
 
+/// `--limit 0` would print an empty listing, or "nothing needs attention",
+/// over a corpus with plenty in it. On every verb that takes it, it is a usage
+/// error with nothing on stdout, and the least limit still answers.
+#[test]
+fn limit_zero_is_a_usage_error() {
+    let c = Corpus::new();
+    let seed = c.seed("an old seed", "An old seed");
+    set_updated(&c.node_file(&seed), &date_days_ago(100));
+    c.run(&["capture", "-q", "waiting"]).assert_ok();
+    for verb in [
+        ["list"].as_slice(),
+        &["inbox"],
+        &["review"],
+        &["review", "--short"],
+    ] {
+        for json in [false, true] {
+            let json = if json { ["--json"].as_slice() } else { &[] };
+            let zero = c.run(&[json, verb, &["--limit", "0"]].concat());
+            assert_eq!(zero.out.status.code(), Some(2), "{}", zero.stderr());
+            assert_eq!(zero.stdout(), "", "`neb {}`", zero.args);
+            assert!(
+                zero.stderr().contains("--limit") && zero.stderr().contains("at least 1"),
+                "`neb {}`: {}",
+                zero.args,
+                zero.stderr()
+            );
+        }
+        let one = c.run(&[verb, &["--limit", "1"]].concat()).assert_ok();
+        assert_ne!(one.stdout(), "", "`neb {}`", one.args);
+    }
+}
+
 /// `--limit` cuts the inbox to its oldest entries. How many wait, and how
 /// many the cut left out, are on stderr.
 #[test]
@@ -7962,6 +8158,7 @@ fn limit_notices_go_to_stderr_in_every_mode() {
         c.run(&["new", title, "--parent", &root]).assert_ok();
         set_updated(&c.node_file(&title.to_lowercase()), &date_days_ago(100));
     }
+    c.run(&["new", "Three", "--parent", "one"]).assert_ok();
     for text in ["first", "second", "third"] {
         c.run(&["capture", "-q", text]).assert_ok();
     }
@@ -7969,7 +8166,7 @@ fn limit_notices_go_to_stderr_in_every_mode() {
         vec!["list", "--limit", "1"],
         vec!["inbox", "--limit", "1"],
         vec!["review", "--short", "--limit", "1"],
-        vec!["trace", &root, "--down", "--depth", "0"],
+        vec!["trace", &root, "--down", "--depth", "1"],
     ] {
         for json in [false, true] {
             let args = if json {

@@ -29,7 +29,11 @@ initialization (`neb init` without `--set-root`) never changes that machine-wide
 setting: when it is absent, the command prints the opt-in command above. If the
 file already names a different corpus, `--set-root` refuses to replace it;
 review the two paths and pass `--force` only when redirecting the machine is
-intentional.
+intentional. Every command checks the file when it reads it, with the same
+rule: one that is empty or holds a relative path is refused by name
+(`empty_root_setting`, `relative_root_setting`) rather than skipped or
+resolved against the working directory, and `--set-root` replaces it without
+`--force`, since it names no corpus.
 The resolver checks `--root`, `$NEBULA_ROOT`, the current directory, that
 config file, then `~/.nebula` in that order. The current directory counts when
 it is a corpus or anywhere under one: the nearest directory at or above it that

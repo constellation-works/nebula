@@ -44,7 +44,10 @@ until `neb migrate`, and so does one with `nodes/` but no `config.yaml`
 
 Plain `neb init` never changes `~/.config/nebula/root`. A human setting up the
 machine's primary corpus can opt in with `neb init <dir> --set-root`; replacing
-a different configured root also requires `--force`. Agents initializing a
+a different configured root also requires `--force`. An empty or relative
+`~/.config/nebula/root` makes every command that falls back to it refuse
+(`empty_root_setting`, `relative_root_setting`), naming the file: tell the
+human, and never create a corpus at the relative path. Agents initializing a
 scratch corpus always use `neb --root <scratch-dir> init` and never pass
 `--set-root`.
 
