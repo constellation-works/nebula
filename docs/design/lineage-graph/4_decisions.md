@@ -16,6 +16,18 @@ related_artifacts: []
 
 # Lineage Graph — Decisions
 
+## Check isolates unreadable files; graph answers require a complete corpus
+
+Under STD-02@2 §R32, `neb check` scans every node file, reports each one it
+cannot read or parse with its path and cause, and checks the remaining nodes.
+It also reports a broken Observatory setting as a finding so node rules still
+run. `list`, `show`, `trace`, `graph`, `impact`, `near`, and `review` are
+all-or-nothing: each refuses and names every unreadable node file. Tag listing
+and desktop graph/search use the same strict load. No lineage or search answer
+may be computed over a partial corpus and presented as complete. This decision
+would change only if those surfaces acquired an explicit incomplete-result
+contract that a caller could not mistake for a full answer.
+
 ## A DAG, not a tree
 
 A rooted tree is the special case of a DAG where every node has exactly one

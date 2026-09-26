@@ -1,0 +1,2 @@
+# ts-rs emits a trailing space after fields in this generated binding.
+apps/desktop/src/types/Report.ts whitespace=-blank-at-eol

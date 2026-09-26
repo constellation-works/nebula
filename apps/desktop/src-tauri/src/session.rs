@@ -183,7 +183,7 @@ fn matches_graph_query(id: &str, title: &str, body: &str, status: &str, needle: 
 pub fn node(corpus: &Corpus, id: &str) -> Result<NodeView> {
     let docs = corpus.load_all()?;
     let observatory = corpus.observatory_root()?.root;
-    Ok(graph::node(&Graph::build(&docs)?, id)?.with_observatory(observatory.as_deref()))
+    graph::node(&Graph::build(&docs)?, id)?.with_observatory(observatory.as_deref())
 }
 
 /// The file behind a node, for handing to the OS. Fails when the node does

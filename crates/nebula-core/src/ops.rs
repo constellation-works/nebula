@@ -106,12 +106,14 @@ impl Cited {
     /// Locate the cited record under `root`, when this is an `observatory`
     /// citation: the step [`crate::graph::NodeView::with_observatory`] is
     /// for `show`, and a caller takes it for the same reason.
-    #[must_use]
-    pub fn with_observatory(mut self, root: Option<&Path>) -> Self {
+    pub fn with_observatory(mut self, root: Option<&Path>) -> Result<Self> {
         if let Some(link) = &mut self.observatory {
-            link.path = root.and_then(|root| resolve_observatory(root, &link.record));
+            link.path = root
+                .map(|root| resolve_observatory(root, &link.record))
+                .transpose()?
+                .flatten();
         }
-        self
+        Ok(self)
     }
 }
 
@@ -939,6 +941,26 @@ fn replace_body(
 /// even when it exists here, and a relative one that does not resolve as
 /// [`Error::UnresolvedUri`].
 pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
+    cite_with_observatory(corpus, id, args, None)
+}
+
+/// [`cite`] with the effective Observatory checkout. Resolve its directory
+/// before saving, so an unreadable checkout cannot turn a landed citation
+/// into a reported failure after the write.
+pub fn cite_with_observatory(
+    corpus: &Corpus,
+    id: &str,
+    args: &Citation,
+    observatory_root: Option<&Path>,
+) -> Result<Cited> {
+    let resolved_record = if normalize_reference_kind(&args.kind) == OBSERVATORY {
+        match (observatory_root, args.uri.as_deref()) {
+            (Some(root), Some(record)) => resolve_observatory(root, &observatory_record(record)?)?,
+            _ => None,
+        }
+    } else {
+        None
+    };
     let _lock = corpus.lock()?;
     let by = model::author(args.by.as_deref())?;
     let mut doc = corpus.load(id)?;
@@ -953,7 +975,7 @@ pub fn cite(corpus: &Corpus, id: &str, args: &Citation) -> Result<Cited> {
         .map(|record| ObservatoryLink {
             reference: reference.clone(),
             record,
-            path: None,
+            path: resolved_record,
         });
     Ok(Cited {
         doc,
@@ -1071,7 +1093,13 @@ pub fn handoff(
         });
     }
     let record = observatory_record(&args.record)?;
-    if let Some(root) = observatory.filter(|root| resolve_observatory(root, &record).is_none()) {
+    let resolved_record = observatory
+        .map(|root| resolve_observatory(root, &record))
+        .transpose()?
+        .flatten();
+    if let Some(root) = observatory
+        && resolved_record.is_none()
+    {
         return Err(Error::UnresolvedObservatoryRecord {
             record,
             root: root.to_path_buf(),
@@ -1101,7 +1129,7 @@ pub fn handoff(
     let observatory = ObservatoryLink {
         reference: reference.clone(),
         record: record.clone(),
-        path: observatory.and_then(|root| resolve_observatory(root, &record)),
+        path: resolved_record,
     };
     Ok(HandedOff {
         doc,

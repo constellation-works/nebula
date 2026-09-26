@@ -423,6 +423,16 @@ pub fn tags_notice(counts: &TagCounts) -> Option<Notice> {
 /// The invariant report's findings, one line each.
 pub fn check(report: &Report) -> String {
     let mut out = String::new();
+    for file in &report.unreadable {
+        let _ = writeln!(
+            out,
+            "{} {} [{}] {}",
+            paint(Role::of("severity", "error"), "ERROR"),
+            bold(&file.path.display().to_string()),
+            file.code,
+            file.message
+        );
+    }
     for f in &report.findings {
         let (tag, token) = match f.level {
             Severity::Error => ("ERROR", "error"),
@@ -449,16 +459,17 @@ pub fn check_tally(report: &Report) -> Notice {
         .filter(|f| f.level == Severity::Error)
         .count();
     let warnings = report.findings.len() - errors;
-    let outcome = match (errors, warnings) {
+    let outcome = match (errors + report.unreadable.len(), warnings) {
         (0, 0) => "clean",
         (0, _) => "warnings",
         _ => "errors",
     };
     Notice::human(format!(
-        "{}, {}, {}",
+        "{}, {}, {}, {}",
         count(report.nodes, "node"),
-        count(errors, "error"),
-        count(warnings, "warning")
+        count(errors + report.unreadable.len(), "error"),
+        count(warnings, "warning"),
+        count(report.unreadable.len(), "unreadable file")
     ))
     .in_role(Role::of("check", outcome))
 }

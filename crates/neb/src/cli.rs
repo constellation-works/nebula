@@ -1729,9 +1729,8 @@ fn run(cli: Cli) -> Outcome {
 
         Command::Check => {
             let corpus = Corpus::open(root)?;
-            let docs = corpus.load_all()?;
-            let g = Graph::build(&docs)?;
-            let report = check::run(&g, &corpus)?;
+            let scan = corpus.scan()?;
+            let report = check::run_scanned(&scan, &corpus)?;
             if json {
                 out_json(&report)?;
             } else {
@@ -1739,7 +1738,9 @@ fn run(cli: Cli) -> Outcome {
             }
             notify(json, Some(render::check_tally(&report)));
             Ok(
-                if report.findings.iter().all(|f| f.level != Severity::Error) {
+                if report.unreadable.is_empty()
+                    && report.findings.iter().all(|f| f.level != Severity::Error)
+                {
                     ok
                 } else {
                     ExitCode::FAILURE
@@ -2292,7 +2293,7 @@ fn run(cli: Cli) -> Outcome {
             if let Some(setting) = &observatory {
                 warn_legacy_observatory_root(&corpus, setting);
             }
-            let cited = ops::cite(
+            let cited = ops::cite_with_observatory(
                 &corpus,
                 &node,
                 &Citation {
@@ -2303,9 +2304,9 @@ fn run(cli: Cli) -> Outcome {
                     by,
                     origin: Origin::of(task, run),
                 },
+                observatory.as_ref().and_then(|s| s.root.as_deref()),
             )
-            .map_err(|e| Failure::about(&e, &node))?
-            .with_observatory(observatory.as_ref().and_then(|s| s.root.as_deref()));
+            .map_err(|e| Failure::about(&e, &node))?;
             if json {
                 out_json(&json::Cited::from(&cited))?;
             } else {
@@ -2383,7 +2384,7 @@ fn run(cli: Cli) -> Outcome {
             let observatory = corpus.observatory_root()?;
             warn_legacy_observatory_root(&corpus, &observatory);
             let view = graph::node(&Graph::build(&docs)?, &node)?
-                .with_observatory(observatory.root.as_deref());
+                .with_observatory(observatory.root.as_deref())?;
             if json {
                 out_json(&json::NodeView::from(&view))?;
             } else {

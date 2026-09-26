@@ -3308,7 +3308,7 @@ fn every_corpus_reader_names_a_non_regular_node_as_what_it_is() {
     }
     assert_eq!(
         c.run(&["--json", "list"]).refusal()["code"],
-        "not_regular_file"
+        "unreadable_nodes"
     );
 }
 
@@ -5461,6 +5461,177 @@ fn check_json_exposes_rule_and_level() {
         .expect("rule 11 finding present");
     assert_eq!(rule11["level"], "warn");
     assert!(rule11["node"].is_null(), "tag drift is a corpus finding");
+}
+
+fn corpus_with_two_bad_nodes() -> (Corpus, String, String) {
+    let c = Corpus::new();
+    let first = c.seed("first thought", "First thought");
+    let second = c.seed("second thought", "Second thought");
+    let raw = std::fs::read_to_string(c.node_file(&first)).unwrap();
+    write(
+        &c.node_file(&first),
+        &raw.replacen(
+            "status: seed\n",
+            &format!("status: seed\nedges:\n- type: contradicts\n  to: {second}\n"),
+            1,
+        ),
+    );
+    write(&c.node_file("broken"), "---\nid: broken\n");
+    write(&c.node_file("zzz-bad"), "no frontmatter\n");
+    (c, first, second)
+}
+
+#[test]
+fn check_reports_every_unparsable_node_and_checks_the_rest() {
+    let (c, _, _) = corpus_with_two_bad_nodes();
+    let run = c.run(&["--json", "check"]).assert_fails();
+    assert_eq!(run.out.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_str(&run.stdout()).unwrap();
+    assert_eq!(report["nodes"], 2);
+    let unreadable = report["unreadable"].as_array().unwrap();
+    assert_eq!(unreadable.len(), 2);
+    for name in ["broken.md", "zzz-bad.md"] {
+        let item = unreadable
+            .iter()
+            .find(|item| item["path"].as_str().unwrap().ends_with(name))
+            .unwrap();
+        assert_eq!(item["code"], "malformed_frontmatter", "{item}");
+        assert!(item["message"].is_string(), "{item}");
+    }
+    assert!(
+        report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["rule"] == 4),
+        "{report}"
+    );
+    let human = c.run(&["check"]).assert_fails();
+    let text = human.stdout();
+    assert!(text.find("broken.md") < text.find("contradicts"), "{text}");
+    assert!(human.stderr().contains("2 unreadable files"));
+}
+
+#[test]
+fn check_reports_an_unknown_field_as_an_unreadable_node() {
+    let c = Corpus::new();
+    let first = c.seed("first thought", "First thought");
+    c.seed("second thought", "Second thought");
+    let raw = std::fs::read_to_string(c.node_file(&first)).unwrap();
+    write(
+        &c.node_file(&first),
+        &raw.replace("status: seed", "status: seed\nfuture_field: unknown"),
+    );
+    let run = c.run(&["--json", "check"]).assert_fails();
+    let report: serde_json::Value = serde_json::from_str(&run.stdout()).unwrap();
+    assert_eq!(report["nodes"], 1);
+    let unreadable = report["unreadable"].as_array().unwrap();
+    assert_eq!(unreadable.len(), 1);
+    assert!(
+        unreadable[0]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("{first}.md"))
+    );
+    assert!(
+        unreadable[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("future_field")
+    );
+}
+
+#[test]
+fn strict_verbs_name_every_unreadable_node() {
+    let (c, first, _) = corpus_with_two_bad_nodes();
+    for args in [vec!["list"], vec!["show", &first], vec!["trace", &first]] {
+        let mut full = vec!["--json"];
+        full.extend(args);
+        let refusal = c.run(&full).refusal();
+        assert_eq!(refusal["code"], "unreadable_nodes");
+        let error = refusal["error"].as_str().unwrap();
+        assert!(error.contains("2 unreadable"), "{error}");
+        assert!(
+            error.contains("broken.md") && error.contains("zzz-bad.md"),
+            "{error}"
+        );
+        assert!(refusal["hint"].as_str().unwrap().contains("neb check"));
+    }
+}
+
+#[test]
+fn check_reports_a_broken_observatory_setting_as_a_finding() {
+    let c = Corpus::new();
+    let id = c.seed("a thought", "A thought");
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    write(
+        &c.node_file(&id),
+        &raw.replacen(
+            "status: seed\n",
+            "status: seed\nedges:\n- type: derives-from\n  to: ghost\n",
+            1,
+        ),
+    );
+    let setting = c.workdir().join(".config/nebula/observatory-root");
+    std::fs::create_dir_all(setting.parent().unwrap()).unwrap();
+    write(&setting, "relative-observatory\n");
+    let run = c.run(&["--json", "check"]).assert_fails();
+    let report: serde_json::Value = serde_json::from_str(&run.stdout()).unwrap();
+    let findings = report["findings"].as_array().unwrap();
+    assert!(
+        findings.iter().any(|f| f["level"] == "error"
+            && f["message"]
+                .as_str()
+                .unwrap()
+                .contains(&setting.display().to_string())),
+        "{report}"
+    );
+    assert!(findings.iter().any(|f| f["rule"] == 3), "{report}");
+    assert!(!run.stdout().contains("no observatory root is set"));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_observatory_directory_is_not_reported_as_unresolved() {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        eprintln!("skipped: root can read mode-000 directories");
+        return;
+    }
+    let c = Corpus::new();
+    let id = c.seed("a thought", "A thought");
+    let obs = observatory(c.workdir());
+    let questions = obs.join("questions");
+    let env = [("OBSERVATORY_ROOT", obs.to_str().unwrap())];
+    c.run_with_env(
+        &["cite", &id, "--uri", "Q002", "--kind", "observatory"],
+        &env,
+    )
+    .assert_ok();
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    let mode = std::fs::metadata(&questions).unwrap().permissions();
+    std::fs::set_permissions(&questions, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let checked = c.run_with_env(&["--json", "check"], &env).assert_fails();
+    let refused = c
+        .run_with_env(&["--json", "handoff", &id, "Q002"], &env)
+        .refusal();
+    std::fs::set_permissions(&questions, mode).unwrap();
+    let report: serde_json::Value = serde_json::from_str(&checked.stdout()).unwrap();
+    assert!(
+        report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |f| f["message"].as_str().unwrap().contains("could not read")
+                    && f["message"].as_str().unwrap().contains("questions")
+            ),
+        "{report}"
+    );
+    assert!(!checked.stdout().contains("does not resolve"));
+    assert_eq!(refused["code"], "io_at");
+    assert!(refused["error"].as_str().unwrap().contains("questions"));
+    assert_eq!(std::fs::read_to_string(c.node_file(&id)).unwrap(), before);
 }
 
 #[test]
@@ -8596,7 +8767,10 @@ fn reports_count_in_the_singular_for_one() {
     c.run(&["new", "Alone"]).assert_ok();
     let checked = c.run(&["check"]).assert_ok();
     assert_eq!(checked.stdout(), "", "no findings, so no payload");
-    assert_eq!(checked.stderr(), "1 node, 0 errors, 0 warnings\n");
+    assert_eq!(
+        checked.stderr(),
+        "1 node, 0 errors, 0 warnings, 0 unreadable files\n"
+    );
     let review = c.run(&["review", "--since", "1"]).assert_ok().stdout();
     assert!(
         review.contains("## Hypotheses untouched for 1 day\n"),
@@ -10526,17 +10700,27 @@ fn a_corpus_already_stamped_v2_over_v1_nodes_names_the_hand_repair() {
     let before = every_file_but_lock(&c.root);
 
     for args in [&["migrate"][..], &["list"]] {
-        c.run(args)
+        let run = c
+            .run(args)
             .assert_fails()
             .says("a-first.md")
             .says("`domain`")
-            .says("schema_version: 1")
-            .says(config.to_str().unwrap())
-            .says("neb migrate");
+            .says(config.to_str().unwrap());
+        if args[0] == "migrate" {
+            run.says("schema_version: 1").says("neb migrate");
+        } else {
+            run.says("neb check");
+        }
         assert_eq!(before, every_file_but_lock(&c.root), "`neb {args:?}` wrote");
     }
     let refused = c.run(&["--json", "list"]).refusal();
-    assert_eq!(refused["code"], "v1_node_under_current_schema", "{refused}");
+    assert_eq!(refused["code"], "unreadable_nodes", "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("v1_node_under_current_schema")
+    );
 
     // The repair it names works.
     write(&config, "schema_version: 1\ncorpus_id: neb-abc123\n");

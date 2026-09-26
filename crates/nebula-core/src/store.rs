@@ -41,6 +41,74 @@ pub struct Corpus {
     config: Config,
 }
 
+/// A full node scan. Bad files remain visible while the good documents can
+/// still be checked; graph queries use [`Corpus::load_all`] instead.
+#[derive(Debug)]
+pub struct Scan {
+    pub docs: Vec<Doc>,
+    pub unreadable: Vec<UnreadableNode>,
+}
+
+/// One file (or directory entry whose name could not be obtained) a scan
+/// could not read. The path is kept as supplied by the corpus root.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct UnreadableNode {
+    pub path: PathBuf,
+    pub code: String,
+    pub message: String,
+}
+
+impl UnreadableNode {
+    fn from_error(path: PathBuf, error: &Error) -> Self {
+        Self {
+            path,
+            code: error.code().to_owned(),
+            message: error.to_string(),
+        }
+    }
+}
+
+/// A directory listing keeps entry errors beside entries, so a tolerant scan
+/// can continue and a strict consumer can refuse before using a partial list.
+pub(crate) struct DirectoryEntries {
+    pub(crate) entries: Vec<std::fs::DirEntry>,
+    pub(crate) errors: Vec<Error>,
+}
+
+impl DirectoryEntries {
+    pub(crate) fn into_strict(self) -> Result<Vec<std::fs::DirEntry>> {
+        if let Some(error) = self.errors.into_iter().next() {
+            return Err(error);
+        }
+        Ok(self.entries)
+    }
+}
+
+pub(crate) fn collect_directory_entries(
+    dir: &Path,
+    entries: impl IntoIterator<Item = std::io::Result<std::fs::DirEntry>>,
+) -> DirectoryEntries {
+    let mut found = DirectoryEntries {
+        entries: Vec::new(),
+        errors: Vec::new(),
+    };
+    for entry in entries {
+        match entry {
+            Ok(entry) => found.entries.push(entry),
+            Err(error) => found
+                .errors
+                .push(Error::io_at("reading directory entry in", dir, error)),
+        }
+    }
+    found
+}
+
+pub(crate) fn list_directory(dir: &Path) -> Result<DirectoryEntries> {
+    let entries = std::fs::read_dir(dir).map_err(|error| Error::io_at("listing", dir, error))?;
+    Ok(collect_directory_entries(dir, entries))
+}
+
 impl Corpus {
     /// Where a corpus would be, given `--root`, else `NEBULA_ROOT`, else the
     /// corpus the working directory is in, else the configured root, else
@@ -899,22 +967,69 @@ impl Corpus {
     /// A full scan, deliberately. The corpus is small and writes are rare, so
     /// an index would be a second source of truth that could drift for no gain.
     pub fn load_all(&self) -> Result<Vec<Doc>> {
-        let dir = self.root.join("nodes");
-        let mut out = Vec::new();
-        refuse_nodes_symlink(&self.root)?;
-        if !dir.is_dir() {
-            return Ok(out);
+        let scan = self.scan()?;
+        if scan.unreadable.is_empty() {
+            Ok(scan.docs)
+        } else {
+            let count = scan.unreadable.len();
+            let details = scan
+                .unreadable
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "{} [{}]: {}",
+                        entry.path.display(),
+                        entry.code,
+                        entry.message
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            Err(Error::UnreadableNodes { count, details })
         }
-        let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .map_err(|error| Error::io_at("listing", &dir, error))?
-            .filter_map(|e| e.ok().map(|e| e.path()))
+    }
+
+    /// Read every loadable node and collect a separate entry for each bad
+    /// file. Directory-entry failures retain the directory path because the
+    /// OS did not provide an entry name.
+    pub fn scan(&self) -> Result<Scan> {
+        let dir = self.root.join("nodes");
+        refuse_nodes_symlink(&self.root)?;
+        let listing = match list_directory(&dir) {
+            Ok(listing) => listing,
+            Err(Error::IoAt { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Scan {
+                    docs: Vec::new(),
+                    unreadable: Vec::new(),
+                });
+            }
+            Err(error) => {
+                return Ok(Scan {
+                    docs: Vec::new(),
+                    unreadable: vec![UnreadableNode::from_error(dir, &error)],
+                });
+            }
+        };
+        let mut unreadable: Vec<UnreadableNode> = listing
+            .errors
+            .into_iter()
+            .map(|error| UnreadableNode::from_error(dir.clone(), &error))
+            .collect();
+        let mut paths: Vec<PathBuf> = listing
+            .entries
+            .into_iter()
+            .map(|entry| entry.path())
             .filter(|p| is_node_file_name(p))
             .collect();
         paths.sort();
+        let mut docs = Vec::new();
         for p in paths {
-            out.push(self.read_node_file(&p)?);
+            match self.read_node_file(&p) {
+                Ok(doc) => docs.push(doc),
+                Err(error) => unreadable.push(UnreadableNode::from_error(p, &error)),
+            }
         }
-        Ok(out)
+        Ok(Scan { docs, unreadable })
     }
 
     /// Read the node file at `path` and refuse it unless it is the node its
@@ -929,7 +1044,7 @@ impl Corpus {
     /// feed it without end.
     fn read_node_file(&self, path: &Path) -> Result<Doc> {
         if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-            return Err(match node_behind(path) {
+            return Err(match node_behind(path)? {
                 Some(id) => Error::IdMismatch {
                     path: path.to_path_buf(),
                     id,
@@ -1111,21 +1226,22 @@ impl Corpus {
     fn inbox_files(&self) -> Result<Vec<PathBuf>> {
         let dir = self.root.join("inbox");
         refuse_inbox_symlink(&dir)?;
-        if !dir.is_dir() {
-            return Ok(Vec::new());
+        let listing = match list_directory(&dir) {
+            Ok(listing) => listing,
+            Err(Error::IoAt { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Vec::new());
+            }
+            Err(error) => return Err(error),
+        };
+        let mut files = Vec::new();
+        for entry in listing.into_strict()? {
+            let kind = entry
+                .file_type()
+                .map_err(|error| Error::io_at("checking", entry.path(), error))?;
+            if kind.is_file() && is_inbox_month_filename(&entry.file_name()) {
+                files.push(entry.path());
+            }
         }
-        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .map_err(|error| Error::io_at("listing", &dir, error))?
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                if !entry.file_type().ok()?.is_file()
-                    || !is_inbox_month_filename(&entry.file_name())
-                {
-                    return None;
-                }
-                Some(entry.path())
-            })
-            .collect();
         files.sort();
         Ok(files)
     }
@@ -2006,15 +2122,21 @@ pub(crate) fn is_path_safe_id(id: &str) -> bool {
 /// is found by identity among the node files beside the link. The id is that
 /// file's name, which a node that loads at all agrees with.
 #[cfg(unix)]
-fn node_behind(link: &Path) -> Option<String> {
+fn node_behind(link: &Path) -> Result<Option<String>> {
     use std::os::unix::fs::MetadataExt;
-    let target = std::fs::metadata(link)
+    let Some(target) = std::fs::metadata(link)
         .ok()
-        .filter(std::fs::Metadata::is_file)?;
-    let dir = link.parent()?;
-    std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|entry| Some(entry.ok()?.path()))
+        .filter(std::fs::Metadata::is_file)
+    else {
+        return Ok(None);
+    };
+    let Some(dir) = link.parent() else {
+        return Ok(None);
+    };
+    let found = list_directory(dir)?
+        .into_strict()?
+        .into_iter()
+        .map(|entry| entry.path())
         .filter(|path| path != link && is_node_file_name(path))
         .find(|path| {
             std::fs::symlink_metadata(path).is_ok_and(|metadata| {
@@ -2023,13 +2145,14 @@ fn node_behind(link: &Path) -> Option<String> {
                     && metadata.ino() == target.ino()
             })
         })
-        .and_then(|node| Some(node.file_stem()?.to_str()?.to_owned()))
+        .and_then(|node| Some(node.file_stem()?.to_str()?.to_owned()));
+    Ok(found)
 }
 
 /// Elsewhere a symlink is refused as one, whatever it names.
 #[cfg(not(unix))]
-fn node_behind(_link: &Path) -> Option<String> {
-    None
+fn node_behind(_link: &Path) -> Result<Option<String>> {
+    Ok(None)
 }
 
 /// Whether a name in `nodes/` is one a scan reads as a node.

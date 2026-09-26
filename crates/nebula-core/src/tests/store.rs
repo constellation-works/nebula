@@ -6,9 +6,11 @@
 
 use std::collections::HashSet;
 
+use crate::Error;
 use crate::fs::{create_private_dir_all, write_private_atomic};
 use crate::ops::{self, Promotion};
 use crate::store::Corpus;
+use crate::store::collect_directory_entries;
 
 /// A capture instant one second before a minute, an hour and a local day
 /// turn over: where a test that read the wall clock was most likely to race.
@@ -23,6 +25,31 @@ fn corpus() -> (tempfile::TempDir, Corpus) {
     let dir = tempfile::tempdir().expect("tempdir");
     let corpus = Corpus::init(&dir.path().join("corpus")).expect("init");
     (dir, corpus)
+}
+
+#[test]
+fn a_failing_directory_entry_is_reported_by_every_listing() {
+    let (_dir, corpus) = corpus();
+    // load_all, inbox_files and migration's node listing share this helper.
+    // An injected iterator failure is deterministic across filesystems.
+    for (consumer, dir) in [
+        ("load_all", corpus.root().join("nodes")),
+        ("inbox_files", corpus.root().join("inbox")),
+        ("migrate", corpus.root().join("nodes")),
+    ] {
+        let entries = std::iter::once(Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "injected directory entry failure",
+        )));
+        let listing = collect_directory_entries(&dir, entries);
+        assert!(listing.entries.is_empty());
+        assert_eq!(listing.errors.len(), 1);
+        let error = listing.into_strict().unwrap_err();
+        assert!(
+            matches!(error, Error::IoAt { path, .. } if path == dir),
+            "{consumer}"
+        );
+    }
 }
 
 #[test]

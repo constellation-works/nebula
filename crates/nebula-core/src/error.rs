@@ -36,6 +36,14 @@ fn holder_phrase(holder: Option<&LockHolder>) -> String {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// A graph query cannot give a complete answer while node files are bad.
+    #[error("{count} unreadable node file(s): {details}")]
+    UnreadableNodes {
+        /// The number of failed files or directory entries.
+        count: usize,
+        /// Every affected path, code and cause.
+        details: String,
+    },
     /// No node with that id exists.
     #[error("no node `{0}`")]
     NoSuchNode(String),
@@ -848,6 +856,7 @@ pub enum ErrorClass {
 
 impl Error {
     codes! {
+        UnreadableNodes => "unreadable_nodes", State,
         NoSuchNode => "no_such_node", State,
         NoSuchInboxEntry => "no_such_inbox_entry", State,
         InboxEntrySettled => "inbox_entry_settled", State,
