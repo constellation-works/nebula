@@ -548,6 +548,7 @@ pub(crate) fn parse(raw: &str) -> Result<Doc> {
     let (front, body) = split_frontmatter(raw)?;
     let node: Node =
         serde_yaml_ng::from_str(front).map_err(|e| Error::yaml("parsing frontmatter", e))?;
+    // "Ids stay strings, checked where they become paths" (4_decisions.md, STD-02@2 §R14).
     if !crate::store::is_path_safe_id(&node.id) {
         return Err(Error::UnsafeId(node.id));
     }

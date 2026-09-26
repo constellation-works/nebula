@@ -511,6 +511,7 @@ fn refuse_cycle(corpus: &Corpus, doc: &Doc) -> Result<()> {
     let Some(first) = genealogy.next() else {
         return Ok(());
     };
+    // "The cycle check runs under the write lock" (4_decisions.md, STD-03@2 §R1).
     let mut docs = corpus.load_all()?;
     let mut trial = doc.clone();
     for edge in std::iter::once(first).chain(genealogy) {
@@ -619,6 +620,7 @@ pub fn link(
     // Genealogy must stay acyclic, so refuse the edge that would close a
     // loop rather than leaving `check` to find it later.
     if kind.is_genealogy() {
+        // "The cycle check runs under the write lock" (4_decisions.md, STD-03@2 §R1).
         let mut docs = corpus.load_all()?;
         docs.retain(|d| d.node.id != doc.node.id);
         docs.push(doc.clone());
