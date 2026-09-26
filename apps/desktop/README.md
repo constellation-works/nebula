@@ -9,12 +9,33 @@ shows.
 ```sh
 make desktop-dev     # pnpm tauri dev with the development-only CSP overlay
 make desktop-check   # tsc + vitest
-make desktop         # pnpm tauri build: target/release/bundle/macos/Nebula.app
+make desktop         # pnpm tauri build: unsigned .app and .dmg under target/release/bundle/macos/
 pnpm test:webview    # build and exercise the production CSP in the native webview
 ```
 
-Needs `pnpm` and a Rust toolchain. The `.app` is not signed or notarised;
-macOS will ask you to allow it the first time.
+Needs `pnpm` and a Rust toolchain. On macOS, `make desktop` creates both
+`Nebula.app` and a versioned `Nebula_*.dmg` under
+`target/release/bundle/macos/`. The app and disk image are unsigned and not
+notarised.
+
+### Install on macOS
+
+1. On a Mac, run `make desktop` from the repository root.
+2. In Finder, open `target/release/bundle/macos/` and double-click the
+   generated `Nebula_*.dmg`.
+3. In the disk image window, drag `Nebula.app` onto the Applications folder.
+   Eject the disk image when the copy finishes.
+4. Open Nebula from Applications. Because this build is not signed or
+   notarised, Gatekeeper may block the first launch. If it does, try opening
+   Nebula once, then open **System Settings → Privacy & Security**, scroll to
+   **Security**, and choose **Open Anyway** for Nebula. Confirm the prompt,
+   then launch the app again. Apple makes this option available for about an
+   hour after the blocked launch; managed Macs may prevent the override.
+
+Only use **Open Anyway** when you trust where the app came from. An unsigned,
+unnotarised app has not been checked by Apple, so macOS cannot verify that it
+is free of known malware or has not been modified. See Apple's [safe app
+opening guidance](https://support.apple.com/102445).
 
 `make desktop-dev` layers `src-tauri/tauri.conf.dev.json` over the production
 configuration. The WebDriver check builds with the production CSP plus a
@@ -80,6 +101,18 @@ a few hundred nodes do not freeze the window, and rendered as plain SVG.
 - The toolbar's `N nodes · M ms` is the time from the layout request to the
   frame after the drawing committed, so the performance target is checkable
   in the app itself.
+
+## Remote images
+
+Node bodies can include Markdown images hosted on the web. The production and
+development Content Security Policies allow images from HTTPS URLs
+(`img-src 'self' https:`), while scripts, connections, and other content stay
+restricted to their existing sources. Loading a remote image contacts its
+host directly from your Mac; that host can observe the request and its timing,
+so image URLs can also be used for tracking. Do not open node bodies with
+remote images unless that trade-off is acceptable. See Tauri's [DMG
+distribution guide](https://v2.tauri.app/distribute/dmg/) for the installer
+format used by `make desktop`.
 
 ## Layout
 

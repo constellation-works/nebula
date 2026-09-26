@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the frontend may call. The corpus is reached only through this crate's own commands. The opener is the one plugin the frontend drives, for reference links, and only to http(s), mailto and tel URLs; files go through `open_in_editor`.",
-  "windows": ["main", "capture"],
+  "description": "What the main window may call. The corpus is reached only through this crate's own commands. The opener is the one plugin the frontend drives, for reference links, and only to http(s), mailto and tel URLs; files go through `open_in_editor`.",
+  "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-hide",

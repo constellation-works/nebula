@@ -38,7 +38,7 @@
         "default-src": "'self'",
         "script-src": "'self'",
         "style-src": "'self' 'unsafe-inline'",
-        "img-src": "'self'",
+        "img-src": "'self' https:",
         "font-src": "'self'",
         "connect-src": "ipc: http://ipc.localhost",
         "worker-src": "'self'",
@@ -50,7 +50,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": ["app", "dmg"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
