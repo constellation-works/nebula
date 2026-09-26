@@ -13,7 +13,9 @@ make desktop         # pnpm tauri build: unsigned .app and .dmg under target/rel
 pnpm test:webview    # build and exercise the production CSP in the native webview
 ```
 
-Needs `pnpm` and a Rust toolchain. On macOS, `make desktop` creates both
+Needs pnpm 11.23.0, the version `packageManager` in `package.json` pins with
+its sha512 (`corepack enable` installs it and checks the hash), and the Rust
+toolchain `rust-toolchain.toml` names. On macOS, `make desktop` creates both
 `Nebula.app` and a versioned `Nebula_*.dmg` under
 `target/release/bundle/macos/`. The app and disk image are unsigned and not
 notarised.
