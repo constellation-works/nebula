@@ -717,6 +717,7 @@ mod tests {
             .collect()
     }
 
+    // "The invariant-table guard stays a Rust test" (4_decisions.md, STD-02@2 §R21).
     #[test]
     fn published_invariant_tables_match_checker_rules() {
         let expected: Vec<_> = RULES

@@ -559,6 +559,7 @@ impl Corpus {
     /// one that is not [`is_path_safe_id`] is refused rather than joined, so
     /// no caller can be handed a path outside `nodes/`.
     pub fn node_path(&self, id: &str) -> Result<PathBuf> {
+        // "Ids stay strings, checked where they become paths" (4_decisions.md, STD-02@2 §R14).
         if !is_path_safe_id(id) {
             return Err(Error::UnsafeId(id.to_string()));
         }

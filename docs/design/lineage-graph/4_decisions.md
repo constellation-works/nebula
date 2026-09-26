@@ -1,7 +1,7 @@
 ---
 title: Lineage Graph — Decisions
 owner: claude
-last_updated: 2026-09-12
+last_updated: 2026-09-26
 last_validated: 2026-09-25
 status: Accepted
 feature: lineage-graph
@@ -212,3 +212,211 @@ letting the desktop app shell out to `neb --json` the way an agent does, was
 rejected because a webview-and-shortcut app polling a subprocess for a
 file-watch-driven graph view is slower and more fragile than linking the
 library it would otherwise be reimplementing.
+
+## Ids stay strings, checked where they become paths
+
+This departs from STD-02@2 §R14, a SHOULD: node ids and Observatory record ids
+are `String`, not validated newtypes. The rule's worry is validate-then-use,
+where every caller has to remember the check. Here the check sits where an id
+gains authority:
+
+- **Node ids, read from disk.** `model::parse` refuses a node whose `id` is not
+  `is_path_safe_id` as it parses the file, and `Corpus::load_all` and
+  `Corpus::load` refuse a file whose name and stored id disagree. No `Doc`
+  with an unsafe id exists for a verb to act on.
+- **Node ids, from a caller.** `Corpus::node_path` is where an id becomes a
+  file path, and it refuses an unsafe id before joining it. `history` and
+  `load_at` also build a git pathspec from the id, and each asks `node_path`
+  first. Those two are the validate-then-use shape the rule warns about; both
+  are in `store.rs`, so the check is one screen away from the use.
+- **Observatory record ids.** `is_observatory_id` is checked when `cite` or
+  `handoff` stores the id, and again by `resolve_observatory` before it is
+  joined under the root.
+
+A newtype would change every signature that carries an id: the ops, the graph
+queries, the store, the CLI, the desktop commands and the generated TypeScript
+types. It would change no refusal. What is given up is a compiler proof: a new
+function that turns an `&str` into a path without `node_path` would compile.
+Scope: node ids and Observatory record ids. Reference ids are node-local
+counters that never become paths. Reverses if an id starts to reach anything
+else with authority (a URL, a git ref, a shell argument) outside `store.rs`, or
+if `nebula-core` gains consumers outside this workspace. At that point the
+check belongs in the type.
+
+## The two integration-test files stay whole
+
+This departs from STD-02@2 §R18, a SHOULD, for `crates/neb/tests/cli.rs` and
+`crates/nebula-core/tests/core.rs` only. Each is a flat list of independent
+end-to-end cases over one shared fixture: the `Corpus` harness and its run
+helpers in `cli.rs`, and `corpus()` and `seed()` in `core.rs`. Size here does
+not hide several responsibilities, which is what the rule's split protects
+against. Splitting the files now would move every test, and it would collide
+with every in-flight task that adds one. The standards wave this decision
+belongs to filed 32 tasks, and 27 of them name one of these two files.
+
+What is given up: diffs and searches in an 8,500-line file are harder to
+review. What still holds the line: a new test goes beside the related tests,
+not at the end of the file. Source files are still held to about 800 lines,
+and ORB-13174 splits the ones over it. Reverses when the tree is quiet enough
+for a single mechanical move into `tests/cli/main.rs` plus one module per verb
+family. That layout keeps one test binary per crate and leaves the test count
+unchanged.
+
+## Unknown fields are refused, never dropped
+
+STD-02@2 §R16 asks that a removed field be "warned about and ignored (or
+migrated) rather than silently rejected", and that round trips be lossless.
+Nebula takes the migrate branch for retired keys and refuses everything else
+loudly; it never warns and ignores. This restates "References cannot carry a
+verdict, as it applied to evidence" above against that rule.
+
+Every stored shape carries `deny_unknown_fields`: `Node`, `Edge`, `Reference`,
+`Origin`, `Closed` and `Config`. A key this build does not know fails the read
+with the file named, so no value is fabricated or discarded. Ignoring the key
+would not be lossless: every verb rewrites the whole node file, so a key
+ignored on read would be deleted on the next save. The other cases are:
+
+- **Keys that v0.2 retired** (`domain`, `evidence` with its verdict and
+  strength, `tasks`, `graduated_to`, and the removed edge kinds) are migrated.
+  `neb migrate` reads v1 through a lenient model and turns each of them into a
+  reference, a tag or a closing reason.
+- **A corpus from a newer build** is refused by its `schema_version` before any
+  node is parsed (`Error::SchemaMismatch`).
+- **`migrate` over a corpus that already declares this schema** reads every
+  node with the strict model first (`Error::CurrentSchemaUnreadable`), so its
+  lenient v1 model cannot drop what it does not know.
+
+One key is kept and warned about instead: the legacy `observatory_root` in
+`config.yaml`, which `check` reports until it is dropped. What is given up: a
+hand-added key breaks every verb that reads that node until it is removed, and
+the refusal's path says where. One residual gap remains. The v1 model
+tolerates keys that v1 never defined, so migrating a v1 node drops such a key.
+The clean-tree refusal keeps the pre-migration file in git history when the
+corpus is under git. Reverses if nebula ever has to read a sibling tool's
+extra keys, which would call for a separate `*Document` type that carries them.
+
+## The invariant-table guard stays a Rust test
+
+`check.rs`'s `published_invariant_tables_match_checker_rules` departs from
+STD-02@2 §R21. It reads three documents with `include_str!`: the v0.2 spec,
+the skill's `invariants.md`, and the lineage-graph invariants spec. For each
+`| # |` table, it compares the number and label columns with the `Rule` enum's
+discriminants and with the label list kept beside them. The rule bans tests
+that read text rather than run code. STD-04@1 §R5 allows a narrow structural
+guard that names what it protects. This test protects the meaning of `[N]`:
+the number `neb check` prints has to mean the same rule in all three
+documents.
+
+The numbers exist only in the `Rule` enum. A shell or docs-lint gate would
+have to restate them or grep the Rust source for them. Either option copies
+the rule table into a second place, or does the text-matching the rule
+forbids in a worse form. What is given up: rewording a table label fails a
+core test, which is the point, because the labels are the published meaning.
+Scope: this test only. No other test reads repository docs or source.
+Reverses if the tables are generated from the `Rule` enum. The guard then has
+nothing left to compare.
+
+## Migration commits by writing `config.yaml` last
+
+A file corpus has no transactions, so this departs from the clause of
+STD-03@2 §R23 that applies each migration in one transaction with its ledger
+record. The ledger is `config.yaml`'s `schema_version`, and the equivalent is:
+
+- Convert every node in memory before writing any, so a node that cannot be
+  converted refuses the run with nothing written. This step is ORB-13175's.
+  Until it lands, a bad v1 node late in the corpus leaves the earlier nodes
+  rewritten.
+- Write each node through the corpus's one atomic-write helper.
+- Write `config.yaml` last. Until it is rewritten, every verb except `migrate`
+  refuses the corpus with `Error::SchemaMismatch`, so no reader treats a
+  half-converted corpus as current.
+- Re-running is safe and idempotent. A node already in v2 form renders back to
+  the bytes on disk and is left alone, so a second run finishes an interrupted
+  one without bumping `updated`.
+
+ORB-13175 also adds the ordered, append-only registry and the fresh-versus-
+migrated parity that the rest of the rule asks for. What is given up is
+rollback: a crash mid-write leaves some nodes converted under an old ledger,
+and recovery runs forward rather than back. Under git, the clean-tree refusal
+means the pre-migration state is also one `git checkout` away. Reverses if the
+corpus moves into a store with transactions.
+
+## No durable copy of git's output
+
+This departs from the last clause of STD-03@2 §R15: nebula keeps no durable log
+of a child's output. The only children whose output it captures are `git`
+and the hooks git runs.
+Bounding their captured output and marking the cut is the git runner's job
+(ORB-13184). Once it lands, the untruncated text is discarded, not kept. That
+is enough here because every git call nebula makes can be repeated by hand to
+see the full text. A refused commit leaves the write on disk and staged, so
+`git -C <root> commit` runs the same hooks over the same index. The other
+calls are reads and queries, repeatable as they are.
+
+What is given up: output from a failure that does not reproduce, such as a
+flaky hook, is seen only in its truncated form. Scope: git and its hooks.
+The interactive `$EDITOR` child's output goes to the terminal and is never
+captured. Reverses if nebula starts a child whose run cannot be repeated,
+such as one that talks to a network service or a model.
+
+## The cycle check runs under the write lock
+
+This departs from STD-03@2 §R1, which forbids holding a lock across a scan of a
+large directory. `link` and `new` read every node (`Corpus::load_all`) to prove
+that a genealogy edge closes no loop, and they do it while holding the corpus
+write lock. The scan is the read half of the write's read-modify-write. Doing
+it outside the lock needs a compare-and-set against the corpus as it was read,
+and nebula has no corpus-wide version to compare: node files are also edited
+by hand. Building one costs more than the wait it saves.
+
+Only writers wait. Reads never take the lock, so `list`, `trace` and the
+desktop's file watcher are unaffected. A waiting writer gives up after
+`LOCK_WAIT` (5 s) with `Error::Locked`, before anything is written, and can
+retry. Measured with a release build on dk-server-1 (2026-09-26), a warm-cache
+`link` of a genealogy edge took about 0.1 s at 3,000 nodes, 0.2 s at 10,000
+and 1.1 s at 30,000. Corpora today hold hundreds. Scope: the cycle checks in
+`ops::link` and `ops::new_node` (`refuse_cycle`). Revisit at 10,000 nodes, or
+sooner if a writer reports `Error::Locked` behind a `link` or `new`. That is
+also when "Full scan instead of an index" above comes due.
+
+## `review`'s cut notice is part of the document
+
+STD-01@2 §R12 sends pagination hints to stderr. The full `review` report keeps
+its `- _… and K more; raise --limit for more_` line inside the markdown, one
+line per cut section, because that report is a document rather than a list.
+It is the markdown that goes into a review file, `--out` writes it to a file
+that has no stderr, and it is read later by someone who never saw the command
+run. A section that lost findings without saying so would read as complete,
+the failure STD-01's §R34 exists to prevent. The line appears only when
+`--limit` cut something, and never without `--limit`.
+
+Scope: the full `review` markdown only. `review --short` is a list, and
+ORB-13190 moves its cut notice to stderr as §R12 asks. ORB-13190 also repeats
+the full report's notice on stderr. The machine signal belongs to `--json`, not
+to this line: ORB-13191 gives `review --limit --json` the `{total, truncated}`
+envelope. Reverses if the review stops being written to a file for later
+reading.
+
+## Reports are not tables
+
+STD-01@2 §R14's table layout applies to list-shaped human output: one header
+row, two-space gutters, one line per record (ORB-13193). These verbs are
+reports, not lists, and keep their own layouts:
+
+- **`show`** is one record's detail view, key by key. STD-01's §R16 already
+  permits this layout for `show`.
+- **`trace`** is a tree on a terminal. The shape of the lineage is the content,
+  and a table would flatten it. ORB-13190 gives its piped form one
+  tab-separated line per node.
+- **`impact`** groups what it reaches under a heading per relation
+  (`descends from`, `contradicts`).
+- **`check`** is a verdict. It gives one finding per line with its severity,
+  rule number and node, then a tally, and the exit code carries the result.
+  Of the five, it is closest to a list. It is kept as a report because each
+  finding's message is free prose that no column width suits.
+- **`review`** is the markdown document of the decision above.
+
+What is given up: these views cannot be cut or awk'd by column. Each one has a
+`--json` form carrying the same payload, and that is the form for a program.
+Reverses for any of them that turns out to be read as a list, which becomes a
+table.
