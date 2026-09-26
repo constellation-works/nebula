@@ -30,10 +30,16 @@ use tauri::{Manager, WindowEvent};
 /// When Tauri cannot start at all (no webview, no event loop); there is
 /// nothing to show an error in at that point.
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(shortcut::plugin())
-        .manage(AppState::new())
+        .manage(AppState::new());
+
+    // Keep the embedded WebDriver transport behind an explicit debug-only test feature.
+    #[cfg(all(debug_assertions, feature = "webdriver-test"))]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![
             commands::capture,
             commands::inbox,

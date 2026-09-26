@@ -7,13 +7,20 @@ shows.
 ## Run
 
 ```sh
-make desktop-dev     # pnpm tauri dev: live reload for the frontend
+make desktop-dev     # pnpm tauri dev with the development-only CSP overlay
 make desktop-check   # tsc + vitest
 make desktop         # pnpm tauri build: target/release/bundle/macos/Nebula.app
+pnpm test:webview    # build and exercise the production CSP in the native webview
 ```
 
 Needs `pnpm` and a Rust toolchain. The `.app` is not signed or notarised;
 macOS will ask you to allow it the first time.
+
+`make desktop-dev` layers `src-tauri/tauri.conf.dev.json` over the production
+configuration. The WebDriver check builds with the production CSP plus a
+debug-only WebDriver capability, initializes an empty corpus in a temporary
+directory, and verifies that inline script injection is blocked while the
+Inbox/Graph UI and `graph` IPC command work.
 
 ## The corpus
 
