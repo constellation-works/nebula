@@ -556,7 +556,8 @@ enum Command {
     Show {
         /// Node id.
         node: String,
-        /// Show the node at this commit hash or at the end of this date.
+        /// Show the node at this commit hash, or at the end of this date as
+        /// `neb log` dates commits, whatever the local timezone.
         #[arg(long, value_name = "HASH|YYYY-MM-DD")]
         at: Option<String>,
     },

@@ -3253,6 +3253,62 @@ fn commit_on_in_a_corpus_the_containing_repository_ignores_is_a_typed_error() {
     assert!(corpus.node_path(&a).unwrap().exists());
 }
 
+/// Commit everything in `dir` dated `stamp`, an ISO 8601 time with its offset.
+fn commit_stamped(dir: &std::path::Path, stamp: &str) {
+    git(dir, &["add", "-A"]);
+    let out = support::output(
+        support::git_command(dir, support::home())
+            .args(["commit", "-q", "-m", stamp])
+            .env("GIT_AUTHOR_DATE", stamp)
+            .env("GIT_COMMITTER_DATE", stamp),
+        support::DEADLINE,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A date names each commit by its own day, in the offset it was recorded
+/// with: the day `history` prints. Here the two commits' UTC days are the
+/// other way round, and no single reader's zone puts both on their own days,
+/// so neither UTC nor the reader's local day would pass.
+#[test]
+fn load_at_a_date_takes_each_commit_on_its_own_day() {
+    let (dir, corpus) = corpus();
+    let root = dir.path().join("corpus");
+    git_init(&root);
+    let id = seed(&corpus, "Days travel", &[]);
+    // 2020-01-02T11:30Z, late on the first in UTC-12.
+    commit_stamped(&root, "2020-01-01T23:30:00-12:00");
+    ops::note(&corpus, &id, "written a day ahead", None).unwrap();
+    // 2020-01-01T18:00Z, early on the second in UTC+14.
+    commit_stamped(&root, "2020-01-02T08:00:00+14:00");
+
+    let days: Vec<String> = corpus
+        .history(&id)
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.date)
+        .collect();
+    assert_eq!(days, ["2020-01-02", "2020-01-01"]);
+    let noted = |date| {
+        corpus
+            .load_at(&id, date)
+            .unwrap()
+            .body
+            .contains("written a day ahead")
+    };
+    assert!(!noted("2020-01-01"), "the first day is before the note");
+    assert!(noted("2020-01-02"), "the second day has it");
+    assert!(matches!(
+        corpus.load_at(&id, "2019-12-31"),
+        Err(Error::NoNodeAtRevision { .. })
+    ));
+}
+
 // ------------------------------------------------------ supervised git --
 //
 // Every git child runs in its own process group with a deadline. A hook is
