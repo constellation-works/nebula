@@ -10,6 +10,7 @@
 //! you which command to run next is presentation, so it lives in the consumer
 //! that has commands to suggest.
 
+use crate::lock::LockHolder;
 use crate::model::{EdgeType, FrontmatterProblem, Status};
 use crate::store::Settlement;
 use std::ffi::OsString;
@@ -17,6 +18,14 @@ use std::path::PathBuf;
 
 /// The library's result type.
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Who holds a lock, as [`Error::Locked`] names it.
+fn holder_phrase(holder: Option<&LockHolder>) -> String {
+    holder.map_or_else(
+        || "an unidentified writer".to_owned(),
+        |h| format!("`{}`, pid {}, since {}", h.label, h.pid, h.since_rfc3339()),
+    )
+}
 
 /// Everything that can go wrong reading or changing a corpus.
 ///
@@ -529,11 +538,14 @@ pub enum Error {
     /// did not release it within the bounded wait. Nothing was written: the
     /// refusal comes before the op reads anything, so there is no
     /// half-applied change to undo.
-    #[error("another nebula writer is holding {}; nothing was written", .root.display())]
+    #[error("another nebula writer is holding {} ({}); nothing was written", .root.display(), holder_phrase(.holder.as_ref()))]
     Locked {
         /// The directory whose `.lock` is held: a corpus root, or
         /// `~/.config/nebula` for this machine's settings.
         root: PathBuf,
+        /// Who holds it, as its holder record says, or `None` when there is
+        /// no readable record. Diagnostic only: `None` is still a held lock.
+        holder: Option<LockHolder>,
     },
 
     /// A body edited outside the lock — in `$EDITOR` — was about to be saved

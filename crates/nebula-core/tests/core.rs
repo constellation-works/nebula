@@ -2507,6 +2507,28 @@ fn a_promotion_interrupted_before_the_strike_completes_on_the_next_write() {
     );
 }
 
+/// The desktop takes the lock under a label of its own, and that take
+/// settles an interrupted write like any other outermost one.
+#[test]
+fn a_labelled_lock_settles_an_interrupted_promotion_too() {
+    let (dir, corpus) = corpus();
+    let root = dir.path().join("corpus");
+    let (entry, node) = interrupted_promotion(&corpus, &root, "an interrupted promotion idea");
+
+    drop(
+        corpus
+            .lock_as(nebula_core::LOCK_WAIT, "desktop capture")
+            .expect("the lock"),
+    );
+
+    assert!(!root.join(".pending").exists(), "the record is settled");
+    assert!(
+        inbox_line(&entry).ends_with(&format!("~~ -> {node}")),
+        "{}",
+        inbox_line(&entry)
+    );
+}
+
 #[test]
 fn a_pending_promotion_whose_node_was_never_written_is_discarded() {
     let (dir, corpus) = corpus();
@@ -4572,7 +4594,16 @@ fn a_write_against_a_held_lock_refuses_and_changes_nothing() {
     });
 
     assert!(
-        matches!(&refused, Err(Error::Locked { root: r }) if r == &root),
+        matches!(&refused, Err(Error::Locked { root: r, .. }) if r == &root),
+        "got {refused:?}"
+    );
+    // An unlabelled holder is named as `nebula`, with this process's id.
+    assert!(
+        matches!(
+            &refused,
+            Err(Error::Locked { holder: Some(h), .. })
+                if h.pid == std::process::id() && h.label == "nebula"
+        ),
         "got {refused:?}"
     );
     assert_eq!(
@@ -4597,6 +4628,13 @@ fn the_lock_file_is_neither_committed_nor_checked() {
     ops::set_commit(&mut corpus, true).unwrap();
     committed(ops::commit(&corpus, "config", &["commit"]));
 
+    // Written and committed under a held lock, so the holder record is in
+    // `.lock` for the whole of both.
+    let held = corpus
+        .lock_as(nebula_core::LOCK_WAIT, "core test")
+        .expect("the lock");
+    let record = std::fs::read_to_string(root.join(nebula_core::LOCK_FILE)).unwrap();
+    assert!(record.contains("\"core test\""), "{record}");
     let id = seed(&corpus, "A node whose write took the lock", &[]);
     committed(ops::commit(&corpus, "new", &[&id]));
     assert!(
@@ -4615,10 +4653,17 @@ fn the_lock_file_is_neither_committed_nor_checked() {
     );
     assert_eq!(git(&root, &["check-ignore", ".lock"]), ".lock\n");
 
+    // Checked with the record still there.
     let docs = corpus.load_all().unwrap();
     let report = nebula_core::check::run(&Graph::build(&docs).unwrap(), &corpus).unwrap();
     assert_eq!(report.nodes, 1, "the lock file is not read as a node");
     assert!(report.findings.is_empty(), "{:?}", report.findings);
+    drop(held);
+    assert_eq!(
+        std::fs::read_to_string(root.join(nebula_core::LOCK_FILE)).unwrap(),
+        "",
+        "the record goes when the lock does"
+    );
 }
 
 // ---------------------------------------------------------------- node ids --

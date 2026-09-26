@@ -12066,27 +12066,53 @@ fn two_concurrent_tag_writes_from_separate_processes_both_land() {
     c.run(&["check"]).assert_ok();
 }
 
-/// Past the bounded wait the writer refuses, with the hint that says what to
-/// do. The write never happens, so retrying is safe.
+/// Past the bounded wait the writer refuses, naming who holds the lock and
+/// saying what to do. The write never happens, so retrying is safe.
 ///
 /// The lock is held here in the test process and contended by a spawned
 /// `neb`, so this is a real cross-process `flock` and not the in-process
-/// table standing in for one.
+/// table standing in for one, and the holder `neb` names is read from the
+/// record this process wrote.
 #[test]
 fn a_writer_that_waits_out_the_lock_refuses_with_a_hint_and_writes_nothing() {
     let c = Corpus::new();
     let id = c.seed("a node nobody else gets to edit", "Locked node");
     let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
 
-    let held = nebula_core::CorpusLock::acquire(&c.root).expect("holding the lock");
+    let held = nebula_core::CorpusLock::acquire_as(&c.root, nebula_core::LOCK_WAIT, "test holder")
+        .expect("holding the lock");
+    let named = format!("(`test holder`, pid {}, for ", std::process::id());
 
     // It waits the full five seconds before giving up, which is the bound
     // under test.
-    c.run(&["tag", &id, "--add", "never"])
+    let refused = c
+        .run(&["tag", &id, "--add", "never"])
         .assert_fails()
         .says("another nebula writer is holding")
+        .says(&named)
         .says("mid-write")
-        .says("run it again in a moment");
+        .says(&format!("ps -p {}", std::process::id()));
+    assert!(
+        !refused.stderr().contains("run it again in a moment"),
+        "{}",
+        refused.stderr()
+    );
+
+    // The same refusal under `--json`: the holder is in `error`, and the
+    // hint names it too.
+    let envelope = c
+        .run(&["--json", "tag", &id, "--add", "never"])
+        .assert_fails()
+        .refusal();
+    assert_eq!(envelope["code"], "locked", "{envelope}");
+    let error = envelope["error"].as_str().expect("error");
+    assert!(error.contains(&named), "{error}");
+    let hint = envelope["hint"].as_str().expect("hint");
+    assert!(
+        hint.contains(&format!("`test holder` (pid {})", std::process::id()))
+            && !hint.contains("in a moment"),
+        "{hint}"
+    );
 
     assert_eq!(
         std::fs::read_to_string(c.node_file(&id)).unwrap(),
@@ -12167,15 +12193,26 @@ fn a_config_write_that_waited_out_the_lock_keeps_the_setting_written_meanwhile()
 }
 
 /// The lock file is the one thing under the root that is not corpus content,
-/// so `neb commit` never stages it and `check` never reads it.
+/// so `neb commit` never stages it and `check` never reads it — nor the
+/// holder record written into it, which is there for the whole of every
+/// write and the commit that records it.
 #[test]
 fn the_lock_file_is_never_staged_and_never_checked() {
     let c = Corpus::new();
     git_init(&c.root);
     c.run(&["config", "commit", "on"]).assert_ok();
+    // A record a crashed holder left behind: present from before the first
+    // write, overwritten by each writer, and emptied as each lets go.
+    let stale = r#"{"pid":1,"since":"2026-09-26T00:00:00Z","label":"a crashed neb"}"#;
+    write(&c.root.join(".lock"), stale);
     let id = c.seed("a write that takes the lock", "Locked write");
 
     assert!(c.root.join(".lock").exists(), "the write took the lock");
+    assert_eq!(
+        std::fs::read_to_string(c.root.join(".lock")).unwrap(),
+        "",
+        "the writer replaced the stale record and cleared its own on release"
+    );
     assert!(
         !git(&c.root, &["ls-files"]).contains(".lock"),
         "the lock file is not tracked"
@@ -12192,11 +12229,72 @@ fn the_lock_file_is_never_staged_and_never_checked() {
         "the commit is the promotion and nothing beside it: {paths:?}"
     );
 
+    // Checked while a holder record sits in the file.
+    write(&c.root.join(".lock"), stale);
     c.run(&["check"]).assert_ok().says("0 errors");
     let report = c.run(&["--json", "check"]).assert_ok().stdout();
     let report: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(report["nodes"], 1, "the lock file is not read as a node");
     assert_eq!(report["findings"].as_array().unwrap().len(), 0);
+    assert!(dirt(&c.root).is_empty(), "{}", dirt(&c.root));
+}
+
+/// A `neb` holding the lock names itself by its verb and target. Its
+/// pre-commit hook stalls with the lock held, the way a slow commit does, and
+/// a waiter in this process is told that `neb tag <id>`, at `neb`'s PID, is
+/// the holder. The commit made under that record does not stage it.
+#[cfg(unix)]
+#[test]
+fn a_neb_mid_write_is_named_by_its_verb_and_commits_without_its_record() {
+    use std::time::{Duration, Instant};
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let id = c.seed("a node a slow commit holds", "Slow commit");
+    let pgid_file = c.workdir().join("hook.pgid");
+    let release = c.workdir().join("release");
+    // Bounded, so a test that fails before releasing it cannot wedge `neb`.
+    pre_commit_hook(
+        &c.root,
+        &pgid_file,
+        &format!(
+            "i=0; while [ ! -e '{}' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done",
+            release.display()
+        ),
+    );
+
+    let tagging = c.spawn(&["tag", &id, "--add", "slow"]);
+    let neb = tagging.child.id();
+    let waiting = Instant::now();
+    while !pgid_file.exists() {
+        assert!(
+            waiting.elapsed() < Duration::from_secs(30),
+            "the hook never ran"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let refused =
+        nebula_core::CorpusLock::acquire_within(&c.root, Duration::from_millis(50)).map(|_| ());
+    write(&release, "");
+    tagging.wait().assert_ok();
+
+    let Err(nebula_core::Error::Locked {
+        holder: Some(holder),
+        ..
+    }) = &refused
+    else {
+        panic!("expected a named holder, got {refused:?}");
+    };
+    assert_eq!(holder.label, format!("neb tag {id}"));
+    assert_eq!(holder.pid, neb, "the holder is the spawned neb");
+    assert_eq!(
+        std::fs::read_to_string(c.root.join(".lock")).unwrap(),
+        "",
+        "neb cleared its record on release"
+    );
+    let paths = head_paths(&c.root);
+    assert_eq!(paths, [format!("nodes/{id}.md")], "{paths:?}");
+    assert!(dirt(&c.root).is_empty(), "{}", dirt(&c.root));
 }
 
 /// Plant the temporary files a write killed before its rename leaves, one

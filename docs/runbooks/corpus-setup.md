@@ -219,7 +219,7 @@ neb check
 | `$NEBULA_ROOT/config.yaml` | corpus id, schema version, and `commit: true` when auto-commit is on (a corpus written by an older `neb` may also carry a legacy `observatory_root`) |
 | `~/.config/nebula/root` | this machine's default corpus, written by `neb init <DIR> --set-root` |
 | `~/.config/nebula/observatory-root` | this machine's Observatory checkout, written by `neb config observatory-root <DIR>`; `$OBSERVATORY_ROOT` outranks it |
-| `$NEBULA_ROOT/.lock`, `~/.config/nebula/.lock` | the advisory write locks; runtime state, never committed, never to be deleted by hand |
+| `$NEBULA_ROOT/.lock`, `~/.config/nebula/.lock` | the advisory write locks, and while one is held, a line naming its holder (PID, since, label); runtime state, never committed, never to be deleted by hand |
 | `$NEBULA_ROOT/.pending` | present only while a promotion is in flight, or after one was interrupted; the next write settles it (see [corpus-recovery.md](corpus-recovery.md#symptom-a-capture-you-promoted-is-still-in-the-inbox)); never committed |
 
 Every file `neb` writes is created `0600` and every directory it creates

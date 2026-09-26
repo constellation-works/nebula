@@ -24,6 +24,9 @@ const ROOT_VAR: &str = "NEBULA_DESKTOP_TEST_HOLD_LOCK";
 /// What the child prints once the lock is held.
 const HELD: &str = "NEBULA_TEST_LOCK_HELD";
 
+/// The label the child records as the lock's holder.
+pub const LABEL: &str = "desktop test holder";
+
 /// In the child only: hold the lock, then exit without reaching `main`.
 #[ctor::ctor]
 unsafe fn hold_the_lock_when_asked() {
@@ -41,7 +44,8 @@ unsafe fn hold_the_lock_when_asked() {
 }
 
 fn hold(root: &Path) -> Result<(), String> {
-    let _lock = nebula_core::CorpusLock::acquire(root).map_err(|e| e.to_string())?;
+    let _lock = nebula_core::CorpusLock::acquire_as(root, nebula_core::LOCK_WAIT, LABEL)
+        .map_err(|e| e.to_string())?;
     let mut stdout = std::io::stdout();
     writeln!(stdout, "{HELD}")
         .and_then(|()| stdout.flush())
@@ -98,6 +102,11 @@ impl LockHolder {
                 ),
             }
         }
+    }
+
+    /// The holder's process id, which its lock record carries.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
     }
 
     /// Close the holder's stdin and wait for it to let go and exit 0.
