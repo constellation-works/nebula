@@ -7,7 +7,15 @@ one JSON value on stdout. The separate `completions` command is the sole
 exception: it always emits a shell script. Ids are slugs of the title
 (`"Tags beat domains"` → `tags-beat-domains`); inbox ids are four hex chars. A
 slug over 60 characters is cut at the last `-` at or before the limit, never
-mid-word. `promote` and `new` take `--id <SLUG>` to choose the id explicitly
+mid-word. `promote` without `--title` or `--id` keeps the captured sentence
+as the title but, for a capture over five words, mints the id from its first
+five words after dropping stop-words (`gravity might be a scarcity gradient
+in some shared resource` → `gravity-scarcity-gradient-shared-resource`); if
+that id belongs to a different idea it adds one more such word at a time, then
+falls back to the full slug. A node already titled with the same text is
+refused with `NodeExists` naming it, never duplicated, as is a capture whose
+every candidate is taken.
+`promote` and `new` take `--id <SLUG>` to choose the id explicitly
 instead — useful for a long title, since ids are frozen by invariant once
 written. An explicit id follows the same slug rules (lowercase words joined
 by single dashes, 60 characters or fewer) and is refused, as a typed error,

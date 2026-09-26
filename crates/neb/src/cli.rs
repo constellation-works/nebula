@@ -243,6 +243,8 @@ enum Command {
         tags: Vec<String>,
         /// Explicit id, overriding the title's slug. Same rules as a slug:
         /// lowercase words joined by single dashes, 60 characters or fewer.
+        /// Without this or `--title`, a capture over five words gets its
+        /// first five significant words, not the whole sentence.
         #[arg(long, value_name = "SLUG")]
         id: Option<String>,
         /// Who authored the text: `human`, or the agent's session or crew

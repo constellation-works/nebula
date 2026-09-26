@@ -1608,6 +1608,71 @@ fn promote_without_a_parent_suggests_and_proceeds_as_a_root() {
     assert_eq!(out.lines().count(), 1, "{out}");
 }
 
+/// A capture promoted without `--title` or `--id` is titled with the whole
+/// sentence but takes a short id. A different thought colliding with it
+/// falls back to a longer id from its own text; the same thought again is
+/// refused, as it always was.
+#[test]
+fn promote_without_title_or_id_mints_a_short_id_from_a_long_capture() {
+    let c = Corpus::new();
+    let text = "gravity might be a scarcity gradient in some shared resource";
+    let short = "gravity-scarcity-gradient-shared-resource";
+    let full = "gravity-might-be-a-scarcity-gradient-in-some-shared-resource";
+
+    let entry = c.run(&["capture", "-q", text]).assert_ok().stdout_trim();
+    let id = c.run(&["promote", "-q", &entry]).assert_ok().stdout_trim();
+    assert_eq!(id, short);
+    let raw = std::fs::read_to_string(c.node_file(short)).unwrap();
+    assert!(raw.contains(&format!("id: {short}\n")), "{raw}");
+    assert!(raw.contains(&format!("title: {text}\n")), "{raw}");
+
+    // The same sentence again: already a node, so refused by that node's
+    // id rather than duplicated under a fallback, and the capture waits.
+    let entry = c.run(&["capture", "-q", text]).assert_ok().stdout_trim();
+    c.run(&["promote", "-q", &entry])
+        .assert_fails()
+        .says(&format!("node `{short}` already exists"));
+    assert!(c.run(&["inbox"]).assert_ok().stdout().contains(&entry));
+    assert!(!c.node_file(full).exists(), "no duplicate node");
+
+    // A different thought sharing the first five significant words falls
+    // back to one more word, and the node holding the short id is untouched.
+    let entry = c
+        .run(&["capture", "-q", &format!("{text} pool")])
+        .assert_ok()
+        .stdout_trim();
+    let id = c.run(&["promote", "-q", &entry]).assert_ok().stdout_trim();
+    assert_eq!(id, format!("{short}-pool"));
+    assert_eq!(
+        std::fs::read_to_string(c.node_file(short)).unwrap(),
+        raw,
+        "the node holding the short id is untouched"
+    );
+
+    // `--title` and `--id` decide the id exactly as they always have.
+    let entry = c
+        .run(&["capture", "-q", "a thought"])
+        .assert_ok()
+        .stdout_trim();
+    let id = c
+        .run(&[
+            "promote",
+            "-q",
+            &entry,
+            "--title",
+            "Gravity might be a scarcity gradient in a shared pool",
+        ])
+        .assert_ok()
+        .stdout_trim();
+    assert_eq!(id, "gravity-might-be-a-scarcity-gradient-in-a-shared-pool");
+    let entry = c.run(&["capture", "-q", text]).assert_ok().stdout_trim();
+    let id = c
+        .run(&["promote", "-q", &entry, "--id", "scarcity-gravity"])
+        .assert_ok()
+        .stdout_trim();
+    assert_eq!(id, "scarcity-gravity");
+}
+
 #[test]
 fn promote_json_is_the_created_node_with_its_neighbours() {
     let c = Corpus::new();

@@ -132,7 +132,9 @@ pub struct Promotion {
     /// What produced it.
     pub origin: Option<Origin>,
     /// Explicit id, overriding the title's slug. Validated with the same
-    /// rules a derived slug already follows, and refused on collision.
+    /// rules a derived slug already follows, and refused on collision. With
+    /// neither this nor `title`, the id is a shortened slug of the captured
+    /// text rather than the slug of the whole sentence.
     pub id: Option<String>,
     /// Who wrote the title and chose the parents. `None` is the human.
     pub by: Option<String>,
@@ -246,6 +248,13 @@ pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion, near_k: usize) ->
     let _lock = corpus.lock()?;
     let e = corpus.inbox_entry(entry)?;
     let title = args.title.clone().unwrap_or_else(|| e.text.clone());
+    // An explicit id or title decides the id as it always has. Only an id
+    // minted from the raw capture is shortened; see `store::capture_ids`.
+    let id = match (&args.id, &args.title) {
+        (Some(id), _) => Some(id.clone()),
+        (None, Some(_)) => None,
+        (None, None) => free_capture_id(corpus, &e.text)?,
+    };
     // Read before the write, so the new node is not among its own neighbours.
     let near = if args.parents.is_empty() {
         suggest(corpus, &format!("{title}\n{}", e.text), near_k)?
@@ -266,7 +275,7 @@ pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion, near_k: usize) ->
             kill: None,
             tags: args.tags.clone(),
             origin: args.origin.clone(),
-            id: args.id.clone(),
+            id,
             by: args.by.clone(),
         },
         Status::Seed,
@@ -284,6 +293,31 @@ pub fn promote(corpus: &Corpus, entry: &str, args: &Promotion, near_k: usize) ->
         doc,
         near,
     })
+}
+
+/// The id for a capture promoted with neither a title nor an id: the first
+/// of [`store::capture_ids`] no node has taken.
+///
+/// A candidate is passed over only when the node holding it is a different
+/// idea. One titled with this very text is the same thought already
+/// promoted, so its id is returned and the create refuses it as
+/// [`Error::NodeExists`], exactly as before ids were shortened: a duplicate
+/// node in a lineage graph is worse than a refusal. When every candidate is
+/// another idea's, the last — the full slug — is returned and refused the
+/// same way. `None` when the text reduces to no id, which the build refuses
+/// as [`Error::UnusableTitle`]. Called under the corpus lock, so nothing can
+/// take the id between this check and the write.
+fn free_capture_id(corpus: &Corpus, text: &str) -> Result<Option<String>> {
+    let candidates = store::capture_ids(text);
+    for id in &candidates {
+        if !corpus.node_path(id)?.exists() {
+            return Ok(Some(id.clone()));
+        }
+        if corpus.load(id)?.node.title.trim() == text.trim() {
+            return Ok(Some(id.clone()));
+        }
+    }
+    Ok(candidates.last().cloned())
 }
 
 /// Create a node directly, without going through the inbox.
