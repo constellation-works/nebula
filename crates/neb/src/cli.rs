@@ -19,11 +19,13 @@
 
 use crate::render;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use nebula_core::triage::{Action, Step};
 use nebula_core::{
     Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, InboxEntry, NEAR_DEFAULT,
-    NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, Origin, Promotion, Severity, Status, check, graph,
-    migrate, model, ops,
+    NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, Origin, Promotion, Severity, Status, Triage, check,
+    graph, migrate, model, ops,
 };
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitCode};
 
@@ -46,6 +48,7 @@ Inbox:
   inbox        List captures that have not been promoted or dropped
   promote      Turn an inbox entry into a seed node. Suggests parents, never picks one
   drop         Discard an inbox entry. Struck through, never deleted
+  triage       Work through the inbox oldest first, one key per entry
 
 Nodes:
   new          Create a node directly, without going through the inbox
@@ -268,6 +271,32 @@ enum Command {
     Drop {
         /// Inbox entry id, from `neb inbox`.
         entry: String,
+    },
+
+    /// Work through the inbox oldest first, one key per entry.
+    ///
+    /// Each waiting entry is shown with its age and the nodes it reads
+    /// closest to, numbered. One line then decides it: `p` promotes it as a
+    /// root, `1`-`3` promotes it under that numbered node, `t` sets the title
+    /// the promotion will use (`t <title>`, or `t` and then the title on the
+    /// next line; a blank title goes back to the captured text), `d` drops
+    /// it, `s` leaves it waiting, `q` stops, and `?` lists the keys. Nothing
+    /// is linked unless a number is chosen.
+    ///
+    /// Each decision is the single verb it stands for, with the same
+    /// refusals, the same `--by`, and, with `neb config commit on`, the same
+    /// commit: one per promote or drop. On a terminal a refused key or
+    /// decision is reported and the same entry asked about again. With
+    /// standard input piped the keys are read one per line, and the first
+    /// refusal ends the session non-zero, because the lines after it were
+    /// written for an entry that did not move. End of input stops as `q`
+    /// does. There is no `--json` form; a script runs `inbox`, `near`,
+    /// `promote` and `drop` itself.
+    Triage {
+        /// Who wrote the titles and chose the parents: `human`, or the
+        /// agent's session or crew label. Free text; defaults to `human`.
+        #[arg(long, value_name = "LABEL")]
+        by: Option<String>,
     },
 
     /// Create a node directly, without going through the inbox.
@@ -664,6 +693,38 @@ impl From<serde_json::Error> for Failure {
     }
 }
 
+/// A line `neb triage` cannot read as a key.
+#[derive(Debug)]
+enum KeyError {
+    Unknown(String),
+}
+
+impl std::fmt::Display for KeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown(line) => write!(
+                f,
+                "`{line}` is not a triage key; use p, a candidate number, t, d, s or q (? lists them)"
+            ),
+        }
+    }
+}
+
+impl KeyError {
+    /// The refusal's `kind` under `--json`, exhaustive like [`Error::kind`].
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Unknown(_) => "TriageKey",
+        }
+    }
+}
+
+impl From<KeyError> for Failure {
+    fn from(e: KeyError) -> Self {
+        Self::of(e.kind(), e.to_string())
+    }
+}
+
 impl From<EditorError> for Failure {
     fn from(e: EditorError) -> Self {
         Self::of(e.kind(), e.to_string())
@@ -866,15 +927,179 @@ fn commit(
     verb: &str,
     ids: &[&str],
 ) -> std::result::Result<(), Failure> {
+    commit_into(&mut std::io::stdout(), corpus, opts, verb, ids)
+}
+
+/// [`commit`], saying so on `out` rather than on stdout directly.
+fn commit_into(
+    out: &mut impl Write,
+    corpus: &Corpus,
+    opts: CommitOpts,
+    verb: &str,
+    ids: &[&str],
+) -> std::result::Result<(), Failure> {
     if opts.skip {
         return Ok(());
     }
     let done = ops::commit(corpus, verb, ids)?;
     if let Some(done) = done.filter(|_| !opts.json) {
         let short = done.hash.get(..7).unwrap_or(&done.hash);
-        println!("{}", render::dim(&format!("committed {short}")));
+        say(
+            out,
+            &format!("{}\n", render::dim(&format!("committed {short}"))),
+        )?;
     }
     Ok(())
+}
+
+/// Write rendered text to `out`. A closed stdout is an I/O error like any other.
+fn say(out: &mut impl Write, text: &str) -> std::result::Result<(), Failure> {
+    out.write_all(text.as_bytes()).map_err(Error::from)?;
+    Ok(())
+}
+
+/// One line of `neb triage` input, read.
+#[derive(Debug, PartialEq, Eq)]
+enum Key {
+    /// A decision about the current entry.
+    Act(Action),
+    /// `t` alone: the title follows on the next line.
+    AskTitle,
+    /// `?` or `h`: list the keys again.
+    Help,
+    /// A blank line, which decides nothing.
+    Nothing,
+}
+
+/// Read one line as a triage key. `t` is the one key that takes text.
+fn parse_key(line: &str) -> std::result::Result<Key, KeyError> {
+    let line = line.trim();
+    let (key, rest) = line
+        .split_once(char::is_whitespace)
+        .map_or((line, ""), |(key, rest)| (key, rest.trim()));
+    Ok(match (key, rest) {
+        ("", _) => Key::Nothing,
+        ("t", "") => Key::AskTitle,
+        ("t", title) => Key::Act(Action::Title(title.to_string())),
+        ("p", "") => Key::Act(Action::Promote),
+        ("d", "") => Key::Act(Action::Drop),
+        ("s", "") => Key::Act(Action::Skip),
+        ("q", "") => Key::Act(Action::Quit),
+        ("?" | "h", "") => Key::Help,
+        (number, "") if number.bytes().all(|b| b.is_ascii_digit()) => {
+            let number = number
+                .parse()
+                .map_err(|_| KeyError::Unknown(line.to_string()))?;
+            Key::Act(Action::PromoteUnder(number))
+        }
+        _ => return Err(KeyError::Unknown(line.to_string())),
+    })
+}
+
+/// `neb triage`: show the current entry, read a line, carry it out, repeat.
+///
+/// `interactive` is whether a person is at the keys. It decides three
+/// things: whether the key legend and a prompt are shown, and whether a
+/// refusal is reported and asked about again or ends the session, since
+/// scripted lines after a refusal were written for an entry that did not
+/// move. A commit that git refuses ends it either way, as it ends the single
+/// verb: every later write would be left uncommitted the same way.
+fn triage(
+    corpus: &Corpus,
+    by: Option<String>,
+    input: &mut impl BufRead,
+    out: &mut impl Write,
+    interactive: bool,
+    commits: CommitOpts,
+) -> std::result::Result<(), Failure> {
+    let refuse = |failure: Failure| {
+        if interactive {
+            eprintln!("{} {}", render::paint("31;1", "error:"), failure.0.prose());
+            Ok(())
+        } else {
+            Err(failure)
+        }
+    };
+    let mut session = Triage::start(corpus, by)?;
+    let mut shown = false;
+    let mut titling = false;
+    while let Some(waiting) = session.current(corpus)? {
+        if !shown {
+            say(out, &render::waiting(waiting))?;
+            if interactive {
+                say(out, &render::triage_keys(waiting))?;
+            }
+            shown = true;
+        }
+        if interactive {
+            say(out, if titling { "title> " } else { "> " })?;
+            out.flush().map_err(Error::from)?;
+        }
+        let mut line = String::new();
+        if input.read_line(&mut line).map_err(Error::from)? == 0 {
+            if interactive {
+                say(out, "\n")?;
+            }
+            break;
+        }
+        let action = if std::mem::take(&mut titling) {
+            Action::Title(line)
+        } else {
+            match parse_key(&line) {
+                Ok(Key::Act(action)) => action,
+                Ok(Key::AskTitle) => {
+                    titling = true;
+                    continue;
+                }
+                Ok(Key::Help) => {
+                    say(out, &render::triage_keys(waiting))?;
+                    continue;
+                }
+                Ok(Key::Nothing) => continue,
+                Err(e) => {
+                    refuse(e.into())?;
+                    continue;
+                }
+            }
+        };
+        // One critical section per decision, as the single verb has: the
+        // write and the commit that records it. Never across the wait for
+        // the next line, which would hold every other writer off meanwhile.
+        let writes = matches!(
+            action,
+            Action::Promote | Action::PromoteUnder(_) | Action::Drop
+        );
+        let _lock = writes.then(|| corpus.lock()).transpose()?;
+        match session.apply(corpus, action) {
+            Ok(step) => {
+                say(out, &render::step(&step))?;
+                match &step {
+                    Step::Promoted { entry, created } => commit_into(
+                        out,
+                        corpus,
+                        commits,
+                        "promote",
+                        &[&entry.id, &created.doc.node.id],
+                    )?,
+                    Step::Dropped { entry } => {
+                        commit_into(out, corpus, commits, "drop", &[&entry.id])?;
+                    }
+                    Step::Titled { .. } => continue,
+                    Step::Skipped { .. } | Step::Quit => {}
+                }
+                shown = false;
+            }
+            Err(e) => {
+                // Settled by another writer since the session began: the
+                // session has moved past it, so the next entry is new.
+                if nebula_core::triage::settled_elsewhere(&e) {
+                    shown = false;
+                }
+                refuse(e.into())?;
+            }
+        }
+    }
+    say(out, &render::tally(&session.tally(), session.total()))
 }
 
 #[allow(clippy::too_many_lines)] // A dispatch table is one arm per verb.
@@ -1150,6 +1375,26 @@ fn run(cli: Cli) -> Outcome {
                 println!("dropped {}", render::bold(&entry));
             }
             commit(&corpus, commits, "drop", &[&entry])?;
+            Ok(ok)
+        }
+
+        Command::Triage { by } => {
+            // Refused before anything is read: there is no one payload a
+            // session of keyed decisions could honestly be.
+            if json {
+                return Err(Error::Interactive("triage".into()).into());
+            }
+            let corpus = Corpus::open(root)?;
+            let stdin = std::io::stdin();
+            let interactive = stdin.is_terminal();
+            triage(
+                &corpus,
+                by,
+                &mut stdin.lock(),
+                &mut std::io::stdout().lock(),
+                interactive,
+                commits,
+            )?;
             Ok(ok)
         }
 
@@ -1668,7 +1913,7 @@ mod tests {
             assert!(flat.contains(&row), "help is missing the row {row:?}");
             seen += 1;
         }
-        assert_eq!(seen, 25, "template rows need updating for a new subcommand");
+        assert_eq!(seen, 26, "template rows need updating for a new subcommand");
         assert!(
             Cli::command().find_subcommand("help").is_none(),
             "clap's `help` subcommand should be disabled"
@@ -1751,7 +1996,7 @@ mod tests {
             .collect();
         let expected = [
             ["init", "check", "migrate", "config", "completions"].as_slice(),
-            &["capture", "inbox", "promote", "drop"],
+            &["capture", "inbox", "promote", "drop", "triage"],
             &["new", "edit", "sharpen", "status", "link", "tag", "note"],
             &["cite"],
             &["show", "log", "list", "near", "trace", "impact", "graph"],
@@ -1834,6 +2079,75 @@ mod tests {
             }
             _ => panic!("expected capture"),
         }
+    }
+
+    /// Each key is one action, `t` is the only one that takes text, and
+    /// anything else is refused by name rather than guessed at.
+    #[test]
+    fn triage_keys_parse_to_their_actions() {
+        for (line, key) in [
+            ("p\n", Key::Act(Action::Promote)),
+            ("  2 ", Key::Act(Action::PromoteUnder(2))),
+            ("d", Key::Act(Action::Drop)),
+            ("s", Key::Act(Action::Skip)),
+            ("q", Key::Act(Action::Quit)),
+            ("t", Key::AskTitle),
+            (
+                "t  A title  here ",
+                Key::Act(Action::Title("A title  here".into())),
+            ),
+            ("?", Key::Help),
+            ("h", Key::Help),
+            ("   \n", Key::Nothing),
+        ] {
+            assert_eq!(parse_key(line).unwrap(), key, "{line:?}");
+        }
+        for line in [
+            "x",
+            "pp",
+            "p now",
+            "d 2",
+            "+1",
+            "-1",
+            "1.5",
+            "99999999999999999999999",
+        ] {
+            let Err(KeyError::Unknown(said)) = parse_key(line) else {
+                panic!("{line:?} should be refused")
+            };
+            assert_eq!(said, line.trim());
+        }
+    }
+
+    /// On a terminal the keys are listed and prompted for, and a refusal is
+    /// reported and the same entry asked about again rather than ending the
+    /// session, which is what lets a person correct a slip.
+    #[test]
+    fn interactive_triage_prompts_and_asks_again_after_a_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let corpus = Corpus::init(&dir.path().join("corpus")).unwrap();
+        let entry = ops::capture(&corpus, "a thought worth keeping").unwrap();
+        let mut input = std::io::Cursor::new("x\n7\nt\n!!!\np\nt Worth keeping\np\n");
+        let mut out = Vec::new();
+        let commits = CommitOpts {
+            skip: false,
+            json: false,
+        };
+        let done = triage(&corpus, None, &mut input, &mut out, true, commits);
+        assert!(done.is_ok(), "refusals do not end a terminal session");
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("p promote as a root"), "{out}");
+        assert!(out.contains("title> "), "{out}");
+        assert_eq!(
+            out.matches("\n[1/1]").count(),
+            1,
+            "the entry is shown once, then asked about again:\n{out}"
+        );
+        assert!(
+            out.contains(&format!("promoted {} -> worth-keeping", entry.id)),
+            "{out}"
+        );
+        assert!(corpus.inbox().unwrap().0.is_empty());
     }
 
     #[test]

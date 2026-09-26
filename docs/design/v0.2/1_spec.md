@@ -141,6 +141,7 @@ and Orbit provenance, and suppress nearest-node suggestions; run
 | `inbox` | list unsettled captures |
 | `promote <ref> [--title ..] [--body ..] [--parent ..] [--tag ..] [--id ..] [--by ..] [--task ..] [--run ..] [--quiet]` | inbox entry becomes a seed node |
 | `drop <ref>` | settle an inbox entry without a node |
+| `triage [--by ..]` | interactive: each waiting entry, oldest first, with its age and numbered `near` candidates; one key promotes it as a root (`p`), under a candidate (`1`–`3`), titles it (`t`), drops (`d`), skips (`s`) or stops (`q`). Each decision is `promote` or `drop`, commit included; no `--json` |
 | `new <title> [--parent ..] [--reopens ..] [--contradicts ..] [--tag ..] [--kill ..]` | create a node directly, with its edges; `--contradicts` is written on both nodes |
 | `sharpen <id> --kill "..."` | seed becomes hypothesis |
 | `link <from> <type> <to>` | add an edge; refuses a genealogy cycle |

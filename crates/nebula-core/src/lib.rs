@@ -20,6 +20,7 @@
 //! - [`graph`]  [`Graph`] and the pure queries over it, `near` included
 //! - [`ops`]    the mutations, each enforcing its point-of-action invariants
 //! - [`check`]  the invariant checker, and where an `observatory` record resolves
+//! - [`triage`] [`Triage`]: the inbox one entry at a time, through the ops above
 //! - [`migrate`] v1 → v2, with its own lenient v1 model kept private
 //!
 //! The public API is exactly what this file names. A consumer that needs more
@@ -47,6 +48,7 @@ pub mod migrate;
 pub mod model;
 pub mod ops;
 pub mod store;
+pub mod triage;
 
 pub use check::{Finding, OBSERVATORY, Report, Severity};
 pub use config::{
@@ -66,6 +68,7 @@ pub use ops::{
     Captured, Citation, Cited, CloseTag, Created, Initialized, NewNode, Promotion, StatusChange,
 };
 pub use store::{Committed, Corpus, HistoryEntry, Inbox, InboxEntry, Settlement};
+pub use triage::Triage;
 
 /// Writes `apps/desktop/src/types/*.ts` from the types above.
 ///

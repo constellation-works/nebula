@@ -37,6 +37,13 @@ neb drop efbb
 
 Or leave it, when you genuinely cannot tell yet. Entries do not expire.
 
+`neb triage` does the same walk without copying ids between commands. It
+shows each entry, oldest first, with its age and the nearest nodes numbered,
+and takes one key: `p` promotes it as a root, `1`–`3` promotes it under that
+node, `t` sets the title first, `d` drops it, `s` leaves it, `q` stops. Each
+key runs the `promote` or `drop` above, commit included, and nothing is
+linked unless you press a number.
+
 Dropping loses nothing. The line stays in the inbox file struck through, so a
 thought you discarded is still findable by grep a year later.
 

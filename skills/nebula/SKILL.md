@@ -49,8 +49,10 @@ Mutating: `capture`, `promote`, `drop`, `new`, `sharpen`, `status`, `link`,
 `impact`, `graph --json`, `review` (and `review --short`), `check`, `tag list`. Every corpus
 verb listed here (plus `init`) emits JSON on stdout under `--json`;
 [verbs.md](references/verbs.md) has each one's flags and its real shape. Shell
-`completions` is the sole exception. Prefer `--json` for anything you will
-reason over.
+`completions` is the one exception. Prefer `--json` for anything you will
+reason over. `neb triage` is the human's interactive loop over the inbox, a
+key per entry; it refuses `--json`, so an agent triages with `inbox`, `near`,
+`promote` and `drop` instead.
 
 ## Linking to Observatory
 
