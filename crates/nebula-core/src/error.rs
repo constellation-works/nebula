@@ -186,6 +186,15 @@ pub enum Error {
     #[error("title `{0}` does not reduce to a usable id")]
     UnusableTitle(String),
 
+    /// A new reference's `kind` is not in [`crate::check::REFERENCE_KINDS`].
+    /// Only new writes are held to the vocabulary; `check` reports an
+    /// unexpected kind already on disk as a warning instead.
+    #[error(
+        "`{0}` is not an accepted reference kind; accepted kinds: {accepted}",
+        accepted = crate::check::REFERENCE_KINDS.join(", ")
+    )]
+    UnknownReferenceKind(String),
+
     /// An `observatory` reference's `uri` is not a bare record id.
     #[error(
         "`{0}` is not an Observatory record id: one of Q, H, T or R followed by digits, such as `Q002`"
@@ -303,6 +312,57 @@ pub enum Error {
 }
 
 impl Error {
+    /// The variant's name, as a stable string for a consumer that is not
+    /// Rust: `neb --json` reports it as the refusal's `kind`, so a script
+    /// matches `NoSuchNode` rather than parsing the message.
+    ///
+    /// Spelled out rather than derived, and exhaustive on purpose. A new
+    /// variant does not compile until it names itself here, and renaming a
+    /// variant does not quietly rename a kind that scripts already match.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NoSuchNode(_) => "NoSuchNode",
+            Self::NoSuchInboxEntry(_) => "NoSuchInboxEntry",
+            Self::NoCorpus(_) => "NoCorpus",
+            Self::NotGitWorkTree(_) => "NotGitWorkTree",
+            Self::NoNodeAtRevision { .. } => "NoNodeAtRevision",
+            Self::EmptyRoot => "EmptyRoot",
+            Self::RootConfigConflict { .. } => "RootConfigConflict",
+            Self::SchemaMismatch { .. } => "SchemaMismatch",
+            Self::CurrentSchemaUnreadable { .. } => "CurrentSchemaUnreadable",
+            Self::Cycle { .. } => "Cycle",
+            Self::SelfLoop => "SelfLoop",
+            Self::DuplicateEdge => "DuplicateEdge",
+            Self::NeedsKill(_) => "NeedsKill",
+            Self::EmptyKill => "EmptyKill",
+            Self::KillAlreadySet(_) => "KillAlreadySet",
+            Self::RefutedNeedsWhy => "RefutedNeedsWhy",
+            Self::RefutedCannotReopen => "RefutedCannotReopen",
+            Self::SeedWithKill => "SeedWithKill",
+            Self::DuplicateId(_) => "DuplicateId",
+            Self::NodeExists(_) => "NodeExists",
+            Self::UnresolvedUri { .. } => "UnresolvedUri",
+            Self::AbsoluteUri(_) => "AbsoluteUri",
+            Self::InvalidTransition { .. } => "InvalidTransition",
+            Self::MissingParent(_) => "MissingParent",
+            Self::UnusableTitle(_) => "UnusableTitle",
+            Self::UnknownReferenceKind(_) => "UnknownReferenceKind",
+            Self::InvalidObservatoryId(_) => "InvalidObservatoryId",
+            Self::InvalidId(_) => "InvalidId",
+            Self::UnsafeId(_) => "UnsafeId",
+            Self::IdMismatch { .. } => "IdMismatch",
+            Self::Locked { .. } => "Locked",
+            Self::StagedElsewhere { .. } => "StagedElsewhere",
+            Self::CorpusIgnored(_) => "CorpusIgnored",
+            Self::Git { .. } => "Git",
+            Self::Corpus(_) => "Corpus",
+            Self::Io(_) => "Io",
+            Self::IoAt { .. } => "IoAt",
+            Self::Yaml { .. } => "Yaml",
+            Self::Json { .. } => "Json",
+        }
+    }
+
     /// A YAML failure, labelled with what was being read.
     pub(crate) fn yaml(context: impl Into<String>, source: serde_yaml_ng::Error) -> Self {
         Self::Yaml {

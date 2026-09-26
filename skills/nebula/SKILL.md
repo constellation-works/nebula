@@ -117,7 +117,11 @@ falsifier.
 ## Refusals
 
 `neb` refuses rather than warns at the point of action. Each refusal is typed
-and tells you what to do; do not retry the same command.
+and tells you what to do; do not retry the same command. Under `--json` it is
+one line of JSON on stderr, `{"error": {"kind", "message", "hint"}}`, with
+exit 1: match on `kind` and act on `hint`
+([verbs.md](references/verbs.md#refusals-under---json) has the envelope and
+the exit codes).
 [invariants.md](references/invariants.md) lists the rules, which verb
 enforces each, and the move that resolves it.
 
