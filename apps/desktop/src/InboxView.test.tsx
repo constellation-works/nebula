@@ -1,10 +1,11 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { App } from "./App";
 import { CaptureBox, CONFIRM_MS } from "./CaptureBox";
 import { CaptureWindow } from "./CaptureWindow";
 import { InboxView } from "./InboxView";
+import * as layoutClient from "./layoutClient";
 import { useInbox } from "./useInbox";
 import type { InboxEntry } from "./types/InboxEntry";
 
@@ -42,6 +43,10 @@ beforeEach(() => {
   mocked.corpusPath.mockResolvedValue("/tmp/nowhere/.nebula");
   mocked.startupWarnings.mockResolvedValue([]);
   mocked.reload.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("InboxView", () => {
@@ -331,6 +336,47 @@ describe("CaptureWindow", () => {
 });
 
 describe("App", () => {
+  it("keeps graph selection, filters and viewport across a tab round-trip without reloading", async () => {
+    const layoutSpy = vi.spyOn(layoutClient, "layoutGraph");
+    mocked.graph.mockResolvedValue({
+      nodes: [
+        { id: "n0", title: "Idea 0", status: "seed", tags: ["other"], created: "", updated: "" },
+        { id: "n1", title: "Idea 1", status: "seed", tags: ["focus"], created: "", updated: "" },
+      ],
+      edges: [],
+    });
+    mocked.node.mockImplementation(async (id) => ({
+      node: { id, title: "Idea 1", status: "seed", created: "", updated: "" },
+      body: "",
+    }));
+    render(<App />);
+    expect(mocked.graph).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Graph" }));
+    const graphCanvas = await screen.findByRole("img", { name: "Graph" });
+    await waitFor(() => expect(graphCanvas.querySelectorAll("g.node")).toHaveLength(2));
+    fireEvent.click(graphCanvas.querySelector('g.node[data-id="n1"]')!);
+    await screen.findByRole("complementary", { name: "Node" });
+    fireEvent.wheel(graphCanvas, { deltaX: 12, deltaY: 30 });
+    const transform = graphCanvas.querySelector("g.scene")!.getAttribute("transform");
+    fireEvent.click(screen.getByRole("button", { name: "focus1" }));
+    fireEvent.change(screen.getByLabelText("Filter by title"), { target: { value: "Idea 1" } });
+    await waitFor(() => expect(layoutSpy).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(graphCanvas.querySelectorAll("g.node")).toHaveLength(1));
+    const layoutCount = layoutSpy.mock.calls.length;
+
+    fireEvent.click(screen.getByRole("tab", { name: /Inbox/ }));
+    fireEvent.click(screen.getByRole("tab", { name: "Graph" }));
+    expect(screen.getByRole("img", { name: "Graph" })).toBe(graphCanvas);
+    expect(graphCanvas.querySelector("g.scene")).toHaveAttribute("transform", transform);
+    expect(screen.getByLabelText("Filter by title")).toHaveValue("Idea 1");
+    expect(screen.getByRole("button", { name: "focus1" })).toHaveAttribute("aria-pressed", "true");
+    expect(graphCanvas.querySelector('g.node[data-id="n1"]')).toHaveClass("node--selected");
+    expect(screen.getByRole("complementary", { name: "Node" })).toBeInTheDocument();
+    expect(mocked.graph).toHaveBeenCalledTimes(1);
+    expect(layoutSpy).toHaveBeenCalledTimes(layoutCount);
+  });
+
   it("shows the count in the Inbox tab", async () => {
     const inbox = deferred<InboxEntry[]>();
     mocked.inbox.mockReturnValueOnce(inbox.promise);

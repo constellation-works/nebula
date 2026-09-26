@@ -9,6 +9,7 @@ type Tab = "inbox" | "graph";
 /** The main window: two tabs over one corpus. */
 export function App() {
   const [tab, setTab] = useState<Tab>("inbox");
+  const [graphVisited, setGraphVisited] = useState(false);
   const [startupWarnings, setStartupWarnings] = useState<string[]>([]);
   const inbox = useInbox();
 
@@ -54,12 +55,22 @@ export function App() {
           type="button"
           className="tab"
           aria-selected={tab === "graph"}
-          onClick={() => setTab("graph")}
+          onClick={() => {
+            setGraphVisited(true);
+            setTab("graph");
+          }}
         >
           Graph
         </button>
       </nav>
-      <main className="view">{tab === "inbox" ? <InboxView inbox={inbox} /> : <GraphView />}</main>
+      <main className="view" hidden={tab !== "inbox"}>
+        <InboxView inbox={inbox} />
+      </main>
+      {graphVisited && (
+        <main className="view" hidden={tab !== "graph"}>
+          <GraphView active={tab === "graph"} />
+        </main>
+      )}
     </div>
   );
 }

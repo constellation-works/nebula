@@ -198,7 +198,7 @@ const Nodes = memo(function Nodes({
 
 /**
  * The drawing: SVG, one `<g>` per node and one `<path>` per edge, under a
- * transform that the mouse moves. Drag pans, wheel zooms about the cursor,
+ * transform that the mouse moves. Drag and plain wheel pan; ctrl-wheel zooms about the cursor,
  * a click on empty canvas clears the selection.
  */
 export function GraphCanvas({ layout, selected, lineage, onSelect, onOpen, fitRequest }: Props) {
@@ -227,11 +227,16 @@ export function GraphCanvas({ layout, selected, lineage, onSelect, onOpen, fitRe
     if (svg === null) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? svg.clientHeight : 1;
+      const v = viewRef.current;
+      if (!e.ctrlKey) {
+        setView({ ...v, x: v.x - e.deltaX * unit, y: v.y - e.deltaY * unit });
+        return;
+      }
       const rect = svg.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
-      const v = viewRef.current;
-      const k = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, v.k * Math.exp(-e.deltaY * 0.0025)));
+      const k = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, v.k * Math.exp(-e.deltaY * unit * 0.0025)));
       const r = k / v.k;
       setView({ x: mx - (mx - v.x) * r, y: my - (my - v.y) * r, k });
     };
