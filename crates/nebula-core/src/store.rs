@@ -245,6 +245,12 @@ impl Corpus {
         CorpusLock::acquire(&self.root)
     }
 
+    /// Take the write lock with a caller-chosen wait bound. A responsive UI
+    /// can refuse a busy writer sooner while keeping the same critical section.
+    pub fn lock_within(&self, wait: std::time::Duration) -> Result<CorpusLock> {
+        CorpusLock::acquire_within(&self.root, wait)
+    }
+
     /// `config.yaml` as it stands on disk, rather than the snapshot
     /// [`Self::open`] took.
     ///

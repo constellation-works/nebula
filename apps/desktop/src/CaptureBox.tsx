@@ -23,7 +23,7 @@ interface Props {
  */
 export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape }: Props) {
   const [text, setText] = useState("");
-  const [status, setStatus] = useState<"idle" | "busy" | "captured" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "busy" | "retrying" | "captured" | "error">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const textRef = useRef("");
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -34,13 +34,28 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape }
 
   async function submit() {
     const trimmed = text.trim();
-    if (!trimmed || status === "busy") return;
+    if (!trimmed || status === "busy" || status === "retrying") return;
     const submitted = text;
     clearTimeout(timer.current);
     setMessage(null);
     setStatus("busy");
     try {
-      const entry = await api.capture(trimmed);
+      let entry: InboxEntry;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          entry = await api.capture(trimmed);
+          break;
+        } catch (e) {
+          if (e !== "corpus busy") throw e;
+          if (attempt === 2) {
+            setStatus("error");
+            setMessage("Corpus busy. Press Enter to retry.");
+            return;
+          }
+          setStatus("retrying");
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
       if (textRef.current === submitted) {
         textRef.current = "";
         setText("");
@@ -87,7 +102,7 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape }
         onKeyDown={onKeyDown}
       />
       <span className={`capture__status capture__status--${status}`} role="status">
-        {status === "captured" ? "captured" : status === "error" ? message : ""}
+        {status === "captured" ? "captured" : status === "retrying" ? "busy, retrying…" : status === "busy" ? "saving…" : status === "error" ? message : ""}
       </span>
     </div>
   );

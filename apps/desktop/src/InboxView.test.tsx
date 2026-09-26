@@ -186,6 +186,31 @@ describe("useInbox", () => {
 });
 
 describe("CaptureBox", () => {
+  it("shows a busy retry and keeps the thought for a manual retry", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mocked.capture.mockRejectedValue("corpus busy");
+    render(<CaptureBox />);
+    const input = screen.getByLabelText("Capture");
+
+    fireEvent.change(input, { target: { value: "keep this thought" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("busy, retrying…")).toBeInTheDocument();
+    expect(input).toHaveValue("keep this thought");
+    fireEvent.change(input, { target: { value: "keep this thought!" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(mocked.capture).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole("status")).toHaveTextContent("Corpus busy. Press Enter to retry.");
+    expect(input).toHaveValue("keep this thought!");
+
+    mocked.capture.mockResolvedValueOnce({ id: "9999", at: "2026-09-13T12:00", text: "keep this thought!" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("captured")).toBeInTheDocument();
+    expect(mocked.capture).toHaveBeenLastCalledWith("keep this thought!");
+    vi.useRealTimers();
+  });
+
   it("keeps a new thought typed while capture is pending and does not dismiss it", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const capture = deferred<InboxEntry>();
