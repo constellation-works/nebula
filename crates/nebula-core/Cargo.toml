@@ -20,6 +20,12 @@ thiserror = { workspace = true }
 time = { workspace = true }
 ts-rs = { workspace = true, optional = true }
 
+# The git runner's process groups, deadlines and signal forwarding are Unix
+# primitives. Elsewhere the runner refuses to start git at all.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+rustix = { workspace = true }
+
 [dev-dependencies]
 ctor = { workspace = true }
 tempfile = { workspace = true }

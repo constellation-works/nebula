@@ -26,5 +26,9 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 time = { workspace = true }
 
+# Signalling `neb` and probing the git process group it leaves behind.
+[target.'cfg(unix)'.dev-dependencies]
+rustix = { workspace = true }
+
 [lints]
 workspace = true

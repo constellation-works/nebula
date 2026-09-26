@@ -49,7 +49,7 @@ on `error`:
 | field | type | what it is |
 |---|---|---|
 | `error` | string | What is wrong, in the words the text output uses before its hint. |
-| `code` | string | The refusal's stable `snake_case` name. For a core refusal it is the `nebula-core` variant's name in `snake_case`: `no_such_node`, `cycle`, `self_loop`, `needs_kill`, `refuted_needs_why`, `refuted_cannot_reopen`, `seed_with_kill`, `unknown_reference_kind`, `unresolved_uri`, `absolute_uri`, `schema_mismatch`, `staged_elsewhere`, `corpus_ignored`, `locked`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `usage` (arguments that parse but ask for nothing, such as an empty `capture`), `editor_not_configured`, `editor_invalid_command`, `editor_start`, `editor_unsuccessful`, `notes_changed`, `triage_key` (a key `triage` does not know), `json` and `io_at`. |
+| `code` | string | The refusal's stable `snake_case` name. For a core refusal it is the `nebula-core` variant's name in `snake_case`: `no_such_node`, `cycle`, `self_loop`, `needs_kill`, `refuted_needs_why`, `refuted_cannot_reopen`, `seed_with_kill`, `unknown_reference_kind`, `unresolved_uri`, `absolute_uri`, `schema_mismatch`, `staged_elsewhere`, `corpus_ignored`, `git`, `git_timed_out`, `locked`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `usage` (arguments that parse but ask for nothing, such as an empty `capture`), `editor_not_configured`, `editor_invalid_command`, `editor_start`, `editor_unsuccessful`, `notes_changed`, `triage_key` (a key `triage` does not know), `json` and `io_at`. |
 | `hint` | string or `null` | What to do about it, as the text output words it: often a command to run, such as `neb sharpen <id> --kill "..."`. `null` when the CLI has nothing to add. |
 
 Key order is not significant. A new refusal arrives with its own `code` and
@@ -62,7 +62,7 @@ Exit codes, with or without `--json`:
 | code | means | stdout | stderr under `--json` |
 |---|---|---|---|
 | 0 | success | the payload | empty, bar a `warning:` line from `init` or `capture` |
-| 1 | a refusal | empty, **except** when the write landed and its commit was refused (`StagedElsewhere`, `CorpusIgnored`, `Git`): then it holds the write's payload | the envelope |
+| 1 | a refusal | empty, **except** when the write landed and its commit was refused (`StagedElsewhere`, `CorpusIgnored`, `Git`, `GitTimedOut`): then it holds the write's payload | the envelope |
 | 1 | `check` found an `error`-level finding | the report | empty |
 | 2 | clap rejected the command line: unknown flag, missing argument, bad value | empty | clap's prose, **not** JSON: it is raised before `neb` knows `--json` was asked for |
 

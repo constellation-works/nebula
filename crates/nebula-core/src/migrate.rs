@@ -16,6 +16,7 @@
 
 use crate::config::{self, Config};
 use crate::error::{Error, Result};
+use crate::git::RunError;
 use crate::lock::{CorpusLock, LOCK_FILE};
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
 use crate::store::{self, Corpus};
@@ -267,9 +268,13 @@ fn in_file(e: Error, path: &Path) -> Error {
 /// lands as its own commit and the pre-migration state stays recoverable.
 /// A corpus that is not a git repository is migrated as is.
 fn refuse_dirty_tree(root: &Path) -> Result<()> {
-    // No git on PATH, or no repository: nothing to protect against.
-    if !store::inside_work_tree(root).unwrap_or(false) {
-        return Ok(());
+    match store::inside_work_tree(root) {
+        Ok(true) => {}
+        // No git on PATH, or no repository: nothing to protect against.
+        Ok(false) | Err(RunError::Start(_)) => return Ok(()),
+        // git ran and gave no answer: whether the tree is dirty is unknown,
+        // which is not the same as clean.
+        Err(error) => return Err(error.into_error(root, "rev-parse")),
     }
     // The write lock is a fact about which process is writing, not corpus
     // content, and it is untracked in a corpus that is its own repository.
@@ -281,7 +286,7 @@ fn refuse_dirty_tree(root: &Path) -> Result<()> {
         return Err(Error::corpus(format!(
             "git status failed in {}:\n{}",
             root.display(),
-            String::from_utf8_lossy(&status.stderr).trim()
+            status.stderr.text()
         )));
     }
     if !status.stdout.is_empty() {

@@ -255,6 +255,20 @@ impl ChildGuard {
         self.child.stdout.take().expect("stdout was piped")
     }
 
+    /// The child's status if it has exited, reaping it; `None` while it
+    /// runs. For a test that polls its own condition under its own deadline
+    /// and needs to know the child is still alive meanwhile. A failed check
+    /// reads as still running, and the caller's deadline bounds it.
+    pub fn try_wait(&mut self) -> Option<ExitStatus> {
+        match self.child.try_wait() {
+            Ok(Some(status)) => {
+                self.reaped = true;
+                Some(status)
+            }
+            Ok(None) | Err(_) => None,
+        }
+    }
+
     /// Wait up to `deadline` for the child to exit. Past it, the child is
     /// killed and reaped, and the error names the command.
     pub fn wait(&mut self, deadline: Duration) -> Result<ExitStatus, String> {

@@ -1128,6 +1128,9 @@ fn edit_body(body: &str) -> std::result::Result<String, Failure> {
     let mut file = tempfile::NamedTempFile::new().map_err(Error::from)?;
     file.write_all(body.as_bytes()).map_err(Error::from)?;
     file.flush().map_err(Error::from)?;
+    // The one child not run like git: it stays in the terminal's foreground
+    // group with no deadline, because a person drives it (STD-03@2 §R11,
+    // recorded in docs/design/lineage-graph/4_decisions.md).
     let status = ProcessCommand::new(program)
         .args(words)
         .arg(file.path())

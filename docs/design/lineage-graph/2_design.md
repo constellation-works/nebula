@@ -64,6 +64,19 @@ for a view. `neb init` writes the file,
 `neb config` rewrites it whole, and `neb migrate` bumps `schema_version` in
 place; it is never hand edited.
 
+Every git command nebula runs — the commit and the history queries alike —
+goes through one supervised runner (`crates/nebula-core/src/git.rs`). git
+leads its own process group; `commit`, which runs the repository's hooks, has
+120 seconds and anything else 30; a command past its deadline is stopped with
+SIGTERM, a five-second grace and SIGKILL of the whole group, and reported as
+`GitTimedOut` rather than as a failure; each output stream is kept to 1 MiB.
+The variables that point git at another repository — the fifteen
+`git rev-parse --local-env-vars` lists, `GIT_DIR` and `GIT_INDEX_FILE` among
+them — are removed first, so a `neb` run from inside another repository's hook
+still commits to, and reads history from, the repository around the corpus.
+The rest of the environment passes through, so the user's identity, signing
+and hooks still apply.
+
 ## Tags, not a declared list
 
 Every node carries free-form tags, normalised to lowercase kebab-case on write.
