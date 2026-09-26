@@ -3,9 +3,11 @@
 Every corpus verb below takes `--root <DIR>` and `--json`, and those flags may
 appear anywhere on the line — before the verb, after it, or after the free
 text of `capture`, `note` and `near`. Every verb that writes also takes
-`--no-commit`, after the verb (or, as an older spelling, before it); a
-read-only verb such as `show`, `list` or `trace` refuses it as an unknown
-argument. Under `--json`, each emits
+`--no-commit`, after the verb; a read-only verb such as `show`, `list` or
+`trace` refuses it there as an unknown argument. The older spelling before the
+verb is deprecated: before a verb that writes it still skips the commit and
+warns on stderr, and before any other verb it is refused (`usage`, exit 2).
+Under `--json`, each emits
 one JSON value on stdout. Two commands are the exceptions: `completions`
 always emits a shell script, and `triage`, which takes its decisions from a
 person one key at a time, refuses `--json` (`Interactive`) and names the
@@ -98,7 +100,7 @@ on `error`:
 | field | type | what it is |
 |---|---|---|
 | `error` | string | What is wrong, in the words the text output uses before its hint. |
-| `code` | string | The refusal's stable `snake_case` name. For a core refusal it is the `nebula-core` variant's name in `snake_case`: `no_such_node`, `cycle`, `self_loop`, `needs_kill`, `refuted_needs_why`, `refuted_cannot_reopen`, `seed_with_kill`, `unknown_reference_kind`, `unresolved_uri`, `absolute_uri`, `schema_mismatch`, `missing_config`, `corpus_ignored`, `git`, `git_timed_out`, `locked`, `edit_conflict`, `input_too_large`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `usage` (arguments that parse but ask for nothing, such as an empty `capture`), `editor_not_configured`, `editor_invalid_command`, `editor_start`, `editor_unsuccessful`, `notes_changed`, `triage_key` (a key `triage` does not know), `json` and `io_at`. |
+| `code` | string | The refusal's stable `snake_case` name. For a core refusal it is the `nebula-core` variant's name in `snake_case`: `no_such_node`, `cycle`, `self_loop`, `needs_kill`, `refuted_needs_why`, `refuted_cannot_reopen`, `seed_with_kill`, `unknown_reference_kind`, `unresolved_uri`, `absolute_uri`, `schema_mismatch`, `missing_config`, `corpus_ignored`, `git`, `git_timed_out`, `locked`, `edit_conflict`, `input_too_large`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `usage` (arguments that parse but ask for nothing, such as an empty `capture`, `graph` with no format, or `--no-commit` before a verb that never commits), `editor_not_configured`, `editor_invalid_command`, `editor_start`, `editor_unsuccessful`, `notes_changed`, `triage_key` (a key `triage` does not know), `triage_title_lost` (input ended while a `triage` title was waiting to be used), `json` and `io_at`. |
 | `hint` | string or `null` | What to do about it, as the text output words it: often a command to run, such as `neb sharpen <id> --kill "..."`. `null` when the CLI has nothing to add. |
 
 Key order is not significant. A new refusal arrives with its own `code` and
@@ -113,12 +115,12 @@ Exit codes, with or without `--json`:
 | 0 | success | the payload | empty, bar a `warning:` or `note:` line (from `init`, `capture`, or a commit that could not happen), or the line saying a query found nothing or a bound cut the result |
 | 1 | a refusal | empty, **except** when the write landed and its commit was refused (`CorpusIgnored`, `Git`, `GitTimedOut`): then it holds the write's payload | the envelope |
 | 1 | `check` found an `error`-level finding | the report | empty |
+| 2 | a usage error `neb` raised: an argument no corpus could accept, whatever it holds (`usage`, `interactive`, `self_loop`, `parent_and_reopens`, `empty_kill`, `refuted_needs_why`, `absolute_uri`, `unusable_title`, `unknown_reference_kind`, `invalid_observatory_id`, `invalid_id`, `empty_root`, and `relative_observatory_root` for a path given on the command line); nothing was written | empty | the envelope |
 | 2 | clap rejected the command line: unknown flag, missing argument, bad value | empty | clap's prose, **not** JSON: it is raised before `neb` knows `--json` was asked for |
 
-`neb graph` with neither `--json` nor `--mermaid` also exits 2, with its hint
-on stdout; under `--json` that cannot happen. Without `--json`, every refusal
-prints exactly what it printed before the envelope existed: `error:`, the
-message, and the hint after a blank line.
+A refusal of a line read by `triage` from piped input exits 1 whatever its
+code: the command line was fine. Without `--json`, every refusal prints
+`error:`, the message, and the hint after a blank line.
 
 ## Corpus
 
@@ -139,7 +141,9 @@ file stays machine-written and is never hand-edited.
 nothing; `DIR` must be absolute. Without `DIR` it prints the effective root and
 which setting supplied it: `$OBSERVATORY_ROOT`, else this machine's setting,
 else the legacy `observatory_root` key an older `neb` wrote into `config.yaml`,
-else nothing. `legacy` names that key whenever the file still carries it, in
+else nothing. The legacy key is deprecated: a verb that resolves a record
+through it (`show`, `cite --kind observatory`, `handoff`) warns on stderr,
+naming it and `neb config observatory-root <DIR>`. `legacy` names that key whenever the file still carries it, in
 force or not. `--drop-legacy` removes it from `config.yaml` (a corpus write,
 committed as `neb config observatory-root` when `commit` is on); run it once
 every machine that shares the corpus has its own setting.
@@ -226,7 +230,10 @@ with `promoted N, dropped N, skipped N; N still waiting`. On a terminal a
 refused key or decision is reported and the same entry is asked about again.
 With standard input piped, keys are read one per line with no prompt, and the
 first refusal ends the session with exit 1, because the lines after it were
-written for an entry that did not move; end of input stops as `q` does. An
+written for an entry that did not move; end of input stops as `q` does, except
+while a title is waiting to be used (after `t`, before the `p` or number it was
+for), which is a refusal, exit 1, naming the title and the `neb promote`
+that would use it. An
 agent does not use `triage`: run `inbox`, `near`, `promote` and `drop` with
 `--json`, which is what it is made of.
 
@@ -516,9 +523,10 @@ that matters in a year.
 ### Observatory records
 
 `--kind observatory` links a node to an Observatory record, and its `--uri` is
-the bare record id — `Q002`, `H007`, `T003`, `R012` — not a path. That is what
-makes the citation portable: nothing machine-specific reaches the corpus. Case
-is normalised up (`q002` stores `Q002`), and anything that is not one of `Q`,
+the bare record id — `Q<nnn>`, `H<nnn>`, `T<nnn>` or `R<nnn>` — not a path.
+That is what makes the citation portable: nothing machine-specific reaches the
+corpus. Case is normalised up (`q<nnn>` stores `Q<nnn>`), and anything that is
+not one of `Q`,
 `H`, `T`, `R` followed by digits is a typed refusal at `cite`.
 
 Where the record is comes from the machine, not the reference or the corpus:
@@ -526,8 +534,8 @@ Where the record is comes from the machine, not the reference or the corpus:
 <DIR>`), else the legacy `observatory_root` key in `config.yaml`. The id is
 matched by prefix inside the directory its
 letter names — `questions/`, `hypotheses/`, `theories/`, `research/` — so
-`Q002` finds `questions/Q002-is-proper-time-a-count….md` and `R012` finds the
-`research/R012-arc/` directory.
+`Q<nnn>` finds `questions/Q<nnn>-<slug>.md` and `R<nnn>` finds the
+`research/R<nnn>-<slug>/` directory.
 
 `check` warns, and never errors, when the root is unset or the id does not
 resolve: the citation is still true, and the machine is merely missing or
@@ -536,21 +544,21 @@ behind the checkout. `show` prints the resolved path under the reference, and
 `{reference, record, path}` (`path` is `null` when it does not resolve).
 
 ```json
-// neb cite proper-time-is-a-count --kind observatory --uri Q002 --note "the question this became"
+// neb cite proper-time-is-a-count --kind observatory --uri Q<nnn> --note "the question this became"
 // then: neb show proper-time-is-a-count --json
 {
   "node": {
     …,
     "references": [
-      { "id": "r1", "kind": "observatory", "uri": "Q002", "title": null,
+      { "id": "r1", "kind": "observatory", "uri": "Q<nnn>", "title": null,
         "note": "the question this became", "added": "2026-09-21", "by": "human",
         "origin": null }
     ],
     …
   },
   "observatory": [
-    { "reference": "r1", "record": "Q002",
-      "path": "/Users/you/workspace/observatory/questions/Q002-is-proper-time-a-count-of-snapshots-along-a-worldline.md" }
+    { "reference": "r1", "record": "Q<nnn>",
+      "path": "/Users/you/workspace/observatory/questions/Q<nnn>-<slug>.md" }
   ]
 }
 ```
@@ -573,16 +581,16 @@ The record's path, when it resolves, is part of the result on stdout; a
 missing `--note` is nudged on stderr.
 
 ```
-// neb handoff scarcity-wake H012 --note "the hypothesis this became"
-scarcity-wake seed -> abandoned, handed off to H012 (r1)
-/Users/you/workspace/observatory/hypotheses/H012-scarcity-wake.md
+// neb handoff scarcity-wake H<nnn> --note "the hypothesis this became"
+scarcity-wake seed -> abandoned, handed off to H<nnn> (r1)
+/Users/you/workspace/observatory/hypotheses/H<nnn>-<slug>.md
 ```
 
 `--json` returns the node as written, the new reference's id, the record as
 stored, and the status it left:
 
 ```json
-// neb handoff scarcity-wake H012 --note "the hypothesis this became" --json
+// neb handoff scarcity-wake H<nnn> --note "the hypothesis this became" --json
 {
   "doc": {
     "node": {
@@ -590,17 +598,17 @@ stored, and the status it left:
       "status": "abandoned", "created": "2026-09-26", "updated": "2026-09-26",
       "kill": null, "kill_by": null, "tags": [], "edges": [],
       "references": [
-        { "id": "r1", "kind": "observatory", "uri": "H012", "title": null,
+        { "id": "r1", "kind": "observatory", "uri": "H<nnn>", "title": null,
           "note": "the hypothesis this became", "added": "2026-09-26", "by": "human",
           "origin": null }
       ],
-      "closed": { "why": "handed off to H012", "at": "2026-09-26" },
+      "closed": { "why": "handed off to H<nnn>", "at": "2026-09-26" },
       "origin": null
     },
     "body": ""
   },
   "reference": "r1",
-  "record": "H012",
+  "record": "H<nnn>",
   "from": "seed"
 }
 ```
@@ -638,7 +646,7 @@ not who wrote the words. `check` enforces nothing about authorship.
 | `neb near <QUERY>...` | the existing nodes closest to free text, or to a node (left out of its own answer), best first, each banded `strong`/`some`/`weak`; for a node, marks neighbours already linked to it | `--limit <K>`/`-k` (default 3); flags may follow the query |
 | `neb trace <NODE>` | ancestry as a tree on a terminal (one tab-separated line per node when piped), each line naming its edge kind(s) | `--down` for descendants, `--depth <N>` |
 | `neb impact <NODE>` | descendants plus `contradicts` neighbours | — |
-| `neb graph` | the whole corpus as `{nodes, edges}` or a Mermaid diagram | `--json`, or `--mermaid [--from <ID>]`; without a format, a hint and exit 2 |
+| `neb graph` | the whole corpus as `{nodes, edges}` or a Mermaid diagram | `--json`, or `--mermaid [--from <ID>]`; without a format, a `usage` refusal naming both, exit 2 |
 
 ```json
 // neb show tags-beat-domains --json

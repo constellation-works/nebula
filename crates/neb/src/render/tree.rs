@@ -348,12 +348,12 @@ mod tests {
     #[test]
     fn a_hand_off_is_named_on_the_node_line_and_tabs_stay_fields() {
         let mut start = node("a", &[], None);
-        start.handed_off_to = Some("H012".into());
+        start.handed_off_to = Some("H123".into());
         start.title = "tabs\tin a\ntitle".into();
         let trace = Trace(vec![start]);
         assert_eq!(
             visible(&draw(&trace, Direction::Up)),
-            "hypothesis a tabs\tin a\ntitle  handed off to H012\n"
+            "hypothesis a tabs\tin a\ntitle  handed off to H123\n"
         );
         assert_eq!(tabbed(&trace), "0\ta\thypothesis\ttabs in a title\t-\n");
     }

@@ -605,10 +605,34 @@ fn a_new_node_refuses_the_same_edge_twice() {
                 ..spec
             },
         );
-        assert!(matches!(refused, Err(Error::DuplicateEdge)), "{refused:?}");
+        assert!(
+            matches!(&refused, Err(Error::DuplicateEdge { from, to, .. }) if from == "twice" && *to == a),
+            "{refused:?}"
+        );
         assert_eq!(node_count(&corpus), 1);
         assert!(corpus.load(&a).unwrap().node.edges.is_empty());
     }
+}
+
+/// A refused repeat names the edge, so the refusal can say which one.
+#[test]
+fn linking_an_edge_twice_names_both_ends_and_the_kind() {
+    let (_dir, corpus) = corpus();
+    let a = seed(&corpus, "A", &[]);
+    let b = seed(&corpus, "B", &[]);
+    ops::link(&corpus, &b, EdgeType::DerivesFrom, &a, None).unwrap();
+    let refused = ops::link(&corpus, &b, EdgeType::DerivesFrom, &a, None);
+    let Err(e @ Error::DuplicateEdge { .. }) = &refused else {
+        panic!("{refused:?}");
+    };
+    assert_eq!(
+        e.to_string(),
+        "the edge `b` derives-from `a` already exists"
+    );
+    assert!(
+        matches!(e, Error::DuplicateEdge { from, kind: EdgeType::DerivesFrom, to } if *from == b && *to == a),
+        "{e:?}"
+    );
 }
 
 #[test]

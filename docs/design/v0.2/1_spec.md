@@ -174,7 +174,10 @@ output and default to everything; under `--json`, given either flag, the list
 is `{items, total, truncated}`, `total` counting the matches before the cut,
 and without it the bare array. `near` always has a limit, so it always
 answers in that envelope. Every verb that writes takes `--no-commit`; a
-read-only verb does not offer it.
+read-only verb does not offer it. Written before the verb, the flag is
+deprecated: it still skips the commit of a verb that writes, with a warning,
+and is refused before one that does not. A refusal of the command line itself,
+an argument no corpus could accept, exits 2; any other refusal exits 1.
 
 ## Invariants
 
