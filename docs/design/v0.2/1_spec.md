@@ -188,7 +188,7 @@ an argument no corpus could accept, exits 2; any other refusal exits 1.
 | 1 | Genealogy is acyclic | error | `link`/`new` refuse; `check` proves |
 | 2 | `hypothesis` names a non-empty `kill` | error | `sharpen`/`status`, `check` |
 | 3 | Every edge target exists; no self-loop | error | `link`/`new`, `check` |
-| 4 | `contradicts` is mutual | error | `link`/`new` write both; `check` |
+| 4 | `contradicts` is mutual | error | `link`/`new` write both, and re-running `link` writes a missing half; `check` |
 | 5 | `refuted` carries `closed.why` | error | `status`, `check` |
 | 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status`, `handoff` |
 | 7 | A reference carries no `verdict`/`strength` | error | parse |
@@ -201,6 +201,7 @@ an argument no corpus could accept, exits 2; any other refusal exits 1.
 | 14 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
 | 15 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse (the shape); every read and write (the agreement) |
 | 16 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |
+| 17 | No write is left half-done: no stray temporary file and no pending-write record | warn; error for a record this build cannot read | the next write settles the record; `check` reports both and deletes neither |
 
 ## Hand-off
 

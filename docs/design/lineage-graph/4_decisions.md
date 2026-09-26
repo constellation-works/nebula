@@ -665,3 +665,38 @@ code, because the command line was fine; `UnusableTitle` from `t !!!` there is
 a failure, and from `new "!!!"` a usage error. Reverses for any variant found
 to be raised by both an argument and the corpus's contents, which would then
 split into two.
+
+## An interrupted promotion is finished from a pending-write record
+
+STD-03@2 §R9 asks that recovery of an interrupted multi-step write finish
+before any state is exposed, and decide from recorded facts rather than age.
+`promote` writes a node and then strikes its inbox line, and a crash between
+the two left a live line whose node exists. Two repairs were weighed: a
+`check` finding with a repair command, and a durable record the next writer
+acts on. The finding cannot work alone. From the files, a promotion stranded
+before its strike is indistinguishable from a second capture of the same text
+whose promotion must keep refusing as `NodeExists`, so no command could be
+named safely, and every lock-free read would go on offering a settled entry
+as waiting.
+
+So `promote` writes `<root>/.pending` (`{"op": "promote", "entry", "stamp",
+"node"}`) through the durable helper before its first write and removes it
+after its last. The take of the corpus lock that enters the critical section
+settles any record before the writer's own op: the node exists, so the line is
+struck; it does not, so the record goes and the entry stays waiting. The node
+is the commit point, because it is written after the record and under the lock
+that checked it did not exist. A record this build cannot read, including one
+naming an operation it does not know, refuses every writer and the inbox read
+until a person removes it (§R9's "refuses and keeps the store closed"). The
+record is a guard in the §R4 sense: an error return settles it at once, and an
+unwind leaves it for the next writer, as a dead process would.
+
+A one-sided `contradicts` edge takes the lighter repair. Unlike the inbox
+line, it is unambiguous, since both halves are one claim, so re-running the
+same `link` writes the missing half, and rule 4 names that command. It needs
+no record.
+
+What is given up: every write, and every inbox read, opens one more file, and
+a garbled record stops writes until someone deals with it. Reverses if a verb
+ever writes more than two files, or a second verb needs a record; the record
+then becomes a journal of steps rather than one fact per op.

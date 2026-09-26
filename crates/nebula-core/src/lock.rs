@@ -110,6 +110,8 @@ const POLL: Duration = Duration::from_millis(20);
 #[derive(Debug)]
 pub struct CorpusLock {
     gate: Arc<Gate>,
+    /// Whether this take found the lock free rather than re-entering it.
+    outermost: bool,
     not_send: PhantomData<*const ()>,
 }
 
@@ -141,6 +143,19 @@ impl CorpusLock {
             }
             std::thread::sleep(POLL);
         }
+    }
+}
+
+impl CorpusLock {
+    /// Whether this is the take that entered the critical section, rather
+    /// than a re-entry by a thread already inside it.
+    ///
+    /// What happens once per critical section, on the way in, keys on this:
+    /// finishing an interrupted write runs here and nowhere deeper, because a
+    /// re-entry is a verb already under way, and finishing its own pending
+    /// write out from under it would race it.
+    pub(crate) fn is_outermost(&self) -> bool {
+        self.outermost
     }
 }
 
@@ -229,6 +244,7 @@ fn try_enter(gate: &Arc<Gate>, root: &Path) -> Result<Option<CorpusLock>> {
             inner.depth += 1;
             Ok(Some(CorpusLock {
                 gate: Arc::clone(gate),
+                outermost: false,
                 not_send: PhantomData,
             }))
         }
@@ -254,6 +270,7 @@ fn try_enter(gate: &Arc<Gate>, root: &Path) -> Result<Option<CorpusLock>> {
                     });
                     Ok(Some(CorpusLock {
                         gate: Arc::clone(gate),
+                        outermost: true,
                         not_send: PhantomData,
                     }))
                 }
@@ -321,6 +338,7 @@ mod tests {
         let dir = root();
         let outer = CorpusLock::acquire(dir.path()).expect("outer");
         let inner = CorpusLock::acquire_within(dir.path(), Duration::ZERO).expect("re-entry");
+        assert!(outer.is_outermost() && !inner.is_outermost());
         drop(inner);
 
         // The outer guard still holds it: only the last drop releases.

@@ -180,6 +180,24 @@ pub(crate) fn append_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Remove `path` and flush its directory, so the removal survives a crash
+/// as a write would.
+///
+/// For a file nebula made and has just established is its own, such as the
+/// pending-write record it read back and parsed (STD-03 §R29): nothing here
+/// decides ownership, so no caller may reach it with a path found by name
+/// alone. A file that is already gone is not an error; the outcome the
+/// caller wanted is on disk either way.
+pub(crate) fn remove_private(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(Error::io_at("removing", path, error)),
+    }
+    observe!(Step::Remove(path.to_path_buf()));
+    sync_parent(path)
+}
+
 /// Write the whole of `contents`, flush it to the device, and close the file,
 /// so the rename that follows moves complete bytes nobody still holds open.
 fn write_sync_and_close(
@@ -322,6 +340,8 @@ pub(crate) enum Step {
     SyncData(PathBuf),
     /// A rename over the target.
     Rename { from: PathBuf, to: PathBuf },
+    /// A file removed.
+    Remove(PathBuf),
     /// `fsync` of a directory.
     SyncDir(PathBuf),
 }
@@ -329,6 +349,42 @@ pub(crate) enum Step {
 #[cfg(test)]
 thread_local! {
     static STEPS: std::cell::RefCell<Option<Vec<Step>>> = const { std::cell::RefCell::new(None) };
+    static CRASH: std::cell::RefCell<Option<CrashAt>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Where [`crashing_at`] stops the process, as a test names it.
+#[cfg(test)]
+type CrashAt = Box<dyn Fn(&Step) -> bool>;
+
+/// What [`crashing_at`] unwinds with, so it can tell its own stop from a
+/// real panic in the code under test.
+#[cfg(test)]
+struct Crashed;
+
+/// Run `f`, stopping it dead right after the first step `at` matches, the
+/// way a kill or a power cut would: that step is on disk and nothing after
+/// it runs. `Err(())` when it stopped there, `Ok` with what `f` returned when
+/// no step matched.
+///
+/// The stop is an unwind that no panic hook sees, so a test prints nothing
+/// for it, and code that runs while it unwinds can ask
+/// [`std::thread::panicking`] to behave as a dead process would: a guard
+/// that would clean up on an ordinary error does nothing. A real panic in
+/// `f` is not swallowed; it carries on up. Deterministic: the stop is chosen
+/// by the step, never by timing (STD-04, STD-03 §R9's fault injection).
+#[cfg(test)]
+pub(crate) fn crashing_at<T>(
+    at: impl Fn(&Step) -> bool + 'static,
+    f: impl FnOnce() -> T,
+) -> std::result::Result<T, ()> {
+    CRASH.with(|crash| *crash.borrow_mut() = Some(Box::new(at)));
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    CRASH.with(|crash| crash.borrow_mut().take());
+    match out {
+        Ok(out) => Ok(out),
+        Err(payload) if payload.is::<Crashed>() => Err(()),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 /// Run `f` and return what it returned with the steps it took, in order.
@@ -342,11 +398,24 @@ pub(crate) fn recording<T>(f: impl FnOnce() -> T) -> (T, Vec<Step>) {
 
 #[cfg(test)]
 fn record(step: Step) {
+    let crash = CRASH.with(|crash| {
+        let mut crash = crash.borrow_mut();
+        // Once only: a stopped process takes no further steps, and the
+        // unwind that follows may run code that takes some.
+        if crash.as_ref().is_some_and(|at| at(&step)) {
+            crash.take()
+        } else {
+            None
+        }
+    });
     STEPS.with(|steps| {
         if let Some(steps) = steps.borrow_mut().as_mut() {
             steps.push(step);
         }
     });
+    if crash.is_some() {
+        std::panic::resume_unwind(Box::new(Crashed));
+    }
 }
 
 #[cfg(test)]
@@ -478,6 +547,44 @@ mod tests {
         assert_eq!(dir_syncs(&second), 0, "{second:?}");
         #[cfg(unix)]
         assert_eq!(mode(&file), PRIVATE_FILE_MODE);
+    }
+
+    #[test]
+    fn a_removal_flushes_its_directory_and_a_missing_file_is_already_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("record");
+        std::fs::write(&file, "x").unwrap();
+        let (result, steps) = recording(|| remove_private(&file));
+        result.unwrap();
+        assert!(!file.exists());
+        let mut expected = vec![Step::Remove(file.clone())];
+        if cfg!(unix) {
+            expected.push(Step::SyncDir(dir.path().to_path_buf()));
+        }
+        assert_eq!(steps, expected);
+        remove_private(&file).unwrap();
+    }
+
+    /// The failpoint stops at the step it names, after that step and before
+    /// the next, and never mistakes a real panic for its own stop.
+    #[test]
+    fn a_crash_stops_right_after_the_step_it_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let (first, second) = (dir.path().join("first"), dir.path().join("second"));
+        let stop = first.clone();
+        let crashed = crashing_at(
+            move |step| matches!(step, Step::Rename { to, .. } if *to == stop),
+            || {
+                write_private_atomic(&first, "1").unwrap();
+                write_private_atomic(&second, "2").unwrap();
+            },
+        );
+        assert!(crashed.is_err());
+        assert!(first.exists() && !second.exists());
+
+        assert_eq!(crashing_at(|_| false, || 7), Ok(7));
+        let real = std::panic::catch_unwind(|| crashing_at(|_| false, || panic!("a real bug")));
+        assert!(real.is_err(), "a real panic carries on up");
     }
 
     #[test]

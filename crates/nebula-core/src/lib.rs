@@ -24,6 +24,7 @@
 //! - [`store`]  [`Corpus`]: where it lives, loading, saving, the inbox
 //! - [`fs`]     the one durable write path: fsync, rename, owner-only modes
 //! - `lock`    [`CorpusLock`]: the advisory `.lock` every write holds, and reads never do
+//! - `pending` the `.pending` record that lets the next writer finish an interrupted promotion
 //! - `git`     the one way git is run: own process group, deadline, bounded output
 //! - [`graph`]  [`Graph`] and the pure queries over it, `near` included
 //! - [`ops`]    the mutations, each enforcing its point-of-action invariants
@@ -50,6 +51,7 @@ mod config;
 mod error;
 mod git;
 mod lock;
+mod pending;
 
 pub mod check;
 pub mod fs;

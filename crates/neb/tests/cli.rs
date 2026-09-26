@@ -2137,14 +2137,54 @@ fn repeated_init_adds_the_lock_ignore_without_replacing_existing_rules() {
     c.run(&["init"]).assert_ok();
     assert_eq!(
         std::fs::read(c.root.join(".gitignore")).unwrap(),
-        b"private-notes/\r\n/.lock\n"
+        b"private-notes/\r\n/.lock\n/.pending\n*.tmp\n"
     );
 
     c.run(&["init"]).assert_ok();
     assert_eq!(
         std::fs::read(c.root.join(".gitignore")).unwrap(),
-        b"private-notes/\r\n/.lock\n",
+        b"private-notes/\r\n/.lock\n/.pending\n*.tmp\n",
         "the setup repair is idempotent"
+    );
+}
+
+/// Crash debris is ignored as well as the lock, after whatever rules the
+/// file already holds, and a corpus an older `init` set up gets only the
+/// rules it lacks.
+#[test]
+fn init_ignores_temp_debris_without_disturbing_existing_rules() {
+    let c = Corpus::new();
+    git_init(&c.root);
+    let ignore = c.root.join(".gitignore");
+    let rules = std::fs::read_to_string(&ignore).unwrap();
+    assert!(rules.lines().any(|line| line == "*.tmp"), "{rules}");
+    for debris in [
+        "nodes/x.md.a-0-1.tmp",
+        "inbox/2026-09.md.a-0-1.tmp",
+        ".pending",
+    ] {
+        assert_eq!(
+            git(&c.root, &["check-ignore", debris]),
+            format!("{debris}\n"),
+            "{debris} is not ignored"
+        );
+    }
+    let node =
+        output(git_command(&c.root, support::home()).args(["check-ignore", "-q", "nodes/x.md"]));
+    assert_eq!(node.status.code(), Some(1), "a node is never ignored");
+
+    // The file an older `init` wrote ends with the lock rule alone.
+    write(&ignore, "private-notes/\n/.lock\n");
+    c.run(&["init"]).assert_ok();
+    assert_eq!(
+        std::fs::read(&ignore).unwrap(),
+        b"private-notes/\n/.lock\n/.pending\n*.tmp\n"
+    );
+    c.run(&["init"]).assert_ok();
+    assert_eq!(
+        std::fs::read(&ignore).unwrap(),
+        b"private-notes/\n/.lock\n/.pending\n*.tmp\n",
+        "idempotent"
     );
 }
 
@@ -2157,7 +2197,7 @@ fn init_replaces_a_gitignore_symlink_even_when_its_target_already_has_the_rule()
     git_init(&c.root);
     let ignore = c.root.join(".gitignore");
     let target = c.workdir().join("external.gitignore");
-    let target_bytes = b"private-notes/\n/.lock\n";
+    let target_bytes = b"private-notes/\n/.lock\n/.pending\n*.tmp\n";
     write(&target, std::str::from_utf8(target_bytes).unwrap());
     std::fs::remove_file(&ignore).unwrap();
     symlink(&target, &ignore).unwrap();
@@ -2212,7 +2252,7 @@ fn init_copies_a_gitignore_symlink_target_without_mutating_it() {
     assert_eq!(std::fs::read(&target).unwrap(), target_bytes);
     assert_eq!(
         std::fs::read(&ignore).unwrap(),
-        b"private-notes/\r\n/.lock\n"
+        b"private-notes/\r\n/.lock\n/.pending\n*.tmp\n"
     );
     assert!(
         !std::fs::symlink_metadata(&ignore)
@@ -2240,7 +2280,10 @@ fn init_replaces_a_dangling_gitignore_symlink_with_an_effective_local_file() {
     c.run(&["init"]).assert_ok();
 
     assert!(!missing.exists(), "init must not create the symlink target");
-    assert_eq!(std::fs::read(&ignore).unwrap(), b"/.lock\n");
+    assert_eq!(
+        std::fs::read(&ignore).unwrap(),
+        b"/.lock\n/.pending\n*.tmp\n"
+    );
     assert!(
         !std::fs::symlink_metadata(&ignore)
             .unwrap()
@@ -5084,6 +5127,50 @@ fn check_warns_about_an_absolute_local_path_already_in_the_corpus() {
         assert_eq!(f["rule"], 8);
         assert_eq!(f["level"], "warn");
         assert_eq!(f["node"], id);
+    }
+}
+
+/// Rule 17: a temporary file an interrupted write left behind is named, with
+/// the command that removes it, and left exactly where it is.
+#[test]
+fn check_warns_about_stale_temp_files() {
+    let c = Corpus::new();
+    let debris = plant_debris(&c);
+
+    let text = c
+        .run(&["check"])
+        .assert_ok()
+        .says("0 errors, 2 warnings")
+        .stdout();
+    for name in [
+        "nodes/x.md.1f2e-0-18d8.tmp",
+        "inbox/2026-09.md.1f2e-0-18d8.tmp",
+    ] {
+        text.lines()
+            .find(|line| line.contains(name))
+            .filter(|line| line.contains("[17]") && line.contains("rm '"))
+            .unwrap_or_else(|| panic!("no rule-17 warning for {name}:\n{text}"));
+    }
+
+    let json = c.run(&["--json", "check"]).assert_ok().stdout();
+    let report: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let findings = report["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 2, "{findings:?}");
+    for (finding, path) in findings.iter().zip(&debris) {
+        assert_eq!(finding["rule"], 17);
+        assert_eq!(finding["level"], "warn");
+        let message = finding["message"].as_str().unwrap();
+        assert!(
+            message.contains(&format!("rm '{}'", path.display())),
+            "{message}"
+        );
+    }
+    for path in &debris {
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "half of a write that never landed\n",
+            "check never deletes or rewrites debris"
+        );
     }
 }
 
@@ -11532,6 +11619,119 @@ fn the_lock_file_is_never_staged_and_never_checked() {
     let report: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(report["nodes"], 1, "the lock file is not read as a node");
     assert_eq!(report["findings"].as_array().unwrap().len(), 0);
+}
+
+/// Plant the temporary files a write killed before its rename leaves, one
+/// in each directory a commit stages whole.
+fn plant_debris(c: &Corpus) -> [PathBuf; 2] {
+    let debris = [
+        c.root.join("nodes/x.md.1f2e-0-18d8.tmp"),
+        c.root.join("inbox/2026-09.md.1f2e-0-18d8.tmp"),
+    ];
+    for path in &debris {
+        write(path, "half of a write that never landed\n");
+    }
+    debris
+}
+
+/// A killed write's temporary file sits in `nodes/` or `inbox/`, which a
+/// commit stages whole. It stays on disk and out of the history, whether or
+/// not the corpus `.gitignore` already carries the rule that hides it.
+#[test]
+fn a_stale_temp_file_is_never_committed() {
+    let c = Corpus::new();
+    git_init(&c.root);
+    // As an older `init` left it: the lock rule and nothing for debris, so
+    // the commit's own pathspec is what keeps the debris out.
+    write(&c.root.join(".gitignore"), "/.lock\n");
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let debris = plant_debris(&c);
+
+    c.run(&["capture", "debris test"])
+        .assert_ok()
+        .says("committed ");
+
+    let tracked = git(&c.root, &["ls-files"]);
+    assert!(!tracked.contains(".tmp"), "{tracked}");
+    assert!(
+        tracked.contains("inbox/"),
+        "the capture itself is committed: {tracked}"
+    );
+    for path in &debris {
+        assert!(path.exists(), "{} was deleted", path.display());
+    }
+
+    // And with the rule `init` now writes, a person's `git add -A` skips it too.
+    c.run(&["init"]).assert_ok();
+    git(&c.root, &["add", "-A"]);
+    let staged = git(&c.root, &["diff", "--cached", "--name-only"]);
+    assert!(!staged.contains(".tmp"), "{staged}");
+}
+
+/// The pending-write record is a fact about a write in flight on one
+/// machine, like the lock: ignored, never staged, and settled by the next
+/// write whether or not that write commits.
+#[test]
+fn the_pending_record_is_never_staged() {
+    let c = Corpus::new();
+    git_init(&c.root);
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let entry = c
+        .run(&["capture", "an interrupted promotion idea"])
+        .stdout_trim();
+    let node = c.run(&["promote", &entry]).assert_ok().stdout_trim();
+    // The state a crash between the node and the strike leaves.
+    let month = std::fs::read_dir(c.root.join("inbox"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "md"))
+        .unwrap();
+    let text = std::fs::read_to_string(&month).unwrap();
+    let struck = text
+        .lines()
+        .find(|l| l.contains(&entry))
+        .unwrap()
+        .to_string();
+    let live = struck
+        .replacen("- ~~[", "- [", 1)
+        .split("~~ ->")
+        .next()
+        .unwrap()
+        .to_string();
+    write(&month, &text.replace(&struck, &live));
+    let stamp = live.split(' ').nth(2).unwrap();
+    write(
+        &c.root.join(".pending"),
+        &format!(r#"{{"op":"promote","entry":"{entry}","stamp":"{stamp}","node":"{node}"}}"#),
+    );
+
+    assert_eq!(git(&c.root, &["check-ignore", ".pending"]), ".pending\n");
+    git(&c.root, &["add", "-A"]);
+    assert!(
+        !git(&c.root, &["diff", "--cached", "--name-only"]).contains(".pending"),
+        "git add -A must not stage the pending record"
+    );
+    // `check` reads it and leaves it; `inbox` no longer offers the entry.
+    c.run(&["check"]).assert_ok().says("did not finish");
+    assert!(c.root.join(".pending").exists());
+    assert!(!c.run(&["inbox"]).assert_ok().stdout().contains(&entry));
+
+    c.run(&["capture", "the next thought"])
+        .assert_ok()
+        .says("committed ");
+
+    assert!(
+        !c.root.join(".pending").exists(),
+        "the next write settled it"
+    );
+    assert!(
+        std::fs::read_to_string(&month)
+            .unwrap()
+            .contains(&format!("~~ -> {node}")),
+        "and finished the promotion"
+    );
+    assert!(!git(&c.root, &["ls-files"]).contains(".pending"));
+    assert!(dirt(&c.root).is_empty(), "{}", dirt(&c.root));
 }
 
 #[test]

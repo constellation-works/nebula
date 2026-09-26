@@ -2,7 +2,7 @@
 type: runbook
 summary: Diagnose a corpus that will not load, repair hand-edited nodes, and recover from an interrupted write.
 tags: [operations, recovery, debugging]
-paths: ["crates/nebula-core/src/model.rs", "crates/nebula-core/src/check.rs", "crates/nebula-core/src/store.rs"]
+paths: ["crates/nebula-core/src/model.rs", "crates/nebula-core/src/check.rs", "crates/nebula-core/src/store.rs", "crates/nebula-core/src/pending.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 last_validated: 2026-09-26
@@ -45,16 +45,64 @@ and the repair is to set `schema_version: 1` in `config.yaml` and run
 Prefer the CLI over hand-editing. Every command that mutates a node writes valid
 frontmatter by construction.
 
-## Symptom: a stray `.md.<pid>-<counter>-<nanos>.tmp` file
+## Symptom: check warns about a `.tmp` file
 
-Node writes render to a sibling temporary file and rename, so a crash mid-write
-leaves the original intact and a nonce-named `.md.<pid>-<counter>-<nanos>.tmp`
-beside it. The temporary file is never read. Delete it, or inspect it first if
-you suspect the write was the one you wanted:
+```
+warn  [17] corpus `nodes/an-idea.md.1f2e-0-18d8.tmp` is a temporary file left by a write that did not finish; ...
+```
+
+Every file is written to a sibling temporary file and renamed into place, so
+a crash mid-write leaves the original intact and a nonce-named
+`<file>.<pid>-<counter>-<nanos>.tmp` beside it. Nothing reads it, `neb`
+never commits it (its commits exclude `*.tmp`, and `neb init` git-ignores
+it), and nothing in `neb` deletes it: its name says a write made it, not that
+its bytes are nothing you want. Inspect it if you suspect the write was one
+you wanted, then remove it with the `rm` the warning prints. To list them
+all:
 
 ```sh
-find "$NEBULA_ROOT/nodes" -name '*.md.*.tmp'
+find "$NEBULA_ROOT/nodes" "$NEBULA_ROOT/inbox" -name '*.tmp'
 ```
+
+## Symptom: a capture you promoted is still in the inbox
+
+`promote` writes the node and then strikes the inbox line, and records what
+it is doing in `$NEBULA_ROOT/.pending` first. A crash between the two leaves
+that record, and `check` names it:
+
+```
+warn  [17] corpus a promotion of inbox entry `1f2e` did not finish, as /corpus/.pending records; `an-idea` was written, so the next write strikes the entry `-> an-idea`
+```
+
+Do nothing by hand. The next `neb` verb that writes — any of them, and the
+desktop's too — settles it before its own work: the line is struck
+`-> <node>` when the node was written, and the record is discarded, with the
+entry left waiting, when it was not. Until then `neb inbox` does not offer
+an entry whose node exists. Running `neb promote <entry>` again settles it
+and then says the entry was already promoted. Do not `neb drop` it: that
+records a promoted thought as dropped.
+
+If every writing verb refuses with `records an unfinished write that this
+build cannot read`, the record was edited by hand or written by a newer
+`neb`. Read it, make sure the node it names and that entry's inbox line say
+what you want, then remove it:
+
+```sh
+cat "$NEBULA_ROOT/.pending"
+rm "$NEBULA_ROOT/.pending"
+```
+
+## Symptom: check reports a one-sided contradiction
+
+```
+ERROR [4] alpha contradicts `beta`, which does not contradict back; record the other half with `neb link alpha contradicts beta`
+```
+
+`link` saves the two ends one after the other, so a crash between them, or a
+hand edit, leaves the claim on one node only. Run the command the finding
+names: with the edge already on `alpha`, it writes only the missing half on
+`beta`, credited to whoever made the first, and refuses as `that edge already
+exists` once both are there.
 
 ## Symptom: check reports a genealogy cycle
 

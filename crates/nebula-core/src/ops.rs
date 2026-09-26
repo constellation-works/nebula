@@ -43,6 +43,7 @@ use crate::fs::create_private_dir_all;
 use crate::graph::{self, Graph, Neighbour};
 use crate::lock::{self, CorpusLock};
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
+use crate::pending::{Pending, PendingWrite};
 use crate::store::{self, CommitOutcome, Corpus, InboxEntry};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -425,8 +426,21 @@ pub fn promote_with(
     if args.title.is_none() {
         doc.node.title_by = None;
     }
+    // Two files, so two renames, and a crash can fall between them. The
+    // record written first is what lets the next writer tell a promotion
+    // that got as far as its node from a second capture of the same text,
+    // and finish it (STD-03 §R9; see `pending.rs`).
+    let pending = Pending::begin(
+        corpus,
+        &PendingWrite::Promote {
+            entry: e.id.clone(),
+            stamp: e.stamp.clone(),
+            node: doc.node.id.clone(),
+        },
+    )?;
     corpus.create(&doc)?;
     corpus.settle_inbox(&e, &format!("-> {}", doc.node.id))?;
+    pending.finished()?;
     Ok(Created {
         path: corpus.node_path(&doc.node.id)?,
         doc,
@@ -679,6 +693,14 @@ pub fn confirm_kill(corpus: &Corpus, id: &str) -> Result<Doc> {
 /// Returns every node that changed: a `contradicts` edge is a claim about both
 /// ends, so it is recorded on both.
 ///
+/// The two ends are two saves, so a crash between them leaves a
+/// `contradicts` recorded on `from` alone, which `check` reports under rule
+/// 4. Running the same link again finishes it: with the edge already on
+/// `from` and missing from `to`, only the reverse is written, credited to
+/// whoever made the half that is there, since it is the other half of that
+/// same claim (STD-03 §R9). With both halves present it is refused as
+/// [`Error::DuplicateEdge`], like any other edge written twice.
+///
 /// `by` is whoever claims the relation; `None` is the human.
 pub fn link(
     corpus: &Corpus,
@@ -697,13 +719,9 @@ pub fn link(
     let _lock = corpus.lock()?;
     let by = model::author(by)?;
     let mut doc = corpus.load(from)?;
-    corpus.load(to)?;
+    let target = corpus.load(to)?;
     if doc.node.has_edge(kind, to) {
-        return Err(Error::DuplicateEdge {
-            from: from.to_owned(),
-            kind,
-            to: to.to_owned(),
-        });
+        return finish_contradiction(corpus, &doc, kind, target);
     }
     doc.node.edges.push(Edge {
         kind,
@@ -742,6 +760,40 @@ pub fn link(
         }
     }
     Ok(changed)
+}
+
+/// The half of a `contradicts` edge that a crash kept `to` from recording,
+/// written onto `to` from the half `from` already has. Anything else asked
+/// for a second time is [`Error::DuplicateEdge`].
+fn finish_contradiction(
+    corpus: &Corpus,
+    from: &Doc,
+    kind: EdgeType,
+    mut to: Doc,
+) -> Result<Vec<Doc>> {
+    let recorded = from
+        .node
+        .edges
+        .iter()
+        .find(|edge| edge.kind == kind && edge.to == to.node.id);
+    let duplicate = || Error::DuplicateEdge {
+        from: from.node.id.clone(),
+        kind,
+        to: to.node.id.clone(),
+    };
+    let Some(recorded) = recorded.filter(|_| kind == EdgeType::Contradicts) else {
+        return Err(duplicate());
+    };
+    if to.node.has_edge(kind, &from.node.id) {
+        return Err(duplicate());
+    }
+    to.node.edges.push(Edge {
+        kind,
+        to: from.node.id.clone(),
+        by: recorded.by.clone(),
+    });
+    corpus.save(&mut to)?;
+    Ok(vec![to])
 }
 
 /// Append a dated paragraph of reasoning to a node body.

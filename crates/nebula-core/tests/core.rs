@@ -11,6 +11,7 @@
               through nebula_core's durable write helper"
 )]
 
+use nebula_core::InboxEntry;
 use nebula_core::triage::{Action, Step, Tally};
 use nebula_core::{
     Band, Citation, CommitOutcome, Committed, Corpus, CorpusLock, Direction, EdgeType, Error,
@@ -18,6 +19,7 @@ use nebula_core::{
     Settlement, Status, TraceHop, Triage, Via, graph, ops, store,
 };
 use std::fmt::Write as _;
+use std::path::Path;
 
 // This process runs with a temporary `HOME` and git environment, set before
 // any test thread starts, and every child comes from its builder.
@@ -449,6 +451,83 @@ fn a_contradiction_is_not_genealogy_so_it_may_point_anywhere() {
     let [a, _, _, d] = diamond(&corpus);
     let changed = ops::link(&corpus, &a, EdgeType::Contradicts, &d, None).unwrap();
     assert_eq!(changed.len(), 2, "recorded on both ends");
+}
+
+/// `alpha contradicts beta` recorded on `alpha` alone: what a crash between
+/// `link`'s two saves leaves, or a hand edit.
+fn half_recorded_contradiction(corpus: &Corpus) -> (String, String) {
+    let alpha = seed(corpus, "Alpha idea", &[]);
+    let beta = seed(corpus, "Beta idea", &[]);
+    let mut doc = corpus.load(&alpha).unwrap();
+    doc.node.edges.push(nebula_core::Edge {
+        kind: EdgeType::Contradicts,
+        to: beta.clone(),
+        by: Some("claude".into()),
+    });
+    corpus.save(&mut doc).unwrap();
+    (alpha, beta)
+}
+
+#[test]
+fn rerunning_a_half_recorded_contradicts_link_completes_it() {
+    let (_dir, corpus) = corpus();
+    let (alpha, beta) = half_recorded_contradiction(&corpus);
+    let alpha_before = std::fs::read(corpus.node_path(&alpha).unwrap()).unwrap();
+
+    let changed = ops::link(&corpus, &alpha, EdgeType::Contradicts, &beta, None).unwrap();
+
+    let changed: Vec<&str> = changed.iter().map(|d| d.node.id.as_str()).collect();
+    assert_eq!(changed, [beta.as_str()], "only the missing half is written");
+    assert_eq!(
+        std::fs::read(corpus.node_path(&alpha).unwrap()).unwrap(),
+        alpha_before,
+        "the half already recorded is left exactly as it was"
+    );
+    let reverse: Vec<_> = corpus
+        .load(&beta)
+        .unwrap()
+        .node
+        .edges
+        .into_iter()
+        .map(|e| (e.kind, e.to, e.by))
+        .collect();
+    assert_eq!(
+        reverse,
+        [(EdgeType::Contradicts, alpha.clone(), Some("claude".into()))],
+        "the reverse is the other half of the recorded claim, credited to its author"
+    );
+    let docs = corpus.load_all().unwrap();
+    let report = nebula_core::check::run(&Graph::build(&docs).unwrap(), &corpus).unwrap();
+    assert!(report.findings.is_empty(), "{:?}", report.findings);
+
+    // Both halves present: a duplicate like any other, from either end.
+    for (from, to) in [(&alpha, &beta), (&beta, &alpha)] {
+        let refused = ops::link(&corpus, from, EdgeType::Contradicts, to, None);
+        assert!(
+            matches!(refused, Err(Error::DuplicateEdge { .. })),
+            "{refused:?}"
+        );
+    }
+    // A genealogy edge asked for twice is refused too, whatever `to` holds.
+    ops::link(&corpus, &alpha, EdgeType::Refines, &beta, None).unwrap();
+    let refused = ops::link(&corpus, &alpha, EdgeType::Refines, &beta, None);
+    assert!(
+        matches!(refused, Err(Error::DuplicateEdge { .. })),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn check_names_the_repair_for_a_one_sided_contradiction() {
+    let (_dir, corpus) = corpus();
+    let (alpha, beta) = half_recorded_contradiction(&corpus);
+    let docs = corpus.load_all().unwrap();
+    let report = nebula_core::check::run(&Graph::build(&docs).unwrap(), &corpus).unwrap();
+    let rule4: Vec<_> = report.findings.iter().filter(|f| f.rule == 4).collect();
+    assert_eq!(rule4.len(), 1, "{:?}", report.findings);
+    assert_eq!(rule4[0].node.as_deref(), Some(alpha.as_str()));
+    let repair = format!("neb link {alpha} contradicts {beta}");
+    assert!(rule4[0].message.contains(&repair), "{}", rule4[0].message);
 }
 
 #[test]
@@ -2214,6 +2293,208 @@ fn a_capture_already_promoted_is_refused_rather_than_duplicated() {
     );
     assert_eq!(corpus.load_all().unwrap().len(), 1, "no duplicate node");
     assert_eq!(std::fs::read(&created.path).unwrap(), before);
+}
+
+/// The state a crash between a promotion's two renames leaves: the pending
+/// record written, the node written, and the inbox line still live. Built
+/// from a real promotion whose strike is then put back, and a record in the
+/// shape `promote` writes. Returns the entry and the node id.
+fn interrupted_promotion(corpus: &Corpus, root: &Path, text: &str) -> (InboxEntry, String) {
+    let entry = ops::capture(corpus, text).unwrap();
+    let node = ops::promote(corpus, &entry.id, &Promotion::default(), 0)
+        .unwrap()
+        .doc
+        .node
+        .id;
+    let live = format!("- [{}] {} {}", entry.id, entry.at, entry.text);
+    let struck = format!("- ~~[{}] {} {}~~ -> {node}", entry.id, entry.at, entry.text);
+    let month = std::fs::read_to_string(&entry.file).unwrap();
+    assert!(month.contains(&struck), "{month}");
+    std::fs::write(&entry.file, month.replace(&struck, &live)).unwrap();
+    write_pending(root, &entry, &node);
+    (entry, node)
+}
+
+/// A pending promotion record, as `promote` writes it before its first write.
+fn write_pending(root: &Path, entry: &InboxEntry, node: &str) {
+    let record = serde_json::json!({
+        "op": "promote",
+        "entry": entry.id,
+        "stamp": entry.at,
+        "node": node,
+    });
+    std::fs::write(root.join(".pending"), record.to_string()).unwrap();
+}
+
+/// The inbox line for `entry`, as it now reads on disk.
+fn inbox_line(entry: &InboxEntry) -> String {
+    let prefixes = [format!("- [{}] ", entry.id), format!("- ~~[{}] ", entry.id)];
+    std::fs::read_to_string(&entry.file)
+        .unwrap()
+        .lines()
+        .find(|line| prefixes.iter().any(|p| line.starts_with(p.as_str())))
+        .unwrap_or_else(|| panic!("no line for {}", entry.id))
+        .to_string()
+}
+
+#[test]
+fn a_promotion_interrupted_before_the_strike_completes_on_the_next_write() {
+    let (dir, corpus) = corpus();
+    let root = dir.path().join("corpus");
+    let (entry, node) = interrupted_promotion(&corpus, &root, "an interrupted promotion idea");
+
+    ops::capture(&corpus, "the next thought").unwrap();
+
+    assert!(
+        inbox_line(&entry).ends_with(&format!("~~ -> {node}")),
+        "{}",
+        inbox_line(&entry)
+    );
+    let ids: Vec<String> = corpus
+        .load_all()
+        .unwrap()
+        .into_iter()
+        .map(|d| d.node.id)
+        .collect();
+    assert_eq!(ids, [node.as_str()], "exactly one node");
+    assert!(!root.join(".pending").exists(), "the record is settled");
+    assert!(
+        matches!(
+            corpus.inbox_entry(&entry.id),
+            Err(Error::InboxEntrySettled { settlement: Settlement::Promoted(n), .. }) if n == node
+        ),
+        "the entry reads as promoted, not dropped"
+    );
+}
+
+#[test]
+fn a_pending_promotion_whose_node_was_never_written_is_discarded() {
+    let (dir, corpus) = corpus();
+    let root = dir.path().join("corpus");
+    let entry = ops::capture(&corpus, "a promotion that never began").unwrap();
+    write_pending(&root, &entry, "a-promotion-that-never-began");
+    let live = inbox_line(&entry);
+
+    ops::capture(&corpus, "the next thought").unwrap();
+
+    assert_eq!(inbox_line(&entry), live, "the line stays live");
+    assert!(!root.join(".pending").exists(), "the record is discarded");
+    assert!(
+        corpus.load_all().unwrap().is_empty(),
+        "no node by guesswork"
+    );
+    assert_eq!(corpus.inbox_entry(&entry.id).unwrap().text, entry.text);
+    // It is an ordinary waiting capture again, and promotes as one.
+    let created = ops::promote(&corpus, &entry.id, &Promotion::default(), 0).unwrap();
+    assert_eq!(created.doc.node.id, "a-promotion-that-never-began");
+}
+
+#[test]
+fn an_interrupted_promotion_is_not_listed_as_waiting() {
+    let (dir, corpus) = corpus();
+    let root = dir.path().join("corpus");
+    let waiting = ops::capture(&corpus, "a thought still waiting").unwrap();
+    let (entry, node) = interrupted_promotion(&corpus, &root, "an interrupted promotion idea");
+
+    let listed: Vec<String> = corpus
+        .inbox()
+        .unwrap()
+        .0
+        .into_iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(
+        listed,
+        [waiting.id],
+        "only the capture that is really waiting"
+    );
+    assert!(
+        inbox_line(&entry).starts_with("- ["),
+        "no write has run since"
+    );
+
+    // Asking to promote it again is the next write: it finishes the
+    // promotion, then says what became of the entry.
+    let refused = ops::promote(&corpus, &entry.id, &Promotion::default(), 0);
+    assert!(
+        matches!(
+            &refused,
+            Err(Error::InboxEntrySettled { settlement: Settlement::Promoted(n), .. }) if *n == node
+        ),
+        "{refused:?}"
+    );
+    assert!(!root.join(".pending").exists());
+}
+
+#[test]
+fn check_names_a_pending_promotion_and_refuses_one_it_cannot_read() {
+    let (dir, corpus) = corpus();
+    let root = dir.path().join("corpus");
+    let (entry, node) = interrupted_promotion(&corpus, &root, "an interrupted promotion idea");
+    let report = |corpus: &Corpus| {
+        let docs = corpus.load_all().unwrap();
+        nebula_core::check::run(&Graph::build(&docs).unwrap(), corpus).unwrap()
+    };
+
+    let findings: Vec<_> = report(&corpus)
+        .findings
+        .into_iter()
+        .filter(|f| f.rule == 17)
+        .collect();
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].level, nebula_core::Severity::Warn);
+    for part in [entry.id.as_str(), node.as_str(), ".pending"] {
+        assert!(
+            findings[0].message.contains(part),
+            "{}",
+            findings[0].message
+        );
+    }
+    assert!(root.join(".pending").exists(), "check never settles it");
+
+    // A record this build cannot read keeps every writer out, and the read
+    // that would present its entry too, until a person has looked at it.
+    let garbled = r#"{"op":"promote","entry":"#;
+    std::fs::write(root.join(".pending"), garbled).unwrap();
+    let unknown = r#"{"op":"merge","nodes":["a","b"]}"#;
+    for record in [garbled, unknown] {
+        std::fs::write(root.join(".pending"), record).unwrap();
+        let refused = ops::capture(&corpus, "a thought that must wait");
+        assert!(
+            matches!(&refused, Err(Error::PendingWriteUnreadable { path, .. }) if *path == root.join(".pending")),
+            "{refused:?}"
+        );
+        assert!(matches!(
+            corpus.inbox(),
+            Err(Error::PendingWriteUnreadable { .. })
+        ));
+        let findings = report(&corpus).findings;
+        let unreadable = findings.iter().find(|f| f.rule == 17).unwrap();
+        assert_eq!(unreadable.level, nebula_core::Severity::Error);
+        assert!(
+            unreadable.message.contains("rm '"),
+            "{}",
+            unreadable.message
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".pending")).unwrap(),
+            record,
+            "nothing deleted or rewrote it"
+        );
+    }
+    assert!(inbox_line(&entry).starts_with("- ["), "no write ran");
+
+    // A field a later build adds is not a reason to refuse.
+    std::fs::remove_file(root.join(".pending")).unwrap();
+    write_pending(&root, &entry, &node);
+    let raw = std::fs::read_to_string(root.join(".pending")).unwrap();
+    std::fs::write(
+        root.join(".pending"),
+        raw.replacen('{', r#"{"future_field":1,"#, 1),
+    )
+    .unwrap();
+    ops::capture(&corpus, "the next thought").unwrap();
+    assert!(inbox_line(&entry).ends_with(&format!("-> {node}")));
 }
 
 /// Every candidate held by some other idea: refused by the full slug, and

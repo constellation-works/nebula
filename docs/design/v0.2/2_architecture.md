@@ -63,6 +63,8 @@ nebula-core/src/
   fs.rs           # the one durable write path: temp + fsync + rename + dir fsync,
                   # 0600 files and 0700 directories; clippy.toml refuses std::fs::write
   lock.rs         # CorpusLock: the advisory <root>/.lock every write holds
+  pending.rs      # the <root>/.pending record that lets the next writer finish
+                  # a promotion interrupted between its node and its strike
   graph.rs        # Graph: an indexed snapshot of loaded nodes (by_id, parents, children)
                   # + pure queries: trace, impact, open, review, export
   ops.rs          # mutations: capture, promote, drop, new, sharpen, link, cite,
@@ -156,6 +158,34 @@ The lock file is created `0600`. It is runtime state, not corpus content:
 `neb config commit on` is enabled a mutating verb stages only `nodes/`, `inbox/`, `config.yaml` and that generated ignore
 file. `check` reads only `nodes/` and `inbox/`, and `migrate`'s refusal to run on
 a dirty tree excludes the ignored lock.
+
+## Interrupted writes
+
+The lock keeps writers apart; it cannot make a write that spans two files
+atomic. Three things cover a crash part-way through one:
+
+- **`promote` records itself first.** It writes the node and then strikes the
+  inbox line, and a crash between the two used to leave a live line whose node
+  exists, which a re-run refused as a duplicate and only a misleading `drop`
+  could clear. Now it first writes `<root>/.pending`
+  (`{"op": "promote", "entry", "stamp", "node"}`, through the durable helper)
+  and removes it after the strike. The take of the corpus lock that enters the
+  critical section settles any record it finds before the op runs: the node
+  exists, so the line is struck `-> <node>`; or it does not, so the record is
+  discarded and the entry stays waiting. The files decide, never age
+  (STD-03 §R9). A record this build cannot read refuses every writer, and the
+  inbox read, until a person has looked at it. Lock-free reads apply the same
+  decision without waiting for it: `inbox`, `review` and the desktop do not
+  offer an entry whose recorded promotion has written its node.
+- **`link contradicts` is finished by running it again.** Its two saves are
+  one node each; with the edge on `from` and not yet on `to`, a re-run writes
+  only the missing half, and `check`'s rule 4 names that command.
+- **Debris is reported, never committed or deleted.** A write killed before
+  its rename leaves `<file>.<pid>-<n>-<nanos>.tmp` beside its target. `neb`
+  commits exclude `*.tmp` and `.pending` by pathspec, `init` adds `/.pending`
+  and `*.tmp` to the corpus `.gitignore` after `/.lock`, and `check` warns
+  about each temporary (rule 17) with the `rm` that removes it. Nothing in
+  `neb` deletes a file it cannot prove it wrote (STD-03 §R29).
 
 ## `neb`
 
