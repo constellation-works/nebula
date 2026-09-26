@@ -16,7 +16,7 @@ agent reads it and runs the lines they agree with.
 
 ```sh
 neb check --json                 # if any error finding: report it as the whole review and stop
-neb review --json                # the five rules
+neb review --json                # review findings
 neb inbox --json                 # what is waiting
 neb open --json                  # what needs attention
 neb list --json                  # for finding parents and duplicates

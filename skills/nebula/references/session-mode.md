@@ -9,7 +9,7 @@ for every write is the same:
 4. Report the changed ids and the check line (`N nodes, E errors, W warnings`).
 
 If `check` reports an error after your write, stop and show it; do not write
-again until the human has seen it. If it reports a warning you caused (rule 9,
+again until the human has seen it. If it reports a warning you caused (rule 10,
 a reference without a note), fix it in the same turn.
 
 ## Start of session

@@ -18,31 +18,30 @@ related_artifacts: []
 
 `neb check` is the lock, the same role `check-theory.py` plays in principia. A
 schema is a suggestion until something refuses a corpus that violates it.
-Ten of these are the rules as of the 2026-09-12 reduction; rules 11 and 12
-were added afterward to catch a hand edit that leaves a node's lifecycle
-fields or dates inconsistent with each other, and rule 13 after a hand edit
-to a node's `id` turned an ordinary verb into a write outside the corpus. See
+The original v0.2 rules were later extended to catch hand edits that leave a
+node's lifecycle fields or dates inconsistent, and to stop an edited `id`
+from turning an ordinary verb into a write outside the corpus. See
 [docs/design/v0.2/1_spec.md](../../v0.2/1_spec.md) for the model they apply to
 and its "What is removed" table for the rules this replaced.
 
 | # | rule | level | enforced at |
 |---|---|---|---|
 | 1 | Genealogy is acyclic | error | `link` refuses; `check` proves |
-| 2 | `hypothesis` names a non-empty kill condition | error | `sharpen`/`status`, `check` |
+| 2 | `hypothesis` names a non-empty `kill` | error | `sharpen`/`status`, `check` |
 | 3 | Every edge target exists; no self-loop | error | `link`, `check` |
 | 4 | `contradicts` is mutual | error | `link` writes both; `check` |
-| 5 | `refuted` carries a closing reason | error | `status`, `check` |
+| 5 | `refuted` carries `closed.why` | error | `status`, `check` |
 | 6 | `refuted` leaves only via a new node's `reopens` edge | error | `status` |
-| 7 | A reference carries none of the removed judgement fields | error | parse |
-| 8 | Local reference URIs resolve | error | `cite`, `check` |
-| 8 | An `observatory` record resolves under the configured root — the same rule, softer, because it judges the machine rather than the corpus | warn | `check` (shape at `cite`) |
-| 9 | Every reference has a note | warn | `check` |
-| 10 | No two tags differ only by case or a trailing `s` | warn | `check` |
-| 11 | `closed` is set only on a `refuted` or `abandoned` node, never an open one | error | `check` |
-| 11 | A `seed` does not carry a `kill` condition — a sign status changed by hand | warn | `check` |
-| 12 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
-| 13 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse; `store` before any read or write |
-| 14 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |
+| 7 | A reference carries no `verdict`/`strength` | error | parse |
+| 8 | Non-discussion references have a URI; local URIs resolve relative to `nodes/` | error | `cite`, `check` |
+| 9 | An `observatory` reference's record resolves under the configured root | warn | `check` (the id's shape is refused at `cite`) |
+| 10 | Every reference has a note | warn | `check` |
+| 11 | No two tags differ only by case or a trailing `s` | warn | `check` |
+| 12 | `closed` is set only on a `refuted`/`abandoned` node, never an open one | error | `check` |
+| 13 | A `seed` does not carry a `kill` condition | warn | `check` |
+| 14 | `created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created` | error | `check` |
+| 15 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse (the shape); every read and write (the agreement) |
+| 16 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |
 
 ## Where a rule lives matters
 
@@ -61,13 +60,13 @@ does not carry what rule 2 or 5 requires. `neb status` refuses to move a
 `refuted` node to any other status. Catching these when you act is worth more
 than catching them later, because you still remember what you meant.
 
-**Deserialization and the store**, for rule 13, which is the one rule the
+**Deserialization and the store**, for rule 15, which is the one rule the
 checker cannot hold: see below.
 
 **The checker**, for everything that needs the whole corpus in view, and as a
 backstop for rules also enforced elsewhere, since node files are hand-editable.
 
-## Rule 8 and Observatory records
+## Rule 9 and Observatory records
 
 A reference of kind `observatory` carries a bare record id (`Q002`, `H007`,
 `T003`, `R012`) rather than a location, and where that record is comes from
@@ -81,10 +80,9 @@ the machine is missing something, not that the citation is wrong, so `check`
 warns. Erroring would make one portable corpus fail on every machine that
 does not happen to have Observatory checked out.
 
-## Rules 11 and 12: nothing a verb writes, only what a hand edit leaves
+## Rules 12–14: nothing a verb writes, only what a hand edit leaves
 
-Every other checker rule backstops something a verb also refuses at the
-point of action. Rules 11 and 12 do not: no verb takes `closed`, `created`,
+Rules 12–14 catch states no verb produces: no verb takes `closed`, `created`,
 `updated` or a reference's `added` as free-form input, so there is no place
 for a matching refusal to live. `ops.rs` only ever produces a `closed` block
 on `refuted`/`abandoned`, a `kill` together with a move to `hypothesis`, and
@@ -96,7 +94,7 @@ The seed-with-kill case is a warning rather than an error: it is not wrong by
 itself, only unusual, since the node has not yet been sharpened through the
 guard that would move its status too.
 
-## Rule 13: the id is a path
+## Rule 15: the id is a path
 
 A node's id is not only a name. `nodes/<id>.md` is where the node is read
 from and, through `Corpus::save`, where the next write lands. That makes an

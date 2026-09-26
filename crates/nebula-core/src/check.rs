@@ -3,8 +3,8 @@
 //! This is the lock, the same role `check-theory.py` plays in principia. A
 //! schema is a suggestion until something refuses to accept a corpus that
 //! violates it, and the invariants here are the ones that keep the record
-//! honest rather than merely tidy. The numbering follows the table in
-//! `docs/design/v0.2/1_spec.md`, "Invariants".
+//! honest rather than merely tidy. The rule IDs below are the source for the
+//! tables in the v0.2 spec, the lineage spec, and the agent skill.
 //!
 //! The checker reports; it never fixes and never prints. What an error costs
 //! the caller — an exit code, a red badge — is the caller's business.
@@ -16,6 +16,29 @@ use crate::store::Corpus;
 use serde::Serialize;
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+
+/// Stable IDs for corpus invariants. Some rules are enforced before a graph
+/// reaches `check`, at parsing or at the point of action.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy)]
+pub enum Rule {
+    AcyclicGenealogy = 1,
+    HypothesisKill = 2,
+    EdgeTargets = 3,
+    MutualContradicts = 4,
+    RefutedReason = 5,
+    RefutedReopens = 6,
+    NoReferenceVerdict = 7,
+    LocalReference = 8,
+    ObservatoryReference = 9,
+    ReferenceNote = 10,
+    TagDrift = 11,
+    OpenNodeClosed = 12,
+    SeedKill = 13,
+    Dates = 14,
+    NodeId = 15,
+    ReferenceKind = 16,
+}
 
 /// How badly a finding breaks the corpus.
 ///
@@ -56,10 +79,16 @@ pub struct Report {
 }
 
 impl Report {
-    fn push(&mut self, level: Severity, rule: u8, node: Option<&str>, message: impl Into<String>) {
+    fn push(
+        &mut self,
+        level: Severity,
+        rule: Rule,
+        node: Option<&str>,
+        message: impl Into<String>,
+    ) {
         self.findings.push(Finding {
             level,
-            rule,
+            rule: rule as u8,
             node: node.map(String::from),
             message: message.into(),
         });
@@ -68,8 +97,8 @@ impl Report {
 
 /// Run every invariant over a graph.
 ///
-/// The corpus is needed for rule 8 alone, which asks the filesystem whether a
-/// local reference resolves, and where the Observatory checkout is.
+/// The corpus is needed for rules 8 and 9, which ask the filesystem whether
+/// local references and Observatory records resolve.
 ///
 /// Rule 7 never reaches this function: a reference carrying a `verdict` or
 /// `strength`, or a node with an unknown field, fails to deserialize, so the
@@ -99,7 +128,7 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
             if !mutual {
                 r.push(
                     Severity::Error,
-                    4,
+                    Rule::MutualContradicts,
                     Some(&doc.node.id),
                     format!("contradicts `{target}`, which does not contradict back"),
                 );
@@ -112,13 +141,13 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
     if let Some(cycle) = graph.cycle() {
         r.push(
             Severity::Error,
-            1,
+            Rule::AcyclicGenealogy,
             None,
             format!("genealogy cycle: {}", cycle.join(" -> ")),
         );
     }
 
-    // 10. Two tags that differ only by case or a trailing `s` are one label
+    // 11. Two tags that differ only by case or a trailing `s` are one label
     //     drifting into two. Writes normalise case, so this mostly catches
     //     hand edits and plurals; a warning keeps drift visible without a
     //     declared list to maintain.
@@ -132,7 +161,7 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
             if let Some(how) = tag_drift(a, b) {
                 r.push(
                     Severity::Warn,
-                    10,
+                    Rule::TagDrift,
                     None,
                     format!("tags `{a}` and `{b}` differ only by {how}"),
                 );
@@ -290,7 +319,7 @@ fn status_rules(doc: &Doc, r: &mut Report) {
     if n.status == Status::Hypothesis && n.kill.as_ref().is_none_or(|k| k.trim().is_empty()) {
         r.push(
             Severity::Error,
-            2,
+            Rule::HypothesisKill,
             id,
             "status is hypothesis but no kill condition is named",
         );
@@ -301,7 +330,7 @@ fn status_rules(doc: &Doc, r: &mut Report) {
     if n.status == Status::Refuted && n.closed.as_ref().is_none_or(|c| c.why.trim().is_empty()) {
         r.push(
             Severity::Error,
-            5,
+            Rule::RefutedReason,
             id,
             "status is refuted but closed.why is empty; say what fired the kill condition",
         );
@@ -314,7 +343,7 @@ fn status_rules(doc: &Doc, r: &mut Report) {
 fn lifecycle_rules(doc: &Doc, r: &mut Report) {
     let n = &doc.node;
     let id = Some(n.id.as_str());
-    // 11. `set_status` clears `closed` the moment a node leaves refuted or
+    // 12. `set_status` clears `closed` the moment a node leaves refuted or
     //     abandoned, and no verb ever sets it any other way, so a `closed`
     //     block on a seed or hypothesis is not a state any verb produces —
     //     it is what an earlier abandonment or refutation left behind after
@@ -322,7 +351,7 @@ fn lifecycle_rules(doc: &Doc, r: &mut Report) {
     if n.status.is_open() && n.closed.is_some() {
         r.push(
             Severity::Error,
-            11,
+            Rule::OpenNodeClosed,
             id,
             format!(
                 "status is `{}` but a `closed` block is still set; leftover from an earlier close?",
@@ -330,7 +359,7 @@ fn lifecycle_rules(doc: &Doc, r: &mut Report) {
             ),
         );
     }
-    // 11. `new --kill` and `sharpen` only ever write a kill condition
+    // 13. `new --kill` and `sharpen` only ever write a kill condition
     //     together with a move to `hypothesis`, so a `seed` carrying one was
     //     set by hand without the guard that would have moved the status
     //     too. Not wrong by itself — the node has not yet been re-sharpened
@@ -338,7 +367,7 @@ fn lifecycle_rules(doc: &Doc, r: &mut Report) {
     if n.status == Status::Seed && n.kill.is_some() {
         r.push(
             Severity::Warn,
-            11,
+            Rule::SeedKill,
             id,
             "status is seed but a kill condition is set; `new --kill`/`sharpen` always move \
              status to hypothesis, so this looks like a hand edit",
@@ -351,7 +380,7 @@ fn lifecycle_rules(doc: &Doc, r: &mut Report) {
 fn date_rules(doc: &Doc, r: &mut Report) {
     let n = &doc.node;
     let id = Some(n.id.as_str());
-    // 12. Every date `ops.rs` writes comes from `store::today()`, so
+    // 14. Every date `ops.rs` writes comes from `store::today()`, so
     //     `created`/`updated` are always `YYYY-MM-DD` and never move
     //     backwards. A hand edit is the only way either goes wrong, and
     //     `review`/`open` then silently treat the node as never stale,
@@ -360,7 +389,7 @@ fn date_rules(doc: &Doc, r: &mut Report) {
     if !created_ok {
         r.push(
             Severity::Error,
-            12,
+            Rule::Dates,
             id,
             format!("created `{}` is not a YYYY-MM-DD date", n.created),
         );
@@ -369,7 +398,7 @@ fn date_rules(doc: &Doc, r: &mut Report) {
     if !updated_ok {
         r.push(
             Severity::Error,
-            12,
+            Rule::Dates,
             id,
             format!("updated `{}` is not a YYYY-MM-DD date", n.updated),
         );
@@ -377,7 +406,7 @@ fn date_rules(doc: &Doc, r: &mut Report) {
     if created_ok && updated_ok && n.updated < n.created {
         r.push(
             Severity::Error,
-            12,
+            Rule::Dates,
             id,
             format!(
                 "updated `{}` is earlier than created `{}`",
@@ -389,7 +418,7 @@ fn date_rules(doc: &Doc, r: &mut Report) {
         if !is_iso_date(&f.added) {
             r.push(
                 Severity::Error,
-                12,
+                Rule::Dates,
                 id,
                 format!(
                     "reference `{}` has an added date `{}` that does not parse",
@@ -410,7 +439,7 @@ fn edge_rules(doc: &Doc, ids: &HashSet<&str>, r: &mut Report) {
         if !ids.contains(e.to.as_str()) {
             r.push(
                 Severity::Error,
-                3,
+                Rule::EdgeTargets,
                 id,
                 format!("edge `{}` points at missing node `{}`", e.kind, e.to),
             );
@@ -418,7 +447,7 @@ fn edge_rules(doc: &Doc, ids: &HashSet<&str>, r: &mut Report) {
         if e.to == n.id {
             r.push(
                 Severity::Error,
-                3,
+                Rule::EdgeTargets,
                 id,
                 format!("edge `{}` points at itself", e.kind),
             );
@@ -434,7 +463,7 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
         if !is_reference_kind(&f.kind) {
             r.push(
                 Severity::Warn,
-                14,
+                Rule::ReferenceKind,
                 id,
                 format!(
                     "reference `{}` has unexpected kind `{}`; accepted kinds: {}",
@@ -447,7 +476,7 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
         if f.uri.as_deref().is_none_or(|uri| uri.trim().is_empty()) && f.kind != "discussion" {
             r.push(
                 Severity::Error,
-                8,
+                Rule::LocalReference,
                 id,
                 format!(
                     "reference `{}` has kind `{}` but no URI; only discussions may omit it",
@@ -455,16 +484,16 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
                 ),
             );
         }
-        // 9. A bare link is how a collection like this rots.
+        // 10. A bare link is how a collection like this rots.
         if f.note.as_ref().is_none_or(|s| s.trim().is_empty()) {
             r.push(
                 Severity::Warn,
-                9,
+                Rule::ReferenceNote,
                 id,
                 format!("reference `{}` has no note saying why it is here", f.id),
             );
         }
-        // 8, for an Observatory record: the id is the reference, and where
+        // 9, for an Observatory record: the id is the reference, and where
         //    it is on this machine is a setting. Not finding it here says
         //    the setting is missing or the checkout is behind, not that the
         //    record is gone, so the finding is a warning rather than an
@@ -474,7 +503,7 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
                 match observatory {
                     None => r.push(
                         Severity::Warn,
-                        8,
+                        Rule::ObservatoryReference,
                         id,
                         format!(
                             "reference `{}` names Observatory record `{record}` but no \
@@ -485,7 +514,7 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
                     ),
                     Some(root) if resolve_observatory(root, record).is_none() => r.push(
                         Severity::Warn,
-                        8,
+                        Rule::ObservatoryReference,
                         id,
                         format!(
                             "reference `{}` names Observatory record `{record}`, which does \
@@ -509,7 +538,7 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
         {
             r.push(
                 Severity::Error,
-                8,
+                Rule::LocalReference,
                 id,
                 format!(
                     "reference `{}` points at a path that does not resolve: {}",
@@ -522,7 +551,102 @@ fn reference_rules(doc: &Doc, corpus: &Corpus, observatory: Option<&Path>, r: &m
 
 #[cfg(test)]
 mod tests {
-    use super::{is_local_path, is_observatory_id, resolve_observatory, tag_drift};
+    use super::{Rule, is_local_path, is_observatory_id, resolve_observatory, tag_drift};
+
+    // The canonical labels and IDs for the published invariant tables. Keep
+    // this beside the code that emits findings, so documentation drift fails
+    // a core test rather than silently changing the meaning of `[N]`.
+    const RULES: &[(Rule, &str)] = &[
+        (Rule::AcyclicGenealogy, "Genealogy is acyclic"),
+        (
+            Rule::HypothesisKill,
+            "`hypothesis` names a non-empty `kill`",
+        ),
+        (Rule::EdgeTargets, "Every edge target exists; no self-loop"),
+        (Rule::MutualContradicts, "`contradicts` is mutual"),
+        (Rule::RefutedReason, "`refuted` carries `closed.why`"),
+        (
+            Rule::RefutedReopens,
+            "`refuted` leaves only via a new node's `reopens` edge",
+        ),
+        (
+            Rule::NoReferenceVerdict,
+            "A reference carries no `verdict`/`strength`",
+        ),
+        (
+            Rule::LocalReference,
+            "Non-discussion references have a URI; local URIs resolve relative to `nodes/`",
+        ),
+        (
+            Rule::ObservatoryReference,
+            "An `observatory` reference's record resolves under the configured root",
+        ),
+        (Rule::ReferenceNote, "Every reference has a note"),
+        (
+            Rule::TagDrift,
+            "No two tags differ only by case or a trailing `s`",
+        ),
+        (
+            Rule::OpenNodeClosed,
+            "`closed` is set only on a `refuted`/`abandoned` node, never an open one",
+        ),
+        (Rule::SeedKill, "A `seed` does not carry a `kill` condition"),
+        (
+            Rule::Dates,
+            "`created`, `updated` and every reference's `added` parse as `YYYY-MM-DD`, and `updated` is not earlier than `created`",
+        ),
+        (
+            Rule::NodeId,
+            "A node's `id` names one file under `nodes/`, and is the id its file name names",
+        ),
+        (
+            Rule::ReferenceKind,
+            "Every reference kind belongs to the documented vocabulary",
+        ),
+    ];
+
+    fn table_rules(markdown: &str) -> Vec<(u8, &str)> {
+        markdown
+            .lines()
+            .skip_while(|line| !line.starts_with("| # |"))
+            .skip(2)
+            .take_while(|line| line.starts_with('|'))
+            .map(|line| {
+                let mut cells = line.split('|').map(str::trim);
+                assert_eq!(cells.next(), Some(""), "table row begins with `|`");
+                let number = cells.next().unwrap().parse::<u8>().unwrap();
+                (number, cells.next().unwrap())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn published_invariant_tables_match_checker_rules() {
+        let expected: Vec<_> = RULES
+            .iter()
+            .map(|(rule, label)| (*rule as u8, *label))
+            .collect();
+        assert!(
+            expected.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "checker rule IDs must be distinct and ordered"
+        );
+        for (name, markdown) in [
+            (
+                "v0.2 spec",
+                include_str!("../../../docs/design/v0.2/1_spec.md"),
+            ),
+            (
+                "skill",
+                include_str!("../../../skills/nebula/references/invariants.md"),
+            ),
+            (
+                "lineage spec",
+                include_str!("../../../docs/design/lineage-graph/specs/invariants.md"),
+            ),
+        ] {
+            assert_eq!(table_rules(markdown), expected, "{name} invariant table");
+        }
+    }
 
     #[test]
     fn tag_drift_catches_case_and_plurals_only() {

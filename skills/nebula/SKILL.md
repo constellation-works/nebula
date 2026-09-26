@@ -1,6 +1,6 @@
 ---
 name: nebula
-description: nebula — the idea lineage graph and its `neb` CLI. Use when a human says "capture that", "that's a nebula seed", asks to triage the inbox, sharpen, link, cite or close an idea, trace where an idea came from, run `neb review`, or when an Orbit routine reads a nebula corpus unattended. Covers the corpus location, every verb and its `--json` shape, the ten invariants and their refusals, and the two operating modes.
+description: nebula — the idea lineage graph and its `neb` CLI. Use when a human says "capture that", "that's a nebula seed", asks to triage the inbox, sharpen, link, cite or close an idea, trace where an idea came from, run `neb review`, or when an Orbit routine reads a nebula corpus unattended. Covers the corpus location, every verb and its `--json` shape, the rules in invariants.md and their refusals, and the two operating modes.
 ---
 
 # nebula
@@ -117,7 +117,7 @@ falsifier.
 
 `neb` refuses rather than warns at the point of action. Each refusal is typed
 and tells you what to do; do not retry the same command.
-[invariants.md](references/invariants.md) lists the ten rules, which verb
+[invariants.md](references/invariants.md) lists the rules, which verb
 enforces each, and the move that resolves it.
 
 ## References
@@ -125,6 +125,6 @@ enforces each, and the move that resolves it.
 | Reference | Read it for |
 |---|---|
 | [verbs.md](references/verbs.md) | Every verb, its flags, and its `--json` shape from a real corpus. |
-| [invariants.md](references/invariants.md) | The ten rules, which verb refuses what, and what to do instead. |
+| [invariants.md](references/invariants.md) | The rules, which verb refuses what, and what to do instead. |
 | [session-mode.md](references/session-mode.md) | The directed flow: triage with the human, sharpen, link, cite, close; check after every write. Worked transcript. |
 | [routine-mode.md](references/routine-mode.md) | The unattended flow: read, then write proposals to `review.md`. Format and worked transcript. |

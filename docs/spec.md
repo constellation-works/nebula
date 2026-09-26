@@ -127,7 +127,7 @@ The node shape, verbs and invariants that followed this point in the original
 spec are v0.1 and no longer accurate: they described `domain`, `evidence`,
 `verdict`/`strength`, `weigh`, `task` and `graduate`, none of which survive the
 2026-09-12 reduction. The current model — four statuses, five edge kinds,
-tag-normalised labels, references with notes, and ten invariants enforced by
+tag-normalised labels, references with notes, and the invariants enforced by
 `neb check` — is specified in full in
 [docs/design/v0.2/1_spec.md](design/v0.2/1_spec.md); the architecture that
 carries it across a core library, the CLI, a desktop app and an agent skill is

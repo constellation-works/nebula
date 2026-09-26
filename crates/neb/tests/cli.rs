@@ -2172,7 +2172,7 @@ fn check_warns_about_a_legacy_unexpected_reference_kind_without_rejecting_the_fi
     assert_eq!(node["node"]["references"][0]["kind"], "bogus");
     c.run(&["check"])
         .assert_ok()
-        .says("[14]")
+        .says("[16]")
         .says("reference `r1` has unexpected kind `bogus`")
         .says("accepted kinds: paper, study, article, note, discussion, book, dataset, thread, observatory, other")
         .says("0 errors, 1 warnings");
@@ -2195,7 +2195,7 @@ fn a_reference_with_no_note_warns_and_a_noted_one_does_not() {
     .assert_ok();
     c.run(&["check"])
         .assert_ok()
-        .says("[9]")
+        .says("[10]")
         .says("reference `r1` has no note saying why it is here")
         .says(&bare)
         .says("0 errors, 1 warnings");
@@ -2215,7 +2215,7 @@ fn a_reference_with_no_note_warns_and_a_noted_one_does_not() {
     omitted
         .run(&["check"])
         .assert_ok()
-        .says("[9]")
+        .says("[10]")
         .says("0 errors, 1 warnings");
 
     let noted = Corpus::new();
@@ -2382,19 +2382,19 @@ fn check_json_exposes_rule_and_level() {
     let v: serde_json::Value = serde_json::from_str(&out).expect("check --json is valid JSON");
     let findings = v["findings"].as_array().expect("findings array");
 
-    let rule9 = findings
-        .iter()
-        .find(|f| f["rule"] == 9)
-        .expect("rule 9 finding present");
-    assert_eq!(rule9["level"], "warn");
-    assert_eq!(rule9["node"], id);
-
     let rule10 = findings
         .iter()
         .find(|f| f["rule"] == 10)
         .expect("rule 10 finding present");
     assert_eq!(rule10["level"], "warn");
-    assert!(rule10["node"].is_null(), "tag drift is a corpus finding");
+    assert_eq!(rule10["node"], id);
+
+    let rule11 = findings
+        .iter()
+        .find(|f| f["rule"] == 11)
+        .expect("rule 11 finding present");
+    assert_eq!(rule11["level"], "warn");
+    assert!(rule11["node"].is_null(), "tag drift is a corpus finding");
 }
 
 #[test]
@@ -2415,7 +2415,7 @@ fn dangling_edges_are_caught() {
 /// verb produces — only a hand edit that reopened the node outside `status`
 /// leaves one behind.
 #[test]
-fn a_closed_block_on_an_open_node_is_a_rule_11_error() {
+fn a_closed_block_on_an_open_node_is_a_rule_12_error() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
     c.run(&["sharpen", &id, "--kill", "if X"]).assert_ok();
@@ -2429,7 +2429,7 @@ fn a_closed_block_on_an_open_node_is_a_rule_11_error() {
     );
     c.run(&["check"])
         .assert_fails()
-        .says("[11]")
+        .says("[12]")
         .says("status is `hypothesis` but a `closed` block is still set")
         .says("1 errors");
 }
@@ -2438,7 +2438,7 @@ fn a_closed_block_on_an_open_node_is_a_rule_11_error() {
 /// with writing `kill`, so a `seed` carrying one was set by hand without the
 /// guard. Not wrong by itself, so it is a warning rather than an error.
 #[test]
-fn a_seed_with_a_kill_condition_is_a_rule_11_warning() {
+fn a_seed_with_a_kill_condition_is_a_rule_13_warning() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
     let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
@@ -2448,7 +2448,7 @@ fn a_seed_with_a_kill_condition_is_a_rule_11_warning() {
     );
     c.run(&["check"])
         .assert_ok()
-        .says("[11]")
+        .says("[13]")
         .says("status is seed but a kill condition is set")
         .says("0 errors, 1 warnings");
 }
@@ -2458,21 +2458,21 @@ fn a_seed_with_a_kill_condition_is_a_rule_11_warning() {
 /// a hand edit — and `review`/`open` then silently treat the node as never
 /// stale, since `days_since` returns `None` for a date it cannot parse.
 #[test]
-fn an_unparsable_created_or_updated_date_is_a_rule_12_error() {
+fn an_unparsable_created_or_updated_date_is_a_rule_14_error() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
     set_created(&c.node_file(&id), "not-a-date");
     c.run(&["check"])
         .assert_fails()
-        .says("[12]")
+        .says("[14]")
         .says("created `not-a-date` is not a YYYY-MM-DD date")
         .says("1 errors");
 }
 
 /// Calendar-looking strings must still name real Gregorian dates. Otherwise
-/// hand edits evade rule 12 while `review` and `open` silently ignore them.
+/// hand edits evade rule 14 while `review` and `open` silently ignore them.
 #[test]
-fn impossible_calendar_dates_are_rule_12_errors() {
+fn impossible_calendar_dates_are_rule_14_errors() {
     for (field, date) in [
         ("created", "2026-99-99"),
         ("updated", "2026-04-31"),
@@ -2487,7 +2487,7 @@ fn impossible_calendar_dates_are_rule_12_errors() {
         }
         c.run(&["check"])
             .assert_fails()
-            .says("[12]")
+            .says("[14]")
             .says(&format!("{field} `{date}` is not a YYYY-MM-DD date"))
             .says("1 errors");
     }
@@ -2514,7 +2514,7 @@ fn impossible_calendar_dates_are_rule_12_errors() {
     write(&c.node_file(&id), &raw);
     c.run(&["check"])
         .assert_fails()
-        .says("[12]")
+        .says("[14]")
         .says("reference `r1` has an added date `2026-02-29` that does not parse")
         .says("1 errors");
 }
@@ -2547,23 +2547,23 @@ fn leap_day_dates_are_valid_for_nodes_and_references() {
 }
 
 #[test]
-fn updated_earlier_than_created_is_a_rule_12_error() {
+fn updated_earlier_than_created_is_a_rule_14_error() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
     set_created(&c.node_file(&id), &date_days_ago(1));
     set_updated(&c.node_file(&id), &date_days_ago(2));
     c.run(&["check"])
         .assert_fails()
-        .says("[12]")
+        .says("[14]")
         .says("updated")
         .says("earlier than created")
         .says("1 errors");
 }
 
 /// A reference's `added` date is stamped the same way and can go wrong the
-/// same way, so rule 12 covers it too.
+/// same way, so rule 14 covers it too.
 #[test]
-fn an_unparsable_reference_added_date_is_a_rule_12_error() {
+fn an_unparsable_reference_added_date_is_a_rule_14_error() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
     c.run(&[
@@ -2586,7 +2586,7 @@ fn an_unparsable_reference_added_date_is_a_rule_12_error() {
     write(&c.node_file(&id), &raw);
     c.run(&["check"])
         .assert_fails()
-        .says("[12]")
+        .says("[14]")
         .says("reference `r1` has an added date `not-a-date` that does not parse")
         .says("1 errors");
 }
@@ -3640,7 +3640,7 @@ fn tag_drift_by_case_or_plural_is_a_warning() {
     write(&c.node_file(&b), &raw.replace("- physics", "- Physics"));
     c.run(&["check"])
         .assert_ok()
-        .says("[10]")
+        .says("[11]")
         .says("tags `Physics` and `physics` differ only by case")
         .says("tags `sim` and `sims` differ only by a trailing `s`")
         .says("0 errors, 2 warnings");
@@ -3996,7 +3996,7 @@ fn an_unresolved_observatory_record_warns_and_never_errors() {
     c.run(&["check"])
         .assert_ok()
         .says("warn")
-        .says("[8]")
+        .says("[9]")
         .says("Observatory record `Q404`")
         .says("does not resolve under")
         .says("0 errors, 1 warnings");
@@ -4030,7 +4030,7 @@ fn an_observatory_reference_with_no_root_warns_and_the_env_supplies_one() {
     c.run(&["check"])
         .assert_ok()
         .says("warn")
-        .says("[8]")
+        .says("[9]")
         .says("no observatory root is set")
         .says("0 errors, 1 warnings");
     c.run(&["show", &id])
