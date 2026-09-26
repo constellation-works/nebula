@@ -1537,11 +1537,12 @@ fn plain_init_never_changes_the_machine_root_setting() {
         "plain init must leave an absent root setting absent"
     );
     assert!(
-        out.stdout().contains("--set-root")
-            && out.stdout().contains(&scratch.display().to_string()),
-        "plain init should name the opt-in command in:\n{}",
-        out.stdout()
+        out.stderr().contains("--set-root")
+            && out.stderr().contains(&scratch.display().to_string()),
+        "plain init should name the opt-in command on stderr:\n{}",
+        out.stderr()
     );
+    assert!(!out.stdout().contains("--set-root"), "{}", out.stdout());
 
     let configured = dir.path().join("configured");
     std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
@@ -2894,8 +2895,10 @@ fn triage_decides_each_entry_oldest_first_as_the_single_verbs_would() {
         "{out}"
     );
 
-    // One commit per write, named as the single verb names its own.
-    assert_eq!(out.matches("committed ").count(), 3, "{out}");
+    // One commit per write, named as the single verb names its own, and
+    // said on stderr: the session's screen is stdout.
+    assert_eq!(run.stderr().matches("committed ").count(), 3, "{out}");
+    assert!(!out.contains("committed "), "{out}");
     assert_eq!(
         log(&c.root)[..3],
         [
@@ -3402,16 +3405,23 @@ fn a_shared_ancestor_is_reached_by_both_branches_and_expanded_once() {
     ])
     .assert_ok();
 
-    let tree = c.run(&["trace", "synthesis"]).assert_ok().stdout();
+    // Piped, the walk is one line per node, so the shared ancestor is one
+    // line; the tree a terminal gets points to it from both branches
+    // (`render::tree`'s unit tests).
+    let lines = c.run(&["trace", "synthesis"]).assert_ok().stdout();
     assert_eq!(
-        tree.matches(&root_id).count(),
-        2,
-        "the shared ancestor appears on both branches"
+        traced_ids(&lines),
+        ["synthesis", "left-branch", root_id.as_str(), "right-branch"],
+        "the shared ancestor is reached once:\n{lines}"
     );
-    assert!(
-        tree.contains("shown above"),
-        "but it is only expanded once:\n{tree}"
-    );
+}
+
+/// The ids of piped `trace` output, one per line, from its second field.
+fn traced_ids(lines: &str) -> Vec<&str> {
+    lines
+        .lines()
+        .map(|l| l.split('\t').nth(1).expect("an id field"))
+        .collect()
 }
 
 #[test]
@@ -3435,48 +3445,43 @@ fn trace_names_edge_kinds_and_draws_parallel_edges_as_one_line() {
     c.run(&["link", "synthesis", "reopens", "left-branch"])
         .assert_ok();
 
-    let branches = |tree: &str| -> Vec<(String, String)> {
-        tree.lines()
-            .skip(1)
+    // Piped, each line is `depth, id, status, title, kinds`.
+    let steps = |lines: &str| -> Vec<(String, String, String)> {
+        lines
+            .lines()
             .map(|l| {
-                let l = l.trim_start_matches(['│', '├', '└', '─', ' ']);
-                let (kinds, rest) = l.split_once("  ").expect("kinds, then the node");
-                let id = rest.split_whitespace().nth(1).expect("an id");
-                (kinds.to_string(), id.to_string())
+                let fields: Vec<&str> = l.split('\t').collect();
+                assert_eq!(fields.len(), 5, "{l:?}");
+                (fields[0].into(), fields[1].into(), fields[4].into())
             })
             .collect()
     };
+    let step = |depth: &str, id: &str, kinds: &str| (depth.into(), id.into(), kinds.into());
 
     let up = c.run(&["trace", "synthesis"]).assert_ok().stdout();
-    assert!(up.lines().next().unwrap().contains("synthesis"), "{up}");
     assert_eq!(
-        branches(&up),
+        steps(&up),
         [
-            ("derives-from, reopens".into(), "left-branch".into()),
-            ("derives-from".into(), root.clone()),
-            ("derives-from".into(), "right-branch".into()),
-            ("derives-from".into(), root.clone()),
+            step("0", "synthesis", "-"),
+            step("1", "left-branch", "derives-from,reopens"),
+            step("2", &root, "derives-from"),
+            step("1", "right-branch", "derives-from"),
         ],
-        "every line names its edge, and the parallel pair is one line:\n{up}"
+        "every step names its edge, and the parallel pair is one step:\n{up}"
     );
-    assert_eq!(up.matches("shown above").count(), 1, "{up}");
-    assert!(
-        up.lines().last().unwrap().ends_with("(shown above)"),
-        "the true diamond is still marked:\n{up}"
-    );
+    assert!(!up.contains("shown above"), "{up}");
 
     let down = c.run(&["trace", "--down", &root]).assert_ok().stdout();
     assert_eq!(
-        branches(&down),
+        steps(&down),
         [
-            ("derives-from".into(), "left-branch".into()),
-            ("derives-from, reopens".into(), "synthesis".into()),
-            ("derives-from".into(), "right-branch".into()),
-            ("derives-from".into(), "synthesis".into()),
+            step("0", &root, "-"),
+            step("1", "left-branch", "derives-from"),
+            step("2", "synthesis", "derives-from,reopens"),
+            step("1", "right-branch", "derives-from"),
         ],
         "descent names the same edges, and reaches the parallel pair once:\n{down}"
     );
-    assert_eq!(down.matches("shown above").count(), 1, "{down}");
 
     let json = c
         .run(&["trace", "--json", "synthesis"])
@@ -3509,15 +3514,15 @@ fn shortcut(c: &Corpus) {
     c.run(&["new", "Deep", "--parent", "cut"]).assert_ok();
 }
 
-/// `--depth` bounds the tree and the JSON alike, a line whose branches it
-/// cut says how many, and a node within reach along any path is kept.
+/// `--depth` bounds the walk and the JSON alike, stderr says how many nodes
+/// it left out, and a node within reach along any path is kept.
 #[test]
 fn trace_depth_bounds_the_tree_and_the_json_alike() {
     let c = Corpus::new();
     shortcut(&c);
-    let tree = |args: &[&str]| c.run(args).assert_ok().stdout();
     let walked = |args: &[&str]| -> Vec<String> {
-        let json: serde_json::Value = serde_json::from_str(&tree(args)).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&c.run(args).assert_ok().stdout()).unwrap();
         assert_eq!(json["total"], 4, "the whole walk: {json}");
         json["items"]
             .as_array()
@@ -3527,64 +3532,137 @@ fn trace_depth_bounds_the_tree_and_the_json_alike() {
             .collect()
     };
 
-    let zero = tree(&["trace", "root", "--down", "--depth", "0"]);
-    assert_eq!(zero.lines().count(), 1, "{zero}");
-    assert!(
-        zero.contains("root Root  (2 more beyond --depth)"),
-        "{zero}"
+    let zero = c
+        .run(&["trace", "root", "--down", "--depth", "0"])
+        .assert_ok();
+    assert_eq!(traced_ids(&zero.stdout()), ["root"]);
+    assert_eq!(
+        zero.stderr(),
+        "3 more nodes beyond --depth 0; raise --depth for more\n"
     );
 
-    let one = tree(&["trace", "root", "--down", "--depth", "1"]);
-    assert!(!one.contains(" deep "), "{one}");
-    assert_eq!(one.matches("(1 more beyond --depth)").count(), 2, "{one}");
+    let one = c
+        .run(&["trace", "root", "--down", "--depth", "1"])
+        .assert_ok();
+    assert_eq!(traced_ids(&one.stdout()), ["root", "branch", "cut"]);
+    assert_eq!(
+        one.stderr(),
+        "1 more node beyond --depth 1; raise --depth for more\n"
+    );
     assert_eq!(
         walked(&["trace", "--json", "root", "--down", "--depth", "1"]),
         ["root", "branch", "cut"]
     );
 
     // Through `branch`, `deep` is three steps out; through the shortcut, two.
-    let two = tree(&["trace", "root", "--down", "--depth", "2"]);
-    assert!(two.contains(" deep "), "{two}");
+    let two = c
+        .run(&["trace", "root", "--down", "--depth", "2"])
+        .assert_ok();
+    assert!(
+        traced_ids(&two.stdout()).contains(&"deep"),
+        "{}",
+        two.stdout()
+    );
+    assert_eq!(two.stderr(), "", "nothing was left out");
     assert_eq!(
         walked(&["trace", "--json", "root", "--down", "--depth", "2"]).len(),
         4
     );
 
     for depth in ["0", "1", "2", "3"] {
-        let drawn = tree(&["trace", "root", "--down", "--depth", depth]);
+        let drawn = c
+            .run(&["trace", "root", "--down", "--depth", depth])
+            .assert_ok()
+            .stdout();
         let listed = walked(&["trace", "--json", "root", "--down", "--depth", depth]);
-        for id in ["root", "branch", "cut", "deep"] {
-            assert_eq!(
-                drawn.contains(&format!(" {id} ")),
-                listed.iter().any(|l| l == id),
-                "--depth {depth}: the tree and the JSON disagree about `{id}`:\n{drawn}"
-            );
-        }
+        assert_eq!(
+            traced_ids(&drawn),
+            listed,
+            "--depth {depth}: the lines and the JSON disagree:\n{drawn}"
+        );
+        assert!(!drawn.contains("--depth"), "{drawn}");
     }
 
-    let up = tree(&["trace", "deep", "--depth", "1"]);
-    assert_eq!(up.lines().count(), 2, "{up}");
-    assert!(up.contains("cut Cut  (2 more beyond --depth)"), "{up}");
+    let up = c.run(&["trace", "deep", "--depth", "1"]).assert_ok();
+    assert_eq!(traced_ids(&up.stdout()), ["deep", "cut"]);
+    assert_eq!(
+        up.stderr(),
+        "2 more nodes beyond --depth 1; raise --depth for more\n"
+    );
 }
 
 /// Without `--depth` the walk is whole, and a bound the corpus never reaches
-/// draws exactly the same tree.
+/// prints exactly the same lines and no notice.
 #[test]
 fn trace_without_depth_is_unchanged_and_an_unreached_depth_matches_it() {
     let c = Corpus::new();
     shortcut(&c);
     for args in [["trace", "root", "--down"].as_slice(), &["trace", "deep"]] {
-        let whole = c.run(args).assert_ok().stdout();
-        assert!(!whole.contains("--depth"), "{whole}");
-        assert!(
-            whole.contains(" root ") && whole.contains(" deep "),
-            "{whole}"
-        );
-        let bounded = c
-            .run(&[args, &["--depth", "10"]].concat())
-            .assert_ok()
-            .stdout();
-        assert_eq!(bounded, whole);
+        let whole = c.run(args).assert_ok();
+        assert_eq!(whole.stderr(), "");
+        let ids = traced_ids(&whole.stdout()).join(" ");
+        assert!(ids.contains("root") && ids.contains("deep"), "{ids}");
+        let bounded = c.run(&[args, &["--depth", "10"]].concat()).assert_ok();
+        assert_eq!(bounded.stdout(), whole.stdout());
+        assert_eq!(bounded.stderr(), "");
+    }
+}
+
+/// Piped, `trace` draws no tree: one line per node with the same fields on
+/// every line, and none of the box-drawing glyphs (STD-01 §R9).
+#[test]
+fn piped_trace_has_no_box_glyphs() {
+    let c = Corpus::new();
+    shortcut(&c);
+    for args in [
+        ["trace", "deep"].as_slice(),
+        &["trace", "root", "--down"],
+        &["trace", "root", "--down", "--depth", "1"],
+    ] {
+        let out = c.run(args).assert_ok().stdout();
+        assert!(!out.contains(['└', '├', '│', '─']), "{out}");
+        assert!(!out.contains('\x1b'), "{out}");
+        let fields: Vec<usize> = out.lines().map(|l| l.split('\t').count()).collect();
+        assert!(!fields.is_empty(), "{out}");
+        assert!(fields.iter().all(|n| *n == 5), "{out}");
+    }
+}
+
+/// The lines `trace` prints are the payload `--json` returns: the same
+/// nodes, whole or bounded (STD-01 §R6).
+#[test]
+fn trace_human_matches_payload() {
+    let c = Corpus::new();
+    shortcut(&c);
+    for args in [
+        ["trace", "deep"].as_slice(),
+        &["trace", "root", "--down"],
+        &["trace", "root", "--down", "--depth", "1"],
+        &["trace", "cut", "--down", "--depth", "1"],
+    ] {
+        let printed = c.run(args).assert_ok().stdout();
+        let json: serde_json::Value = serde_json::from_str(
+            &c.run(&[["--json"].as_slice(), args].concat())
+                .assert_ok()
+                .stdout(),
+        )
+        .unwrap();
+        // Bounded, the walk is the capped-list envelope (STD-01 §R34).
+        let walk = if json.is_object() {
+            &json["items"]
+        } else {
+            &json
+        };
+        let mut from_payload: Vec<&str> = walk
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        let mut from_lines = traced_ids(&printed);
+        from_payload.sort_unstable();
+        from_lines.sort_unstable();
+        assert_eq!(from_lines, from_payload, "{args:?}:\n{printed}");
     }
 }
 
@@ -5117,6 +5195,22 @@ fn deprecated_open_matches_review_short_and_warns_once_on_stderr() {
     assert!(help.contains("\n  review "), "{help}");
 }
 
+/// Help reads the same on every machine: clap is built without `wrap_help`
+/// and `color`, so neither the width nor the terminal changes a byte
+/// (STD-01 §R17).
+#[test]
+fn help_does_not_depend_on_columns() {
+    let c = Corpus::new();
+    for args in [["list", "--help"].as_slice(), &["--help"]] {
+        let narrow = c.run_with_env(args, &[("COLUMNS", "50")]).assert_ok();
+        let wide = c.run_with_env(args, &[("COLUMNS", "200")]).assert_ok();
+        let plain = c.run_with_env(args, &[("NO_COLOR", "")]).assert_ok();
+        assert_eq!(narrow.stdout(), wide.stdout(), "{args:?}");
+        assert_eq!(plain.stdout(), wide.stdout(), "{args:?}");
+        assert!(!wide.stdout().contains('\x1b'), "{args:?}");
+    }
+}
+
 #[test]
 #[allow(clippy::too_many_lines)] // One contract matrix is easier to audit than split verb lists.
 fn every_documented_json_verb_emits_machine_readable_json() {
@@ -6588,9 +6682,10 @@ fn list_lines_up_its_ids_after_the_status() {
     assert_eq!(starts, [11, 11], "{out}");
 }
 
-/// `--limit` cuts `list` to its first N matches and says how many it left
-/// out; without it every match is listed, as before. `--json` gets the cut
-/// list in the envelope that says so.
+/// `--limit` cuts `list` to its first N matches and says on stderr how many
+/// it left out, in every mode; without it every match is listed, as before,
+/// and the count is stderr's too. `--json` gets the cut list in the envelope
+/// that says so.
 #[test]
 fn list_limit_bounds_the_listing_and_defaults_to_all() {
     let c = Corpus::new();
@@ -6599,85 +6694,114 @@ fn list_limit_bounds_the_listing_and_defaults_to_all() {
     }
     c.run(&["new", "Untagged"]).assert_ok();
 
-    let all = c.run(&["list"]).assert_ok().stdout();
-    assert!(all.ends_with("\n4 of 4 nodes\n"), "{all}");
-    let tagged = c.run(&["list", "--tag", "t"]).assert_ok().stdout();
-    assert!(tagged.ends_with("\n3 of 4 nodes\n"), "{tagged}");
+    let all = c.run(&["list"]).assert_ok();
+    assert_eq!(all.stdout().lines().count(), 4, "{}", all.stdout());
+    assert_eq!(all.stderr(), "4 of 4 nodes\n");
+    let tagged = c.run(&["list", "--tag", "t"]).assert_ok();
+    assert_eq!(tagged.stdout().lines().count(), 3, "{}", tagged.stdout());
+    assert_eq!(tagged.stderr(), "3 of 4 nodes\n");
 
-    let cut = c
-        .run(&["list", "--tag", "t", "--limit", "2"])
-        .assert_ok()
-        .stdout();
+    let cut = c.run(&["list", "--tag", "t", "--limit", "2"]).assert_ok();
+    assert_eq!(cut.stdout().lines().count(), 2, "{}", cut.stdout());
+    assert!(
+        cut.stdout().lines().all(|l| l.starts_with("seed")),
+        "{}",
+        cut.stdout()
+    );
     assert_eq!(
-        cut.lines().filter(|l| l.starts_with("seed")).count(),
-        2,
-        "{cut}"
+        cut.stderr(),
+        "2 of 3 matching nodes shown, of 4 in all; raise --limit for more\n"
     );
-    assert!(
-        cut.ends_with("\n2 of 3 matching nodes shown, of 4 in all; raise --limit for more\n"),
-        "{cut}"
+    let roomy = c.run(&["list", "--tag", "t", "--limit", "3"]).assert_ok();
+    assert_eq!(
+        (roomy.stdout(), roomy.stderr()),
+        (tagged.stdout(), tagged.stderr()),
+        "a limit nobody reaches changes nothing"
     );
-    let roomy = c
-        .run(&["list", "--tag", "t", "--limit", "3"])
-        .assert_ok()
-        .stdout();
-    assert_eq!(roomy, tagged, "a limit nobody reaches changes nothing");
-    let unfiltered = c.run(&["list", "--limit", "1"]).assert_ok().stdout();
-    assert!(
-        unfiltered.ends_with("\n1 of 4 nodes shown; raise --limit for more\n"),
-        "{unfiltered}"
+    let unfiltered = c.run(&["list", "--limit", "1"]).assert_ok();
+    assert_eq!(unfiltered.stdout().lines().count(), 1);
+    assert_eq!(
+        unfiltered.stderr(),
+        "1 of 4 nodes shown; raise --limit for more\n"
     );
 
-    let json = c
-        .run(&["list", "--json", "--limit", "1"])
-        .assert_ok()
-        .stdout();
-    let listed: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(listed["items"].as_array().unwrap().len(), 1, "{json}");
-    assert_eq!(listed["total"], 4, "{json}");
+    let json = c.run(&["list", "--json", "--limit", "1"]).assert_ok();
+    let listed: serde_json::Value = serde_json::from_str(&json.stdout()).unwrap();
+    assert_eq!(listed["items"].as_array().unwrap().len(), 1, "{listed}");
+    assert_eq!(listed["total"], 4, "{listed}");
+    assert_eq!(
+        json.stderr(),
+        "1 of 4 nodes shown; raise --limit for more\n"
+    );
 
     let single = Corpus::new();
     single.run(&["new", "Alone"]).assert_ok();
-    let one = single.run(&["list"]).assert_ok().stdout();
-    assert!(one.ends_with("\n1 of 1 node\n"), "{one}");
+    let one = single.run(&["list"]).assert_ok();
+    assert_eq!(one.stdout().lines().count(), 1, "{}", one.stdout());
+    assert_eq!(one.stderr(), "1 of 1 node\n");
 }
 
+/// Piped, `list` is one line per node and nothing else, so `wc -l` counts
+/// nodes; the count of the corpus is on stderr.
+#[test]
+fn piped_list_has_one_line_per_record() {
+    let c = Corpus::new();
+    for n in 0..150 {
+        c.run(&["new", &format!("Filler {n}"), "--tag", "t", "--no-commit"])
+            .assert_ok();
+    }
+    c.run(&["new", "Untagged"]).assert_ok();
+    let listed = c.run(&["list", "--tag", "t"]).assert_ok();
+    let out = listed.stdout();
+    assert_eq!(out.lines().count(), 150, "{out}");
+    assert!(out.lines().all(|l| l.starts_with("seed ")), "{out}");
+    assert_eq!(listed.stderr(), "150 of 151 nodes\n");
+}
+
+/// `--limit` cuts the inbox to its oldest entries. How many wait, and how
+/// many the cut left out, are on stderr.
 #[test]
 fn inbox_limit_shows_the_oldest_and_counts_the_rest() {
     let c = Corpus::new();
     for text in ["first thought", "second thought", "third thought"] {
         c.run(&["capture", "--quiet", text]).assert_ok();
     }
-    let all = c.run(&["inbox"]).assert_ok().stdout();
+    let all = c.run(&["inbox"]).assert_ok();
+    assert_eq!(all.stdout().lines().count(), 3, "{}", all.stdout());
+    assert_eq!(all.stderr(), "3 waiting. Promote or drop each one.\n");
+
+    let cut = c.run(&["inbox", "--limit", "2"]).assert_ok();
+    let listed = cut.stdout();
+    assert_eq!(listed.lines().count(), 2, "{listed}");
     assert!(
-        all.contains("3 waiting. Promote or drop each one."),
-        "{all}"
+        listed.contains("first thought") && listed.contains("second thought"),
+        "{listed}"
+    );
+    assert!(!listed.contains("third thought"), "{listed}");
+    assert_eq!(
+        cut.stderr(),
+        "2 of 3 waiting shown; raise --limit for more. Promote or drop each one.\n"
     );
 
-    let cut = c.run(&["inbox", "--limit", "2"]).assert_ok().stdout();
+    let json = c.run(&["inbox", "--json", "--limit", "1"]).assert_ok();
+    let listed: serde_json::Value = serde_json::from_str(&json.stdout()).unwrap();
+    assert_eq!(listed["items"].as_array().unwrap().len(), 1, "{listed}");
+    assert_eq!(listed["items"][0]["text"], "first thought", "{listed}");
+    assert_eq!(listed["total"], 3, "{listed}");
     assert!(
-        cut.contains("first thought") && cut.contains("second thought"),
-        "{cut}"
+        json.stderr()
+            .starts_with("1 of 3 waiting shown; raise --limit"),
+        "{}",
+        json.stderr()
     );
-    assert!(!cut.contains("third thought"), "{cut}");
-    assert!(
-        cut.contains("2 of 3 waiting shown; raise --limit for more. Promote or drop each one."),
-        "{cut}"
-    );
-
-    let json = c
-        .run(&["inbox", "--json", "--limit", "1"])
-        .assert_ok()
-        .stdout();
-    let listed: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(listed["items"].as_array().unwrap().len(), 1, "{json}");
-    assert_eq!(listed["items"][0]["text"], "first thought", "{json}");
-    assert_eq!(listed["total"], 3, "{json}");
+    let uncut = c.run(&["inbox", "--json"]).assert_ok();
+    assert_eq!(uncut.stderr(), "", "a plain count is for a person");
 }
 
 /// `review --limit` keeps the first N findings under each heading, so a
-/// crowded section cannot push a short one out, and says what it cut. With
-/// `--short` it keeps the first N lines.
+/// crowded section cannot push a short one out, and says what it cut: in the
+/// markdown, which is the file `--out` writes, and on stderr. With `--short`
+/// it keeps the first N lines, and says so on stderr alone.
 #[test]
 fn review_limit_cuts_each_section_and_the_short_form() {
     let c = Corpus::new();
@@ -6690,44 +6814,50 @@ fn review_limit_cuts_each_section_and_the_short_form() {
     c.run(&["capture", "--quiet", "an old capture"]).assert_ok();
     set_inbox_stamp_for(&c.root, "an old capture", &stamp_days_ago(20));
 
-    let whole = c.run(&["review"]).assert_ok().stdout();
-    assert_eq!(whole.matches("`cold-").count(), 3, "{whole}");
-    assert!(!whole.contains("--limit"), "{whole}");
+    let whole = c.run(&["review"]).assert_ok();
+    assert_eq!(whole.stdout().matches("`cold-").count(), 3);
+    assert!(!whole.stdout().contains("--limit"), "{}", whole.stdout());
+    assert_eq!(whole.stderr(), "");
 
-    let cut = c.run(&["review", "--limit", "1"]).assert_ok().stdout();
-    assert_eq!(cut.matches("`cold-").count(), 1, "{cut}");
+    let cut = c.run(&["review", "--limit", "1"]).assert_ok();
+    let report = cut.stdout();
+    assert_eq!(report.matches("`cold-").count(), 1, "{report}");
     assert!(
-        cut.contains("- _… and 2 more; raise --limit for more_"),
-        "{cut}"
+        report.contains("- _… and 2 more; raise --limit for more_"),
+        "{report}"
     );
     assert!(
-        cut.contains("1 capture waiting over fourteen days"),
-        "the inbox section keeps its one finding:\n{cut}"
+        report.contains("1 capture waiting over fourteen days"),
+        "the inbox section keeps its one finding:\n{report}"
     );
-    let json = c
-        .run(&["review", "--json", "--limit", "1"])
-        .assert_ok()
-        .stdout();
-    let items: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(items["items"].as_array().unwrap().len(), 2, "{json}");
-    assert_eq!(items["total"], 4, "every rule's findings: {json}");
+    assert_eq!(
+        cut.stderr(),
+        "2 findings not shown; raise --limit for more\n"
+    );
+    let json = c.run(&["review", "--json", "--limit", "1"]).assert_ok();
+    let items: serde_json::Value = serde_json::from_str(&json.stdout()).unwrap();
+    assert_eq!(items["items"].as_array().unwrap().len(), 2, "{items}");
+    assert_eq!(items["total"], 4, "every rule's findings: {items}");
+    assert_eq!(json.stderr(), cut.stderr(), "said in every mode");
 
-    let short = c.run(&["review", "--short"]).assert_ok().stdout();
-    assert_eq!(short.lines().count(), 4, "{short}");
-    let short_cut = c
-        .run(&["review", "--short", "--limit", "2"])
-        .assert_ok()
-        .stdout();
-    let lines: Vec<&str> = short_cut.lines().collect();
-    assert_eq!(lines.len(), 3, "{short_cut}");
-    assert_eq!(lines[2], "… and 2 more; raise --limit for more");
+    let short = c.run(&["review", "--short"]).assert_ok();
+    assert_eq!(short.stdout().lines().count(), 4, "{}", short.stdout());
+    assert_eq!(short.stderr(), "");
+    let short_cut = c.run(&["review", "--short", "--limit", "2"]).assert_ok();
+    assert_eq!(
+        short_cut.stdout().lines().count(),
+        2,
+        "{}",
+        short_cut.stdout()
+    );
+    assert_eq!(short_cut.stderr(), "2 of 4 shown; raise --limit for more\n");
     let json = c
         .run(&["review", "--short", "--json", "--limit", "2"])
-        .assert_ok()
-        .stdout();
-    let items: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(items["items"].as_array().unwrap().len(), 2, "{json}");
-    assert_eq!(items["total"], 4, "{json}");
+        .assert_ok();
+    let items: serde_json::Value = serde_json::from_str(&json.stdout()).unwrap();
+    assert_eq!(items["items"].as_array().unwrap().len(), 2, "{items}");
+    assert_eq!(items["total"], 4, "{items}");
+    assert_eq!(json.stderr(), short_cut.stderr(), "said in every mode");
 }
 
 /// Run a `--json` command and parse what it printed.
@@ -6844,9 +6974,9 @@ fn review_limit_json_envelope() {
 fn reports_count_in_the_singular_for_one() {
     let c = Corpus::new();
     c.run(&["new", "Alone"]).assert_ok();
-    c.run(&["check"])
-        .assert_ok()
-        .says("1 node, 0 errors, 0 warnings");
+    let checked = c.run(&["check"]).assert_ok();
+    assert_eq!(checked.stdout(), "", "no findings, so no payload");
+    assert_eq!(checked.stderr(), "1 node, 0 errors, 0 warnings\n");
     let review = c.run(&["review", "--since", "1"]).assert_ok().stdout();
     assert!(
         review.contains("## Hypotheses untouched for 1 day\n"),
@@ -6856,6 +6986,91 @@ fn reports_count_in_the_singular_for_one() {
         review.contains("## Seeds untouched for 1 day\n"),
         "{review}"
     );
+}
+
+/// A query that finds nothing exits 0 with nothing on stdout and one line
+/// on stderr saying so, in every mode; `--json` still prints its empty
+/// document (STD-01 §R16).
+#[test]
+fn empty_results_leave_stdout_empty_and_explain_on_stderr() {
+    let empty = Corpus::new();
+    let c = Corpus::new();
+    git_init(&c.root);
+    git_commit_at(&c.root, "2020-01-01", "initial repository");
+    let root = c.seed("a root thought", "Root thought");
+    c.run(&["new", "Leaf", "--parent", &root]).assert_ok();
+
+    for (corpus, args, said) in [
+        (&c, vec!["list", "--status", "refuted"], "no nodes match"),
+        (&c, vec!["near", "xyzzy"], "nothing near"),
+        (&c, vec!["impact", "leaf"], "nothing descends from"),
+        (
+            &c,
+            vec!["review", "--short", "--tag", "none"],
+            "nothing needs attention",
+        ),
+        (&empty, vec!["tag", "list"], "no tags"),
+        (&empty, vec!["inbox"], "inbox is empty"),
+        (&c, vec!["log", "leaf"], "no commits touched this node"),
+    ] {
+        let human = corpus.run(&args).assert_ok();
+        assert_eq!(human.stdout(), "", "`neb {}`", human.args);
+        assert_eq!(human.stderr().lines().count(), 1, "`neb {}`", human.args);
+        assert!(human.stderr().contains(said), "{}", human.stderr());
+
+        let json = corpus
+            .run(&[["--json"].as_slice(), &args].concat())
+            .assert_ok();
+        let doc: serde_json::Value = serde_json::from_str(&json.stdout())
+            .unwrap_or_else(|e| panic!("`neb {}`: {e}\n{}", json.args, json.stdout()));
+        // `near` is always the capped-list envelope (STD-01 §R34).
+        let records = if doc.is_object() { &doc["items"] } else { &doc };
+        assert_eq!(records, &serde_json::json!([]), "`neb {}`", json.args);
+        assert_eq!(json.stderr(), human.stderr(), "`neb {}`", json.args);
+    }
+}
+
+/// A notice that `--limit` or `--depth` cut the result is stderr's in every
+/// mode, and stdout never mentions the bound (STD-01 §R12, §R34).
+#[test]
+fn limit_notices_go_to_stderr_in_every_mode() {
+    let c = Corpus::new();
+    let root = c.seed("a root thought", "Root");
+    for title in ["One", "Two"] {
+        c.run(&["new", title, "--parent", &root]).assert_ok();
+        set_updated(&c.node_file(&title.to_lowercase()), &date_days_ago(100));
+    }
+    for text in ["first", "second", "third"] {
+        c.run(&["capture", "-q", text]).assert_ok();
+    }
+    for args in [
+        vec!["list", "--limit", "1"],
+        vec!["inbox", "--limit", "1"],
+        vec!["review", "--short", "--limit", "1"],
+        vec!["trace", &root, "--down", "--depth", "0"],
+    ] {
+        for json in [false, true] {
+            let args = if json {
+                [["--json"].as_slice(), &args].concat()
+            } else {
+                args.clone()
+            };
+            let run = c.run(&args).assert_ok();
+            let out = run.stdout();
+            assert!(
+                !out.contains("--limit") && !out.contains("--depth"),
+                "`neb {}`:\n{out}",
+                run.args
+            );
+            let err = run.stderr();
+            assert_eq!(err.lines().count(), 1, "`neb {}`:\n{err}", run.args);
+            assert!(
+                err.contains("raise --limit for more") || err.contains("raise --depth for more"),
+                "`neb {}`:\n{err}",
+                run.args
+            );
+        }
+    }
 }
 
 #[test]
@@ -7422,13 +7637,8 @@ fn handoff_cites_the_record_and_closes_the_node_in_one_write() {
     assert_eq!(v["handed_off_to"], "H012");
     assert_eq!(v["observatory"][0]["path"], record.to_str().unwrap());
 
-    // `trace` names the hand-off on the node's own line, both ways.
-    c.run(&["trace", &id])
-        .assert_ok()
-        .says(&format!("{id} Scarcity wake  handed off to H012"));
-    c.run(&["trace", &parent, "--down"])
-        .assert_ok()
-        .says(&format!("{id} Scarcity wake  handed off to H012"));
+    // `trace` names the hand-off in its payload; the tree a terminal gets
+    // shows it on the node's own line (`render::tree`'s unit tests).
     let walk: serde_json::Value =
         serde_json::from_str(&c.run(&["--json", "trace", &id]).assert_ok().stdout()).unwrap();
     assert_eq!(walk[0]["handed_off_to"], "H012");
@@ -7495,18 +7705,142 @@ fn handoff_with_no_observatory_root_accepts_the_id_and_warns_as_cite_does() {
             "--note",
             "n",
         ])
-        .assert_ok()
-        .stdout();
-    let warning = cited.lines().last().unwrap().to_owned();
-    assert!(warning.starts_with("No observatory root set"), "{cited}");
+        .assert_ok();
+    assert_eq!(
+        cited.stdout(),
+        format!("{other} r1\n"),
+        "the reference alone"
+    );
+    let warning = cited.stderr();
+    assert!(warning.starts_with("No observatory root set"), "{warning}");
+    assert_eq!(warning.lines().count(), 1, "{warning}");
 
-    let out = c
-        .run(&["handoff", &id, "H012", "--note", "n"])
-        .assert_ok()
-        .stdout();
-    assert!(out.ends_with(&format!("\n\n{warning}\n")), "{out}");
+    let out = c.run(&["handoff", &id, "H012", "--note", "n"]).assert_ok();
+    assert!(
+        !out.stdout().contains("No observatory root"),
+        "{}",
+        out.stdout()
+    );
+    assert_eq!(out.stderr(), warning, "the same one line on stderr");
     let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
     assert!(raw.contains("why: handed off to H012"), "{raw}");
+}
+
+/// Hints and advice are stderr's, so stdout holds only what a verb did or
+/// read (STD-01 §R12): `init`'s `--set-root` hint, `cite`'s and `handoff`'s
+/// notes about the record and a missing note, and `config`'s advice.
+#[test]
+#[allow(clippy::too_many_lines)] // One walk through every hint is easier to audit than five.
+fn init_cite_handoff_and_config_hints_are_on_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let scratch = dir.path().join("scratch");
+    let init = run_from_home(&dir.path().join("home"), Some(&scratch), &["init"], None).assert_ok();
+    assert_eq!(
+        init.stdout(),
+        format!("corpus ready at {}\n", scratch.display())
+    );
+    assert!(init.stderr().contains("--set-root"), "{}", init.stderr());
+
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let other = c.seed("another idea", "Another idea");
+
+    let cited = c
+        .run(&["cite", &id, "--kind", "observatory", "--uri", "H012"])
+        .assert_ok();
+    assert_eq!(cited.stdout(), format!("{id} r1\n"));
+    let stderr = cited.stderr();
+    let said: Vec<&str> = stderr.lines().collect();
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(said[0].starts_with("No observatory root set"), "{said:?}");
+    assert!(said[1].starts_with("No note."), "{said:?}");
+
+    let handed = c.run(&["handoff", &other, "H012"]).assert_ok();
+    assert!(
+        handed
+            .stdout()
+            .starts_with(&format!("{other} seed -> abandoned")),
+        "{}",
+        handed.stdout()
+    );
+    assert_eq!(handed.stdout().lines().count(), 1, "{}", handed.stdout());
+    assert_eq!(handed.stderr(), cited.stderr(), "the same two lines");
+
+    let (obs, record) = observatory_with_h012(c.workdir());
+    let obs = obs.to_str().unwrap();
+    let env = [("OBSERVATORY_ROOT", obs)];
+    let resolved = c
+        .run_with_env(
+            &[
+                "cite",
+                &id,
+                "--kind",
+                "observatory",
+                "--uri",
+                "H012",
+                "--note",
+                "n",
+            ],
+            &env,
+        )
+        .assert_ok();
+    assert_eq!(
+        resolved.stdout(),
+        format!("{id} r2\n{}\n", record.display()),
+        "the record's path is the result"
+    );
+    assert_eq!(resolved.stderr(), "");
+    let unresolved = c
+        .run_with_env(
+            &[
+                "cite",
+                &id,
+                "--kind",
+                "observatory",
+                "--uri",
+                "H999",
+                "--note",
+                "n",
+            ],
+            &env,
+        )
+        .assert_ok();
+    assert_eq!(unresolved.stdout(), format!("{id} r3\n"));
+    assert!(
+        unresolved
+            .stderr()
+            .starts_with("`H999` does not resolve under"),
+        "{}",
+        unresolved.stderr()
+    );
+
+    let commit = c.run(&["config", "commit"]).assert_ok();
+    assert_eq!(commit.stdout(), "off\n");
+    assert!(
+        commit.stderr().contains("neb config commit on"),
+        "{}",
+        commit.stderr()
+    );
+    let commit = c.run(&["--json", "config", "commit"]).assert_ok();
+    assert_eq!(commit.stderr(), "", "advice is for a person");
+
+    let unset = c.run(&["config", "observatory-root"]).assert_ok();
+    assert_eq!(unset.stdout(), "");
+    assert!(
+        unset.stderr().starts_with("no observatory root; set one"),
+        "{}",
+        unset.stderr()
+    );
+    let saved = c
+        .run_with_env(&["config", "observatory-root", obs], &env)
+        .assert_ok();
+    assert!(saved.stdout().starts_with(obs), "{}", saved.stdout());
+    assert_eq!(saved.stdout().lines().count(), 1, "{}", saved.stdout());
+    assert!(
+        saved.stderr().contains("outranks it while exported"),
+        "{}",
+        saved.stderr()
+    );
 }
 
 /// Each refusal exits non-zero, writes nothing, and under `--json` is the
@@ -8782,10 +9116,61 @@ fn handoff_is_one_commit_of_the_node() {
     assert_eq!(head_paths(&c.root), [format!("nodes/{id}.md")]);
 }
 
+/// `--quiet` is the id alone, so `E=$(neb capture -q …)` holds just the id:
+/// the `committed` line is stderr's (STD-01 §R12). `promote -q` leaves the
+/// path to `--json`.
+#[test]
+fn quiet_capture_and_promote_print_the_id_alone() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+
+    let captured = c.run(&["capture", "-q", "x2 probe thought"]).assert_ok();
+    let entry = captured.stdout();
+    assert_eq!(entry.lines().count(), 1, "{entry:?}");
+    let entry = entry.trim_end().to_string();
+    assert_eq!(captured.stdout(), format!("{entry}\n"));
+    assert!(
+        captured.stderr().contains("committed "),
+        "{}",
+        captured.stderr()
+    );
+
+    let promoted = c.run(&["promote", &entry, "-q"]).assert_ok();
+    assert_eq!(promoted.stdout(), "x2-probe-thought\n");
+    assert!(
+        promoted.stderr().contains("committed "),
+        "{}",
+        promoted.stderr()
+    );
+    assert!(c.node_file("x2-probe-thought").exists());
+}
+
+/// A write's `committed <hash>` goes to stderr in human mode, and nowhere
+/// under `--json`, so stdout is the verb's result alone either way.
+#[test]
+fn commit_notice_is_on_stderr() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let id = c.run(&["new", "An idea"]).assert_ok().stdout_trim();
+
+    let noted = c.run(&["note", &id, "x"]).assert_ok();
+    assert_eq!(noted.stdout(), format!("{id}\n"));
+    let head = git(&c.root, &["rev-parse", "HEAD"]);
+    assert_eq!(noted.stderr(), format!("committed {}\n", &head[..7]));
+
+    let json = c.run(&["--json", "note", &id, "x"]).assert_ok();
+    assert!(!json.stderr().contains("committed"), "{}", json.stderr());
+    assert!(!json.stdout().contains("committed"), "{}", json.stdout());
+    assert_eq!(log(&c.root)[0], format!("neb note {id}"), "still committed");
+}
+
 // ----------------------------------------------------------- closed stdout --
 
-/// A stdout closed under `neb`: exit 0, and not a word on stderr.
-fn assert_closed_quietly(run: &Run) {
+/// A stdout closed under `neb`: exit 0, and on stderr exactly `stderr`,
+/// what the verb says there with its stdout open. A reader that went away
+/// adds no error, and takes no notice away: counts and the `committed` line
+/// are stderr's, whoever reads stdout.
+fn assert_closed_quietly(run: &Run, stderr: &str) {
     assert_eq!(
         run.out.status.code(),
         Some(0),
@@ -8793,7 +9178,7 @@ fn assert_closed_quietly(run: &Run) {
         run.args,
         run.stderr()
     );
-    assert_eq!(run.stderr(), "", "`neb {}` said something", run.args);
+    assert_eq!(run.stderr(), stderr, "`neb {}` said something", run.args);
 }
 
 /// `neb <read> | head -1` is normal use: a reader that stops early ends the
@@ -8832,7 +9217,8 @@ fn closed_stdout_exits_zero_silently_for_reads() {
         vec!["log", &id],
         vec!["completions", "bash"],
     ] {
-        assert_closed_quietly(&c.run_closed_stdout(&args, &[], ""));
+        let open = c.run(&args).assert_ok().stderr();
+        assert_closed_quietly(&c.run_closed_stdout(&args, &[], ""), &open);
     }
 }
 
@@ -8845,7 +9231,7 @@ fn closed_stdout_exits_zero_silently_for_triage() {
         .run(&["capture", "-q", "a thought"])
         .assert_ok()
         .stdout_trim();
-    assert_closed_quietly(&c.run_closed_stdout(&["triage"], &[], "d\nq\n"));
+    assert_closed_quietly(&c.run_closed_stdout(&["triage"], &[], "d\nq\n"), "");
     assert!(
         c.run(&["inbox"]).assert_ok().stdout().contains(&entry),
         "a decision made with nobody watching was applied"
@@ -8883,7 +9269,13 @@ fn closed_stdout_still_commits_a_write() {
     ] {
         let before = log(&c.root).len();
         let run = c.run_closed_stdout(&args, &env, "");
-        assert_closed_quietly(&run);
+        let head = git(&c.root, &["rev-parse", "HEAD"]);
+        let notice = if args.contains(&"--json") {
+            String::new()
+        } else {
+            format!("committed {}\n", &head[..7])
+        };
+        assert_closed_quietly(&run, &notice);
         assert_eq!(log(&c.root).len(), before + 1, "`neb {}`", run.args);
         let last = git(&c.root, &["log", "-1", "--format=%s"]);
         assert!(

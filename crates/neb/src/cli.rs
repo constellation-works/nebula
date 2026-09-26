@@ -27,7 +27,7 @@ use nebula_core::{
     NEAR_DEFAULT, NewNode, OBSERVATORY, OBSERVATORY_ROOT_ENV, ObservatoryRoot, Origin, Promotion,
     Severity, Status, Triage, check, graph, migrate, model, ops,
 };
-use std::io::{BufRead, IsTerminal, Write};
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, ExitCode};
 
@@ -260,7 +260,8 @@ enum Command {
     Promote {
         /// Inbox entry id, from `neb inbox`.
         entry: String,
-        /// Print the id and path alone, without the nearest nodes.
+        /// Print the node id alone, without its path or the nearest nodes.
+        /// `--json` carries the path.
         #[arg(long, short)]
         quiet: bool,
         /// Node title. Defaults to the captured text.
@@ -1024,7 +1025,7 @@ pub fn main() -> ExitCode {
             if json {
                 errln!("{}", refused.json());
             } else {
-                errln!("{} {}", render::paint("31;1", "error:"), refused.prose());
+                errln!("{} {}", render::error_label(), refused.prose());
             }
             ExitCode::FAILURE
         }
@@ -1148,8 +1149,8 @@ fn edit_body(body: &str) -> std::result::Result<String, Failure> {
 }
 
 /// What every mutating arm needs to decide whether to commit and how to say
-/// so: `--no-commit` waives the setting once, and `--json` keeps the
-/// confirmation off stdout so the payload stays parseable.
+/// so: `--no-commit` waives the setting once, and `--json` leaves the
+/// `committed` notice out.
 #[derive(Clone, Copy)]
 struct CommitOpts {
     skip: bool,
@@ -1181,14 +1182,14 @@ fn note_same_as(corpus: &Corpus, entry: &InboxEntry) -> std::result::Result<(), 
     Ok(())
 }
 
-/// Say where an `observatory` reference's record is on this machine, or why
-/// it cannot be located: the lines `cite --kind observatory` and `handoff`
-/// print under their result.
+/// Say where an `observatory` reference's record is on this machine: the
+/// path on stdout, as part of what `cite --kind observatory` and `handoff`
+/// report, or why it cannot be located on stderr.
 fn print_record_location(setting: &ObservatoryRoot, record: &str) {
     match setting.root.as_deref() {
-        None => outln!(
-            "\n{}",
-            render::dim(&format!(
+        None => errln!(
+            "{}",
+            render::notice(&format!(
                 "No observatory root set, so `{record}` cannot be located. \
                  Set one with `neb config observatory-root <DIR>` or \
                  ${OBSERVATORY_ROOT_ENV}."
@@ -1196,9 +1197,9 @@ fn print_record_location(setting: &ObservatoryRoot, record: &str) {
         ),
         Some(dir) => match setting.resolve(record) {
             Some(path) => outln!("{}", render::dim(&path.display().to_string())),
-            None => outln!(
-                "\n{}",
-                render::dim(&format!(
+            None => errln!(
+                "{}",
+                render::notice(&format!(
                     "`{record}` does not resolve under {}; `check` will keep \
                      saying so until the checkout has it.",
                     dir.display()
@@ -1208,30 +1209,30 @@ fn print_record_location(setting: &ObservatoryRoot, record: &str) {
     }
 }
 
-/// The nudge after a reference written without `--note`.
+/// The nudge after a reference written without `--note`, on stderr.
 fn print_bare_note() {
-    outln!(
-        "\n{}",
-        render::dim("No note. Add one saying why it is here, or this is a link that rots.")
+    errln!(
+        "{}",
+        render::notice("No note. Add one saying why it is here, or this is a link that rots.")
     );
 }
 
-/// Commit the corpus after a write, if `config.yaml` asks for it.
+/// Write a result's [`render::Notice`] to stderr, unless `--json` leaves it
+/// out: counts and hints are for a person, while an empty or cut result is
+/// said in every mode (STD-01 §R16, §R34).
+fn notify(json: bool, notice: Option<render::Notice>) {
+    if let Some(line) = notice.and_then(|n| n.line(json)) {
+        errln!("{line}");
+    }
+}
+
+/// Commit the corpus after a write, if `config.yaml` asks for it, and say
+/// so on stderr: the notice is not the verb's payload (STD-01 §R12), so
+/// `E=$(neb capture -q …)` holds the id alone. `--json` leaves it out.
 ///
 /// Runs after the verb has printed its own result, because the write has
 /// already landed and a refusal here must never read as the write failing.
 fn commit(
-    corpus: &Corpus,
-    opts: CommitOpts,
-    verb: &str,
-    ids: &[&str],
-) -> std::result::Result<(), Failure> {
-    commit_into(&mut output::stdout(), corpus, opts, verb, ids)
-}
-
-/// [`commit`], saying so on `out` rather than on stdout directly.
-fn commit_into(
-    out: &mut impl Write,
     corpus: &Corpus,
     opts: CommitOpts,
     verb: &str,
@@ -1243,10 +1244,7 @@ fn commit_into(
     let done = ops::commit(corpus, verb, ids)?;
     if let Some(done) = done.filter(|_| !opts.json) {
         let short = done.hash.get(..7).unwrap_or(&done.hash);
-        say(
-            out,
-            &format!("{}\n", render::dim(&format!("committed {short}"))),
-        )?;
+        errln!("{}", render::notice(&format!("committed {short}")));
     }
     Ok(())
 }
@@ -1317,7 +1315,7 @@ fn triage(
 ) -> std::result::Result<(), Failure> {
     let refuse = |failure: Failure| {
         if interactive {
-            errln!("{} {}", render::paint("31;1", "error:"), failure.0.prose());
+            errln!("{} {}", render::error_label(), failure.0.prose());
             Ok(())
         } else {
             Err(failure)
@@ -1380,15 +1378,14 @@ fn triage(
             Ok(step) => {
                 say(out, &render::step(&step))?;
                 match &step {
-                    Step::Promoted { entry, created } => commit_into(
-                        out,
+                    Step::Promoted { entry, created } => commit(
                         corpus,
                         commits,
                         "promote",
                         &[&entry.id, &created.doc.node.id],
                     )?,
                     Step::Dropped { entry } => {
-                        commit_into(out, corpus, commits, "drop", &[&entry.id])?;
+                        commit(corpus, commits, "drop", &[&entry.id])?;
                     }
                     Step::Titled { .. } => continue,
                     Step::Skipped { .. } | Step::Quit => {}
@@ -1445,9 +1442,12 @@ fn run(cli: Cli) -> Outcome {
                         Corpus::root_config_path()?.display()
                     );
                 } else if root_config_path.is_some() {
-                    outln!(
-                        "run `neb init {} --set-root` to make this corpus the machine default",
-                        target.display()
+                    errln!(
+                        "{}",
+                        render::notice(&format!(
+                            "run `neb init {} --set-root` to make this corpus the machine default",
+                            target.display()
+                        ))
                     );
                 }
             }
@@ -1482,6 +1482,7 @@ fn run(cli: Cli) -> Outcome {
             } else {
                 out!("{}", render::check(&report));
             }
+            notify(json, Some(render::check_tally(&report)));
             Ok(
                 if report.findings.iter().all(|f| f.level != Severity::Error) {
                     ok
@@ -1508,6 +1509,7 @@ fn run(cli: Cli) -> Outcome {
             } else {
                 out!("{}", render::migration(&report));
             }
+            notify(json, Some(render::migration_notice(&report)));
             // The corpus is at this build's schema now, so it opens; the
             // migration lands as its own commit when the setting is on.
             commit(&Corpus::open(root)?, commits, "migrate", &[])?;
@@ -1542,7 +1544,10 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&setting)?;
             } else {
-                out!("{}", render::observatory_root(&setting, dir.is_some()));
+                out!("{}", render::observatory_root(&setting));
+            }
+            for note in render::observatory_root_notes(&setting, dir.is_some()) {
+                notify(json, Some(note));
             }
             if drop_legacy {
                 commit(&corpus, commits, "config", &["observatory-root"])?;
@@ -1565,6 +1570,7 @@ fn run(cli: Cli) -> Outcome {
             } else {
                 out!("{}", render::commit_setting(setting));
             }
+            notify(json, render::commit_setting_hint(setting));
             // Turning it on records itself; turning it off leaves the file
             // for the next commit you make by hand, because off means off.
             if changed {
@@ -1637,12 +1643,13 @@ fn run(cli: Cli) -> Outcome {
             let corpus = Corpus::open(root)?;
             let mut inbox = corpus.inbox()?;
             let cut = cap(&mut inbox.0, limit);
+            let notice = render::inbox_notice(inbox.0.len(), cut.0);
             if json {
                 out_json(&json::List::new(inbox.0, limit.map(|_| cut)))?;
             } else {
-                let (waiting, _) = cut;
-                out!("{}", render::inbox(&inbox, waiting));
+                out!("{}", render::inbox(&inbox));
             }
+            notify(json, Some(notice));
             Ok(ok)
         }
 
@@ -1678,6 +1685,8 @@ fn run(cli: Cli) -> Outcome {
             )?;
             if json {
                 out_json(&json::Created::from(&created))?;
+            } else if quiet {
+                outln!("{}", render::bold(&created.doc.node.id));
             } else {
                 outln!(
                     "{} {}",
@@ -1710,12 +1719,11 @@ fn run(cli: Cli) -> Outcome {
                 return Err(Error::Interactive("triage".into()).into());
             }
             let corpus = Corpus::open(root)?;
-            let stdin = std::io::stdin();
-            let interactive = stdin.is_terminal();
+            let interactive = output::stdin_on_terminal();
             triage(
                 &corpus,
                 by,
-                &mut stdin.lock(),
+                &mut std::io::stdin().lock(),
                 &mut output::stdout(),
                 interactive,
                 commits,
@@ -1904,6 +1912,7 @@ fn run(cli: Cli) -> Outcome {
             } else {
                 out!("{}", render::tags(&counts));
             }
+            notify(json, render::tags_notice(&counts));
             Ok(ok)
         }
 
@@ -2092,6 +2101,7 @@ fn run(cli: Cli) -> Outcome {
             } else {
                 out!("{}", render::history(&history));
             }
+            notify(json, render::history_notice(&history));
             Ok(ok)
         }
 
@@ -2108,9 +2118,12 @@ fn run(cli: Cli) -> Outcome {
                 let nodes = listing.0.iter().map(json::Node::from).collect();
                 out_json(&json::List::new(nodes, limit.map(|_| cut)))?;
             } else {
-                let (matched, _) = cut;
-                out!("{}", render::list(&listing.0, matched, docs.len()));
+                out!("{}", render::list(&listing.0));
             }
+            notify(
+                json,
+                Some(render::list_notice(listing.0.len(), cut.0, docs.len())),
+            );
             Ok(ok)
         }
 
@@ -2126,14 +2139,13 @@ fn run(cli: Cli) -> Outcome {
             // On stderr in every mode, so a capped answer never reads as
             // the whole one and the payload stays all stdout holds (STD-01
             // §R34, §R12).
-            if truncated {
-                errln!("{} of {matched} shown; raise -k for more", near.0.len());
-            }
+            let notice = render::near_notice(near.0.len(), matched);
             if json {
                 out_json(&json::Capped::new(near.0, (matched, truncated)))?;
             } else {
                 out!("{}", render::near(&near));
             }
+            notify(json, notice);
             Ok(ok)
         }
 
@@ -2143,17 +2155,21 @@ fn run(cli: Cli) -> Outcome {
             let direction = if down { Direction::Down } else { Direction::Up };
             let graph = Graph::build(&docs)?;
             let walk = graph::trace_within(&graph, &node, direction, depth)?;
+            // A bounded walk's `total` is what the whole walk reaches.
+            let cut = depth
+                .map(|_| graph::trace(&graph, &node, direction))
+                .transpose()?
+                .map(|whole| (whole.0.len(), walk.0.len() < whole.0.len()));
             if json {
-                // A bounded walk's `total` is what the whole walk reaches.
-                let cut = depth
-                    .map(|_| graph::trace(&graph, &node, direction))
-                    .transpose()?
-                    .map(|whole| (whole.0.len(), walk.0.len() < whole.0.len()));
                 let steps = walk.0.iter().map(json::TraceNode::from).collect();
                 out_json(&json::List::new(steps, cut))?;
+            } else if output::stdout_on_terminal() {
+                out!("{}", render::tree(&walk, direction));
             } else {
-                out!("{}", render::tree(&docs, &node, direction, depth));
+                out!("{}", render::trace_lines(&walk));
             }
+            let whole = cut.map_or(walk.0.len(), |(total, _)| total);
+            notify(json, render::trace_notice(walk.0.len(), whole, depth));
             Ok(ok)
         }
 
@@ -2166,6 +2182,7 @@ fn run(cli: Cli) -> Outcome {
             } else {
                 out!("{}", render::impact(&report, &node));
             }
+            notify(json, render::impact_notice(&report));
             Ok(ok)
         }
 
@@ -2226,6 +2243,7 @@ fn run(cli: Cli) -> Outcome {
                 )
             };
             write_report(out.as_deref(), &text)?;
+            notify(json, render::review_notice(&omitted));
             Ok(ok)
         }
 
@@ -2249,12 +2267,13 @@ fn short_review(
     let docs = corpus.load_all()?;
     let mut report = graph::open(&Graph::build(&docs)?, &corpus.inbox()?, tags)?;
     let cut = cap(&mut report.0, limit);
+    let notice = render::open_notice(report.0.len(), cut.0);
     if json {
         out_json(&json::List::new(report.0, limit.map(|_| cut)))?;
     } else {
-        let (all, _) = cut;
-        out!("{}", render::open(&report, all - report.0.len()));
+        out!("{}", render::open(&report));
     }
+    notify(json, notice);
     Ok(())
 }
 

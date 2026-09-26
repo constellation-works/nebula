@@ -1,6 +1,7 @@
 //! The multi-line renderings: one function per report the core returns.
 
-use super::{bold, count, dim, paint, status_badge};
+use super::{Notice, bold, count, dim, paint, status_badge};
+use crate::output::Role;
 use nebula_core::{
     Band, CommitSetting, EdgeType, HUMAN, INBOX_DAYS, Impact, Inbox, MigrationReport, Near,
     Neighbour, NodeView, OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, OpenReport,
@@ -105,66 +106,56 @@ pub fn node(view: &NodeView) -> String {
     out
 }
 
-/// Where `observatory` references resolve, and what set that. `saved` is
-/// true right after `neb config observatory-root <DIR>`, so a machine
-/// setting the environment outranks says so rather than seeming lost.
-pub fn observatory_root(setting: &ObservatoryRoot, saved: bool) -> String {
-    let mut out = match (&setting.root, setting.source) {
-        (Some(root), ObservatorySource::Env) => format!(
-            "{} {}\n",
-            bold(&root.display().to_string()),
-            dim(&format!("(${OBSERVATORY_ROOT_ENV})"))
-        ),
-        (Some(root), ObservatorySource::Machine) => format!(
-            "{} {}\n",
-            bold(&root.display().to_string()),
-            dim("(this machine: ~/.config/nebula/observatory-root)")
-        ),
-        (Some(root), ObservatorySource::Config) => format!(
-            "{} {}\n{}\n",
-            bold(&root.display().to_string()),
-            dim("(config.yaml, legacy)"),
-            dim(&format!(
-                "config.yaml travels with the corpus, and this path is one machine's. Give \
-                 each machine its own with `neb config observatory-root <DIR>` or \
-                 ${OBSERVATORY_ROOT_ENV}, then remove the key with \
-                 `neb config observatory-root --drop-legacy`."
-            ))
-        ),
-        _ => format!(
-            "{}\n",
-            dim(&format!(
-                "no observatory root; set one with `neb config observatory-root <DIR>` or \
-                 ${OBSERVATORY_ROOT_ENV}"
-            ))
-        ),
+/// Where `observatory` references resolve, and what set that: one line,
+/// or nothing when no root is set.
+pub fn observatory_root(setting: &ObservatoryRoot) -> String {
+    let source = match setting.source {
+        ObservatorySource::Env => format!("(${OBSERVATORY_ROOT_ENV})"),
+        ObservatorySource::Machine => "(this machine: ~/.config/nebula/observatory-root)".into(),
+        ObservatorySource::Config => "(config.yaml, legacy)".into(),
+        ObservatorySource::Unset => return String::new(),
     };
+    setting.root.as_ref().map_or_else(String::new, |root| {
+        format!("{} {}\n", bold(&root.display().to_string()), dim(&source))
+    })
+}
+
+/// The advice around an observatory root, for stderr. `saved` is true right
+/// after `neb config observatory-root <DIR>`, so a machine setting the
+/// environment outranks says so rather than seeming lost.
+pub fn observatory_root_notes(setting: &ObservatoryRoot, saved: bool) -> Vec<Notice> {
+    let mut notes = Vec::new();
+    match (&setting.root, setting.source) {
+        (Some(_), ObservatorySource::Config) => notes.push(Notice::human(format!(
+            "config.yaml travels with the corpus, and this path is one machine's. Give \
+             each machine its own with `neb config observatory-root <DIR>` or \
+             ${OBSERVATORY_ROOT_ENV}, then remove the key with \
+             `neb config observatory-root --drop-legacy`."
+        ))),
+        (Some(_), _) => {}
+        (None, _) => notes.push(Notice::human(format!(
+            "no observatory root; set one with `neb config observatory-root <DIR>` or \
+             ${OBSERVATORY_ROOT_ENV}"
+        ))),
+    }
     if saved && setting.source == ObservatorySource::Env {
-        let _ = writeln!(
-            out,
-            "{}",
-            dim(&format!(
-                "Saved for this machine, but ${OBSERVATORY_ROOT_ENV} outranks it while exported."
-            ))
-        );
+        notes.push(Notice::human(format!(
+            "Saved for this machine, but ${OBSERVATORY_ROOT_ENV} outranks it while exported."
+        )));
     }
     if let Some(legacy) = setting
         .legacy
         .as_ref()
         .filter(|_| setting.source != ObservatorySource::Config)
     {
-        let _ = writeln!(
-            out,
-            "{}",
-            dim(&format!(
-                "config.yaml still carries a legacy observatory_root ({}), ignored here; \
-                 once every machine has its own setting, remove it with \
-                 `neb config observatory-root --drop-legacy`.",
-                legacy.display()
-            ))
-        );
+        notes.push(Notice::human(format!(
+            "config.yaml still carries a legacy observatory_root ({}), ignored here; \
+             once every machine has its own setting, remove it with \
+             `neb config observatory-root --drop-legacy`.",
+            legacy.display()
+        )));
     }
-    out
+    notes
 }
 
 /// Whether writes are committed, as `neb config commit` reports it.
@@ -172,35 +163,38 @@ pub fn commit_setting(setting: CommitSetting) -> String {
     if setting.enabled {
         format!("{} {}\n", bold("on"), dim("(config.yaml)"))
     } else {
-        format!(
-            "{}\n",
-            dim("off; turn it on with `neb config commit on` once the corpus is a git repository")
-        )
+        "off\n".to_string()
     }
 }
 
-/// Captures waiting to be promoted or dropped. `waiting` is how many there
-/// are in all, which is more than `inbox` holds when `--limit` cut it.
-pub fn inbox(inbox: &Inbox, waiting: usize) -> String {
-    if waiting == 0 {
-        return format!("{}\n", dim("inbox is empty"));
-    }
+/// How to turn committing on, when it is off.
+pub fn commit_setting_hint(setting: CommitSetting) -> Option<Notice> {
+    (!setting.enabled).then(|| {
+        Notice::human("turn it on with `neb config commit on` once the corpus is a git repository")
+    })
+}
+
+/// Captures waiting to be promoted or dropped, one line each.
+pub fn inbox(inbox: &Inbox) -> String {
     let mut out = String::new();
     for e in &inbox.0 {
         let _ = writeln!(out, "{} {} {}", bold(&e.id), dim(&e.at), e.text);
     }
-    let shown = inbox.0.len();
-    let tally = if shown < waiting {
-        format!("{shown} of {waiting} waiting shown; raise --limit for more.")
-    } else {
-        format!("{waiting} waiting.")
-    };
-    let _ = writeln!(
-        out,
-        "\n{}",
-        dim(&format!("{tally} Promote or drop each one."))
-    );
     out
+}
+
+/// How many captures wait. `waiting` is how many there are in all, which is
+/// more than `shown` when `--limit` cut the listing.
+pub fn inbox_notice(shown: usize, waiting: usize) -> Notice {
+    if waiting == 0 {
+        Notice::always("inbox is empty")
+    } else if shown < waiting {
+        Notice::always(format!(
+            "{shown} of {waiting} waiting shown; raise --limit for more. Promote or drop each one."
+        ))
+    } else {
+        Notice::human(format!("{waiting} waiting. Promote or drop each one."))
+    }
 }
 
 /// One neighbour as a line: band, status, id, title, and any link it
@@ -222,12 +216,7 @@ pub(super) fn neighbour(n: &Neighbour) -> String {
 
 /// A band, padded so the columns after it line up.
 fn band(b: Band) -> String {
-    let text = format!("{b:<6}");
-    match b {
-        Band::Strong => bold(&text),
-        Band::Some => text,
-        Band::Weak => dim(&text),
-    }
+    paint(Role::of("band", &b.to_string()), &format!("{b:<6}"))
 }
 
 /// The edges a neighbour already shares with the node `near` was asked
@@ -265,18 +254,26 @@ fn linked(n: &Neighbour) -> Option<String> {
 /// The nodes closest to a query, best first, as `near` prints them.
 pub fn near(near: &Near) -> String {
     let mut out = String::new();
-    if near.0.is_empty() {
-        let _ = writeln!(
-            out,
-            "{}",
-            dim("nothing near: no node shares a word with this")
-        );
-        return out;
-    }
     for n in &near.0 {
         let _ = writeln!(out, "{}", neighbour(n));
     }
     out
+}
+
+/// The notice for `near`: no node shares a word with the query, or `-k`
+/// cut the `matched` nodes that do to the `shown` best.
+pub fn near_notice(shown: usize, matched: usize) -> Option<Notice> {
+    if matched == 0 {
+        Some(Notice::always(
+            "nothing near: no node shares a word with this",
+        ))
+    } else if shown < matched {
+        Some(Notice::always(format!(
+            "{shown} of {matched} shown; raise -k for more"
+        )))
+    } else {
+        None
+    }
 }
 
 /// The nearest nodes after a `capture` or a `promote`, indented under the
@@ -297,14 +294,6 @@ pub fn suggestions(near: &[Neighbour]) -> String {
 /// What descends from a node, and what contradicts it.
 pub fn impact(report: &Impact, id: &str) -> String {
     let mut out = String::new();
-    if report.0.is_empty() {
-        let _ = writeln!(
-            out,
-            "{}",
-            dim("nothing descends from or contradicts this node")
-        );
-        return out;
-    }
     for (via, heading) in [
         (Via::Descends, format!("descends from `{id}`:")),
         (Via::Contradicts, format!("contradicts `{id}`:")),
@@ -326,68 +315,104 @@ pub fn impact(report: &Impact, id: &str) -> String {
     out
 }
 
-/// Nodes that need attention. `omitted` is how many lines `--limit` cut.
-pub fn open(report: &OpenReport, omitted: usize) -> String {
+/// The notice for a node nothing descends from or contradicts.
+pub fn impact_notice(report: &Impact) -> Option<Notice> {
+    report
+        .0
+        .is_empty()
+        .then(|| Notice::always("nothing descends from or contradicts this node"))
+}
+
+/// Nodes that need attention, one line each.
+pub fn open(report: &OpenReport) -> String {
     let mut out = String::new();
-    if report.0.is_empty() && omitted == 0 {
-        let _ = writeln!(out, "{}", dim("nothing needs attention"));
-    }
     for item in &report.0 {
         let _ = writeln!(out, "{} {}", bold(&item.id), item.why);
     }
-    if omitted > 0 {
-        let _ = writeln!(
-            out,
-            "{}",
-            dim(&format!("… and {omitted} more; raise --limit for more"))
-        );
-    }
     out
+}
+
+/// The notice for `review --short`: nothing needs attention, or `--limit`
+/// cut the list. `all` is how long it was before the cut.
+pub fn open_notice(shown: usize, all: usize) -> Option<Notice> {
+    if all == 0 {
+        Some(Notice::always("nothing needs attention"))
+    } else if shown < all {
+        Some(Notice::always(format!(
+            "{shown} of {all} shown; raise --limit for more"
+        )))
+    } else {
+        None
+    }
 }
 
 /// Every tag with the number of nodes carrying it.
 pub fn tags(counts: &TagCounts) -> String {
     let mut out = String::new();
-    if counts.0.is_empty() {
-        let _ = writeln!(out, "{}", dim("no tags"));
-    }
     for t in &counts.0 {
         let _ = writeln!(out, "{} {}", bold(&t.tag), dim(&t.count.to_string()));
     }
     out
 }
 
-/// The invariant report, findings first and a tally last.
+/// The notice for a corpus with no tags.
+pub fn tags_notice(counts: &TagCounts) -> Option<Notice> {
+    counts.0.is_empty().then(|| Notice::always("no tags"))
+}
+
+/// The invariant report's findings, one line each.
 pub fn check(report: &Report) -> String {
     let mut out = String::new();
     for f in &report.findings {
-        let (tag, code) = match f.level {
-            Severity::Error => ("ERROR", "31;1"),
-            Severity::Warn => ("warn ", "33"),
+        let (tag, token) = match f.level {
+            Severity::Error => ("ERROR", "error"),
+            Severity::Warn => ("warn ", "warn"),
         };
         let where_ = f.node.as_deref().unwrap_or("corpus");
         let _ = writeln!(
             out,
             "{} {} {} {}",
-            paint(code, tag),
+            paint(Role::of("severity", token), tag),
             dim(&format!("[{}]", f.rule)),
             bold(where_),
             f.message
         );
     }
+    out
+}
+
+/// The invariant report's tally: how many nodes, errors and warnings.
+pub fn check_tally(report: &Report) -> Notice {
     let errors = report
         .findings
         .iter()
         .filter(|f| f.level == Severity::Error)
         .count();
-    let _ = writeln!(
-        out,
-        "\n{}, {}, {}",
+    let warnings = report.findings.len() - errors;
+    let outcome = match (errors, warnings) {
+        (0, 0) => "clean",
+        (0, _) => "warnings",
+        _ => "errors",
+    };
+    Notice::human(format!(
+        "{}, {}, {}",
         count(report.nodes, "node"),
         count(errors, "error"),
-        count(report.findings.len() - errors, "warning")
-    );
-    out
+        count(warnings, "warning")
+    ))
+    .in_role(Role::of("check", outcome))
+}
+
+/// The notice for a report `--limit` cut: how many findings it left out.
+/// The markdown says so under each cut section too, since it is the file.
+pub fn review_notice(omitted: &[(ReviewRule, usize)]) -> Option<Notice> {
+    let cut: usize = omitted.iter().map(|(_, n)| n).sum();
+    (cut > 0).then(|| {
+        Notice::always(format!(
+            "{} not shown; raise --limit for more",
+            count(cut, "finding")
+        ))
+    })
 }
 
 /// The weekly maintenance report, as the markdown that goes into `review.md`.
@@ -460,18 +485,18 @@ pub fn migration(report: &MigrationReport) -> String {
             nebula_core::SCHEMA_VERSION
         );
     }
-    if report.rewritten.is_empty() && !report.config_rewritten {
-        let _ = writeln!(out, "{}", dim("already at schema 2; nothing changed"));
-    } else {
-        let _ = writeln!(
-            out,
-            "\n{}",
-            dim(&format!(
-                "{} of {} rewritten; run `neb check` to confirm",
-                report.rewritten.len(),
-                count(report.nodes, "node")
-            ))
-        );
-    }
     out
+}
+
+/// What a migration came to: nothing, or how much, and what to run next.
+pub fn migration_notice(report: &MigrationReport) -> Notice {
+    if report.rewritten.is_empty() && !report.config_rewritten {
+        Notice::human("already at schema 2; nothing changed")
+    } else {
+        Notice::human(format!(
+            "{} of {} rewritten; run `neb check` to confirm",
+            report.rewritten.len(),
+            count(report.nodes, "node")
+        ))
+    }
 }

@@ -35,6 +35,24 @@ references, closed, origin}`, and every author label is stated, `"human"`
 where nobody passed `--by`, from a write verb exactly as from `show`. A list
 that a limit cut says so: see [capped lists](#capped-lists).
 
+## stdout and stderr
+
+stdout carries the result and nothing else: records, ids, the report. So
+`neb list | wc -l` counts nodes, `grep` and `cut` see only records, and
+`E=$(neb capture -q …)` holds the entry id alone. Everything about the
+result goes to stderr, one line each: counts (`3 of 4 nodes`), what
+`--limit` or `--depth` left out, the line saying a query found nothing,
+hints, and `committed <hash>`. Under `--json` the line saying nothing
+matched and the line saying a bound cut the result are still written to
+stderr; counts, hints and `committed` are not.
+
+Colour is decided once, per stream: text is coloured only for a terminal,
+never when that stream is piped or redirected, when `TERM=dumb`, or when
+`NO_COLOR` is set to a non-empty value. `CLICOLOR_FORCE` never colours a
+pipe. Each colour stands for a role (a live seed, an owed hypothesis, a dead
+node, an error) and is never the only thing saying so. `--help` is never
+coloured and never re-wrapped to the terminal's width.
+
 ## Refusals under `--json`
 
 Under `--json` a refusal is data too: one JSON object on one line, the last
@@ -61,7 +79,7 @@ Exit codes, with or without `--json`:
 
 | code | means | stdout | stderr under `--json` |
 |---|---|---|---|
-| 0 | success | the payload | empty, bar a `warning:` line from `init` or `capture` |
+| 0 | success | the payload | empty, bar a `warning:` or `note:` line, or the line saying a query found nothing or a bound cut the result |
 | 1 | a refusal | empty, **except** when the write landed and its commit was refused (`StagedElsewhere`, `CorpusIgnored`, `Git`, `GitTimedOut`): then it holds the write's payload | the envelope |
 | 1 | `check` found an `error`-level finding | the report | empty |
 | 2 | clap rejected the command line: unknown flag, missing argument, bad value | empty | clap's prose, **not** JSON: it is raised before `neb` knows `--json` was asked for |
@@ -117,8 +135,8 @@ never `--set-root`.
 
 With `commit` on (off by default) and the corpus root inside a git work
 tree, every mutating verb ends with one commit of `nodes/`, `inbox/` and
-`config.yaml`, named `neb <verb> <ids>`, and prints `committed <hash>` in
-text mode (nothing extra in `--json`). It never pushes and never touches a
+`config.yaml`, named `neb <verb> <ids>`, and prints `committed <hash>` on
+stderr in text mode (nothing extra in `--json`). It never pushes and never touches a
 path outside the corpus root. If something outside the corpus is already
 staged, the verb exits non-zero with `staged changes outside the corpus`
 **after** its write has landed — the write is never rolled back because of
@@ -134,9 +152,9 @@ for one invocation.
 
 | verb | does | flags |
 |---|---|---|
-| `neb capture <TEXT\|->...` | append a thought as one inbox line; prints the entry id, then the three nearest nodes; works on a corpus that does not exist yet, and then says so on stderr (`note: created a new corpus at <absolute path>`); a thought already waiting in the inbox is still captured, and stderr says `note: same as <id>, still waiting` | `--quiet`/`-q` (before or after the text) |
+| `neb capture <TEXT\|->...` | append a thought as one inbox line; prints the entry id, then the three nearest nodes; works on a corpus that does not exist yet, and then says so on stderr (`note: created a new corpus at <absolute path>`); a thought already waiting in the inbox is still captured, and stderr says `note: same as <id>, still waiting` | `--quiet`/`-q` (before or after the text): the entry id alone |
 | `neb inbox` | live entries (not promoted, not dropped), oldest first | `--limit <N>` |
-| `neb promote <ENTRY>` | inbox entry → seed node; without `--parent`, prints the three nearest nodes and proceeds as a root | `--title`, `--body <TEXT\|->`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run`, `--quiet`/`-q` |
+| `neb promote <ENTRY>` | inbox entry → seed node; without `--parent`, prints the three nearest nodes and proceeds as a root | `--title`, `--body <TEXT\|->`, `--parent <ID>`×, `--tag <TAG>`×, `--id <SLUG>`, `--by <LABEL>`, `--task`, `--run`, `--quiet`/`-q`: the node id alone |
 | `neb drop <ENTRY>` | strike an entry through; never deleted | — |
 | `neb triage` | walk the waiting entries oldest first and decide each with one key, through `promote` and `drop` | `--by <LABEL>` |
 
@@ -196,7 +214,7 @@ word with the text — a `near:` block of up to three lines, `<band> <status>
 are the [`near`](#query) query run for you: a suggestion for the triage
 step, never an edge. `promote` writes the node as a root whatever it lists,
 and with `--parent` lists nothing, since that decision is made. `--quiet`
-prints the id (and path) alone. No block at all means nothing in the corpus
+prints the id alone; `promote --json` carries the path. No block at all means nothing in the corpus
 shares a word with it — promote as a root or drop. The id is printed before
 `nodes/` is read, so a node file that will not parse fails the suggestions
 (non-zero, after the id, like a refused commit) and never the capture;
@@ -497,7 +515,9 @@ refuted or abandoned (`AlreadyClosed`), including one handed off before; a
 record id of the wrong shape (`InvalidObservatoryId`); and, when this machine
 has an observatory root, a record that does not resolve under it
 (`UnresolvedObservatoryRecord`). With no root set, the id is accepted and the
-verb prints the same `No observatory root set` line `cite` does.
+verb prints the same `No observatory root set` line `cite` does, on stderr.
+The record's path, when it resolves, is part of the result on stdout; a
+missing `--note` is nudged on stderr.
 
 ```
 // neb handoff scarcity-wake H012 --note "the hypothesis this became"
@@ -563,7 +583,7 @@ not who wrote the words. `check` enforces nothing about authorship.
 | `neb log <NODE>` | commits that changed the node, newest first | — |
 | `neb list` | every node | `--status <S>`, `--tag <TAG>`× (every tag must match), `--limit <N>` |
 | `neb near <QUERY>...` | the existing nodes closest to free text, or to a node (left out of its own answer), best first, each banded `strong`/`some`/`weak`; for a node, marks neighbours already linked to it | `--limit <K>`/`-k` (default 3); flags may follow the query |
-| `neb trace <NODE>` | ancestry as a tree, each line naming its edge kind(s) | `--down` for descendants, `--depth <N>` |
+| `neb trace <NODE>` | ancestry as a tree on a terminal (one tab-separated line per node when piped), each line naming its edge kind(s) | `--down` for descendants, `--depth <N>` |
 | `neb impact <NODE>` | descendants plus `contradicts` neighbours | — |
 | `neb graph` | the whole corpus as `{nodes, edges}` or a Mermaid diagram | `--json`, or `--mermaid [--from <ID>]`; without a format, a hint and exit 2 |
 
@@ -645,8 +665,12 @@ references.
 
 `--limit <N>` on `list`, `inbox` and `review` (per section; lines with
 `--short`) and `--depth <N>` on `trace` bound the output; without them
-everything is printed, as before. The text ends by saying what was left out
-(`2 of 3 matching nodes shown, of 4 in all; raise --limit for more`).
+everything is printed, as before. stdout holds the records alone, and stderr
+says what was left out (`2 of 3 matching nodes shown, of 4 in all; raise
+--limit for more`), in text mode and under `--json` alike. Uncut, text
+mode's stderr carries the count instead (`3 of 4 nodes`). A filter that
+matches nothing leaves stdout empty (`[]` under `--json`) and says `no nodes
+match` on stderr.
 
 Under `--json`, the flag changes the shape: with it, the list is an envelope
 whether or not anything was cut, and without it the list is the bare array.
@@ -694,8 +718,8 @@ for free text (and so for the `near` of `capture` and `promote`). A linked
 neighbour is a link that exists, not one to make.
 
 Nodes sharing no word are left out, so an empty answer (`"items": []` with
-`"total": 0`; in text,
-`nothing near: no node shares a word with this`) is a real finding: the
+`"total": 0`, or nothing in text, with `nothing near: no node shares a word
+with this` on stderr in both) is a real finding: the
 thought is unlike anything in the corpus. It ranks candidates for a human to
 read; it never writes anything, and passing its first line straight to
 `--parent` unread is the automatic linking the spec rules out.
@@ -718,29 +742,44 @@ strong abandoned  a-single-global-taxonomy A single global taxonomy  linked: con
 some   seed       required-categorical-fields-drift Required categorical fields drift  linked: parent (derives-from)
 ```
 
-`neb trace` prints a tree. Every line below the start names the genealogy
-edge kind(s) joining it to the line above. The kinds are always the
-descendant's edges, so they read the same both ways: walking up, the line
-above declares them to this one; walking down, this one declares them to the
-line above. Two edges between the same pair (`derives-from` plus a later `reopens`)
-are one relation stated twice, so they draw as one line naming both kinds. A
-node reached along two different paths is a true diamond: it is drawn on each
-path but expanded only once, and later copies end in `(shown above)`. A node
-handed off to Observatory ends its line with `handed off to <RECORD>`.
+`neb trace` prints a tree on a terminal, drawn from the same walk `--json`
+returns. Every line below the start names the genealogy edge kind(s) of the
+step that first reached it. The kinds are always the descendant's edges, so
+they read the same both ways: walking up, the line above declares them to
+this one; walking down, this one declares them to the line above. Two edges
+between the same pair (`derives-from` plus a later `reopens`) are one
+relation stated twice, so they draw as one line naming both kinds. A node
+joined to more than one node on the walk is a true diamond: it is drawn out
+once, under the step that first reached it, and each other place it joins
+points to it with `(shown above)` (or `(shown below)`), naming no kinds. A
+node handed off to Observatory ends its line with `handed off to <RECORD>`.
 
 ```
-// neb trace retardation-in-the-wake
+// neb trace retardation-in-the-wake        (on a terminal)
 hypothesis retardation-in-the-wake Retardation in the wake
 ├─ derives-from, reopens  refuted    scarcity-wake-retardation Scarcity wake retardation
 │  └─ derives-from  seed       gravity-as-scarcity Gravity as scarcity
-└─ refines  seed       gravity-as-scarcity Gravity as scarcity  (shown above)
+└─ seed       gravity-as-scarcity Gravity as scarcity  (shown above)
+```
+
+Piped or redirected, it prints one tab-separated line per node instead, in
+walk order: the steps from the start along the first path to it, the id, the
+status, the title, and the kinds of the step that reached it joined by `,`
+(`-` for the start). No glyphs, no pointers, so `cut -f2` is the ids:
+
+```
+// neb trace retardation-in-the-wake | cat
+0	retardation-in-the-wake	hypothesis	Retardation in the wake	-
+1	scarcity-wake-retardation	refuted	Scarcity wake retardation	derives-from,reopens
+2	gravity-as-scarcity	seed	Gravity as scarcity	derives-from
 ```
 
 `--depth <N>` stops the walk N steps out (`1` is the parents, or the children
-with `--down`; `0` the node alone), in the tree and in `--json` alike. A line
-whose branches it cut ends in `(K more beyond --depth)`. A node within N steps
-along any path is kept, even when the first path the walk took reached it
-further out. Without `--depth` the whole walk is printed, as before.
+with `--down`; `0` the node alone), in the tree, the lines and `--json` alike.
+When it left nodes out, stderr says how many, in every mode (`2 more nodes
+beyond --depth 1; raise --depth for more`). A node within N steps along any
+path is kept, even when the first path the walk took reached it further out.
+Without `--depth` the whole walk is printed, as before.
 
 `--json` lists each node once, in walk order. `parents` names each genealogical
 parent once, however many edges reach it. `via` is the step that first reached
@@ -821,10 +860,13 @@ reference and does not close the no-references finding after the grace period.
 `_none_` or a `- \`id\` Title — reason` list; `--out review.md` writes it to a
 file. `--limit <N>` keeps the first N findings under each heading, so a
 crowded section cannot push a short one out, and a cut section ends
-`- _… and K more; raise --limit for more_`; under `--json` it keeps the first
-N items of each `rule`, in the [capped-list](#capped-lists) envelope whose
-`total` counts every rule's findings. With `--short` it keeps the first N
-lines and ends `… and K more; raise --limit for more`.
+`- _… and K more; raise --limit for more_`, which is part of the report and
+so of the `--out` file; under `--json` it keeps the first N items of each
+`rule`, in the [capped-list](#capped-lists) envelope whose `total` counts
+every rule's findings. Either way stderr says how many findings were cut
+(`2 findings not shown; raise --limit for more`). With `--short` it keeps the
+first N lines, and stderr says `N of M shown; raise --limit for more`; with
+nothing to report, stdout is empty and stderr says `nothing needs attention`.
 
 ```json
 // neb review --short --json

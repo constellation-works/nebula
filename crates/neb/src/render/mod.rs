@@ -1,7 +1,11 @@
 //! Terminal output: everything that turns a core type into text.
 //!
-//! Colour is applied only when stdout is a terminal and `NO_COLOR` is unset, so
-//! piping into a file or an agent yields clean text.
+//! Colour comes from the output layer's one gate, decided per stream, so
+//! piping into a file or an agent yields clean text. What a colour means is
+//! a role (`output::Role`), never a raw code.
+//!
+//! stdout carries the payload alone (STD-01 §R12). Counts, cut notices and
+//! empty-state lines are [`Notice`]s, which the caller writes to stderr.
 
 mod error;
 pub mod json;
@@ -9,43 +13,85 @@ mod report;
 mod tree;
 mod triage;
 
+use crate::output::{self, Role, Stream};
 use nebula_core::{EdgeType, GraphExport, HistoryEntry, Node, Status};
 use std::collections::HashSet;
 use std::fmt::Write as _;
-use std::sync::OnceLock;
 
 pub use error::{Refusal, refusal, refusal_about};
 pub use report::{
-    check, commit_setting, impact, inbox, migration, near, node, observatory_root, open, review,
-    suggestions, tags,
+    check, check_tally, commit_setting, commit_setting_hint, impact, impact_notice, inbox,
+    inbox_notice, migration, migration_notice, near, near_notice, node, observatory_root,
+    observatory_root_notes, open, open_notice, review, review_notice, suggestions, tags,
+    tags_notice,
 };
-pub use tree::draw as tree;
+pub use tree::{draw as tree, tabbed as trace_lines, trace_notice};
 pub use triage::{step, tally, triage_keys, waiting};
 
-fn colour() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| {
-        std::env::var_os("NO_COLOR").is_none() && crate::output::stdout_is_terminal()
-    })
-}
-
-/// Wrap text in an ANSI code, or return it untouched when colour is off.
-pub fn paint(code: &str, s: &str) -> String {
-    if colour() {
-        format!("\x1b[{code}m{s}\x1b[0m")
-    } else {
-        s.to_string()
-    }
+/// Text in `role`'s colour, for stdout.
+pub fn paint(role: Role, s: &str) -> String {
+    output::paint(Stream::Stdout, role, s)
 }
 
 /// Dim text, for anything secondary.
 pub fn dim(s: &str) -> String {
-    paint("2", s)
+    paint(Role::Muted, s)
 }
 
 /// Bold text, for identifiers.
 pub fn bold(s: &str) -> String {
-    paint("1", s)
+    output::bold(Stream::Stdout, s)
+}
+
+/// Muted text, for a line on stderr about the result rather than in it.
+pub fn notice(s: &str) -> String {
+    output::paint(Stream::Stderr, Role::Muted, s)
+}
+
+/// The `error:` that starts a refusal, for stderr.
+pub fn error_label() -> String {
+    output::paint(Stream::Stderr, Role::Error, "error:")
+}
+
+/// A line about a result rather than part of it: a count, a cut, or an
+/// empty result. It goes to stderr, never stdout (STD-01 §R12).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notice {
+    text: String,
+    role: Role,
+    /// Written under `--json` too. An empty result (§R16) and a cut list
+    /// (§R34) say so in every mode; a plain count only to a person.
+    every_mode: bool,
+}
+
+impl Notice {
+    /// Said in every mode: nothing matched, or a bound cut the result.
+    fn always(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            role: Role::Muted,
+            every_mode: true,
+        }
+    }
+
+    /// Said in human mode only: a count or a hint.
+    fn human(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            role: Role::Muted,
+            every_mode: false,
+        }
+    }
+
+    /// The same notice, coloured as `role` says.
+    fn in_role(self, role: Role) -> Self {
+        Self { role, ..self }
+    }
+
+    /// The line to write to stderr, or `None` when `--json` leaves it out.
+    pub fn line(&self, json: bool) -> Option<String> {
+        (self.every_mode || !json).then(|| output::paint(Stream::Stderr, self.role, &self.text))
+    }
 }
 
 /// `1 node`, `2 nodes`: a count with its noun agreeing. Every noun counted
@@ -65,13 +111,7 @@ where
 ///
 /// Padded to the longest status, so the ids after it line up in a column.
 pub fn status_badge(s: Status) -> String {
-    let code = match s {
-        Status::Seed => "36",       // cyan, unformed
-        Status::Hypothesis => "33", // yellow, live and owing a look
-        Status::Refuted => "31",    // red, dead
-        Status::Abandoned => "2",   // dim, settled
-    };
-    paint(code, &format!("{s:<10}"))
+    paint(Role::of("status", &s.to_string()), &format!("{s:<10}"))
 }
 
 /// One node as a single line.
@@ -89,41 +129,37 @@ pub fn line(n: &Node) -> String {
     )
 }
 
-/// A listing of nodes, with the count of how many of the corpus it is.
-/// `matched` is how many the filter kept, which is more than `nodes` holds
-/// when `--limit` cut it.
-pub fn list(nodes: &[Node], matched: usize, total: usize) -> String {
-    if matched == 0 {
-        return format!("{}\n", dim("no nodes match"));
-    }
+/// A listing of nodes, one line each, and nothing when there are none.
+pub fn list(nodes: &[Node]) -> String {
     let mut out = String::new();
     for n in nodes {
         let _ = writeln!(out, "{}", line(n));
     }
-    let tally = if nodes.len() < matched && matched < total {
-        format!(
-            "{} of {} shown, of {total} in all; raise --limit for more",
-            nodes.len(),
-            count(matched, "matching node")
-        )
-    } else if nodes.len() < matched {
-        format!(
-            "{} of {} shown; raise --limit for more",
-            nodes.len(),
-            count(total, "node")
-        )
-    } else {
-        format!("{matched} of {}", count(total, "node"))
-    };
-    let _ = writeln!(out, "\n{}", dim(&tally));
     out
+}
+
+/// What a listing is of the corpus. `matched` is how many the filter kept,
+/// which is more than `shown` when `--limit` cut it.
+pub fn list_notice(shown: usize, matched: usize, total: usize) -> Notice {
+    if matched == 0 {
+        Notice::always("no nodes match")
+    } else if shown < matched && matched < total {
+        Notice::always(format!(
+            "{shown} of {} shown, of {total} in all; raise --limit for more",
+            count(matched, "matching node")
+        ))
+    } else if shown < matched {
+        Notice::always(format!(
+            "{shown} of {} shown; raise --limit for more",
+            count(total, "node")
+        ))
+    } else {
+        Notice::human(format!("{matched} of {}", count(total, "node")))
+    }
 }
 
 /// Commits that changed a node, newest first.
 pub fn history(entries: &[HistoryEntry]) -> String {
-    if entries.is_empty() {
-        return format!("{}\n", dim("no commits touched this node"));
-    }
     let mut out = String::new();
     for entry in entries {
         let short = entry.hash.get(..7).unwrap_or(&entry.hash);
@@ -136,6 +172,13 @@ pub fn history(entries: &[HistoryEntry]) -> String {
         );
     }
     out
+}
+
+/// The notice for a node no commit touched.
+pub fn history_notice(entries: &[HistoryEntry]) -> Option<Notice> {
+    entries
+        .is_empty()
+        .then(|| Notice::always("no commits touched this node"))
 }
 
 /// A Mermaid flowchart for the whole export, or one node's ancestry and
@@ -240,7 +283,7 @@ mod tests {
 
     /// The text with every ANSI escape removed, so a test reads what a
     /// terminal shows whether or not colour happens to be on.
-    fn visible(s: &str) -> String {
+    pub(super) fn visible(s: &str) -> String {
         let mut out = String::new();
         let mut chars = s.chars();
         while let Some(c) = chars.next() {
@@ -268,6 +311,30 @@ mod tests {
             assert!(badge.starts_with(&s.to_string()), "{badge:?}");
         }
         assert_eq!(visible(&status_badge(Status::Seed)), "seed      ");
+    }
+
+    /// A count is for a person, and `--json` leaves it out; an empty or cut
+    /// listing is said in every mode.
+    #[test]
+    fn list_notices_say_in_every_mode_only_what_a_script_needs() {
+        let said = |n: &Notice, json| n.line(json).map(|l| visible(&l));
+        let whole = list_notice(3, 3, 4);
+        assert_eq!(said(&whole, false).as_deref(), Some("3 of 4 nodes"));
+        assert_eq!(said(&whole, true), None);
+        for (notice, text) in [
+            (list_notice(0, 0, 4), "no nodes match"),
+            (
+                list_notice(1, 4, 4),
+                "1 of 4 nodes shown; raise --limit for more",
+            ),
+            (
+                list_notice(1, 3, 4),
+                "1 of 3 matching nodes shown, of 4 in all; raise --limit for more",
+            ),
+        ] {
+            assert_eq!(said(&notice, false).as_deref(), Some(text));
+            assert_eq!(said(&notice, true).as_deref(), Some(text));
+        }
     }
 
     #[test]

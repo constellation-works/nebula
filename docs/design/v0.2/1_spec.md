@@ -216,8 +216,8 @@ the node to `abandoned` with `closed: {why: "handed off to <record>"}`.
 - A node is read as handed off when both halves are present: it is
   `abandoned`, its `closed.why` is exactly `handed off to <record>`, and it
   carries an `observatory` reference to that record. No field records it.
-  `show` prints where the record is under the `closed:` line, and `trace`
-  appends `handed off to <record>` to the node's line; both `--json` forms
+  `show` prints where the record is under the `closed:` line, and `trace`'s
+  tree appends `handed off to <record>` to the node's line; both `--json` forms
   carry `handed_off_to`, `null` when the node was not handed off.
 
 Decision (ORB-13077): nebula owns this verb; back-links from Observatory to
