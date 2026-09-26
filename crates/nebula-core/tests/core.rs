@@ -1414,7 +1414,7 @@ fn capture_refuses_a_symlinked_active_month_without_changing_its_target() {
 
     let error = ops::capture(&corpus, "must stay inside").unwrap_err();
 
-    assert!(matches!(error, Error::Corpus(message) if message.contains("symlink")));
+    assert!(matches!(error, Error::InboxSymlink(path) if path == entry.file));
     assert_eq!(std::fs::read(&outside).unwrap(), before);
     assert!(
         std::fs::symlink_metadata(&entry.file)
@@ -1442,7 +1442,10 @@ fn inbox_writes_refuse_a_symlinked_directory_without_changing_its_target() {
     let promote_error = ops::promote(&corpus, &entry.id, &Promotion::default(), 0).unwrap_err();
 
     for error in [capture_error, settle_error, drop_error, promote_error] {
-        assert!(matches!(error, Error::Corpus(message) if message.contains("symlink")));
+        assert!(
+            matches!(&error, Error::InboxSymlink(path) if path == inbox_dir),
+            "{error}"
+        );
     }
     assert_eq!(std::fs::read(&outside_month).unwrap(), before);
     assert!(corpus.load_all().unwrap().is_empty());
@@ -1518,9 +1521,48 @@ fn settling_refuses_when_the_indexed_line_has_another_entry_id() {
     let error = corpus.settle_inbox(&entry, "dropped").unwrap_err();
 
     assert!(
-        matches!(error, Error::Corpus(message) if message == "inbox entry moved underneath us; nothing written")
+        matches!(&error, Error::InboxEntryChanged { id, file, line: 0 } if *id == entry.id && *file == entry.file),
+        "{error}"
     );
     assert_eq!(std::fs::read_to_string(&entry.file).unwrap(), replacement);
+}
+
+/// The line gone and the line changed are two failure modes, and each is
+/// its own refusal naming the entry and its file (STD-02 §R26).
+#[test]
+fn a_missing_and_a_changed_inbox_line_are_distinct_refusals() {
+    let (_dir, corpus) = corpus();
+    ops::capture(&corpus, "first thought").unwrap();
+    let entry = ops::capture(&corpus, "second thought").unwrap();
+    assert_eq!(entry.line, 1);
+    let before = std::fs::read_to_string(&entry.file).unwrap();
+
+    // The file now ends before the entry's line.
+    let first_line = format!("{}\n", before.lines().next().unwrap());
+    std::fs::write(&entry.file, &first_line).unwrap();
+    let missing = corpus.settle_inbox(&entry, "dropped").unwrap_err();
+    assert!(
+        matches!(&missing, Error::InboxEntryMissing { id, file, line: 1 } if *id == entry.id && *file == entry.file),
+        "{missing}"
+    );
+    assert_eq!(std::fs::read_to_string(&entry.file).unwrap(), first_line);
+
+    // The line is there, holding other text.
+    let changed_text = format!("{first_line}- [beef] 2026-09-22T08:25 someone else's\n");
+    std::fs::write(&entry.file, &changed_text).unwrap();
+    let changed = corpus.settle_inbox(&entry, "dropped").unwrap_err();
+    assert!(
+        matches!(&changed, Error::InboxEntryChanged { id, file, line: 1 } if *id == entry.id && *file == entry.file),
+        "{changed}"
+    );
+    assert_eq!(std::fs::read_to_string(&entry.file).unwrap(), changed_text);
+
+    assert_ne!(missing.code(), changed.code());
+    for error in [&missing, &changed] {
+        let said = error.to_string();
+        assert!(said.contains(&entry.id), "{said}");
+        assert!(said.contains(&entry.file.display().to_string()), "{said}");
+    }
 }
 
 /// A legacy stamp has no offset. It is read as local time, and settling the
@@ -1599,7 +1641,7 @@ fn whitespace_only_capture_is_refused_without_writing() {
     for text in ["", "   ", "\n", " \r\n\t\n "] {
         let error = ops::capture(&corpus, text).unwrap_err();
         assert!(
-            matches!(&error, Error::Corpus(message) if message == "nothing to capture"),
+            matches!(&error, Error::EmptyCapture),
             "capturing {text:?}: {error}"
         );
     }
@@ -1609,6 +1651,50 @@ fn whitespace_only_capture_is_refused_without_writing() {
         "a refused capture must not change the inbox file"
     );
     assert_eq!(corpus.inbox().unwrap().0.len(), 1);
+}
+
+/// Each of these rules is spelled once, here, so every surface reports the
+/// same code for it; `neb`'s test of the same name checks the CLI agrees
+/// (STD-02 §R24). None of them touches the node.
+#[test]
+fn blank_capture_note_and_open_status_reason_are_typed_refusals() {
+    let (dir, corpus) = corpus();
+    let id = seed(&corpus, "An idea", &[]);
+    let node_file = dir.path().join("corpus/nodes").join(format!("{id}.md"));
+    let before = std::fs::read_to_string(&node_file).unwrap();
+
+    let capture = ops::capture(&corpus, "   ").unwrap_err();
+    assert!(matches!(capture, Error::EmptyCapture), "{capture}");
+    assert_eq!(capture.code(), "empty_capture");
+    assert!(matches!(
+        nebula_core::store::validate_capture(" \n\t "),
+        Err(Error::EmptyCapture)
+    ));
+    assert_eq!(
+        nebula_core::store::validate_capture(" a\n b ").unwrap(),
+        "a b"
+    );
+
+    let note = ops::note(&corpus, &id, "  \n ", None).unwrap_err();
+    assert!(matches!(note, Error::EmptyNote), "{note}");
+    assert_eq!(note.code(), "empty_note");
+
+    for open in [Status::Seed, Status::Hypothesis] {
+        let reason = ops::set_status(&corpus, &id, open, Some("y")).unwrap_err();
+        assert!(
+            matches!(reason, Error::ReasonOnOpenStatus(status) if status == open),
+            "{reason}"
+        );
+        assert_eq!(reason.code(), "reason_on_open_status");
+    }
+    // The arguments decide it, so a node that does not exist is no excuse.
+    assert!(matches!(
+        ops::set_status(&corpus, "nope", Status::Seed, Some("y")),
+        Err(Error::ReasonOnOpenStatus(Status::Seed))
+    ));
+
+    assert_eq!(std::fs::read_to_string(&node_file).unwrap(), before);
+    assert!(corpus.inbox().unwrap().0.is_empty());
 }
 
 #[test]
@@ -1623,9 +1709,7 @@ fn capture_refuses_an_exhausted_id_namespace_without_writing() {
 
     let error = ops::capture(&corpus, "there is no id left").unwrap_err();
 
-    assert!(
-        matches!(error, Error::Corpus(message) if message == "inbox id namespace exhausted; nothing captured")
-    );
+    assert!(matches!(error, Error::InboxIdsExhausted));
     assert_eq!(
         std::fs::read_to_string(&entry.file).unwrap(),
         fixture,
@@ -4458,7 +4542,7 @@ fn read_bounded_takes_the_limit_and_refuses_one_byte_more() {
     ));
     assert!(matches!(
         ops::read_bounded(&[0xff, 0xfe][..], "a body", 16),
-        Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::InvalidData
+        Err(Error::StdinNotUtf8 { what: "a body" })
     ));
 }
 
@@ -4912,20 +4996,18 @@ fn a_symlinked_nodes_directory_refuses_open_init_reads_and_writes() {
         Corpus::init(&root),
         Corpus::open_or_init(Some(root.clone())).map(|(corpus, _)| corpus),
     ] {
-        assert!(matches!(result, Err(Error::Corpus(message)) if message.contains("symlink")));
+        assert!(matches!(result, Err(Error::NodesSymlink(path)) if path == nodes));
     }
-    assert!(matches!(corpus.load(&id), Err(Error::Corpus(message)) if message.contains("symlink")));
+    assert!(matches!(corpus.load(&id), Err(Error::NodesSymlink(path)) if path == nodes));
+    assert!(matches!(corpus.load_all(), Err(Error::NodesSymlink(path)) if path == nodes));
     assert!(
-        matches!(corpus.load_all(), Err(Error::Corpus(message)) if message.contains("symlink"))
+        matches!(ops::note(&corpus, &id, "escape", None), Err(Error::NodesSymlink(path)) if path == nodes)
     );
     assert!(
-        matches!(ops::note(&corpus, &id, "escape", None), Err(Error::Corpus(message)) if message.contains("symlink"))
+        matches!(ops::new_node(&corpus, &NewNode { title: "New".into(), ..NewNode::default() }), Err(Error::NodesSymlink(path)) if path == nodes)
     );
     assert!(
-        matches!(ops::new_node(&corpus, &NewNode { title: "New".into(), ..NewNode::default() }), Err(Error::Corpus(message)) if message.contains("symlink"))
-    );
-    assert!(
-        matches!(nebula_core::migrate::run(Some(root)), Err(Error::Corpus(message)) if message.contains("symlink"))
+        matches!(nebula_core::migrate::run(Some(root)), Err(Error::NodesSymlink(path)) if path == nodes)
     );
 
     assert_eq!(std::fs::read(&outside_node).unwrap(), before);
@@ -4947,9 +5029,7 @@ fn init_refuses_a_dangling_nodes_symlink_without_creating_a_corpus() {
     let nodes = root.join("nodes");
     std::os::unix::fs::symlink(dir.path().join("missing"), &nodes).unwrap();
 
-    assert!(
-        matches!(Corpus::init(&root), Err(Error::Corpus(message)) if message.contains("symlink"))
-    );
+    assert!(matches!(Corpus::init(&root), Err(Error::NodesSymlink(path)) if path == nodes));
     assert!(
         std::fs::symlink_metadata(&nodes)
             .unwrap()

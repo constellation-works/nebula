@@ -10,15 +10,21 @@
 //! you which command to run next is presentation, so it lives in the consumer
 //! that has commands to suggest.
 
-use crate::model::{EdgeType, Status};
+use crate::model::{EdgeType, FrontmatterProblem, Status};
 use crate::store::Settlement;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 /// The library's result type.
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Everything that can go wrong reading or changing a corpus.
+///
+/// `#[non_exhaustive]` because it is the library's public error (STD-02
+/// §R11): a consumer outside this crate keeps a wildcard arm, so a new
+/// variant is a new code rather than a broken build.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// No node with that id exists.
     #[error("no node `{0}`")]
@@ -66,10 +72,10 @@ pub enum Error {
         revision: String,
     },
 
-    /// An explicit `--root` was empty. Every `join` built from it would
-    /// silently resolve to the current directory, which is exactly the bug
-    /// this refuses.
-    #[error("--root cannot be empty")]
+    /// An explicit root (`--root`) was empty. Every `join` built from it
+    /// would silently resolve to the current directory, which is exactly the
+    /// bug this refuses.
+    #[error("an explicit corpus root cannot be empty")]
     EmptyRoot,
 
     /// This machine's corpus root setting, `~/.config/nebula/root`, is there
@@ -94,10 +100,21 @@ pub enum Error {
         root: PathBuf,
     },
 
+    /// `HOME` is not set, so there is no home directory to find this
+    /// machine's settings or the default corpus under.
+    #[error("HOME is not set")]
+    HomeUnset,
+
+    /// `HOME` is set, but not to valid UTF-8. Refused rather than read as
+    /// unset: the directory it names is there, and treating it as missing
+    /// would skip this machine's settings without saying so.
+    #[error("HOME is not valid UTF-8: `{}`", .0.to_string_lossy())]
+    HomeNotUnicode(OsString),
+
     /// A machine-local root setting already names a different corpus. The
     /// caller must opt in to replacing it rather than redirecting commands
     /// silently.
-    #[error("{} already points to {}, not {}; pass --force to replace it", .path.display(), .configured.display(), .requested.display())]
+    #[error("{} already points to {}, not {}", .path.display(), .configured.display(), .requested.display())]
     RootConfigConflict {
         /// The machine-local setting file.
         path: PathBuf,
@@ -233,6 +250,29 @@ pub enum Error {
         to: String,
     },
 
+    /// A status name that is not one of the four.
+    #[error("`{0}` is not a status")]
+    NotAStatus(String),
+
+    /// An edge type name that is not one of the five.
+    #[error("`{0}` is not an edge type")]
+    NotAnEdgeType(String),
+
+    /// An author label holding the punctuation a note line uses to carry its
+    /// author in the prose, so the note would not parse back.
+    #[error("`{0}` cannot be an author label: no parentheses, newlines or `: `")]
+    InvalidAuthorLabel(String),
+
+    /// A node file whose frontmatter cannot even be found, before any YAML
+    /// is parsed.
+    #[error("in {}: {problem}", .path.display())]
+    MalformedFrontmatter {
+        /// The node file, or the path it has in the tree it was read from.
+        path: PathBuf,
+        /// Which delimiter is missing.
+        problem: FrontmatterProblem,
+    },
+
     /// A new node names the same node as a parent and as the refuted idea it
     /// reopens. `reopens` is genealogy already, so the pair would be two
     /// parallel claims of one descent.
@@ -247,6 +287,11 @@ pub enum Error {
     #[error("a kill condition cannot be empty; that is the whole point of it")]
     EmptyKill,
 
+    /// Confirming a kill condition as the human's own, on a node that names
+    /// none.
+    #[error("`{0}` has no kill condition to confirm")]
+    NoKillToConfirm(String),
+
     /// A falsifier is content, not a field that `sharpen` may silently replace.
     #[error("kill condition is already `{0}`; it was not replaced")]
     KillAlreadySet(String),
@@ -254,6 +299,11 @@ pub enum Error {
     /// Refuting asserts the kill condition fired, and that has to be written.
     #[error("refuted needs a reason: say how the kill condition fired")]
     RefutedNeedsWhy,
+
+    /// A reason given for a move to an open status. Only a closing has
+    /// something for a reason to be the reason for.
+    #[error("a reason only applies to refuted or abandoned, not `{0}`")]
+    ReasonOnOpenStatus(Status),
 
     /// A ruled-out idea cannot quietly return to active work.
     #[error("a refuted node cannot simply reopen")]
@@ -291,6 +341,85 @@ pub enum Error {
     /// for a machine-readable answer it has no way to give.
     #[error("`{0}` is interactive and has no JSON form")]
     Interactive(String),
+
+    /// A capture that is nothing but whitespace. Refused before a corpus is
+    /// opened or created; see [`crate::store::validate_capture`].
+    #[error("nothing to capture")]
+    EmptyCapture,
+
+    /// A note that is nothing but whitespace.
+    #[error("a note cannot be empty")]
+    EmptyNote,
+
+    /// Every one of the 65,536 inbox ids is held by a live entry.
+    #[error("inbox id namespace exhausted; nothing captured")]
+    InboxIdsExhausted,
+
+    /// An inbox entry handed to a corpus whose inbox it is not in. Striking
+    /// it would change another corpus's inbox.
+    #[error("inbox entry `{id}` is in {}, not in this corpus's inbox {}", .file.display(), .inbox.display())]
+    InboxEntryForeign {
+        /// The entry.
+        id: String,
+        /// The month file the entry was read from.
+        file: PathBuf,
+        /// This corpus's inbox directory.
+        inbox: PathBuf,
+    },
+
+    /// The entry's month file now ends before the line the entry was read
+    /// from. Nothing was written.
+    #[error(
+        "inbox entry `{id}` was on line {} of {}, which now ends before it; nothing was written",
+        .line + 1,
+        .file.display()
+    )]
+    InboxEntryMissing {
+        /// The entry.
+        id: String,
+        /// Its month file.
+        file: PathBuf,
+        /// The line it was read from, counted from 0.
+        line: usize,
+    },
+
+    /// The line the entry was read from now holds something else. Nothing
+    /// was written.
+    #[error(
+        "line {} of {} no longer holds inbox entry `{id}`; nothing was written",
+        .line + 1,
+        .file.display()
+    )]
+    InboxEntryChanged {
+        /// The entry.
+        id: String,
+        /// Its month file.
+        file: PathBuf,
+        /// The line it was read from, counted from 0.
+        line: usize,
+    },
+
+    /// `nodes/` is a symlink. A root reached through one is fine; node paths
+    /// under a symlinked `nodes/` could reach a different tree.
+    #[error("{} is a symlink; node operations require a real directory", .0.display())]
+    NodesSymlink(PathBuf),
+
+    /// `inbox/` or a month file under it is a symlink, which must not
+    /// redirect an inbox write.
+    #[error("{} is a symlink; inbox operations require real paths", .0.display())]
+    InboxSymlink(PathBuf),
+
+    /// A reference that must say where it is, given without a URI. Only a
+    /// `discussion` may have none.
+    #[error("a reference of kind `{kind}` needs a URI; only a discussion may have none")]
+    UriRequired {
+        /// The reference kind, as normalised.
+        kind: String,
+    },
+
+    /// A point in a node's history that is neither a date nor a commit hash.
+    #[error("`{0}` is not a YYYY-MM-DD date or a git revision")]
+    InvalidAt(String),
 
     /// Two nodes claim the same id.
     #[error("duplicate node id `{0}`")]
@@ -439,6 +568,24 @@ pub enum Error {
         reason: String,
     },
 
+    /// Standard input could not be read. There is no path to name, so the
+    /// stream and what it was read for are named instead (STD-02 §R26).
+    #[error("reading {what} from standard input: {source}")]
+    IoStdin {
+        /// What the text was for: `a capture`, `a body`, `a triage key`.
+        what: &'static str,
+        /// The operating system's reason.
+        source: std::io::Error,
+    },
+
+    /// Text read from standard input is not UTF-8. Refused before the
+    /// corpus is opened for writing, so nothing was written.
+    #[error("{what} on standard input is not valid UTF-8; nothing was written")]
+    StdinNotUtf8 {
+        /// What the text was for: `a capture` or `a body`.
+        what: &'static str,
+    },
+
     /// `commit` is on, but the repository containing the corpus ignores it,
     /// so there is nothing git would ever record.
     #[error("{} is ignored by the git repository that contains it; nothing can be committed", .0.display())]
@@ -470,16 +617,103 @@ pub enum Error {
         after: std::time::Duration,
     },
 
-    /// Anything else about the corpus itself: configuration, a malformed
-    /// file, a value that is not one of the ones there are.
-    #[error("{0}")]
-    Corpus(String),
+    /// `git log` or `git rev-list` gave output that does not split into
+    /// whole records.
+    #[error("git {command} returned a malformed history record for `{pathspec}` in {}", .root.display())]
+    MalformedHistory {
+        /// The corpus root the command ran in.
+        root: PathBuf,
+        /// Which git command.
+        command: &'static str,
+        /// The node file whose history was asked for, as git was given it.
+        pathspec: String,
+    },
 
-    /// Reading or writing failed.
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    /// Every name tried for keeping a refused edit was taken.
+    #[error(
+        "no free name to keep the edit of `{id}` under in {} after {attempts} tries",
+        .dir.display()
+    )]
+    NoFreeKeepName {
+        /// The node the edit was for.
+        id: String,
+        /// Where refused edits are kept.
+        dir: PathBuf,
+        /// How many names were tried.
+        attempts: u32,
+    },
 
-    /// Reading or writing a known corpus path failed.
+    /// A migration was asked of a corpus whose git work tree has uncommitted
+    /// changes. Nothing was changed: the migration must land as its own
+    /// commit so the state before it stays recoverable.
+    #[error("{} has uncommitted changes, and the migration must be its own commit; nothing was changed", .0.display())]
+    DirtyTree(PathBuf),
+
+    /// A migration step produced a node this build cannot read back. Found
+    /// in memory, before anything was written.
+    #[error(
+        "in {}: the migration produced a node this build cannot read: {source}; nothing was written",
+        .path.display()
+    )]
+    MigratedNodeUnreadable {
+        /// The node file the step rewrote.
+        path: PathBuf,
+        /// Why the current model refused it.
+        source: Box<Error>,
+    },
+
+    /// A v1 node file names a status v1 never had.
+    #[error("in {}: status `{status}` is not a v1 status", .path.display())]
+    NotAV1Status {
+        /// The node file.
+        path: PathBuf,
+        /// The status as written.
+        status: String,
+    },
+
+    /// A v1 node file names an edge type v1 never had.
+    #[error("in {}: edge type `{edge_type}` is not a v1 edge type", .path.display())]
+    NotAV1EdgeType {
+        /// The node file.
+        path: PathBuf,
+        /// The edge type as written.
+        edge_type: String,
+    },
+
+    /// An atomic write failed, and removing its temporary file failed too,
+    /// so the temporary is still there beside the target.
+    #[error(
+        "writing {} failed: {write}; removing the temporary file {} also failed: {cleanup}",
+        .path.display(),
+        .tmp.display()
+    )]
+    TempCleanupFailed {
+        /// The file that was being written.
+        path: PathBuf,
+        /// The temporary file left behind.
+        tmp: PathBuf,
+        /// Why the write failed.
+        #[source]
+        write: std::io::Error,
+        /// Why the temporary could not be removed.
+        cleanup: std::io::Error,
+    },
+
+    /// Every temporary name tried beside a file was taken.
+    #[error(
+        "no free temporary name beside {} after {attempts} tries; something is creating files under them",
+        .path.display()
+    )]
+    NoFreeTempName {
+        /// The file a temporary was wanted for.
+        path: PathBuf,
+        /// How many names were tried.
+        attempts: u32,
+    },
+
+    /// Reading or writing a known path failed. There is no pathless I/O
+    /// variant, so an `io::Error` cannot reach a caller without naming what
+    /// it touched (STD-02 §R26).
     #[error("{action} {}: {source}", .path.display())]
     IoAt {
         /// What operation was attempted.
@@ -518,16 +752,19 @@ fn shown_candidates(shown: usize) -> String {
     }
 }
 
-/// Writes [`Error::code`] from one `Variant => "code"` line per variant, and,
-/// for the tests, the same lines as data.
+/// Writes [`Error::code`] and [`Error::class`] from one
+/// `Variant => "code", Class,` line per variant, and, for the tests, the
+/// same lines as data.
 ///
-/// The match it expands to is exhaustive, so a new variant does not compile
-/// until it has a line. The table the tests walk is built from those same
-/// lines, so no variant can have a code that the uniqueness and spelling
-/// checks never see. `Self::Variant { .. }` matches a variant of any shape,
-/// which is why a line names the variant alone.
+/// The matches it expands to are exhaustive, so a new variant does not
+/// compile until it has a line with both. The table the tests walk is built
+/// from those same lines, so no variant can have a code that the uniqueness
+/// and spelling checks never see. `Self::Variant { .. }` matches a variant of
+/// any shape, which is why a line names the variant alone. A variant whose
+/// class turns on a field names it in braces, one line per case:
+/// `Variant { field: None, } => "code", Argument,`; its lines share a code.
 macro_rules! codes {
-    ($($variant:ident => $code:literal,)*) => {
+    ($($variant:ident $({ $($field:tt)* })? => $code:literal, $class:ident,)*) => {
         /// The variant's stable machine name: `neb --json` reports it as the
         /// refusal's `code`, so a script matches `no_such_node` rather than
         /// parsing the message.
@@ -538,74 +775,128 @@ macro_rules! codes {
         /// rename a code that scripts already match.
         pub fn code(&self) -> &'static str {
             match self {
-                $(Self::$variant { .. } => $code,)*
+                $(Self::$variant { $($($field)*)? .. } => $code,)*
             }
         }
 
-        /// Every variant's name beside its code, one entry per line of the
-        /// `codes!` invocation.
+        /// Whether the refusal is about the arguments alone or about what
+        /// they met: see [`ErrorClass`]. Exhaustive like [`Self::code`], so a
+        /// new variant does not compile until it is placed.
+        pub fn class(&self) -> ErrorClass {
+            match self {
+                $(Self::$variant { $($($field)*)? .. } => ErrorClass::$class,)*
+            }
+        }
+
+        /// Every variant's name beside its code and class, one entry per
+        /// line of the `codes!` invocation.
         #[cfg(test)]
-        const CODES: &[(&str, &str)] = &[$((stringify!($variant), $code),)*];
+        const CODES: &[(&str, &str, ErrorClass)] =
+            &[$((stringify!($variant), $code, ErrorClass::$class),)*];
     };
+}
+
+/// What a refusal is about, which is what decides how a surface reports it:
+/// `neb` exits 2 for an [`ErrorClass::Argument`] and 1 for an
+/// [`ErrorClass::State`] (STD-01 §R20).
+///
+/// It lives here, beside the codes, because [`Error`] is `#[non_exhaustive]`:
+/// a match on it in any other crate needs a wildcard, so only here can a new
+/// variant be refused compilation until it is placed (STD-02 §R27).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorClass {
+    /// An argument no corpus could accept, whatever it holds: a value of the
+    /// wrong shape, a flag the verb's other arguments rule out, or a verb
+    /// asked for a form it has none of.
+    Argument,
+    /// Anything that turns on what the corpus, the machine or git holds.
+    State,
 }
 
 impl Error {
     codes! {
-        NoSuchNode => "no_such_node",
-        NoSuchInboxEntry => "no_such_inbox_entry",
-        InboxEntrySettled => "inbox_entry_settled",
-        NoCorpus => "no_corpus",
-        NotGitWorkTree => "not_git_work_tree",
-        NoNodeAtRevision => "no_node_at_revision",
-        UnknownRevision => "unknown_revision",
-        EmptyRoot => "empty_root",
-        EmptyRootSetting => "empty_root_setting",
-        RelativeRootSetting => "relative_root_setting",
-        RootConfigConflict => "root_config_conflict",
-        RootAndPathDiffer => "root_and_path_differ",
-        RelativeObservatoryRoot => "relative_observatory_root",
-        MissingConfig => "missing_config",
-        SchemaMismatch => "schema_mismatch",
-        CurrentSchemaUnreadable => "current_schema_unreadable",
-        V1NodeUnderCurrentSchema => "v1_node_under_current_schema",
-        Cycle => "cycle",
-        SelfLoop => "self_loop",
-        DuplicateEdge => "duplicate_edge",
-        ParentAndReopens => "parent_and_reopens",
-        NeedsKill => "needs_kill",
-        EmptyKill => "empty_kill",
-        KillAlreadySet => "kill_already_set",
-        RefutedNeedsWhy => "refuted_needs_why",
-        RefutedCannotReopen => "refuted_cannot_reopen",
-        AlreadyClosed => "already_closed",
-        SeedWithKill => "seed_with_kill",
-        NoSuchCandidate => "no_such_candidate",
-        Interactive => "interactive",
-        DuplicateId => "duplicate_id",
-        NodeExists => "node_exists",
-        UnresolvedUri => "unresolved_uri",
-        AbsoluteUri => "absolute_uri",
-        InvalidTransition => "invalid_transition",
-        MissingParent => "missing_parent",
-        UnusableTitle => "unusable_title",
-        UnknownReferenceKind => "unknown_reference_kind",
-        InvalidObservatoryId => "invalid_observatory_id",
-        UnresolvedObservatoryRecord => "unresolved_observatory_record",
-        InvalidId => "invalid_id",
-        UnsafeId => "unsafe_id",
-        IdMismatch => "id_mismatch",
-        Locked => "locked",
-        EditConflict => "edit_conflict",
-        InputTooLarge => "input_too_large",
-        PendingWriteUnreadable => "pending_write_unreadable",
-        CorpusIgnored => "corpus_ignored",
-        Git => "git",
-        GitTimedOut => "git_timed_out",
-        Corpus => "corpus",
-        Io => "io",
-        IoAt => "io_at",
-        Yaml => "yaml",
-        Json => "json",
+        NoSuchNode => "no_such_node", State,
+        NoSuchInboxEntry => "no_such_inbox_entry", State,
+        InboxEntrySettled => "inbox_entry_settled", State,
+        NoCorpus => "no_corpus", State,
+        NotGitWorkTree => "not_git_work_tree", State,
+        NoNodeAtRevision => "no_node_at_revision", State,
+        UnknownRevision => "unknown_revision", State,
+        EmptyRoot => "empty_root", Argument,
+        EmptyRootSetting => "empty_root_setting", State,
+        RelativeRootSetting => "relative_root_setting", State,
+        HomeUnset => "home_unset", State,
+        HomeNotUnicode => "home_not_unicode", State,
+        RootConfigConflict => "root_config_conflict", State,
+        RootAndPathDiffer => "root_and_path_differ", Argument,
+        RelativeObservatoryRoot { setting: None, } => "relative_observatory_root", Argument,
+        RelativeObservatoryRoot { setting: Some(_), } => "relative_observatory_root", State,
+        MissingConfig => "missing_config", State,
+        SchemaMismatch => "schema_mismatch", State,
+        CurrentSchemaUnreadable => "current_schema_unreadable", State,
+        V1NodeUnderCurrentSchema => "v1_node_under_current_schema", State,
+        NotAStatus => "not_a_status", Argument,
+        NotAnEdgeType => "not_an_edge_type", Argument,
+        InvalidAuthorLabel => "invalid_author_label", Argument,
+        MalformedFrontmatter => "malformed_frontmatter", State,
+        Cycle => "cycle", State,
+        SelfLoop => "self_loop", Argument,
+        DuplicateEdge => "duplicate_edge", State,
+        ParentAndReopens => "parent_and_reopens", Argument,
+        NeedsKill => "needs_kill", State,
+        EmptyKill => "empty_kill", Argument,
+        NoKillToConfirm => "no_kill_to_confirm", State,
+        KillAlreadySet => "kill_already_set", State,
+        RefutedNeedsWhy => "refuted_needs_why", Argument,
+        ReasonOnOpenStatus => "reason_on_open_status", Argument,
+        RefutedCannotReopen => "refuted_cannot_reopen", State,
+        AlreadyClosed => "already_closed", State,
+        SeedWithKill => "seed_with_kill", State,
+        NoSuchCandidate => "no_such_candidate", State,
+        Interactive => "interactive", Argument,
+        EmptyCapture => "empty_capture", Argument,
+        EmptyNote => "empty_note", Argument,
+        InboxIdsExhausted => "inbox_ids_exhausted", State,
+        InboxEntryForeign => "inbox_entry_foreign", State,
+        InboxEntryMissing => "inbox_entry_missing", State,
+        InboxEntryChanged => "inbox_entry_changed", State,
+        NodesSymlink => "nodes_symlink", State,
+        InboxSymlink => "inbox_symlink", State,
+        UriRequired => "uri_required", Argument,
+        InvalidAt => "invalid_at", Argument,
+        DuplicateId => "duplicate_id", State,
+        NodeExists => "node_exists", State,
+        UnresolvedUri => "unresolved_uri", State,
+        AbsoluteUri => "absolute_uri", Argument,
+        InvalidTransition => "invalid_transition", State,
+        MissingParent => "missing_parent", State,
+        UnusableTitle => "unusable_title", Argument,
+        UnknownReferenceKind => "unknown_reference_kind", Argument,
+        InvalidObservatoryId => "invalid_observatory_id", Argument,
+        UnresolvedObservatoryRecord => "unresolved_observatory_record", State,
+        InvalidId => "invalid_id", Argument,
+        UnsafeId => "unsafe_id", State,
+        IdMismatch => "id_mismatch", State,
+        Locked => "locked", State,
+        EditConflict => "edit_conflict", State,
+        InputTooLarge => "input_too_large", State,
+        PendingWriteUnreadable => "pending_write_unreadable", State,
+        IoStdin => "io_stdin", State,
+        StdinNotUtf8 => "stdin_not_utf8", State,
+        CorpusIgnored => "corpus_ignored", State,
+        Git => "git", State,
+        GitTimedOut => "git_timed_out", State,
+        MalformedHistory => "malformed_history", State,
+        NoFreeKeepName => "no_free_keep_name", State,
+        DirtyTree => "dirty_tree", State,
+        MigratedNodeUnreadable => "migrated_node_unreadable", State,
+        NotAV1Status => "not_a_v1_status", State,
+        NotAV1EdgeType => "not_a_v1_edge_type", State,
+        TempCleanupFailed => "temp_cleanup_failed", State,
+        NoFreeTempName => "no_free_temp_name", State,
+        IoAt => "io_at", State,
+        Yaml => "yaml", State,
+        Json => "json", State,
     }
 
     /// A YAML failure, labelled with what was being read.
@@ -616,17 +907,10 @@ impl Error {
         }
     }
 
-    /// Anything about the corpus that has no variant of its own.
-    pub(crate) fn corpus(message: impl Into<String>) -> Self {
-        Self::Corpus(message.into())
-    }
-
     /// An I/O failure labelled with the path the user can inspect or repair.
-    pub(crate) fn io_at(
-        action: &'static str,
-        path: impl Into<PathBuf>,
-        source: std::io::Error,
-    ) -> Self {
+    /// Public so a surface's own I/O (a report file, an editor's temporary
+    /// file) is reported the same way the library's is.
+    pub fn io_at(action: &'static str, path: impl Into<PathBuf>, source: std::io::Error) -> Self {
         Self::IoAt {
             action,
             path: path.into(),
@@ -637,8 +921,12 @@ impl Error {
 
 #[cfg(test)]
 mod tests {
-    use super::Error;
-    use std::collections::BTreeSet;
+    use super::{Error, ErrorClass};
+    use crate::model::{FrontmatterProblem, Status};
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
+    use std::io;
+    use std::path::PathBuf;
 
     /// A variant name in `snake_case`: `NoSuchNode` is `no_such_node`.
     fn snake_case(variant: &str) -> String {
@@ -669,19 +957,21 @@ mod tests {
     /// so a new one is checked here without anyone listing it.
     #[test]
     fn every_code_is_its_variant_name_in_snake_case_and_unique() {
-        let mut seen = BTreeSet::new();
-        for &(variant, code) in Error::CODES {
+        // A variant split by class has one line per case, sharing its code.
+        let mut seen = BTreeMap::new();
+        for &(variant, code, _) in Error::CODES {
             assert!(is_snake_case(code), "`{code}` is not snake_case");
             assert_eq!(code, snake_case(variant), "the code for `{variant}`");
-            assert!(seen.insert(code), "`{code}` names two variants");
+            let named = *seen.entry(code).or_insert(variant);
+            assert_eq!(named, variant, "`{code}` names two variants");
         }
     }
 
     /// One line per variant covers every shape: tuple, struct and unit.
     #[test]
     fn the_codes_table_is_what_code_returns() {
-        let io = Error::Io(std::io::Error::other("x"));
-        assert!(Error::CODES.contains(&("Io", io.code())));
+        let io = Error::io_at("reading", "/x", std::io::Error::other("x"));
+        assert!(Error::CODES.contains(&("IoAt", io.code(), io.class())));
         assert_eq!(Error::NoSuchNode("x".into()).code(), "no_such_node");
         assert_eq!(
             Error::NoNodeAtRevision {
@@ -692,6 +982,199 @@ mod tests {
             "no_node_at_revision"
         );
         assert_eq!(Error::EmptyRoot.code(), "empty_root");
+    }
+
+    /// Each error's message holds every needle beside it.
+    fn assert_named(rows: Vec<(Error, &[&str])>) {
+        for (error, needles) in rows {
+            let said = error.to_string();
+            for needle in needles {
+                assert!(
+                    said.contains(needle),
+                    "{} lacks `{needle}`: {said}",
+                    error.code()
+                );
+            }
+        }
+    }
+
+    /// An environment or machine-setting error names the value or the file
+    /// that decided it (STD-02 §R26). One row per variant.
+    #[test]
+    fn environment_errors_name_their_value_or_setting() {
+        #[cfg(unix)]
+        let not_unicode = {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(b"/home/\xffuser".to_vec())
+        };
+        #[cfg(not(unix))]
+        let not_unicode = OsString::from("/home/user");
+        assert_named(vec![
+            (Error::HomeUnset, &["HOME is not set"]),
+            (
+                Error::HomeNotUnicode(not_unicode),
+                &["not valid UTF-8", "/home/", "user"],
+            ),
+            (
+                Error::EmptyRootSetting(PathBuf::from("/h/.config/nebula/root")),
+                &["/h/.config/nebula/root"],
+            ),
+            (
+                Error::RelativeRootSetting {
+                    setting: PathBuf::from("/h/.config/nebula/root"),
+                    root: PathBuf::from("rel"),
+                },
+                &["`rel`", "/h/.config/nebula/root"],
+            ),
+        ]);
+    }
+
+    /// An I/O or on-disk error names the path it touched (STD-02 §R26). One
+    /// row per variant.
+    #[test]
+    fn io_errors_name_their_path() {
+        let p = PathBuf::from;
+        let denied = || io::Error::from(io::ErrorKind::PermissionDenied);
+        let (month, entry) = (p("/c/inbox/2026-09.md"), || "ab12".to_string());
+        assert_named(vec![
+            (
+                Error::io_at("reading", &month, denied()),
+                &["reading /c/inbox/2026-09.md", "ermission denied"],
+            ),
+            (
+                Error::MalformedFrontmatter {
+                    path: p("/c/nodes/a.md"),
+                    problem: FrontmatterProblem::Unterminated,
+                },
+                &["/c/nodes/a.md", "not terminated"],
+            ),
+            (
+                Error::InboxEntryForeign {
+                    id: entry(),
+                    file: p("/other/inbox/2026-09.md"),
+                    inbox: p("/c/inbox"),
+                },
+                &["ab12", "/other/inbox/2026-09.md", "/c/inbox"],
+            ),
+            (
+                Error::InboxEntryMissing {
+                    id: entry(),
+                    file: month.clone(),
+                    line: 4,
+                },
+                &["ab12", "/c/inbox/2026-09.md", "line 5"],
+            ),
+            (
+                Error::InboxEntryChanged {
+                    id: entry(),
+                    file: month.clone(),
+                    line: 4,
+                },
+                &["ab12", "/c/inbox/2026-09.md", "line 5"],
+            ),
+            (Error::NodesSymlink(p("/c/nodes")), &["/c/nodes"]),
+            (Error::InboxSymlink(p("/c/inbox")), &["/c/inbox"]),
+            (
+                Error::MalformedHistory {
+                    root: p("/c"),
+                    command: "log",
+                    pathspec: "nodes/a.md".into(),
+                },
+                &["git log", "`nodes/a.md`", "/c"],
+            ),
+            (
+                Error::NoFreeKeepName {
+                    id: "a".into(),
+                    dir: p("/h/.local/state/nebula/kept"),
+                    attempts: 16,
+                },
+                &["`a`", "/h/.local/state/nebula/kept", "16 tries"],
+            ),
+            (Error::DirtyTree(p("/c")), &["/c has uncommitted changes"]),
+            (
+                Error::MigratedNodeUnreadable {
+                    path: p("/c/nodes/a.md"),
+                    source: Box::new(Error::NotAStatus("odd".into())),
+                },
+                &["/c/nodes/a.md", "`odd`"],
+            ),
+            (
+                Error::NotAV1Status {
+                    path: p("/c/nodes/a.md"),
+                    status: "odd".into(),
+                },
+                &["/c/nodes/a.md", "`odd`"],
+            ),
+            (
+                Error::NotAV1EdgeType {
+                    path: p("/c/nodes/a.md"),
+                    edge_type: "odd".into(),
+                },
+                &["/c/nodes/a.md", "`odd`"],
+            ),
+            (
+                Error::TempCleanupFailed {
+                    path: p("/c/nodes/a.md"),
+                    tmp: p("/c/nodes/a.md.1.tmp"),
+                    write: io::Error::from(io::ErrorKind::StorageFull),
+                    cleanup: denied(),
+                },
+                &["/c/nodes/a.md", "/c/nodes/a.md.1.tmp", "ermission denied"],
+            ),
+            (
+                Error::NoFreeTempName {
+                    path: p("/c/nodes/a.md"),
+                    attempts: 8,
+                },
+                &["/c/nodes/a.md", "8 tries"],
+            ),
+        ]);
+    }
+
+    /// A refusal about the arguments alone is `Argument`; one about what they
+    /// met is `State`, and `RelativeObservatoryRoot` is either, by whether
+    /// the path came off the command line or out of the setting file.
+    #[test]
+    fn each_refusal_has_the_class_its_cause_decides() {
+        let argument = [
+            Error::EmptyCapture,
+            Error::EmptyNote,
+            Error::ReasonOnOpenStatus(Status::Seed),
+            Error::UriRequired {
+                kind: "paper".into(),
+            },
+            Error::InvalidAt("x".into()),
+            Error::SelfLoop,
+            Error::RelativeObservatoryRoot {
+                root: PathBuf::from("rel"),
+                setting: None,
+            },
+        ];
+        let state = [
+            Error::NoSuchNode("x".into()),
+            Error::NoKillToConfirm("x".into()),
+            Error::HomeUnset,
+            Error::DirtyTree(PathBuf::from("/c")),
+            Error::io_at("reading", "/x", io::Error::other("x")),
+            Error::RelativeObservatoryRoot {
+                root: PathBuf::from("rel"),
+                setting: Some(PathBuf::from("/h/.config/nebula/observatory-root")),
+            },
+        ];
+        for error in argument {
+            assert_eq!(error.class(), ErrorClass::Argument, "{}", error.code());
+        }
+        for error in state {
+            assert_eq!(error.class(), ErrorClass::State, "{}", error.code());
+        }
+        // Both classes appear in the table, and each line's class is the one
+        // `class()` returns for its variant.
+        assert!(
+            Error::CODES
+                .iter()
+                .any(|&(_, _, c)| c == ErrorClass::Argument)
+        );
+        assert!(Error::CODES.iter().any(|&(_, _, c)| c == ErrorClass::State));
     }
 
     #[test]

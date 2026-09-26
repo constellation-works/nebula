@@ -319,12 +319,14 @@ pub fn read_bounded(input: impl std::io::Read, what: &'static str, limit: usize)
 
     let ceiling = u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1);
     let mut bytes = Vec::new();
-    input.take(ceiling).read_to_end(&mut bytes)?;
+    input
+        .take(ceiling)
+        .read_to_end(&mut bytes)
+        .map_err(|source| Error::IoStdin { what, source })?;
     if bytes.len() > limit {
         return Err(Error::InputTooLarge { what, limit });
     }
-    String::from_utf8(bytes)
-        .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))
+    String::from_utf8(bytes).map_err(|_| Error::StdinNotUtf8 { what })
 }
 
 /// The five-second path: append a thought to the inbox.
@@ -726,9 +728,7 @@ pub fn confirm_kill(corpus: &Corpus, id: &str) -> Result<Doc> {
         return Err(Error::RefutedCannotReopen);
     }
     if doc.node.kill.as_ref().is_none_or(|k| k.trim().is_empty()) {
-        return Err(Error::corpus(
-            "there is no kill condition to confirm; name one with --kill",
-        ));
+        return Err(Error::NoKillToConfirm(id.to_string()));
     }
     doc.node.kill_by = None;
     corpus.save(&mut doc)?;
@@ -860,7 +860,7 @@ pub fn note(corpus: &Corpus, id: &str, text: &str, by: Option<&str>) -> Result<D
         .collect::<Vec<_>>()
         .join(" ");
     if text.is_empty() {
-        return Err(Error::corpus("a note cannot be empty"));
+        return Err(Error::EmptyNote);
     }
     let _lock = corpus.lock()?;
     let by = model::author(by)?;
@@ -977,9 +977,7 @@ fn attach(corpus: &Corpus, node: &mut Node, args: &Citation, by: Option<String>)
         .filter(|uri| !uri.is_empty())
         .map(str::to_owned);
     if uri.is_none() && kind != "discussion" {
-        return Err(Error::corpus(
-            "--uri is required unless --kind is discussion",
-        ));
+        return Err(Error::UriRequired { kind });
     }
     if !is_reference_kind(&kind) {
         return Err(Error::UnknownReferenceKind(args.kind.clone()));
@@ -1189,18 +1187,17 @@ pub fn set_status(
     status: Status,
     why: Option<&str>,
 ) -> Result<StatusChange> {
+    let why = why.map(str::trim).filter(|w| !w.is_empty());
+    // An open status is not a closing, so there is nothing for a reason to be
+    // the reason for. Refused before the node is read: the arguments alone
+    // decide it, so the answer does not depend on the corpus.
+    if status.is_open() && why.is_some() {
+        return Err(Error::ReasonOnOpenStatus(status));
+    }
     let _lock = corpus.lock()?;
     let mut doc = corpus.load(id)?;
     let from = doc.node.status;
-    let why = why.map(str::trim).filter(|w| !w.is_empty());
 
-    // An open status is not a closing, so there is nothing for a reason to be
-    // the reason for.
-    if status.is_open() && why.is_some() {
-        return Err(Error::corpus(
-            "a reason only applies to refuted or abandoned",
-        ));
-    }
     // Rule 5 at the point of action: refuting is asserting the kill
     // condition fired, and that assertion has to be written down.
     if status == Status::Refuted && why.is_none() {

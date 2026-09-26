@@ -101,7 +101,7 @@ on `error`:
 | field | type | what it is |
 |---|---|---|
 | `error` | string | What is wrong, in the words the text output uses before its hint. |
-| `code` | string | The refusal's stable `snake_case` name. For a core refusal it is the `nebula-core` variant's name in `snake_case`: `no_such_node`, `cycle`, `self_loop`, `needs_kill`, `refuted_needs_why`, `refuted_cannot_reopen`, `seed_with_kill`, `unknown_reference_kind`, `unresolved_uri`, `absolute_uri`, `schema_mismatch`, `missing_config`, `corpus_ignored`, `git`, `git_timed_out`, `locked`, `edit_conflict`, `input_too_large`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `usage` (arguments that parse but ask for nothing, such as an empty `capture`, `graph` with no format, or `--no-commit` before a verb that never commits), `editor_not_configured`, `editor_invalid_command`, `editor_start`, `editor_unsuccessful`, `notes_changed`, `triage_key` (a key `triage` does not know), `triage_title_lost` (input ended while a `triage` title was waiting to be used), `json` and `io_at`. |
+| `code` | string | The refusal's stable `snake_case` name. For a core refusal it is the `nebula-core` variant's name in `snake_case`: `no_such_node`, `cycle`, `self_loop`, `needs_kill`, `refuted_needs_why`, `refuted_cannot_reopen`, `seed_with_kill`, `unknown_reference_kind`, `unresolved_uri`, `absolute_uri`, `schema_mismatch`, `missing_config`, `corpus_ignored`, `git`, `git_timed_out`, `locked`, `edit_conflict`, `input_too_large`, `io_at` (an I/O failure, naming the path), `io_stdin` (standard input could not be read), `stdin_not_utf8`, `empty_capture` (an empty `capture`), `empty_note`, `reason_on_open_status`, `no_kill_to_confirm`, `uri_required`, `invalid_author_label`, `invalid_at`, `not_a_status`, `not_an_edge_type`, `malformed_frontmatter`, `inbox_entry_missing`, `inbox_entry_changed`, `inbox_entry_foreign`, `inbox_ids_exhausted`, `nodes_symlink`, `inbox_symlink`, `home_unset`, `home_not_unicode`, `empty_root_setting`, `relative_root_setting`, `dirty_tree`, `not_a_v1_status`, `not_a_v1_edge_type`, `migrated_node_unreadable`, `malformed_history`, `no_free_keep_name`, `temp_cleanup_failed`, `no_free_temp_name`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `usage` (arguments that parse but ask for nothing, such as `graph` with no format, `near` with no text, or `--no-commit` before a verb that never commits), `editor_not_configured`, `editor_invalid_command`, `editor_start`, `editor_unsuccessful`, `notes_changed`, `triage_key` (a key `triage` does not know), `triage_title_lost` (input ended while a `triage` title was waiting to be used), `stdout` and `json`. |
 | `hint` | string or `null` | What to do about it, as the text output words it: often a command to run, such as `neb sharpen <id> --kill "..."`. `null` when the CLI has nothing to add. |
 
 Key order is not significant. A new refusal arrives with its own `code` and
@@ -116,7 +116,7 @@ Exit codes, with or without `--json`:
 | 0 | success | the payload | empty, bar a `warning:` or `note:` line (from `init`, `capture`, or a commit that could not happen), or the line saying a query found nothing or a bound cut the result |
 | 1 | a refusal | empty, **except** when the write landed and its commit was refused (`CorpusIgnored`, `Git`, `GitTimedOut`): then it holds the write's payload | the envelope |
 | 1 | `check` found an `error`-level finding | the report | empty |
-| 2 | a usage error `neb` raised: an argument no corpus could accept, whatever it holds (`usage`, `interactive`, `self_loop`, `parent_and_reopens`, `empty_kill`, `refuted_needs_why`, `absolute_uri`, `unusable_title`, `unknown_reference_kind`, `invalid_observatory_id`, `invalid_id`, `empty_root`, `root_and_path_differ`, and `relative_observatory_root` for a path given on the command line); nothing was written | empty | the envelope |
+| 2 | a usage error `neb` raised: an argument no corpus could accept, whatever it holds (`usage`, `interactive`, `self_loop`, `parent_and_reopens`, `empty_kill`, `refuted_needs_why`, `absolute_uri`, `unusable_title`, `unknown_reference_kind`, `invalid_observatory_id`, `invalid_id`, `empty_root`, `root_and_path_differ`, `empty_capture`, `empty_note`, `reason_on_open_status`, `uri_required`, `invalid_at`, `invalid_author_label`, `not_a_status`, `not_an_edge_type`, and `relative_observatory_root` for a path given on the command line); nothing was written | empty | the envelope |
 | 2 | clap rejected the command line: unknown flag, missing argument, bad value | empty | clap's prose, **not** JSON: it is raised before `neb` knows `--json` was asked for |
 
 A refusal of a line read by `triage` from piped input exits 1 whatever its
@@ -261,7 +261,8 @@ bytes); more is refused as `input_too_large` before the corpus is opened for
 writing, so nothing is captured. Text over several lines,
 piped or quoted, is joined onto one line: each line break becomes a single
 space and blank lines vanish, so `printf 'a\nb\n' | neb capture -` stores
-`a b`. Only whitespace-only text is refused (`nothing to capture`).
+`a b`. Only whitespace-only text is refused (`nothing to capture`, code
+`empty_capture`), before a missing corpus is created for it.
 
 `capture` prints the entry id on its own line, then — when any node shares a
 word with the text — a `near:` block of up to three lines, `<band> <status>

@@ -91,7 +91,9 @@ Design rules for core:
   hand edits, not core bugs.
 - **Writes take the corpus lock; reads never do.** See below.
 - **Typed errors.** `Error::Cycle { from, to }`, `Error::NeedsKill(status)`,
-  `Error::NoSuchNode(id)`, `Error::RefutedNeedsWhy`, `Error::Io`, ... The CLI
+  `Error::NoSuchNode(id)`, `Error::RefutedNeedsWhy`, `Error::IoAt { action, path,
+  source }`, ... One variant per failure mode and no catch-all; an I/O error
+  always names its path; the enum is `#[non_exhaustive]`. The CLI
   maps them to messages and exit codes, and under `--json` to an envelope
   whose `code` is `Error::code()`, the variant's name in `snake_case`; the
   desktop maps them to UI. Neither parses strings.

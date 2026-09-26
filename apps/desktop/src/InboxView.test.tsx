@@ -233,11 +233,16 @@ describe("InboxView", () => {
   });
 
   it("an unresolved root shows its cause and no path to initialise", async () => {
-    mocked.inbox.mockRejectedValue({ code: "empty_root", message: "could not resolve the corpus root: configured nebula root is empty" });
+    mocked.inbox.mockRejectedValue({
+      code: "empty_root_setting",
+      message: "could not resolve the corpus root: the corpus root setting /home/me/.config/nebula/root is empty",
+    });
     mocked.corpusPath.mockResolvedValue(null);
     render(<Harness />);
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("could not resolve the corpus root: configured nebula root is empty");
+    expect(alert).toHaveTextContent(
+      "could not resolve the corpus root: the corpus root setting /home/me/.config/nebula/root is empty",
+    );
     await waitFor(() => expect(mocked.corpusPath).toHaveBeenCalledTimes(1));
     expect(alert).not.toHaveTextContent("Looked in");
     expect(alert).not.toHaveTextContent("neb init");

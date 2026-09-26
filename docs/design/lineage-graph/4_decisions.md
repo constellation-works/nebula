@@ -648,9 +648,9 @@ run, in which case both settings would need an override of their own.
 ## Which refusals are usage errors
 
 STD-01@2 §R20 gives a usage error exit 2 and a failure exit 1. `neb` decides
-which in one place, `exit` in `crates/neb/src/render/error.rs`, per core
-variant, with no wildcard, and the CLI's own refusals are made as one or the
-other. A usage error is an argument no corpus could accept whatever it holds:
+which in one place, `exit` in `crates/neb/src/render/error.rs`, from the class
+core gives each variant (see the next decision), and the CLI's own refusals
+are made as one or the other. A usage error is an argument no corpus could accept whatever it holds:
 a value of the wrong shape (`InvalidId`, `UnusableTitle`, `EmptyKill`,
 `AbsoluteUri`, `UnknownReferenceKind`, `InvalidObservatoryId`, an empty
 `--root`, a relative path given to `config observatory-root`), flags that rule
@@ -665,6 +665,28 @@ code, because the command line was fine; `UnusableTitle` from `t !!!` there is
 a failure, and from `new "!!!"` a usage error. Reverses for any variant found
 to be raised by both an argument and the corpus's contents, which would then
 split into two.
+
+## Exit classes live in core beside the codes
+
+Which refusals exit 2 is decided per core variant, and that decision has to
+fail the build when a variant is added without one (STD-02@2 §R27, STD-01@2
+§R20). `nebula_core::Error` is `#[non_exhaustive]` (STD-02@2 §R11), and that
+makes any match on it outside `nebula-core` need a wildcard, so a per-variant
+`match` in `neb` would quietly send a new variant to whatever the wildcard
+says. The classification therefore lives where the enum is defined: each
+`codes!` line in `crates/nebula-core/src/error.rs` names a variant's code and
+its `ErrorClass`, `Argument` (an argument no corpus could accept, whatever it
+holds) or `State` (anything that turns on what the corpus, the machine or git
+holds), and `Error::class()` is generated as an exhaustive match with no
+wildcard. `RelativeObservatoryRoot` has two lines, split on whether its path
+came off the command line (`setting: None`, `Argument`) or out of the setting
+file (`State`). `neb`'s `exit` maps `Argument` to exit 2 and `State` to exit
+1, with nothing per variant, and the desktop can branch on the same class.
+
+What is given up: core now states a fact that only surfaces act on, though
+it is a fact about the refusal's cause rather than about any surface.
+Reverses if `Error` stops being `#[non_exhaustive]`, or a surface needs a
+split the two classes cannot express.
 
 ## An interrupted promotion is finished from a pending-write record
 

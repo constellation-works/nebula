@@ -385,11 +385,11 @@ fn verified(staged: &Staged) -> Result<(Vec<(&StagedNode, String)>, Config)> {
         if node.text == node.original {
             continue;
         }
-        let doc = model::parse(&node.text).map_err(|e| {
-            Error::corpus(format!(
-                "in {}: the migration produced a node this build cannot read: {e}",
-                node.path.display()
-            ))
+        let doc = model::parse(&node.text, &node.path).map_err(|source| {
+            Error::MigratedNodeUnreadable {
+                path: node.path.clone(),
+                source: Box::new(source),
+            }
         })?;
         writes.push((node, doc.node.id));
     }
@@ -441,7 +441,7 @@ pub(crate) fn v1_node_under_current_schema(
     version: u32,
 ) -> Option<Error> {
     let raw = std::fs::read_to_string(path).ok()?;
-    let (front, _) = model::split_frontmatter(&raw).ok()?;
+    let (front, _) = model::split_frontmatter(&raw, path).ok()?;
     serde_yaml_ng::from_str::<V1Node>(front).ok()?;
     let fields: serde_yaml_ng::Mapping = serde_yaml_ng::from_str(front).ok()?;
     let keys: Vec<String> = V1_ONLY_KEYS
@@ -455,14 +455,6 @@ pub(crate) fn v1_node_under_current_schema(
         version,
         keys,
     })
-}
-
-/// Name the file a complaint about the corpus came from.
-fn in_file(e: Error, path: &Path) -> Error {
-    match e {
-        Error::Corpus(message) => Error::corpus(format!("in {}: {message}", path.display())),
-        other => other,
-    }
 }
 
 /// A corpus under git with uncommitted changes is refused, so the migration
@@ -490,10 +482,7 @@ fn refuse_dirty_tree(root: &Path) -> Result<()> {
         });
     }
     if !status.stdout.is_empty() {
-        return Err(Error::corpus(format!(
-            "{} has uncommitted changes; commit or stash them so the migration is its own commit",
-            root.display()
-        )));
+        return Err(Error::DirtyTree(root.to_path_buf()));
     }
     Ok(())
 }
@@ -539,15 +528,14 @@ fn v1_to_v2(corpus: &mut Staged) -> Result<()> {
     corpus.config = Some(migrated.render()?);
 
     for node in &mut corpus.nodes {
-        let (front, body) =
-            model::split_frontmatter(&node.text).map_err(|e| in_file(e, &node.path))?;
+        let (front, body) = model::split_frontmatter(&node.text, &node.path)?;
         let v1: V1Node = serde_yaml_ng::from_str(front).map_err(|e| {
             Error::yaml(
                 format!("parsing {} with the v1 model", node.path.display()),
                 e,
             )
         })?;
-        let (converted, notes) = convert(v1).map_err(|e| in_file(e, &node.path))?;
+        let (converted, notes) = convert(v1, &node.path)?;
         node.text = model::render(&Doc {
             node: converted,
             body: body.to_string(),
@@ -559,8 +547,9 @@ fn v1_to_v2(corpus: &mut Staged) -> Result<()> {
 
 // ------------------------------------------------------------ conversion --
 
-/// One v1 node in v2 form, plus a line per thing that changed.
-fn convert(v1: V1Node) -> Result<(Node, Vec<String>)> {
+/// One v1 node in v2 form, plus a line per thing that changed. `path` is the
+/// file it was read from, which a refusal names.
+fn convert(v1: V1Node, path: &Path) -> Result<(Node, Vec<String>)> {
     let mut notes = Vec::new();
 
     // The v1 model is lenient by design, so this is the one place a v1 id is
@@ -592,7 +581,7 @@ fn convert(v1: V1Node) -> Result<(Node, Vec<String>)> {
     refs.references(v1.references);
     refs.evidence(v1.evidence);
     refs.tasks(v1.tasks);
-    let edges = refs.edges(v1.edges)?;
+    let edges = refs.edges(v1.edges, path)?;
     let references = refs.out;
 
     let (status, closed) = convert_status(
@@ -601,6 +590,7 @@ fn convert(v1: V1Node) -> Result<(Node, Vec<String>)> {
         v1.graduated_to.as_deref(),
         &v1.updated,
         &mut notes,
+        path,
     )?;
 
     Ok((
@@ -723,7 +713,7 @@ impl Relabel<'_> {
     /// The five surviving edge kinds pass through. The evidence graph in
     /// edge form becomes a reference to the other node, so the claim
     /// survives even though the edge kind does not.
-    fn edges(&mut self, edges: Vec<V1Edge>) -> Result<Vec<Edge>> {
+    fn edges(&mut self, edges: Vec<V1Edge>, path: &Path) -> Result<Vec<Edge>> {
         let mut out = Vec::new();
         for e in edges {
             let kind = match e.kind.as_str() {
@@ -745,9 +735,10 @@ impl Relabel<'_> {
                     continue;
                 }
                 other => {
-                    return Err(Error::corpus(format!(
-                        "edge type `{other}` is not a v1 edge type"
-                    )));
+                    return Err(Error::NotAV1EdgeType {
+                        path: path.to_path_buf(),
+                        edge_type: other.to_string(),
+                    });
                 }
             };
             out.push(Edge {
@@ -767,6 +758,7 @@ fn convert_status(
     graduated_to: Option<&str>,
     updated: &str,
     notes: &mut Vec<String>,
+    path: &Path,
 ) -> Result<(Status, Option<Closed>)> {
     Ok(match status {
         "seed" => (Status::Seed, closed),
@@ -804,9 +796,10 @@ fn convert_status(
             )
         }
         other => {
-            return Err(Error::corpus(format!(
-                "status `{other}` is not a v1 status"
-            )));
+            return Err(Error::NotAV1Status {
+                path: path.to_path_buf(),
+                status: other.to_string(),
+            });
         }
     })
 }

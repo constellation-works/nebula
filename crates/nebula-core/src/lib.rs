@@ -69,7 +69,7 @@ pub use check::{Finding, OBSERVATORY, Report, Severity};
 pub use config::{
     CommitSetting, OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, SCHEMA_VERSION,
 };
-pub use error::{Error, Result};
+pub use error::{Error, ErrorClass, Result};
 #[cfg(debug_assertions)]
 #[doc(hidden)]
 pub use git::GitDeadlineOverride;

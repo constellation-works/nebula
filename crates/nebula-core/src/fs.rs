@@ -76,11 +76,12 @@ pub fn write_private_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<(
             Ok(()) => {}
             Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => {}
             Err(cleanup) => {
-                return Err(Error::corpus(format!(
-                    "atomic write to {} failed: {error}; removing {} failed: {cleanup}",
-                    path.display(),
-                    tmp.display()
-                )));
+                return Err(Error::TempCleanupFailed {
+                    path: path.to_path_buf(),
+                    tmp,
+                    write: error,
+                    cleanup,
+                });
             }
         }
         return Err(Error::io_at("writing", path, error));
@@ -317,11 +318,10 @@ pub(crate) fn create_temporary_sibling(path: &Path) -> Result<(PathBuf, File)> {
             Err(error) => return Err(Error::io_at("writing", path, error)),
         }
     }
-    Err(Error::corpus(format!(
-        "no free temporary name beside {} after {TEMPORARY_NAME_ATTEMPTS} tries; \
-         something is creating files under them",
-        path.display()
-    )))
+    Err(Error::NoFreeTempName {
+        path: path.to_path_buf(),
+        attempts: TEMPORARY_NAME_ATTEMPTS,
+    })
 }
 
 /// One thing the helpers did to the disk, as a test sees it.

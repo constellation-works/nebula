@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+# Consumed inside this workspace only (STD-02 §R11).
+publish = false
 
 [lib]
 name = "nebula_core"

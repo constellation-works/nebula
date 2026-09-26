@@ -149,6 +149,13 @@ impl fmt::Display for StdoutFailed {
     }
 }
 
+/// A write to a stream the caller treats as stdout failed.
+impl From<io::Error> for StdoutFailed {
+    fn from(e: io::Error) -> Self {
+        Self(e)
+    }
+}
+
 /// The refusal `main` reports, with `code` `stdout` under `--json`.
 impl From<StdoutFailed> for Refusal {
     fn from(e: StdoutFailed) -> Self {
