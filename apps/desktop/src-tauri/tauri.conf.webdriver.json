@@ -5,7 +5,15 @@
   },
   "app": {
     "security": {
-      "capabilities": ["default", "webdriver"]
+      "capabilities": [
+        "default",
+        {
+          "identifier": "webdriver",
+          "description": "Permission for the debug-only embedded WebDriver used by the CSP integration check.",
+          "windows": ["main"],
+          "permissions": ["wdio-webdriver:default"]
+        }
+      ]
     }
   }
 }
