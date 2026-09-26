@@ -4,6 +4,7 @@ import * as api from "./api";
 import type { Written } from "./api";
 import { CaptureBox, CONFIRM_MS } from "./CaptureBox";
 import { CaptureWindow } from "./CaptureWindow";
+import { LOCKED, type IpcError } from "./ipcError";
 import type { InboxEntry } from "./types/InboxEntry";
 
 vi.mock("./api");
@@ -14,12 +15,25 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => windowMock })
 const mocked = vi.mocked(api);
 
 const ignored = "/corpus is ignored by the git repository that contains it; nothing can be committed";
+const busyWithHolder: IpcError = {
+  code: LOCKED,
+  message: "another nebula writer is holding /corpus; nothing was written",
+  lockHolder: { label: "neb tag foo", pid: 123 },
+};
 
 /** A capture that landed in the inbox and whose commit was refused. */
 function landedUncommitted(text: string): Written<InboxEntry> {
   return {
     value: { id: "9999", at: "2026-09-13T12:00", text },
     commit: { status: "refused", error: { code: "corpus_ignored", message: ignored } },
+  };
+}
+
+/** A capture that landed outside a git work tree. */
+function landedWithoutRepository(text: string): Written<InboxEntry> {
+  return {
+    value: { id: "9999", at: "2026-09-13T12:00", text },
+    commit: { status: "not_a_repository" },
   };
 }
 
@@ -62,6 +76,41 @@ describe("CaptureBox", () => {
     });
     expect(mocked.capture).toHaveBeenCalledTimes(1);
   });
+
+  it("reports a capture that landed outside a git repository", async () => {
+    mocked.capture.mockResolvedValue(landedWithoutRepository("saved"));
+    const onCaptured = vi.fn();
+    render(<CaptureBox onCaptured={onCaptured} />);
+    const input = screen.getByLabelText("Capture");
+
+    fireEvent.change(input, { target: { value: "saved" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("captured (not committed: not a git repository)");
+    expect(status).toHaveClass("capture__status--warning");
+    expect(input).toHaveValue("");
+    expect(onCaptured).toHaveBeenCalledTimes(1);
+  });
+
+  it("names a recorded lock holder after capture retries", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mocked.capture.mockRejectedValue(busyWithHolder);
+    render(<CaptureBox />);
+    const input = screen.getByLabelText("Capture");
+
+    fireEvent.change(input, { target: { value: "keep this thought" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(mocked.capture).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Corpus busy: `neb tag foo` (pid 123) is writing. Press Enter to retry.",
+    );
+    expect(input).toHaveValue("keep this thought");
+  });
 });
 
 describe("CaptureWindow", () => {
@@ -81,5 +130,20 @@ describe("CaptureWindow", () => {
 
     fireEvent.keyDown(input, { key: "Escape" });
     expect(windowMock.hide).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays up with a not-committed note when there is no git repository", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mocked.capture.mockResolvedValue(landedWithoutRepository("saved"));
+    render(<CaptureWindow />);
+    const input = screen.getByLabelText("Capture");
+
+    fireEvent.change(input, { target: { value: "saved" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(await screen.findByText("captured (not committed: not a git repository)")).toBeInTheDocument();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CONFIRM_MS * 2);
+    });
+    expect(windowMock.hide).not.toHaveBeenCalled();
   });
 });

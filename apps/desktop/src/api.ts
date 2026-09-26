@@ -18,8 +18,8 @@ import type { NodeView } from "./types/NodeView";
 /**
  * What the commit after a write did: `CommitReport` in
  * `src-tauri/src/session.rs`, whose JSON `tests/commands.rs` pins against
- * these lines. `refused` means the write landed and was not committed: a
- * warning, never a reason to write again.
+ * these lines. `refused` and `not_a_repository` mean the write landed without
+ * a commit: a warning, never a reason to write again.
  */
 export type CommitReport =
   | { status: "committed"; commit: Committed }

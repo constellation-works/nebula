@@ -140,10 +140,12 @@ fn capture_command_reports_busy_while_another_process_holds_the_lock() {
             )),
         "the message names the holder: {message}"
     );
+    assert_eq!(refused["lockHolder"]["label"], lock_holder::LABEL);
+    assert_eq!(refused["lockHolder"]["pid"], holder.pid());
     assert_eq!(
         refused.as_object().map(serde_json::Map::len),
-        Some(2),
-        "exactly `code` and `message`: {refused}"
+        Some(3),
+        "`code`, `message`, and `lockHolder`: {refused}"
     );
 
     holder.release();

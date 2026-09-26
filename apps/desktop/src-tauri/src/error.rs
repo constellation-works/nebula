@@ -91,23 +91,60 @@ impl From<ShortcutError> for DesktopError {
     }
 }
 
-/// The one error every command returns: `{ code, message }` in the webview,
-/// declared again as `IpcError` in `apps/desktop/src/ipcError.ts`.
+/// The one error every command returns in the webview, declared again as
+/// `IpcError` in `apps/desktop/src/ipcError.ts`. A recorded lock holder is
+/// included separately so the frontend never has to parse the message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct IpcError {
     /// [`DesktopError::code`]: what the frontend branches on.
     pub code: String,
     /// The error's own message: what the frontend shows.
     pub message: String,
+    /// Who holds a busy lock, when the core could read its diagnostic record.
+    #[serde(rename = "lockHolder", skip_serializing_if = "Option::is_none")]
+    pub lock_holder: Option<LockHolderInfo>,
+}
+
+/// The holder fields the desktop uses to identify a busy writer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LockHolderInfo {
+    /// The command or application recorded by the writer.
+    pub label: String,
+    /// The writer's process id.
+    pub pid: u32,
+}
+
+impl DesktopError {
+    fn lock_holder_info(&self) -> Option<LockHolderInfo> {
+        let error = match self {
+            Self::Core(error) => error,
+            Self::RootUnresolved(error) => error.as_ref(),
+            _ => return None,
+        };
+        let nebula_core::Error::Locked {
+            holder: Some(holder),
+            ..
+        } = error
+        else {
+            return None;
+        };
+        Some(LockHolderInfo {
+            label: holder.label.clone(),
+            pid: holder.pid,
+        })
+    }
 }
 
 /// The translator (STD-02 §R12): every command error reaches the webview
 /// through this and nothing else.
 impl From<DesktopError> for IpcError {
     fn from(e: DesktopError) -> Self {
+        let lock_holder = e.lock_holder_info();
         Self {
             code: e.code().to_string(),
             message: e.to_string(),
+            lock_holder,
         }
     }
 }

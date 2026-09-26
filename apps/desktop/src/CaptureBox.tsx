@@ -1,7 +1,7 @@
 import { useEffect, useImperativeHandle, useRef, useState, type ClipboardEvent, type KeyboardEvent, type Ref } from "react";
 import * as api from "./api";
 import type { Written } from "./api";
-import { errorMessage, isIpcError, LOCKED } from "./ipcError";
+import { errorMessage, isIpcError, lockHolderName, LOCKED } from "./ipcError";
 import type { InboxEntry } from "./types/InboxEntry";
 
 /** How long the "captured" confirmation stays up. */
@@ -15,7 +15,8 @@ interface Props {
   placeholder?: string;
   /**
    * After a capture landed: once the confirmation has been shown, or at once
-   * when its commit was refused and the warning stays up.
+   * when its commit was refused or could not be committed because there is
+   * no git work tree, and the warning stays up.
    */
   onCaptured?: (written: Written<InboxEntry>, hasActiveDraft: boolean) => void;
   onEscape?: () => void;
@@ -26,10 +27,10 @@ interface Props {
 /**
  * One input. Enter captures; after success the box clears only the submitted
  * text, says "captured" for a second, and is ready for the next thought. A
- * capture whose commit was refused landed all the same: the text is cleared
- * too, so Enter cannot write it twice, and the status keeps a warning saying
- * it was not committed. The same box sits at the top of the inbox and alone
- * in the floating window.
+ * capture whose commit was refused or had no repository landed all the same:
+ * the text is cleared too, so Enter cannot write it twice, and the status
+ * keeps a warning saying it was not committed. The same box sits at the top
+ * of the inbox and alone in the floating window.
  */
 export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape, resetErrorKey }: Props) {
   const [text, setText] = useState("");
@@ -78,7 +79,12 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape, 
           if (!isIpcError(e) || e.code !== LOCKED) throw e;
           if (attempt === 2) {
             setStatus("error");
-            setMessage("Corpus busy. Press Enter to retry.");
+            const holder = lockHolderName(e);
+            setMessage(
+              holder
+                ? `Corpus busy: ${holder} is writing. Press Enter to retry.`
+                : "Corpus busy. Press Enter to retry.",
+            );
             return;
           }
           setStatus("retrying");
@@ -90,9 +96,10 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape, 
         textRef.current = "";
         setText("");
       }
-      if (written.commit.status === "refused") {
+      if (written.commit.status === "refused" || written.commit.status === "not_a_repository") {
         setStatus("warning");
-        setMessage(`captured (not committed: ${errorMessage(written.commit.error)})`);
+        const reason = written.commit.status === "refused" ? errorMessage(written.commit.error) : "not a git repository";
+        setMessage(`captured (not committed: ${reason})`);
         onCaptured?.(written, Boolean(textRef.current.trim()));
       } else {
         setMessage(null);

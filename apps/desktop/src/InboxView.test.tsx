@@ -20,6 +20,10 @@ const mocked = vi.mocked(api);
 
 /** What a settle or capture rejects with while another writer holds the lock. */
 const busy: IpcError = { code: LOCKED, message: "another nebula writer is holding /corpus; nothing was written" };
+const busyWithHolder: IpcError = {
+  ...busy,
+  lockHolder: { label: "neb tag foo", pid: 123 },
+};
 
 const entries: InboxEntry[] = [
   { id: "a1b2", at: "2026-09-13T09:00", text: "capture must stay under five seconds" },
@@ -217,15 +221,33 @@ describe("InboxView", () => {
     expect(mocked.dropEntry).toHaveBeenCalledTimes(1);
   });
 
+  it("a settle outside a git repository refreshes the list and reports the missing commit", async () => {
+    mocked.inbox.mockResolvedValueOnce(entries).mockResolvedValueOnce([entries[1]]);
+    mocked.dropEntry.mockResolvedValue({
+      value: entries[0],
+      commit: { status: "not_a_repository" },
+    });
+    render(<Harness />);
+    await screen.findByText("a1b2");
+
+    fireEvent.click(within(screen.getAllByRole("listitem")[0]).getByRole("button", { name: "Drop" }));
+    await waitFor(() => expect(mocked.inbox).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText("a1b2")).not.toBeInTheDocument());
+    expect(screen.getByText("dropped a1b2 (not committed: not a git repository)")).toBeInTheDocument();
+    expect(mocked.dropEntry).toHaveBeenCalledTimes(1);
+  });
+
   it("a busy settle says the corpus is busy", async () => {
-    mocked.dropEntry.mockRejectedValueOnce(busy);
+    mocked.dropEntry.mockRejectedValueOnce(busyWithHolder);
     mocked.promoteRoot.mockRejectedValueOnce(busy);
     render(<Harness />);
     await screen.findByText("a1b2");
     const [first, second] = screen.getAllByRole("listitem");
 
     fireEvent.click(within(first).getByRole("button", { name: "Drop" }));
-    expect(await within(first).findByRole("alert")).toHaveTextContent("Corpus busy; nothing was changed. Try again.");
+    expect(await within(first).findByRole("alert")).toHaveTextContent(
+      "Corpus busy: `neb tag foo` (pid 123) is writing. Try again.",
+    );
     fireEvent.click(within(second).getByRole("button", { name: "Promote as root" }));
     expect(await within(second).findByRole("alert")).toHaveTextContent("Corpus busy; nothing was changed. Try again.");
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
