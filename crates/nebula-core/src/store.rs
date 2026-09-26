@@ -683,12 +683,14 @@ impl Corpus {
     }
 
     /// Append a capture to the current month's inbox file.
+    ///
+    /// Text that spans lines is joined onto one with [`capture_line`] rather
+    /// than refused: the inbox holds one entry per line, and a refusal would
+    /// lose the thought at the moment it arrived. Only text that is nothing
+    /// but whitespace is refused.
     pub fn capture(&self, text: &str) -> Result<InboxEntry> {
         use std::io::Write;
-        if text.contains(['\n', '\r']) {
-            return Err(Error::corpus("capture text must fit on one line"));
-        }
-        let text = text.trim();
+        let text = capture_line(text);
         if text.is_empty() {
             return Err(Error::corpus("nothing to capture"));
         }
@@ -719,7 +721,7 @@ impl Corpus {
         Ok(InboxEntry {
             id,
             at: now,
-            text: text.to_string(),
+            text,
             file: path,
             line,
         })
@@ -814,6 +816,25 @@ pub(crate) fn refuse_nodes_symlink(root: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(Error::io_at("inspecting", &path, error)),
     }
+}
+
+/// The one inbox line a piece of captured text is stored as.
+///
+/// Every line break, `\n` or `\r` alike, becomes a single space, together
+/// with the whitespace around it, and blank lines vanish, so text pasted or
+/// piped in over several lines reads as the sentence it was. Whitespace
+/// inside a line is the author's and stays; the ends are trimmed. The result
+/// never holds a line break, which is what keeps the inbox at one entry per
+/// line, and it is empty exactly when the text was nothing but whitespace.
+///
+/// [`Corpus::capture`] applies it, so the CLI, the desktop app and anything
+/// else that captures store the same line for the same text.
+pub fn capture_line(text: &str) -> String {
+    text.split(['\n', '\r'])
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Check the named inbox entry itself, without resolving the corpus root. A

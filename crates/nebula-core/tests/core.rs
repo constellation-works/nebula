@@ -7,7 +7,7 @@
 
 use nebula_core::{
     Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, HUMAN, NEAR_DEFAULT, NewNode,
-    Promotion, ReviewRule, Status, TraceHop, Via, graph, ops,
+    Promotion, ReviewRule, Status, TraceHop, Via, graph, ops, store,
 };
 use std::fmt::Write as _;
 
@@ -940,16 +940,59 @@ fn settling_refuses_when_the_indexed_line_has_another_entry_id() {
 }
 
 #[test]
-fn multiline_capture_is_refused_without_writing() {
+fn capture_line_joins_every_line_break_into_one_space() {
+    for (text, line) in [
+        ("one line", "one line"),
+        ("  padded  ", "padded"),
+        ("a\nb\n", "a b"),
+        ("a\r\nb\r\n", "a b"),
+        ("a\rb", "a b"),
+        ("a  \n\n\t  b", "a b"),
+        ("\n\nleading and trailing\n\n", "leading and trailing"),
+        ("inner  spacing\tstays\nput", "inner  spacing\tstays put"),
+        ("", ""),
+        (" \n\r\n\t ", ""),
+    ] {
+        assert_eq!(store::capture_line(text), line, "joining {text:?}");
+    }
+}
+
+#[test]
+fn multiline_capture_is_stored_as_one_inbox_line() {
+    let (_dir, corpus) = corpus();
+    let existing = ops::capture(&corpus, "already here").unwrap();
+
+    let entry = ops::capture(&corpus, "first line\nsecond line\r\nthird\rfourth\n").unwrap();
+
+    assert_eq!(entry.text, "first line second line third fourth");
+    let raw = std::fs::read_to_string(&entry.file).unwrap();
+    assert_eq!(raw.lines().count(), 2, "one line per entry:\n{raw}");
+    assert_eq!(entry.line, 1);
+    assert_eq!(
+        raw.lines().nth(entry.line).unwrap(),
+        format!("- [{}] {} {}", entry.id, entry.at, entry.text)
+    );
+    assert_eq!(corpus.inbox().unwrap().0.len(), 2);
+    assert_eq!(corpus.inbox_entry(&entry.id).unwrap().text, entry.text);
+    assert_eq!(
+        corpus.inbox_entry(&existing.id).unwrap().text,
+        existing.text
+    );
+}
+
+#[test]
+fn whitespace_only_capture_is_refused_without_writing() {
     let (_dir, corpus) = corpus();
     let existing = ops::capture(&corpus, "already here").unwrap();
     let before = std::fs::read_to_string(&existing.file).unwrap();
 
-    let error = ops::capture(&corpus, "first line\nsecond line").unwrap_err();
-
-    assert!(
-        matches!(error, Error::Corpus(message) if message == "capture text must fit on one line")
-    );
+    for text in ["", "   ", "\n", " \r\n\t\n "] {
+        let error = ops::capture(&corpus, text).unwrap_err();
+        assert!(
+            matches!(&error, Error::Corpus(message) if message == "nothing to capture"),
+            "capturing {text:?}: {error}"
+        );
+    }
     assert_eq!(
         std::fs::read_to_string(&existing.file).unwrap(),
         before,

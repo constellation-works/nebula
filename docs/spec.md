@@ -59,7 +59,8 @@ neb capture "ranking signal decay looks like it has a half-life, not a cliff"
 ```
 
 Appends one timestamped line with a short id to `inbox/YYYY-MM.md`. No parent,
-no tags, no status. If capture ever asks you to pick a parent, you will stop
+no tags, no status. Text over several lines, quoted or piped in with
+`neb capture -`, is joined onto that one line rather than refused. If capture ever asks you to pick a parent, you will stop
 capturing, and the whole thing is dead.
 
 Inbox entries are **not nodes**. Promotion is a separate, explicit act, and

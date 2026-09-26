@@ -98,6 +98,9 @@ smuggled past.
 ## Capture has a five-second budget
 
 Capture takes one line, requires no decisions, and works before a corpus exists.
+Text that arrives over several lines is joined onto one rather than refused, since
+a refusal loses the thought at the moment it arrived (see the
+[capture path](specs/capture-path.md#text-over-several-lines)).
 If capture ever asks which parent an idea belongs to, it will be skipped at the
 exact moment an idea arrives, and the corpus dies. Promotion is a separate act,
 and most captures should never be promoted.

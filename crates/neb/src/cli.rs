@@ -197,7 +197,8 @@ enum Command {
     /// names the three existing nodes the thought reads closest to, for the
     /// triage that comes later; that is a suggestion, and nothing is linked.
     /// With no corpus at the root it creates one rather than refuse, and
-    /// names the path it created on stderr.
+    /// names the path it created on stderr. Text over several lines, typed,
+    /// pasted or piped in with `-`, is joined onto one line with spaces.
     Capture {
         /// Print the entry id alone, without the nearest nodes.
         #[arg(long, short)]
@@ -206,8 +207,9 @@ enum Command {
         ///
         /// Remaining words, so it can be typed without quotes. Not a trailing
         /// vararg: a flag after the text (`--quiet`, `--no-commit`) is still
-        /// a flag. A dash-leading token belongs in quotes, or after `--`.
-        #[arg(required = true, num_args = 1..)]
+        /// a flag. A dash-leading token belongs in quotes, or after `--`. A
+        /// lone `-` reads the thought from standard input.
+        #[arg(required = true, num_args = 1.., value_name = "TEXT|-")]
         text: Vec<String>,
     },
 
@@ -687,19 +689,34 @@ type Outcome = std::result::Result<ExitCode, Failure>;
 
 /// Resolve a `--body` value, using stdin only for the explicit `-` spelling.
 fn body_value(value: Option<String>) -> std::result::Result<String, Failure> {
-    use std::io::Read;
-
     match value.as_deref() {
         None => Ok(String::new()),
-        Some("-") => {
-            let mut body = String::new();
-            std::io::stdin()
-                .read_to_string(&mut body)
-                .map_err(Error::from)?;
-            Ok(body)
-        }
+        Some("-") => read_stdin(),
         Some(_) => Ok(value.unwrap_or_default()),
     }
+}
+
+/// The words of a `capture`, or standard input when they are a lone `-`.
+///
+/// Only that exact spelling reads stdin, as with `--body -`: a dash among
+/// other words is part of the thought. The text is passed on as it came;
+/// the core joins its lines, so a pipe and a paste store the same line.
+fn capture_text(words: &[String]) -> std::result::Result<String, Failure> {
+    match words {
+        [dash] if dash == "-" => read_stdin(),
+        _ => Ok(words.join(" ")),
+    }
+}
+
+/// All of standard input, as text.
+fn read_stdin() -> std::result::Result<String, Failure> {
+    use std::io::Read;
+
+    let mut text = String::new();
+    std::io::stdin()
+        .read_to_string(&mut text)
+        .map_err(Error::from)?;
+    Ok(text)
 }
 
 /// Existing notes are immutable through `edit`; `note` is their append path.
@@ -959,7 +976,7 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Capture { quiet, text } => {
-            let text = text.join(" ");
+            let text = capture_text(&text)?;
             if text.trim().is_empty() {
                 return Err(Failure::say("nothing to capture"));
             }

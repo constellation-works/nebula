@@ -363,13 +363,82 @@ fn capture_then_promote_leaves_the_original_text_in_the_node() {
     );
 }
 
+/// The lines of the one inbox month file a fresh corpus has captured into.
+fn inbox_lines(c: &Corpus) -> Vec<String> {
+    let files: Vec<PathBuf> = std::fs::read_dir(c.root.join("inbox"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    let [month] = files.as_slice() else {
+        panic!("expected one inbox month file, found {files:?}");
+    };
+    std::fs::read_to_string(month)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
 #[test]
-fn multiline_capture_is_refused_without_writing() {
+fn capture_dash_reads_stdin_and_joins_its_lines() {
     let c = Corpus::new();
 
-    c.run(&["capture", "first line\nsecond line", "--quiet", "--json"])
+    let id = c
+        .run_with_stdin(&["capture", "-", "--quiet"], "a\nb\n")
+        .assert_ok()
+        .stdout_trim();
+
+    let lines = inbox_lines(&c);
+    assert_eq!(lines.len(), 1, "one line per entry: {lines:?}");
+    assert!(lines[0].starts_with(&format!("- [{id}] ")), "{lines:?}");
+    assert!(lines[0].ends_with(" a b"), "{lines:?}");
+
+    let captured = c
+        .run_with_stdin(&["capture", "-", "--json"], "one\r\n\r\n  two\r\n")
+        .assert_ok()
+        .stdout();
+    let captured: serde_json::Value = serde_json::from_str(&captured).unwrap();
+    assert_eq!(captured["entry"]["text"], "one two");
+    assert_eq!(inbox_lines(&c).len(), 2);
+}
+
+#[test]
+fn multiline_capture_text_is_joined_onto_one_line() {
+    let c = Corpus::new();
+
+    let captured = c
+        .run(&["capture", "first line\nsecond line", "--quiet", "--json"])
+        .assert_ok()
+        .stdout();
+    let captured: serde_json::Value = serde_json::from_str(&captured).unwrap();
+    assert_eq!(captured["entry"]["text"], "first line second line");
+
+    // A lone `-` is stdin; a dash among other words is part of the thought.
+    c.run(&["capture", "--quiet", "--", "left", "-", "right"])
+        .assert_ok();
+
+    let lines = inbox_lines(&c);
+    assert_eq!(lines.len(), 2, "one line per entry: {lines:?}");
+    assert!(lines[0].ends_with(" first line second line"), "{lines:?}");
+    assert!(lines[1].ends_with(" left - right"), "{lines:?}");
+    c.run(&["inbox"])
+        .assert_ok()
+        .says("first line second line")
+        .says("left - right");
+}
+
+#[test]
+fn empty_capture_is_refused_without_writing() {
+    let c = Corpus::new();
+
+    for input in ["", "\n", " \r\n\t\n "] {
+        c.run_with_stdin(&["capture", "-"], input)
+            .assert_fails()
+            .says("nothing to capture");
+    }
+    c.run(&["capture", " \n \r\n "])
         .assert_fails()
-        .says("capture text must fit on one line");
+        .says("nothing to capture");
 
     assert_eq!(
         std::fs::read_dir(c.root.join("inbox")).unwrap().count(),
@@ -377,6 +446,27 @@ fn multiline_capture_is_refused_without_writing() {
         "a refused capture must not create an inbox record"
     );
     c.run(&["inbox", "--json"]).assert_ok().says("[]");
+}
+
+/// Capture creates a missing corpus, but not for a thought that is not there:
+/// empty standard input is refused before anything is written.
+#[test]
+fn empty_stdin_capture_creates_no_corpus() {
+    let dir = tempfile::tempdir().unwrap();
+    let fresh = Corpus {
+        root: dir.path().join("fresh"),
+        dir,
+    };
+
+    fresh
+        .run_with_stdin(&["capture", "-"], "\n\n")
+        .assert_fails()
+        .says("nothing to capture");
+
+    assert!(
+        !fresh.root.exists(),
+        "a refused capture must not init a corpus"
+    );
 }
 
 fn inbox_id_candidates(stamp: &str, text: &str) -> Vec<String> {
