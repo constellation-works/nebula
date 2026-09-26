@@ -45,6 +45,7 @@ drop and waits only up to a deadline. `make hostile-env-test` proves it.
 ## Working here
 
 ```sh
+make ci-fast          # pre-handoff gate: fmt, release/standards/terminal/dependency checks, clippy
 make test             # every crate: core unit tests + end-to-end CLI tests
 make hostile-env-test # the suites under a hostile HOME, TMPDIR and GIT_DIR
 make clippy           # --workspace --all-targets --all-features -D warnings
@@ -56,8 +57,8 @@ The workspace is `crates/nebula-core` (the corpus as a library: no terminal,
 no clap, typed errors, `Serialize` returns) and `crates/neb` (the CLI: one
 core call per verb, plus rendering). Anything that reads or writes the corpus
 goes in core; the desktop app and the agent skill must see what the CLI sees.
-CI runs all four on Linux and macOS, and fails if the generated TypeScript is
-stale. Both matter: the checker walks paths, and
+CI runs all of these on Linux and macOS, and fails if the generated TypeScript
+is stale (`make types-check`). Both matter: the checker walks paths, and
 macOS temporary directories sit under a symlink, so path handling that resolves
 or canonicalizes will pass on one platform and fail on the other. Use paths as
 given.

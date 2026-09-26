@@ -122,7 +122,7 @@ format used by `make desktop`.
 - `src-tauri/` — the shell: commands, file watcher, tray, shortcut.
 - `src/` — the frontend. `src/types/` is generated from `nebula-core`
   (`pnpm gen-types`, or `make types` at the root) and never edited by hand;
-  CI fails on drift.
+  CI fails on drift, including a stale or missing file (`make types-check`).
 - `src/layout.ts` is the pure adapter (`GraphExport` → elk graph → drawn
   layout); `src/layout.worker.ts` runs elk off the main thread and
   `src/layoutClient.ts` talks to it, falling back to the same elk in-thread
