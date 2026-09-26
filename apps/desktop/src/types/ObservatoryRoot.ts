@@ -10,6 +10,13 @@ export type ObservatoryRoot = {
  */
 root: string | null, 
 /**
- * Which of the two settings supplied it.
+ * Which setting supplied it.
  */
-source: ObservatorySource, };
+source: ObservatorySource, 
+/**
+ * The legacy `observatory_root` key in `config.yaml`, whenever the file
+ * still carries one, in effect or not: it is one machine's path in a
+ * file every machine shares, so it is worth naming even where a machine
+ * setting outranks it.
+ */
+legacy: string | null, };

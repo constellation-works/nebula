@@ -118,9 +118,9 @@ Field rules:
   A `verdict` or `strength` key is a parse error (`deny_unknown_fields`).
 - `origin`: unchanged from v0.1. Recorded, never typed by hand.
 - `schema_version: 2` in `config.yaml`. It also keeps the stable `corpus_id`
-  and optional machine-written settings for `observatory_root` and automatic
-  `commit` behavior. Use `neb config observatory-root` and `neb config commit`
-  rather than editing it by hand.
+  and the optional machine-written `commit` setting. Use `neb config commit`
+  rather than editing it by hand. Where the Observatory checkout is is a
+  machine setting, not a corpus one; see [Machine settings](#machine-settings).
 
 ## Inbox
 
@@ -178,6 +178,35 @@ return type serialised; see [2_architecture.md](2_architecture.md).
 | 15 | A node's `id` names one file under `nodes/`, and is the id its file name names | error | parse (the shape); every read and write (the agreement) |
 | 16 | Every reference kind belongs to the documented vocabulary | warn | `cite` refuses new values; `check` reports existing ones |
 
+## Machine settings
+
+The corpus travels between machines (synced, and committed under
+`commit: true`), so nothing machine-specific belongs in it. Where the
+Observatory checkout is, which `observatory` references resolve against, is
+therefore read per machine, first match wins:
+
+1. `$OBSERVATORY_ROOT`;
+2. `~/.config/nebula/observatory-root`, beside `~/.config/nebula/root`,
+   written by `neb config observatory-root <DIR>` (an absolute path; nothing
+   under the corpus changes);
+3. legacy: an `observatory_root` key in `config.yaml`, which earlier builds
+   wrote there. It is still read, so a corpus that carries one keeps
+   resolving, but never written. `check` warns (rule 9) whenever the file
+   carries it, saying whether it is in force here or outranked, and
+   `neb config observatory-root --drop-legacy` removes it once every machine
+   has its own setting.
+
+`neb config observatory-root` without a directory reports the effective root
+and which of these supplied it (`source: env | machine | config | unset`),
+plus the legacy key when the file still carries one.
+
+Decision (ORB-13050): the real corpus, synced between two machines, carried
+one machine's absolute path in `config.yaml`, so every record resolved on
+that machine and warned on the other. Moving the setting to the machine and
+keeping the key as a read-only fallback fixes that without breaking any
+corpus that has the key; reconsider only if a corpus-wide Observatory
+location ever becomes meaningful, such as a path relative to the corpus.
+
 ## Migration (`neb migrate`)
 
 One-shot, idempotent, refuses on a dirty git tree in the corpus, bumps
@@ -190,7 +219,8 @@ writes them back in v2 form:
 - `status: testing | supported` → `hypothesis`.
 - `status: graduated` → `abandoned` with `closed: {why: "graduated to <graduated_to>"}`.
 - `config.yaml` loses `domains` and `default_domain`; existing
-  `observatory_root` and `commit` settings are preserved.
+  `observatory_root` (thereafter the legacy fallback above) and `commit`
+  settings are preserved.
 
 Nothing is dropped; the mapping is a lossless re-labelling into references,
 which is the whole point of keeping references and cutting the rest.

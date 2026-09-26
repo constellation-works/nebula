@@ -194,7 +194,8 @@ neb check
 |---|---|
 | `$NEBULA_ROOT/nodes/<id>.md` | one node, with its edges, references and prose |
 | `$NEBULA_ROOT/inbox/YYYY-MM.md` | captures, append-only, struck through when settled |
-| `$NEBULA_ROOT/config.yaml` | corpus id, schema version, `commit: true` when auto-commit is on, and the observatory root when one is set |
+| `$NEBULA_ROOT/config.yaml` | corpus id, schema version, and `commit: true` when auto-commit is on (a corpus written by an older `neb` may also carry a legacy `observatory_root`) |
+| `~/.config/nebula/observatory-root` | this machine's Observatory checkout, written by `neb config observatory-root <DIR>`; `$OBSERVATORY_ROOT` outranks it |
 
 Work and personal ideas belong in separate corpora, each with its own
 `NEBULA_ROOT`; topics inside one owner's thinking are tags, not separate

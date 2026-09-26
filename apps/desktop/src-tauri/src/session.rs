@@ -52,7 +52,7 @@ pub fn graph(corpus: &Corpus) -> Result<GraphExport> {
 /// `neb show` locates them, so the panel and the terminal agree.
 pub fn node(corpus: &Corpus, id: &str) -> Result<NodeView> {
     let docs = corpus.load_all()?;
-    let observatory = corpus.observatory_root().root;
+    let observatory = corpus.observatory_root()?.root;
     Ok(graph::node(&Graph::build(&docs)?, id)?.with_observatory(observatory.as_deref()))
 }
 

@@ -87,7 +87,10 @@ back, printing a line per node changed and a note per thing it did:
   `closed.why` synthesized to say exactly that — nothing here invents a real
   reason, it records that the old record did not have one.
 - `config.yaml` is rewritten with `corpus_id` and `schema_version: 2`, while
-  preserving `observatory_root` when set and the `commit` setting. The
+  preserving `observatory_root` when set and the `commit` setting. A preserved
+  `observatory_root` is read only as a legacy fallback; set each machine's own
+  with `neb config observatory-root <DIR>`, then remove the key with
+  `neb config observatory-root --drop-legacy`. The
   declared-domain list and default are dropped along with the field they
   supported.
 

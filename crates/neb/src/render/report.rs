@@ -73,20 +73,31 @@ pub fn node(view: &NodeView) -> String {
     out
 }
 
-/// Where `observatory` references resolve, and what set that.
-pub fn observatory_root(setting: &ObservatoryRoot) -> String {
-    match (&setting.root, setting.source) {
-        (Some(root), ObservatorySource::Config) => {
-            format!(
-                "{} {}\n",
-                bold(&root.display().to_string()),
-                dim("(config.yaml)")
-            )
-        }
+/// Where `observatory` references resolve, and what set that. `saved` is
+/// true right after `neb config observatory-root <DIR>`, so a machine
+/// setting the environment outranks says so rather than seeming lost.
+pub fn observatory_root(setting: &ObservatoryRoot, saved: bool) -> String {
+    let mut out = match (&setting.root, setting.source) {
         (Some(root), ObservatorySource::Env) => format!(
             "{} {}\n",
             bold(&root.display().to_string()),
             dim(&format!("(${OBSERVATORY_ROOT_ENV})"))
+        ),
+        (Some(root), ObservatorySource::Machine) => format!(
+            "{} {}\n",
+            bold(&root.display().to_string()),
+            dim("(this machine: ~/.config/nebula/observatory-root)")
+        ),
+        (Some(root), ObservatorySource::Config) => format!(
+            "{} {}\n{}\n",
+            bold(&root.display().to_string()),
+            dim("(config.yaml, legacy)"),
+            dim(&format!(
+                "config.yaml travels with the corpus, and this path is one machine's. Give \
+                 each machine its own with `neb config observatory-root <DIR>` or \
+                 ${OBSERVATORY_ROOT_ENV}, then remove the key with \
+                 `neb config observatory-root --drop-legacy`."
+            ))
         ),
         _ => format!(
             "{}\n",
@@ -95,7 +106,33 @@ pub fn observatory_root(setting: &ObservatoryRoot) -> String {
                  ${OBSERVATORY_ROOT_ENV}"
             ))
         ),
+    };
+    if saved && setting.source == ObservatorySource::Env {
+        let _ = writeln!(
+            out,
+            "{}",
+            dim(&format!(
+                "Saved for this machine, but ${OBSERVATORY_ROOT_ENV} outranks it while exported."
+            ))
+        );
     }
+    if let Some(legacy) = setting
+        .legacy
+        .as_ref()
+        .filter(|_| setting.source != ObservatorySource::Config)
+    {
+        let _ = writeln!(
+            out,
+            "{}",
+            dim(&format!(
+                "config.yaml still carries a legacy observatory_root ({}), ignored here; \
+                 once every machine has its own setting, remove it with \
+                 `neb config observatory-root --drop-legacy`.",
+                legacy.display()
+            ))
+        );
+    }
+    out
 }
 
 /// Whether writes are committed, as `neb config commit` reports it.

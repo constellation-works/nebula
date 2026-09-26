@@ -179,6 +179,19 @@ fn hint(e: &Error) -> Option<String> {
         Error::ParentAndReopens(id) => {
             format!("`--reopens {id}` already records the descent, so drop `--parent {id}`.")
         }
+        Error::RelativeObservatoryRoot {
+            setting: Some(path),
+            ..
+        } => format!(
+            "Set it again with an absolute path:  neb config observatory-root <DIR>\n\
+             Or remove {} to fall back to the other settings.",
+            path.display()
+        ),
+        Error::RelativeObservatoryRoot { setting: None, .. } => {
+            "The setting is read from whatever directory a command runs in, so \
+             pass the checkout's absolute path."
+                .to_owned()
+        }
         _ => return None,
     })
 }

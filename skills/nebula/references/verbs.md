@@ -65,14 +65,22 @@ message, and the hint after a blank line.
 | `neb init [PATH]` | create an empty corpus without changing the machine default | `--set-root`, `--force` (requires `--set-root`) |
 | `neb check` | run the rules in [invariants.md](invariants.md); exit non-zero on any error | — |
 | `neb migrate` | v1 → v2 in place; idempotent; refuses on a dirty git tree | — |
-| `neb config observatory-root [DIR]` | read or set where the Observatory checkout is | — |
+| `neb config observatory-root [DIR]` | read or set where the Observatory checkout is on this machine | `--drop-legacy` |
 | `neb config commit [on\|off]` | read or set whether each write is committed to the corpus's git repository | — |
 
-`config` rewrites `config.yaml` whole when a setting changes; `init`, `migrate`,
-and `capture` when it initializes a corpus can write it too. The file stays
-machine-written and is never hand-edited. Without `DIR` it prints the effective
-root and which setting supplied it (`observatory_root` in `config.yaml`, else
-`$OBSERVATORY_ROOT`, else nothing).
+`config commit` rewrites `config.yaml` whole when the setting changes; `init`,
+`migrate`, and `capture` when it initializes a corpus can write it too. The
+file stays machine-written and is never hand-edited.
+
+`config observatory-root DIR` writes this machine's
+`~/.config/nebula/observatory-root` and nothing in the corpus, so it commits
+nothing; `DIR` must be absolute. Without `DIR` it prints the effective root and
+which setting supplied it: `$OBSERVATORY_ROOT`, else this machine's setting,
+else the legacy `observatory_root` key an older `neb` wrote into `config.yaml`,
+else nothing. `legacy` names that key whenever the file still carries it, in
+force or not. `--drop-legacy` removes it from `config.yaml` (a corpus write,
+committed as `neb config observatory-root` when `commit` is on); run it once
+every machine that shares the corpus has its own setting.
 
 ```json
 // neb init /Users/you/.nebula --json
@@ -85,8 +93,8 @@ corpus unless `--force` is also explicit. Scratch corpora use `--root` and
 never `--set-root`.
 
 ```json
-// neb config observatory-root --json     (source: config | env | unset)
-{ "root": "/Users/you/workspace/observatory", "source": "config" }
+// neb config observatory-root --json     (source: env | machine | config | unset)
+{ "root": "/Users/you/workspace/observatory", "source": "machine", "legacy": null }
 ```
 
 ```json
@@ -366,9 +374,10 @@ makes the citation portable: nothing machine-specific reaches the corpus. Case
 is normalised up (`q002` stores `Q002`), and anything that is not one of `Q`,
 `H`, `T`, `R` followed by digits is a typed refusal at `cite`.
 
-Where the record is comes from the corpus, not the reference:
-`observatory_root` in `config.yaml` (set by `neb config observatory-root`),
-else `$OBSERVATORY_ROOT`. The id is matched by prefix inside the directory its
+Where the record is comes from the machine, not the reference or the corpus:
+`$OBSERVATORY_ROOT`, else this machine's setting (`neb config observatory-root
+<DIR>`), else the legacy `observatory_root` key in `config.yaml`. The id is
+matched by prefix inside the directory its
 letter names — `questions/`, `hypotheses/`, `theories/`, `research/` — so
 `Q002` finds `questions/Q002-is-proper-time-a-count….md` and `R012` finds the
 `research/R012-arc/` directory.

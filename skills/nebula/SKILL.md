@@ -57,12 +57,16 @@ reason over.
 A node that became an Observatory record is cited by the record's id, never
 by a path: `neb cite <node> --kind observatory --uri Q002 --note "why"`.
 Record ids are `Q###` (questions), `H###` (hypotheses), `T###` (theories) and
-`R###` (research). The path is reconstructed per machine from
-`observatory_root` in `config.yaml` (`neb config observatory-root <DIR>`) or
-`$OBSERVATORY_ROOT`, so an absolute path in a reference is a bug: it may
-resolve here and breaks everywhere else. `cite` refuses one, and `check`
-warns about any already in the corpus. An unresolved record is a warning
-about this machine, not something to rewrite.
+`R###` (research). The path is reconstructed per machine: `$OBSERVATORY_ROOT`,
+else this machine's setting (`neb config observatory-root <DIR>`, stored in
+`~/.config/nebula/observatory-root`, never in the corpus), else a legacy
+`observatory_root` key in `config.yaml`. An absolute path in a reference is a
+bug: it may resolve here and breaks everywhere else. `cite` refuses one, and
+`check` warns about any already in the corpus. An unresolved record is a
+warning about this machine, not something to rewrite. A `check` warning that
+`config.yaml` carries `observatory_root` means an older `neb` stored one
+machine's path in the shared corpus: leave it to the human to set each
+machine's own and then run `neb config observatory-root --drop-legacy`.
 
 ## Capture from conversation
 

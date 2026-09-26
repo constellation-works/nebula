@@ -46,10 +46,12 @@ Every node write is rendered to a sibling temporary file and renamed, so an
 interrupted write cannot leave half a node behind.
 
 `config.yaml` at the corpus root holds `schema_version`, an opaque `corpus_id`,
-the optional `observatory_root` that locates the Observatory checkout on this
-machine so an `observatory` reference's bare record id can resolve to a file,
 and the optional `commit` setting that enables a git commit after mutating
-verbs when the corpus is in a git work tree. Nothing about the ideas is
+verbs when the corpus is in a git work tree. Where the Observatory checkout is,
+so an `observatory` reference's bare record id can resolve to a file, is a
+machine setting (`$OBSERVATORY_ROOT`, else `~/.config/nebula/observatory-root`)
+rather than a corpus one; an `observatory_root` key an earlier build wrote
+into `config.yaml` is still read as a last fallback. Nothing about the ideas is
 configured — tags on the nodes themselves are how the corpus is partitioned
 for a view. `neb init` writes the file,
 `neb config` rewrites it whole, and `neb migrate` bumps `schema_version` in

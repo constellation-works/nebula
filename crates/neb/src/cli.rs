@@ -38,7 +38,7 @@ Corpus:
   init         Create an empty corpus
   check        Run the invariants. Exits non-zero on any error
   migrate      Bring a v1 corpus forward to the v2 schema, in place
-  config       Read or set a corpus setting
+  config       Read or set a corpus or machine setting
   completions  Generate shell completion scripts
 
 Inbox:
@@ -174,10 +174,12 @@ enum Command {
     /// the removed edge kinds become references; nothing is dropped.
     Migrate,
 
-    /// Read or set a corpus setting.
+    /// Read or set a corpus or machine setting.
     ///
-    /// `config.yaml` stays machine-written: this rewrites it whole rather
-    /// than inviting a hand edit. Settings: `observatory-root`, `commit`.
+    /// `commit` lives in the corpus's `config.yaml`, which stays
+    /// machine-written: this rewrites it whole rather than inviting a hand
+    /// edit. `observatory-root` lives per machine, because the corpus travels
+    /// between machines and the checkout's path does not.
     Config {
         #[command(subcommand)]
         setting: ConfigSetting,
@@ -552,12 +554,21 @@ enum Command {
 /// The settings `neb config` reads and writes.
 #[derive(Subcommand)]
 enum ConfigSetting {
-    /// Where the Observatory checkout is, so `cite --kind observatory Q002`
-    /// resolves. Without a directory, prints the effective root and where it
-    /// came from. Falls back to `$OBSERVATORY_ROOT` when unset here.
+    /// Where the Observatory checkout is on this machine, so
+    /// `cite --kind observatory Q002` resolves. A directory is saved to
+    /// `~/.config/nebula/observatory-root`, never into the corpus, which
+    /// travels between machines. Without one, prints the effective root and
+    /// which setting supplied it: `$OBSERVATORY_ROOT`, else this machine's
+    /// setting, else a legacy `observatory_root` key in `config.yaml`.
     ObservatoryRoot {
-        /// The checkout. Omit to read the current setting.
+        /// The checkout, as an absolute path. Omit to read the current
+        /// setting.
         dir: Option<PathBuf>,
+        /// Remove the legacy `observatory_root` key from `config.yaml`, where
+        /// an older `neb` stored one machine's path for every machine. Do it
+        /// once every machine that uses the corpus has its own setting.
+        #[arg(long)]
+        drop_legacy: bool,
     },
 
     /// Whether each mutating verb commits the corpus afterwards, when the
@@ -948,22 +959,26 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Config {
-            setting: ConfigSetting::ObservatoryRoot { dir },
+            setting: ConfigSetting::ObservatoryRoot { dir, drop_legacy },
         } => {
             let mut corpus = Corpus::open(root)?;
-            // Only the form that sets the value writes. Reading it back
-            // takes no lock and so never waits on a writer.
-            let _lock = dir.is_some().then(|| corpus.lock()).transpose()?;
-            let (setting, changed) = match dir {
-                Some(dir) => (ops::set_observatory_root(&mut corpus, dir)?, true),
-                None => (corpus.observatory_root(), false),
-            };
+            // Setting the root writes this machine's file and nothing in the
+            // corpus, so only `--drop-legacy` takes the corpus lock. Reading
+            // it back takes none and so never waits on a writer.
+            let _lock = drop_legacy.then(|| corpus.lock()).transpose()?;
+            if let Some(dir) = &dir {
+                ops::set_observatory_root(&corpus, dir)?;
+            }
+            if drop_legacy {
+                ops::drop_legacy_observatory_root(&mut corpus)?;
+            }
+            let setting = corpus.observatory_root()?;
             if json {
                 out_json(&setting)?;
             } else {
-                print!("{}", render::observatory_root(&setting));
+                print!("{}", render::observatory_root(&setting, dir.is_some()));
             }
-            if changed {
+            if drop_legacy {
                 commit(&corpus, commits, "config", &["observatory-root"])?;
             }
             Ok(ok)
@@ -1350,6 +1365,11 @@ fn run(cli: Cli) -> Outcome {
         } => {
             let (corpus, _lock) = open_locked(root)?;
             let bare = note.as_ref().is_none_or(|n| n.trim().is_empty());
+            // Read before the write, so a broken machine setting refuses the
+            // cite rather than failing it after the reference has landed.
+            let observatory = (!json && kind == OBSERVATORY)
+                .then(|| corpus.observatory_root())
+                .transpose()?;
             let cited = ops::cite(
                 &corpus,
                 &node,
@@ -1367,8 +1387,7 @@ fn run(cli: Cli) -> Outcome {
                 out_json(&cited)?;
             } else {
                 println!("{} {}", render::bold(&node), render::bold(&cited.reference));
-                if kind == OBSERVATORY {
-                    let setting = corpus.observatory_root();
+                if let Some(setting) = &observatory {
                     let record = cited
                         .doc
                         .node
@@ -1386,7 +1405,7 @@ fn run(cli: Cli) -> Outcome {
                                  ${OBSERVATORY_ROOT_ENV}."
                             ))
                         ),
-                        Some(dir) => match check::resolve_observatory(dir, &record) {
+                        Some(dir) => match setting.resolve(&record) {
                             Some(path) => println!("{}", render::dim(&path.display().to_string())),
                             None => println!(
                                 "\n{}",
@@ -1423,7 +1442,7 @@ fn run(cli: Cli) -> Outcome {
                     .ok_or_else(|| Error::NoSuchNode(node.clone()))?;
                 *current = historical;
             }
-            let observatory = corpus.observatory_root().root;
+            let observatory = corpus.observatory_root()?.root;
             let view =
                 graph::node(&Graph::build(&docs)?, &node)?.with_observatory(observatory.as_deref());
             if json {

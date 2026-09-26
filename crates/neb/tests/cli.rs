@@ -5152,21 +5152,28 @@ fn an_observatory_reference_with_no_root_warns_and_the_env_supplies_one() {
         .assert_ok()
         .says("does not resolve; check the observatory root");
 
-    // $OBSERVATORY_ROOT is the fallback, so a machine that exports one needs
-    // no per-corpus setting at all.
+    // $OBSERVATORY_ROOT outranks every stored setting, so a machine that
+    // exports one needs no other.
     c.run_with_env(&["check"], &[("OBSERVATORY_ROOT", obs.to_str().unwrap())])
         .assert_ok()
         .says("0 errors, 0 warnings");
 }
 
-/// The setting is read and written by one verb, `config.yaml` stays whole
-/// and machine-written, and the corpus's own value wins over the
-/// environment's.
+/// The Observatory checkout's path belongs to the machine: `config` writes it
+/// to `~/.config/nebula/observatory-root`, leaves the corpus's `config.yaml`
+/// byte for byte, and reports which setting is in force, with the
+/// environment outranking the machine's file.
 #[test]
-fn the_observatory_root_is_a_corpus_setting_that_config_reads_and_writes() {
+fn the_observatory_root_is_a_machine_setting_that_never_reaches_the_corpus() {
     let c = Corpus::new();
     let obs = observatory(c.workdir());
     let elsewhere = c.workdir().join("elsewhere");
+    let config = std::fs::read(c.root.join("config.yaml")).unwrap();
+    let machine = c
+        .workdir()
+        .join(".config")
+        .join("nebula")
+        .join("observatory-root");
 
     c.run(&["config", "observatory-root"])
         .assert_ok()
@@ -5175,29 +5182,34 @@ fn the_observatory_root_is_a_corpus_setting_that_config_reads_and_writes() {
     c.run(&["config", "observatory-root", obs.to_str().unwrap()])
         .assert_ok()
         .says(obs.to_str().unwrap())
-        .says("config.yaml");
-
-    let raw = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
-    assert!(
-        raw.starts_with("# nebula corpus configuration. Not edited by hand.\n"),
-        "{raw}"
+        .says("this machine");
+    assert_eq!(
+        config,
+        std::fs::read(c.root.join("config.yaml")).unwrap(),
+        "setting the observatory root rewrote the corpus's config.yaml"
     );
-    assert!(raw.contains("schema_version: 2"), "{raw}");
-    assert!(raw.contains("corpus_id:"), "{raw}");
-    assert!(
-        raw.contains(&format!("observatory_root: {}", obs.display())),
-        "{raw}"
+    assert_eq!(
+        std::fs::read_to_string(&machine).unwrap(),
+        format!("{}\n", obs.display())
     );
 
-    // Set on purpose for this corpus, so it outranks whatever the shell says.
+    let out = c
+        .run(&["--json", "config", "observatory-root"])
+        .assert_ok()
+        .stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).expect("config --json is valid JSON");
+    assert_eq!(v["root"], obs.to_str().unwrap());
+    assert_eq!(v["source"], "machine");
+    assert!(v["legacy"].is_null(), "{v}");
+
+    // The environment outranks the machine's file, and says so.
     c.run_with_env(
         &["config", "observatory-root"],
         &[("OBSERVATORY_ROOT", elsewhere.to_str().unwrap())],
     )
     .assert_ok()
-    .says(obs.to_str().unwrap())
-    .says("config.yaml");
-
+    .says(elsewhere.to_str().unwrap())
+    .says("$OBSERVATORY_ROOT");
     let out = c
         .run_with_env(
             &["--json", "config", "observatory-root"],
@@ -5205,33 +5217,186 @@ fn the_observatory_root_is_a_corpus_setting_that_config_reads_and_writes() {
         )
         .assert_ok()
         .stdout();
-    let v: serde_json::Value = serde_json::from_str(&out).expect("config --json is valid JSON");
-    assert_eq!(v["root"], obs.to_str().unwrap());
-    assert_eq!(v["source"], "config");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["root"], elsewhere.to_str().unwrap());
+    assert_eq!(v["source"], "env");
 
-    // And with nothing in the file, the environment answers.
-    let bare = Corpus::new();
-    let out = bare
-        .run_with_env(
-            &["--json", "config", "observatory-root"],
-            &[("OBSERVATORY_ROOT", obs.to_str().unwrap())],
-        )
+    // Saving a setting the environment outranks is not silently moot.
+    c.run_with_env(
+        &["config", "observatory-root", obs.to_str().unwrap()],
+        &[("OBSERVATORY_ROOT", elsewhere.to_str().unwrap())],
+    )
+    .assert_ok()
+    .says("outranks it");
+
+    // Read from whatever directory a command runs in, so it must be
+    // absolute; the refusal writes nothing.
+    c.run(&["config", "observatory-root", "observatory"])
+        .assert_fails()
+        .says("must be an absolute path")
+        .says("`observatory`")
+        .says("pass the checkout's absolute path");
+    let refused = c
+        .run(&["--json", "config", "observatory-root", "observatory"])
+        .refusal();
+    assert_eq!(refused["kind"], "RelativeObservatoryRoot");
+    assert_eq!(
+        refused["message"],
+        "the observatory root must be an absolute path, not `observatory`"
+    );
+    assert!(
+        refused["hint"]
+            .as_str()
+            .is_some_and(|h| h.contains("absolute path")),
+        "{refused}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&machine).unwrap(),
+        format!("{}\n", obs.display())
+    );
+
+    // A broken machine file is refused rather than skipped, and names
+    // itself; the environment, which outranks it, still works.
+    write(&machine, "\n");
+    c.run(&["config", "observatory-root"])
+        .assert_fails()
+        .says("must be an absolute path")
+        .says(machine.to_str().unwrap())
+        .says("Set it again with an absolute path");
+    let refused = c.run(&["--json", "config", "observatory-root"]).refusal();
+    assert_eq!(refused["kind"], "RelativeObservatoryRoot");
+    assert!(
+        refused["hint"]
+            .as_str()
+            .is_some_and(|h| h.contains(machine.to_str().unwrap())),
+        "{refused}"
+    );
+    c.run_with_env(
+        &["config", "observatory-root"],
+        &[("OBSERVATORY_ROOT", obs.to_str().unwrap())],
+    )
+    .assert_ok()
+    .says(obs.to_str().unwrap());
+}
+
+/// Give the corpus the `observatory_root` key an older `neb` wrote into
+/// `config.yaml`: another machine's absolute path, as the real synced corpus
+/// carried. Written by hand, since nothing in this build writes it any more.
+fn with_legacy_observatory_root(c: &Corpus) -> String {
+    let foreign = "/Users/someone-else/workspace/observatory".to_string();
+    let config = c.root.join("config.yaml");
+    let raw = std::fs::read_to_string(&config).unwrap();
+    write(&config, &format!("{raw}observatory_root: {foreign}\n"));
+    foreign
+}
+
+/// The corpus that prompted the move: synced from another machine with that
+/// machine's path in `config.yaml`. The key still answers when nothing else
+/// does, so no existing corpus breaks, and `check` says it is machine-specific;
+/// this machine's setting outranks it, the environment outranks both, and
+/// `--drop-legacy` removes it once it is no longer needed.
+#[test]
+fn a_foreign_legacy_observatory_root_yields_to_this_machines_setting() {
+    let c = Corpus::new();
+    let obs = observatory(c.workdir());
+    let foreign = with_legacy_observatory_root(&c);
+    let id = c.seed("an idea", "An idea");
+    c.run(&[
+        "cite",
+        &id,
+        "--kind",
+        "observatory",
+        "--uri",
+        "Q002",
+        "--note",
+        "why",
+    ])
+    .assert_ok();
+    let resolved = obs
+        .join("questions")
+        .join("Q002-is-proper-time-a-count-of-snapshots-along-a-worldline.md");
+
+    // Nothing on this machine, so the legacy key answers — and cannot
+    // resolve anything here.
+    let out = c
+        .run(&["--json", "config", "observatory-root"])
+        .assert_ok()
+        .stdout();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["root"], foreign.as_str());
+    assert_eq!(v["source"], "config");
+    assert_eq!(v["legacy"], foreign.as_str());
+    c.run(&["config", "observatory-root"])
+        .assert_ok()
+        .says("(config.yaml, legacy)")
+        .says("--drop-legacy");
+    c.run(&["check"])
+        .assert_ok()
+        .says(&format!("does not resolve under {foreign}"))
+        .says(&format!("config.yaml sets observatory_root to {foreign}"))
+        .says("machine-specific")
+        .says("0 errors, 2 warnings");
+
+    // This machine's setting outranks the key, which `check` still names.
+    let bogus = c.workdir().join("not-observatory");
+    c.run(&["config", "observatory-root", bogus.to_str().unwrap()])
+        .assert_ok()
+        .says("config.yaml still carries a legacy observatory_root");
+    c.run(&["check"])
+        .assert_ok()
+        .says(&format!("does not resolve under {}", bogus.display()))
+        .says("ignored here in favour of this machine's setting");
+
+    // The environment outranks the machine's setting.
+    c.run_with_env(&["check"], &[("OBSERVATORY_ROOT", obs.to_str().unwrap())])
+        .assert_ok()
+        .says("ignored here in favour of $OBSERVATORY_ROOT")
+        .says("0 errors, 1 warnings");
+
+    c.run(&["config", "observatory-root", obs.to_str().unwrap()])
+        .assert_ok();
+    c.run(&["check"])
+        .assert_ok()
+        .says("ignored here in favour of this machine's setting")
+        .says("0 errors, 1 warnings");
+    c.run(&["show", &id])
+        .assert_ok()
+        .says(resolved.to_str().unwrap());
+    let out = c
+        .run(&["--json", "config", "observatory-root"])
         .assert_ok()
         .stdout();
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["root"], obs.to_str().unwrap());
-    assert_eq!(v["source"], "env");
+    assert_eq!(v["source"], "machine");
+    assert_eq!(v["legacy"], foreign.as_str());
+    let raw = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    assert!(raw.contains(&foreign), "{raw}");
+    assert!(!raw.contains(obs.to_str().unwrap()), "{raw}");
+
+    // Once every machine has its own, the key goes, and the rest of the
+    // file stays machine-written and whole.
+    c.run(&["config", "observatory-root", "--drop-legacy"])
+        .assert_ok()
+        .says(obs.to_str().unwrap());
+    let raw = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
+    assert!(
+        raw.starts_with("# nebula corpus configuration. Not edited by hand.\n"),
+        "{raw}"
+    );
+    assert!(raw.contains("schema_version: 2"), "{raw}");
+    assert!(raw.contains("corpus_id:"), "{raw}");
+    assert!(!raw.contains("observatory_root"), "{raw}");
+    c.run(&["check"]).assert_ok().says("0 errors, 0 warnings");
 }
 
-/// `migrate` rewrites `config.yaml` whole, so the one setting the file
-/// carries has to survive it — and a corpus already at v2 still changes
-/// nothing.
+/// `migrate` rewrites `config.yaml` whole, so a legacy key the file carries
+/// has to survive it — dropping it is `--drop-legacy`'s decision, not a
+/// side effect — and a corpus already at v2 still changes nothing.
 #[test]
-fn migrate_keeps_the_observatory_root() {
+fn migrate_keeps_a_legacy_observatory_root() {
     let c = Corpus::new();
-    let obs = observatory(c.workdir());
-    c.run(&["config", "observatory-root", obs.to_str().unwrap()])
-        .assert_ok();
+    let foreign = with_legacy_observatory_root(&c);
     let before = std::fs::read_to_string(c.root.join("config.yaml")).unwrap();
 
     c.run(&["migrate"]).assert_ok().says("nothing changed");
@@ -5242,7 +5407,7 @@ fn migrate_keeps_the_observatory_root() {
     );
     c.run(&["config", "observatory-root"])
         .assert_ok()
-        .says(obs.to_str().unwrap());
+        .says(&foreign);
 }
 
 /// A path or a slug stored as an observatory record would never resolve, and
@@ -6293,9 +6458,18 @@ fn commit_on_records_each_mutating_verb_and_never_pushes() {
     let early = c.run(&["capture", "before the setting"]).stdout_trim();
     c.run(&["config", "commit", "on"]).assert_ok();
     assert_eq!(log(&c.root), ["neb config commit"]);
+    // The observatory root is this machine's, not the corpus's: setting it
+    // leaves nothing to commit. Dropping the legacy key from `config.yaml`
+    // is a corpus write, and lands as one.
     c.run(&["config", "observatory-root", "/tmp/observatory"])
         .assert_ok();
+    assert_eq!(log(&c.root), ["neb config commit"]);
+    with_legacy_observatory_root(&c);
+    git(&c.root, &["commit", "-qam", "an older neb"]);
+    c.run(&["config", "observatory-root", "--drop-legacy"])
+        .assert_ok();
     assert_eq!(log(&c.root)[0], "neb config observatory-root");
+    assert_eq!(head_paths(&c.root), ["config.yaml"]);
 
     // Every mutating verb, in lifecycle order, one commit each.
     let entry = c.run(&["capture", "a thought"]).assert_ok().stdout_trim();
@@ -6644,14 +6818,13 @@ fn a_writer_that_waits_out_the_lock_refuses_with_a_hint_and_writes_nothing() {
 #[test]
 fn a_config_write_that_waited_out_the_lock_keeps_the_setting_written_meanwhile() {
     let (c, _remote) = corpus_repo();
-    let observatory = c.workdir().join("observatory");
-    let observatory = observatory.to_str().expect("a utf-8 temporary path");
+    let foreign = with_legacy_observatory_root(&c);
 
     let held = nebula_core::CorpusLock::acquire(&c.root).expect("holding the lock");
 
     // The waiter opens — snapshotting a config with no `commit` key — and
     // then polls for the lock this thread is holding.
-    let waiting = c.spawn(&["config", "observatory-root", observatory]);
+    let waiting = c.spawn(&["config", "observatory-root", "--drop-legacy"]);
 
     // Long enough for the spawned `neb` to be past its open and into the
     // wait, and far short of the five seconds it would wait in total. On a
@@ -6678,13 +6851,13 @@ fn a_config_write_that_waited_out_the_lock_keeps_the_setting_written_meanwhile()
         "the waiter rewrote the config from its pre-lock snapshot: {raw}"
     );
     assert!(
-        raw.contains(observatory),
-        "and the waiter's own setting must still have landed: {raw}"
+        !raw.contains(&foreign),
+        "and the waiter's own change must still have landed: {raw}"
     );
     c.run(&["config", "commit"]).assert_ok().says("on");
     c.run(&["config", "observatory-root"])
         .assert_ok()
-        .says(observatory);
+        .says("no observatory root");
 }
 
 /// The lock file is the one thing under the root that is not corpus content,
