@@ -11,7 +11,6 @@ mod triage;
 use nebula_core::{EdgeType, GraphExport, HistoryEntry, Node, Status};
 use std::collections::HashSet;
 use std::fmt::Write as _;
-use std::io::IsTerminal;
 use std::sync::OnceLock;
 
 pub use error::{Refusal, refusal, refusal_about};
@@ -24,7 +23,9 @@ pub use triage::{step, tally, triage_keys, waiting};
 
 fn colour() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal())
+    *ON.get_or_init(|| {
+        std::env::var_os("NO_COLOR").is_none() && crate::output::stdout_is_terminal()
+    })
 }
 
 /// Wrap text in an ANSI code, or return it untouched when colour is off.

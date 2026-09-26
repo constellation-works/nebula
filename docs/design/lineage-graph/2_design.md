@@ -96,6 +96,7 @@ The repository is a Cargo workspace of two crates. Dependencies point one way:
 | | `error` | one `Error` enum; every public function returns `Result<T, Error>` |
 | `neb` | `cli` | the clap tree and dispatch; the only module anywhere that knows clap |
 | | `render` | terminal output for the values core returns; `tree` draws ancestry |
+| | `output` | the only writer to stdout and stderr; a closed stdout ends the verb silently, after its commit |
 
 Core never prints, never colours, never exits, and does not depend on clap or
 `anyhow`. Every value it returns is `Serialize`, so `neb --json` and the

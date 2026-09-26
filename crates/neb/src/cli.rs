@@ -17,6 +17,7 @@
 //! add the variant to [`Command`] in the position its section dictates *and*
 //! add its row to the template; a `#[test]` below checks the two stay in sync.
 
+use crate::output::{self, errln, out, outln};
 use crate::render;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use nebula_core::triage::{Action, Step};
@@ -834,6 +835,12 @@ impl From<serde_json::Error> for Failure {
     }
 }
 
+impl From<output::StdoutFailed> for Failure {
+    fn from(e: output::StdoutFailed) -> Self {
+        Self(e.into())
+    }
+}
+
 /// A line `neb triage` cannot read as a key.
 #[derive(Debug)]
 enum KeyError {
@@ -1000,16 +1007,23 @@ impl GlobalConflict {
 /// A refusal exits 1 either way. Under `--json` it is one line of JSON on
 /// stderr, so stdout still holds nothing but a verb's payload; without, it
 /// is the prose it always was.
+///
+/// A stdout that closed under the verb changes nothing here: the verb ran to
+/// its end, and exits as it decided (see [`output`]). A write to stdout that
+/// failed some other way is a refusal of its own, reported once the verb is
+/// done and only if the verb did not refuse first.
 pub fn main() -> ExitCode {
     let cli = parse_from(std::env::args_os()).unwrap_or_else(|e| e.exit());
     let json = cli.json;
-    match run(cli) {
+    let outcome = run(cli);
+    let flushed = output::finish();
+    match outcome.and_then(|code| flushed.map(|()| code).map_err(Failure::from)) {
         Ok(code) => code,
         Err(Failure(refused)) => {
             if json {
-                eprintln!("{}", refused.json());
+                errln!("{}", refused.json());
             } else {
-                eprintln!("{} {}", render::paint("31;1", "error:"), refused.prose());
+                errln!("{} {}", render::paint("31;1", "error:"), refused.prose());
             }
             ExitCode::FAILURE
         }
@@ -1030,7 +1044,7 @@ fn note_close_tags(corpus: &Corpus, node: &str, tags: &[String]) {
         return;
     };
     for c in close {
-        eprintln!(
+        errln!(
             "note: tag {} is close to {} ({} node{})",
             c.tag,
             c.near,
@@ -1158,7 +1172,7 @@ fn open_locked(root: Option<PathBuf>) -> std::result::Result<(Corpus, CorpusLock
 /// or the `--json` payload, on stdout reads the same as for any capture.
 fn note_same_as(corpus: &Corpus, entry: &InboxEntry) -> std::result::Result<(), Failure> {
     if let Some(earlier) = corpus.inbox()?.same_as(entry) {
-        eprintln!("note: same as {}, still waiting", earlier.id);
+        errln!("note: same as {}, still waiting", earlier.id);
     }
     Ok(())
 }
@@ -1168,7 +1182,7 @@ fn note_same_as(corpus: &Corpus, entry: &InboxEntry) -> std::result::Result<(), 
 /// print under their result.
 fn print_record_location(setting: &ObservatoryRoot, record: &str) {
     match setting.root.as_deref() {
-        None => println!(
+        None => outln!(
             "\n{}",
             render::dim(&format!(
                 "No observatory root set, so `{record}` cannot be located. \
@@ -1177,8 +1191,8 @@ fn print_record_location(setting: &ObservatoryRoot, record: &str) {
             ))
         ),
         Some(dir) => match setting.resolve(record) {
-            Some(path) => println!("{}", render::dim(&path.display().to_string())),
-            None => println!(
+            Some(path) => outln!("{}", render::dim(&path.display().to_string())),
+            None => outln!(
                 "\n{}",
                 render::dim(&format!(
                     "`{record}` does not resolve under {}; `check` will keep \
@@ -1192,7 +1206,7 @@ fn print_record_location(setting: &ObservatoryRoot, record: &str) {
 
 /// The nudge after a reference written without `--note`.
 fn print_bare_note() {
-    println!(
+    outln!(
         "\n{}",
         render::dim("No note. Add one saying why it is here, or this is a link that rots.")
     );
@@ -1208,7 +1222,7 @@ fn commit(
     verb: &str,
     ids: &[&str],
 ) -> std::result::Result<(), Failure> {
-    commit_into(&mut std::io::stdout(), corpus, opts, verb, ids)
+    commit_into(&mut output::stdout(), corpus, opts, verb, ids)
 }
 
 /// [`commit`], saying so on `out` rather than on stdout directly.
@@ -1233,7 +1247,8 @@ fn commit_into(
     Ok(())
 }
 
-/// Write rendered text to `out`. A closed stdout is an I/O error like any other.
+/// Write rendered text to `out`. On stdout this never fails: the output
+/// layer absorbs a closed pipe, so the commit after it still runs.
 fn say(out: &mut impl Write, text: &str) -> std::result::Result<(), Failure> {
     out.write_all(text.as_bytes()).map_err(Error::from)?;
     Ok(())
@@ -1285,17 +1300,20 @@ fn parse_key(line: &str) -> std::result::Result<Key, KeyError> {
 /// scripted lines after a refusal were written for an entry that did not
 /// move. A commit that git refuses ends it either way, as it ends the single
 /// verb: every later write would be left uncommitted the same way.
+///
+/// When `out` closes, nobody can see the next entry, so the session ends as
+/// `q` ends it: every decision already made stays applied and committed.
 fn triage(
     corpus: &Corpus,
     by: Option<String>,
     input: &mut impl BufRead,
-    out: &mut impl Write,
+    out: &mut impl output::Closable,
     interactive: bool,
     commits: CommitOpts,
 ) -> std::result::Result<(), Failure> {
     let refuse = |failure: Failure| {
         if interactive {
-            eprintln!("{} {}", render::paint("31;1", "error:"), failure.0.prose());
+            errln!("{} {}", render::paint("31;1", "error:"), failure.0.prose());
             Ok(())
         } else {
             Err(failure)
@@ -1315,6 +1333,9 @@ fn triage(
         if interactive {
             say(out, if titling { "title> " } else { "> " })?;
             out.flush().map_err(Error::from)?;
+        }
+        if out.is_closed() {
+            break;
         }
         let mut line = String::new();
         if input.read_line(&mut line).map_err(Error::from)? == 0 {
@@ -1413,21 +1434,21 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&done)?;
             } else {
-                println!("corpus ready at {}", done.root.display());
+                outln!("corpus ready at {}", done.root.display());
                 if set_root {
-                    println!(
+                    outln!(
                         "wrote {} so every command finds it",
                         Corpus::root_config_path()?.display()
                     );
                 } else if root_config_path.is_some() {
-                    println!(
+                    outln!(
                         "run `neb init {} --set-root` to make this corpus the machine default",
                         target.display()
                     );
                 }
             }
             if let Some(configured) = default_root_warning {
-                eprintln!(
+                errln!(
                     "warning: creating ~/.nebula while {} points to {}",
                     Corpus::root_config_path()?.display(),
                     configured.display()
@@ -1435,7 +1456,7 @@ fn run(cli: Cli) -> Outcome {
             }
             if let Some(configured) = shadowing_warning {
                 let config_path = Corpus::root_config_path()?;
-                eprintln!(
+                errln!(
                     "warning: {} still points to {}, not {}; run `echo {} > {}` to point commands at this corpus",
                     config_path.display(),
                     configured.display(),
@@ -1455,7 +1476,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&report)?;
             } else {
-                print!("{}", render::check(&report));
+                out!("{}", render::check(&report));
             }
             Ok(
                 if report.findings.iter().all(|f| f.level != Severity::Error) {
@@ -1481,7 +1502,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&report)?;
             } else {
-                print!("{}", render::migration(&report));
+                out!("{}", render::migration(&report));
             }
             // The corpus is at this build's schema now, so it opens; the
             // migration lands as its own commit when the setting is on.
@@ -1510,7 +1531,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&setting)?;
             } else {
-                print!("{}", render::observatory_root(&setting, dir.is_some()));
+                out!("{}", render::observatory_root(&setting, dir.is_some()));
             }
             if drop_legacy {
                 commit(&corpus, commits, "config", &["observatory-root"])?;
@@ -1531,7 +1552,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&setting)?;
             } else {
-                print!("{}", render::commit_setting(setting));
+                out!("{}", render::commit_setting(setting));
             }
             // Turning it on records itself; turning it off leaves the file
             // for the next commit you make by hand, because off means off.
@@ -1542,7 +1563,11 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Completions { shell } => {
-            clap_complete::generate(shell, &mut Cli::command(), "neb", &mut std::io::stdout());
+            // Rendered whole first: `generate` panics on a failed write, and
+            // the layer, not clap, decides what a closed stdout means.
+            let mut script = Vec::new();
+            clap_complete::generate(shell, &mut Cli::command(), "neb", &mut script);
+            output::stdout().write_all(&script).map_err(Error::from)?;
             Ok(ok)
         }
 
@@ -1560,7 +1585,7 @@ fn run(cli: Cli) -> Outcome {
             let default_root_warning = Corpus::warning_before_default_init(&resolved_root)?;
             let (corpus, created) = Corpus::open_or_init(Some(resolved_root.clone()))?;
             if let Some(configured) = default_root_warning {
-                eprintln!(
+                errln!(
                     "warning: creating ~/.nebula while {} points to {}",
                     Corpus::root_config_path()?.display(),
                     configured.display()
@@ -1572,7 +1597,7 @@ fn run(cli: Cli) -> Outcome {
             // lexically, because paths are used as given, never resolved.
             if created {
                 let shown = std::path::absolute(&resolved_root).unwrap_or(resolved_root);
-                eprintln!("note: created a new corpus at {}", shown.display());
+                errln!("note: created a new corpus at {}", shown.display());
             }
             let _lock = corpus.lock()?;
             let k = if quiet { 0 } else { NEAR_DEFAULT };
@@ -1587,9 +1612,9 @@ fn run(cli: Cli) -> Outcome {
             // the capture never depended on the rest of the corpus parsing,
             // and a node file that will not must not read as a lost thought.
             let entry = ops::capture(&corpus, &text)?;
-            println!("{}", render::bold(&entry.id));
+            outln!("{}", render::bold(&entry.id));
             note_same_as(&corpus, &entry)?;
-            print!(
+            out!(
                 "{}",
                 render::suggestions(&ops::suggest(&corpus, &entry.text, k)?)
             );
@@ -1604,7 +1629,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&inbox)?;
             } else {
-                print!("{}", render::inbox(&inbox, waiting));
+                out!("{}", render::inbox(&inbox, waiting));
             }
             Ok(ok)
         }
@@ -1642,12 +1667,12 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&created)?;
             } else {
-                println!(
+                outln!(
                     "{} {}",
                     render::bold(&created.doc.node.id),
                     render::dim(&created.path.display().to_string())
                 );
-                print!("{}", render::suggestions(&created.near));
+                out!("{}", render::suggestions(&created.near));
             }
             note_close_tags(&corpus, &created.doc.node.id, &created.doc.node.tags);
             commit(&corpus, commits, "promote", &[&entry, &created.doc.node.id])?;
@@ -1660,7 +1685,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&dropped)?;
             } else {
-                println!("dropped {}", render::bold(&entry));
+                outln!("dropped {}", render::bold(&entry));
             }
             commit(&corpus, commits, "drop", &[&entry])?;
             Ok(ok)
@@ -1679,7 +1704,7 @@ fn run(cli: Cli) -> Outcome {
                 &corpus,
                 by,
                 &mut stdin.lock(),
-                &mut std::io::stdout().lock(),
+                &mut output::stdout(),
                 interactive,
                 commits,
             )?;
@@ -1720,7 +1745,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&created)?;
             } else {
-                println!(
+                outln!(
                     "{} {}",
                     render::bold(&created.doc.node.id),
                     render::dim(&created.path.display().to_string())
@@ -1747,7 +1772,7 @@ fn run(cli: Cli) -> Outcome {
                 let view = graph::node(&Graph::build(&docs)?, &node)?;
                 out_json(&view)?;
             } else {
-                println!("{}", render::bold(&node));
+                outln!("{}", render::bold(&node));
             }
             commit(&corpus, commits, "edit", &[&node])?;
             Ok(ok)
@@ -1765,7 +1790,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&doc)?;
             } else {
-                println!("{} kill condition confirmed as yours", render::bold(&node));
+                outln!("{} kill condition confirmed as yours", render::bold(&node));
             }
             commit(&corpus, commits, "sharpen", &[&node])?;
             Ok(ok)
@@ -1790,15 +1815,15 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&doc)?;
             } else if before.node.status != doc.node.status {
-                println!("{} is now {}", render::bold(&node), doc.node.status);
+                outln!("{} is now {}", render::bold(&node), doc.node.status);
             } else if before.node.kill.is_some() {
-                println!(
+                outln!(
                     "{} kill condition replaced; status remains {}",
                     render::bold(&node),
                     doc.node.status
                 );
             } else {
-                println!(
+                outln!(
                     "{} kill condition set; status remains {}",
                     render::bold(&node),
                     doc.node.status
@@ -1823,7 +1848,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&changed)?;
             } else {
-                println!(
+                outln!(
                     "{} {} -> {status}",
                     render::bold(&node),
                     render::dim(&changed.from.to_string())
@@ -1842,7 +1867,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&changed)?;
             } else {
-                println!(
+                outln!(
                     "{} {} {}",
                     render::bold(&from),
                     render::dim(&kind.to_string()),
@@ -1865,7 +1890,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&counts)?;
             } else {
-                print!("{}", render::tags(&counts));
+                out!("{}", render::tags(&counts));
             }
             Ok(ok)
         }
@@ -1896,7 +1921,7 @@ fn run(cli: Cli) -> Outcome {
                 } else {
                     doc.node.tags.join(", ")
                 };
-                println!("{} {shown}", render::bold(&target));
+                outln!("{} {shown}", render::bold(&target));
             }
             note_close_tags(&corpus, &target, &add);
             commit(&corpus, commits, "tag", &[&target])?;
@@ -1916,7 +1941,7 @@ fn run(cli: Cli) -> Outcome {
                 let view = graph::node(&Graph::build(&docs)?, &node)?;
                 out_json(&view)?;
             } else {
-                println!("{}", render::bold(&node));
+                outln!("{}", render::bold(&node));
             }
             commit(&corpus, commits, "note", &[&node])?;
             Ok(ok)
@@ -1958,7 +1983,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&cited)?;
             } else {
-                println!("{} {}", render::bold(&node), render::bold(&cited.reference));
+                outln!("{} {}", render::bold(&node), render::bold(&cited.reference));
                 if let Some(setting) = &observatory {
                     let record = cited
                         .doc
@@ -2008,7 +2033,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&done)?;
             } else {
-                println!(
+                outln!(
                     "{} {} -> {}, handed off to {} {}",
                     render::bold(&node),
                     render::dim(&done.from.to_string()),
@@ -2042,7 +2067,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&view)?;
             } else {
-                print!("{}", render::node(&view));
+                out!("{}", render::node(&view));
             }
             Ok(ok)
         }
@@ -2053,7 +2078,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&history)?;
             } else {
-                print!("{}", render::history(&history));
+                out!("{}", render::history(&history));
             }
             Ok(ok)
         }
@@ -2070,7 +2095,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&listing)?;
             } else {
-                print!("{}", render::list(&listing.0, matched, docs.len()));
+                out!("{}", render::list(&listing.0, matched, docs.len()));
             }
             Ok(ok)
         }
@@ -2086,7 +2111,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&near)?;
             } else {
-                print!("{}", render::near(&near));
+                out!("{}", render::near(&near));
             }
             Ok(ok)
         }
@@ -2099,7 +2124,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&walk)?;
             } else {
-                print!("{}", render::tree(&docs, &node, direction, depth));
+                out!("{}", render::tree(&docs, &node, direction, depth));
             }
             Ok(ok)
         }
@@ -2111,14 +2136,14 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&report)?;
             } else {
-                print!("{}", render::impact(&report, &node));
+                out!("{}", render::impact(&report, &node));
             }
             Ok(ok)
         }
 
         Command::Graph { mermaid, from } => {
             if !json && !mermaid {
-                println!(
+                outln!(
                     "neb graph needs an output format; run:  neb graph --json  or  neb graph --mermaid"
                 );
                 return Ok(ExitCode::from(2));
@@ -2127,7 +2152,7 @@ fn run(cli: Cli) -> Outcome {
             let docs = corpus.load_all()?;
             let exported = graph::export(&Graph::build(&docs)?)?;
             if mermaid {
-                print!(
+                out!(
                     "{}",
                     render::mermaid(&exported, from.as_deref())
                         .map_err(|message| Failure::of("no_such_node", message))?
@@ -2174,7 +2199,7 @@ fn run(cli: Cli) -> Outcome {
         }
 
         Command::Open { tags } => {
-            eprintln!("warning: `neb open` is deprecated; use `neb review --short`");
+            errln!("warning: `neb open` is deprecated; use `neb review --short`");
             short_review(root, json, &tags, None)?;
             Ok(ok)
         }
@@ -2196,7 +2221,7 @@ fn short_review(
     if json {
         out_json(&report)?;
     } else {
-        print!("{}", render::open(&report, all - report.0.len()));
+        out!("{}", render::open(&report, all - report.0.len()));
     }
     Ok(())
 }
@@ -2214,7 +2239,7 @@ fn cap<T>(items: &mut Vec<T>, limit: Option<usize>) -> usize {
 
 /// Pretty JSON on stdout, which is what `--json` means everywhere.
 fn out_json<T: serde::Serialize>(v: &T) -> std::result::Result<(), Failure> {
-    println!("{}", serde_json::to_string_pretty(v)?);
+    outln!("{}", serde_json::to_string_pretty(v)?);
     Ok(())
 }
 
@@ -2223,7 +2248,7 @@ fn write_report(out: Option<&Path>, text: &str) -> std::result::Result<(), Failu
     match out {
         Some(path) => std::fs::write(path, format!("{text}\n"))
             .map_err(|e| Failure::of("io_at", format!("writing {}: {e}", path.display())))?,
-        None => println!("{text}"),
+        None => outln!("{text}"),
     }
     Ok(())
 }
@@ -2714,6 +2739,52 @@ mod tests {
             "{out}"
         );
         assert!(corpus.inbox().unwrap().0.is_empty());
+    }
+
+    /// A screen that goes away once the first decision is reported.
+    struct GoesAfterFirstStep(Vec<u8>);
+
+    impl Write for GoesAfterFirstStep {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl output::Closable for GoesAfterFirstStep {
+        fn is_closed(&self) -> bool {
+            String::from_utf8_lossy(&self.0).contains("dropped ")
+        }
+    }
+
+    /// When the screen closes mid-session, the session ends as `q` ends it:
+    /// the decision already made stays, and the keys typed after it are
+    /// never applied to entries nobody saw.
+    #[test]
+    fn triage_ends_as_quit_does_when_its_screen_closes() {
+        let dir = tempfile::tempdir().unwrap();
+        let corpus = Corpus::init(&dir.path().join("corpus")).unwrap();
+        let first = ops::capture(&corpus, "the first thought").unwrap();
+        let second = ops::capture(&corpus, "the second thought").unwrap();
+        let mut input = std::io::Cursor::new("d\nd\n");
+        let mut out = GoesAfterFirstStep(Vec::new());
+        let commits = CommitOpts {
+            skip: true,
+            json: false,
+        };
+        let done = triage(&corpus, None, &mut input, &mut out, false, commits);
+        assert!(done.is_ok(), "a closed screen is no refusal");
+        let waiting: Vec<_> = corpus
+            .inbox()
+            .unwrap()
+            .0
+            .into_iter()
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(waiting, [second.id], "only {} was dropped", first.id);
     }
 
     #[test]
