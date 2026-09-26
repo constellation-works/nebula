@@ -2559,6 +2559,7 @@ fn init_shadowing_warning_names_the_set_root_command() {
     let setting = std::fs::read(&config_path).unwrap();
     let cwd = dir.path().join("w");
     std::fs::create_dir_all(&cwd).unwrap();
+    let cwd = std::fs::canonicalize(&cwd).unwrap();
 
     let run = run_in(&cwd, &home, None, &["init", "rel"], None).assert_ok();
     let stderr = run.stderr();
