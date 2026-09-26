@@ -96,6 +96,10 @@ static HOME: OnceLock<PathBuf> = OnceLock::new();
 /// Isolate this process before `main`, and so before the test harness starts
 /// any thread (STD-04 §R6): nothing else can be reading the environment.
 #[ctor::ctor]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the test home's gitconfig is a fixture, not nebula state"
+)]
 unsafe fn isolate_this_process() {
     let home = tempfile::Builder::new()
         .prefix("nebula-test-home.")

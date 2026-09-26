@@ -43,8 +43,14 @@ writes in routine mode, so there is effectively one writer at a time. Revisit
 if a node's frontmatter routinely outgrows its prose, or if a second concurrent
 writer appears.
 
-Every node write is rendered to a sibling temporary file and renamed, so an
-interrupted write cannot leave half a node behind.
+Every node write is rendered to a sibling temporary file, flushed, and
+renamed, and the directory is flushed after the rename, so an interrupted
+write cannot leave half a node behind and a finished one survives a crash.
+Every other file nebula keeps (`config.yaml`, `.gitignore`, the inbox, the
+machine settings in `~/.config/nebula`, the desktop's `settings.json`) is
+written the same way, through the one helper in `nebula_core::fs`; an inbox
+capture is one appended write, then flushed. Files are created `0600` and the
+directories nebula creates `0700`, whatever the umask.
 
 `config.yaml` at the corpus root holds `schema_version`, an opaque `corpus_id`,
 and the optional `commit` setting that enables a git commit after mutating

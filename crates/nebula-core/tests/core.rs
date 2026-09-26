@@ -5,6 +5,12 @@
 //! asserts on messages and exit codes. These assert on the typed values, which
 //! is what a consumer that is not a terminal matches on.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "fixtures plant and corrupt corpus files directly; only the code under test goes \
+              through nebula_core's durable write helper"
+)]
+
 use nebula_core::triage::{Action, Step, Tally};
 use nebula_core::{
     Band, Citation, Corpus, CorpusLock, Direction, EdgeType, Error, Graph, HUMAN, Handoff,
@@ -2683,6 +2689,79 @@ fn a_corpus_that_cannot_be_created_names_the_root_it_aimed_at() {
         );
     }
     assert!(!root.exists());
+}
+
+/// Set in a child copy of this test binary that [`in_own_process`] started.
+const IN_OWN_PROCESS: &str = "NEBULA_CORE_TEST_IN_OWN_PROCESS";
+
+/// Whether the caller is the child copy of this test binary that runs `test`
+/// alone. In the parent, start that child, require it to pass, and say no.
+///
+/// Machine settings live under `HOME`, and every test in this process shares
+/// its one isolated home (`support`), so a test that writes
+/// `~/.config/nebula` would race the tests beside it. `support` gives each
+/// test process a fresh home of its own, so the child's settings are nobody
+/// else's (STD-03 §R20). The child comes from the isolating builder and is
+/// waited for under its guard and deadline.
+#[cfg(unix)]
+fn in_own_process(test: &str) -> bool {
+    if std::env::var_os(IN_OWN_PROCESS).is_some() {
+        return true;
+    }
+    let mut cmd = support::command(
+        std::env::current_exe().expect("test binary"),
+        support::home(),
+    );
+    cmd.args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(IN_OWN_PROCESS, "1");
+    let out = support::output(&mut cmd, support::DEADLINE).unwrap_or_else(|e| panic!("{e}"));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && stdout.contains("1 passed"),
+        "the child run of {test} did not pass:\n{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    false
+}
+
+/// `~/.config/nebula/root` is replaced whole, like every other file nebula
+/// writes. Written by name, as it once was, a symlink there carried the new
+/// path into whatever file it pointed at and stayed a symlink.
+#[cfg(unix)]
+#[test]
+fn set_root_replaces_a_symlinked_setting_instead_of_writing_through() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !in_own_process("set_root_replaces_a_symlinked_setting_instead_of_writing_through") {
+        return;
+    }
+
+    let settings = support::home().join(".config").join("nebula");
+    std::fs::create_dir_all(&settings).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("outside-target");
+    std::fs::write(&outside, "/an/older/corpus\n").unwrap();
+    let setting = settings.join("root");
+    std::os::unix::fs::symlink(&outside, &setting).unwrap();
+    let target = dir.path().join("new-corpus");
+
+    ops::init(None, Some(target.clone()), true, true).expect("init --set-root --force");
+
+    assert_eq!(
+        std::fs::read(&outside).unwrap(),
+        b"/an/older/corpus\n",
+        "the write went through the symlink"
+    );
+    let metadata = std::fs::symlink_metadata(&setting).unwrap();
+    assert!(
+        metadata.file_type().is_file(),
+        "the setting is still a symlink"
+    );
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    assert_eq!(
+        std::fs::read_to_string(&setting).unwrap(),
+        format!("{}\n", target.display())
+    );
 }
 
 #[test]

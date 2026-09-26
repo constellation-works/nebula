@@ -39,15 +39,30 @@
 //! on a stuck peer would be worse than one that says so: [`Error::Locked`]
 //! reaches the caller before anything is written, and the caller can retry.
 //!
-//! The lock file is created once and never removed. Unlinking it would race:
-//! a second process can hold `flock` on an unlinked inode while a third
-//! creates a fresh file at the same path and locks that instead, and the two
-//! would not see each other.
+//! The lock file is created once, `0600`, and never removed. Unlinking it
+//! would race: a second process can hold `flock` on an unlinked inode while a
+//! third creates a fresh file at the same path and locks that instead, and the
+//! two would not see each other.
+//!
+//! The same lock guards this machine's settings in `~/.config/nebula`, taken
+//! on that directory through
+//! [`Corpus::lock_machine_settings`](crate::store::Corpus::lock_machine_settings),
+//! so a check of a setting and the write that follows it cannot interleave
+//! with another writer's.
+//!
+//! **The lock order** (STD-03 §R3): the machine-setting lock before the corpus
+//! lock, never the other way round. `init --set-root` holds the first while
+//! it creates the corpus under the second, and
+//! `config observatory-root <DIR> --drop-legacy` takes both in that order
+//! before writing either; nothing takes the machine-setting lock while
+//! holding a corpus lock. Re-entry on one thread takes nothing new, so it
+//! cannot break the order.
 
 use crate::error::{Error, Result};
+use crate::fs::private_open_options;
 use fs4::{FileExt, TryLockError};
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -194,9 +209,9 @@ fn try_enter(gate: &Arc<Gate>, root: &Path) -> Result<Option<CorpusLock>> {
         None => {
             // `truncate(false)`: the file is a lock, not a record. Nothing
             // is ever written into it, and emptying it would be a write to
-            // a file another process may hold open.
+            // a file another process may hold open. Created `0600`.
             let path = root.join(LOCK_FILE);
-            let file = OpenOptions::new()
+            let file = private_open_options()
                 .create(true)
                 .write(true)
                 .truncate(false)
@@ -241,6 +256,19 @@ mod tests {
             "the file stays; deleting it would race a process holding the old inode"
         );
         CorpusLock::acquire(dir.path()).expect("the next writer gets in");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_lock_file_is_created_owner_only() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = root();
+        drop(CorpusLock::acquire(dir.path()).expect("acquire"));
+        let mode = std::fs::metadata(dir.path().join(LOCK_FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

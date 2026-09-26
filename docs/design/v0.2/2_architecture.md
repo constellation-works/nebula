@@ -60,6 +60,8 @@ nebula-core/src/
   model.rs        # Node, Status, Edge, EdgeType, Reference, Origin, Closed, InboxEntry
                   # serde with deny_unknown_fields; this is the file format
   store.rs        # Corpus: open/init, load/save nodes, inbox append/settle, config
+  fs.rs           # the one durable write path: temp + fsync + rename + dir fsync,
+                  # 0600 files and 0700 directories; clippy.toml refuses std::fs::write
   lock.rs         # CorpusLock: the advisory <root>/.lock every write holds
   graph.rs        # Graph: an indexed snapshot of loaded nodes (by_id, parents, children)
                   # + pure queries: trace, impact, open, review, export
@@ -132,9 +134,16 @@ through, which is the trade: writers wait for each other, readers never wait
 at all. Per-file atomic replacement is what keeps a reader from seeing half
 a node.
 
-The lock file is runtime state, not corpus content: `neb init` adds `/.lock` to
-the corpus `.gitignore`, and when `neb config commit on` is enabled a mutating
-verb stages only `nodes/`, `inbox/`, `config.yaml` and that generated ignore
+The same lock, on `~/.config/nebula`, serializes writes to this machine's
+settings: `init --set-root` holds it from the check of `~/.config/nebula/root`
+until after the write, and `config observatory-root <DIR>` holds it for its
+write. **Lock order:** the machine-setting lock first, then the corpus lock,
+never the reverse. `init --set-root`, and `config observatory-root <DIR>
+--drop-legacy`, are the paths that hold both.
+
+The lock file is created `0600`. It is runtime state, not corpus content:
+`neb init` adds `/.lock` to the corpus `.gitignore`, and when
+`neb config commit on` is enabled a mutating verb stages only `nodes/`, `inbox/`, `config.yaml` and that generated ignore
 file. `check` reads only `nodes/` and `inbox/`, and `migrate`'s refusal to run on
 a dirty tree excludes the ignored lock.
 

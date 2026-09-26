@@ -303,12 +303,14 @@ pub enum Error {
         id: String,
     },
 
-    /// Another writer holds the corpus lock and did not release it within
-    /// the bounded wait. Nothing was written: the refusal comes before the
-    /// op reads anything, so there is no half-applied change to undo.
+    /// Another writer holds the corpus lock, or the machine-setting lock, and
+    /// did not release it within the bounded wait. Nothing was written: the
+    /// refusal comes before the op reads anything, so there is no
+    /// half-applied change to undo.
     #[error("another nebula writer is holding {}; nothing was written", .root.display())]
     Locked {
-        /// The corpus root whose `.lock` is held.
+        /// The directory whose `.lock` is held: a corpus root, or
+        /// `~/.config/nebula` for this machine's settings.
         root: PathBuf,
     },
 

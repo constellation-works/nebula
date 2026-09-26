@@ -485,3 +485,13 @@ was taken on in its own offset, which for a legacy stamp is the date it
 shows. Reverses if a legacy stamp is found that was not written in the
 machine's local time often enough to mislead, in which case legacy `at`
 should pass through as written with a separate field for the reading.
+
+## Owner-only modes are set on Unix only
+
+This departs from STD-05@1 §R8, a MUST, on platforms without Unix modes.
+`nebula_core::fs` creates files `0600` and directories `0700` on Unix and sets
+nothing elsewhere: the standard's Deviations section says Windows meets the
+rule with owner-only ACLs, and none are applied. The rename is still atomic
+there. nebula builds, tests and ships on Linux and macOS only, so no supported
+platform is affected. Reverses if a Windows build is ever supported; the
+helper is the one place an ACL would be set.

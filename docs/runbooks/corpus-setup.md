@@ -205,7 +205,14 @@ neb check
 | `$NEBULA_ROOT/nodes/<id>.md` | one node, with its edges, references and prose |
 | `$NEBULA_ROOT/inbox/YYYY-MM.md` | captures, append-only, struck through when settled |
 | `$NEBULA_ROOT/config.yaml` | corpus id, schema version, and `commit: true` when auto-commit is on (a corpus written by an older `neb` may also carry a legacy `observatory_root`) |
+| `~/.config/nebula/root` | this machine's default corpus, written by `neb init <DIR> --set-root` |
 | `~/.config/nebula/observatory-root` | this machine's Observatory checkout, written by `neb config observatory-root <DIR>`; `$OBSERVATORY_ROOT` outranks it |
+| `$NEBULA_ROOT/.lock`, `~/.config/nebula/.lock` | the advisory write locks; runtime state, never committed, never to be deleted by hand |
+
+Every file `neb` writes is created `0600` and every directory it creates
+`0700`, whatever your umask, because a corpus mixes work and personal
+thinking. A directory that already existed, such as a corpus root you made
+yourself, keeps the mode you gave it.
 
 Work and personal ideas belong in separate corpora, each with its own
 `NEBULA_ROOT`; topics inside one owner's thinking are tags, not separate

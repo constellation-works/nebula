@@ -16,6 +16,7 @@
 
 use crate::config::{self, CommitSetting, Config, ObservatoryRoot};
 use crate::error::{Error, Result};
+use crate::fs::{append_private, create_private_dir_all, write_private_atomic};
 use crate::lock::{CorpusLock, LOCK_FILE};
 use crate::model::{self, Doc};
 use serde::Serialize;
@@ -97,7 +98,27 @@ impl Corpus {
 
     /// The machine-local file that records a non-default corpus root.
     pub fn root_config_path() -> Result<PathBuf> {
-        Ok(Self::home()?.join(".config").join("nebula").join("root"))
+        Ok(Self::machine_settings_dir()?.join("root"))
+    }
+
+    /// Where this machine's settings live: `~/.config/nebula`.
+    pub fn machine_settings_dir() -> Result<PathBuf> {
+        Ok(Self::home()?.join(".config").join("nebula"))
+    }
+
+    /// Take the lock that serializes writes to this machine's settings,
+    /// `~/.config/nebula/.lock`, creating the directory `0700` if needed.
+    ///
+    /// The same advisory lock a corpus write takes, on a different
+    /// directory, so it waits the same bounded time and refuses with
+    /// [`Error::Locked`] naming `~/.config/nebula`. A writer that checks a
+    /// setting and then writes it holds this across both, so two of them
+    /// cannot both pass the check. Taken before any corpus lock, never after
+    /// one; see the lock order in `lock.rs`.
+    pub fn lock_machine_settings() -> Result<CorpusLock> {
+        let dir = Self::machine_settings_dir()?;
+        create_private_dir_all(&dir)?;
+        CorpusLock::acquire(&dir)
     }
 
     /// Read the configured corpus root, if this machine has one.
@@ -121,10 +142,7 @@ impl Corpus {
     /// corpus one, because the corpus travels between machines and the
     /// checkout's path does not.
     pub fn observatory_root_config_path() -> Result<PathBuf> {
-        Ok(Self::home()?
-            .join(".config")
-            .join("nebula")
-            .join("observatory-root"))
+        Ok(Self::machine_settings_dir()?.join("observatory-root"))
     }
 
     /// Read this machine's Observatory checkout setting, if it has one.
@@ -170,8 +188,8 @@ impl Corpus {
         let parent = path
             .parent()
             .ok_or_else(|| Error::corpus("observatory root configuration path has no parent"))?;
-        std::fs::create_dir_all(parent).map_err(|error| Error::io_at("creating", parent, error))?;
-        write_atomic(&path, format!("{}\n", dir.display()))?;
+        create_private_dir_all(parent)?;
+        write_private_atomic(&path, format!("{}\n", dir.display()))?;
         Ok(path)
     }
 
@@ -190,15 +208,19 @@ impl Corpus {
     /// Make `root` the machine-local default corpus.
     ///
     /// Refuses to replace a different configured root unless `force` is set.
-    /// Paths are compared as given, like every other corpus path.
+    /// Paths are compared as given, like every other corpus path. The check
+    /// and the write happen under [`Self::lock_machine_settings`], and the
+    /// file is replaced whole: a symlink at `root` is replaced by a regular
+    /// file, and whatever it pointed at is left alone.
     pub fn write_root_config(root: &Path, force: bool) -> Result<PathBuf> {
+        let _lock = Self::lock_machine_settings()?;
         let path = Self::root_config_path()?;
         Self::check_root_config(root, force)?;
         let parent = path
             .parent()
             .ok_or_else(|| Error::corpus("root configuration path has no parent"))?;
-        std::fs::create_dir_all(parent)?;
-        std::fs::write(&path, format!("{}\n", root.display()))?;
+        create_private_dir_all(parent)?;
+        write_private_atomic(&path, format!("{}\n", root.display()))?;
         Ok(path)
     }
 
@@ -296,7 +318,7 @@ impl Corpus {
         // corpora unasked, so a bare "Permission denied" would leave the
         // reader guessing which root it was aimed at.
         for dir in [root.to_path_buf(), root.join("nodes"), root.join("inbox")] {
-            std::fs::create_dir_all(&dir).map_err(|error| Error::io_at("creating", &dir, error))?;
+            create_private_dir_all(&dir)?;
         }
         let config = if let Some(config) = config {
             config
@@ -770,9 +792,9 @@ impl Corpus {
     /// Nor is one *file* under two entries. `nodes/safe.md` hard-linked to,
     /// or a symlink at, `nodes/victim.md` opens the same bytes, but it is a
     /// second name for the node, and neither door can keep it coherent: a
-    /// scan reads the node twice, and [`write_atomic`] replaces the entry the
-    /// id names with a new file, so a hard link keeps the old bytes under the
-    /// other name and the next load refuses. So an alias is refused wherever
+    /// scan reads the node twice, and [`write_private_atomic`] replaces the
+    /// entry the id names with a new file, so a hard link keeps the old bytes
+    /// under the other name and the next load refuses. So an alias is refused wherever
     /// it is met, and it is the alias that is named, since it is what has to
     /// go. A hard link is met even when the node is loaded through its own
     /// name, because that is the load whose write would split the pair; a
@@ -805,15 +827,18 @@ impl Corpus {
     /// than refused: the inbox holds one entry per line, and a refusal would
     /// lose the thought at the moment it arrived. Only text that is nothing
     /// but whitespace is refused.
+    ///
+    /// The line, with the newline that repairs a month file missing its last
+    /// one, is built whole and handed to one append, so a crash can lose the
+    /// capture but never leave half of it in the inbox.
     pub fn capture(&self, text: &str) -> Result<InboxEntry> {
-        use std::io::Write;
         let text = capture_line(text);
         if text.is_empty() {
             return Err(Error::corpus("nothing to capture"));
         }
         let dir = self.root.join("inbox");
         refuse_inbox_symlink(&dir)?;
-        std::fs::create_dir_all(&dir).map_err(|error| Error::io_at("writing", &dir, error))?;
+        create_private_dir_all(&dir)?;
         refuse_inbox_symlink(&dir)?;
         let now = stamp();
         let month = &now[..7];
@@ -825,16 +850,12 @@ impl Corpus {
         let line = existing.lines().count();
         refuse_inbox_symlink(&dir)?;
         refuse_inbox_symlink(&path)?;
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|error| Error::io_at("writing", &path, error))?;
-        if !existing.is_empty() && !existing.ends_with('\n') {
-            writeln!(f).map_err(|error| Error::io_at("writing", &path, error))?;
-        }
-        writeln!(f, "- [{id}] {now} {text}")
-            .map_err(|error| Error::io_at("writing", &path, error))?;
+        let repair = if !existing.is_empty() && !existing.ends_with('\n') {
+            "\n"
+        } else {
+            ""
+        };
+        append_private(&path, format!("{repair}- [{id}] {now} {text}\n").as_bytes())?;
         Ok(InboxEntry {
             id,
             at: now.clone(),
@@ -955,7 +976,7 @@ impl Corpus {
         );
         refuse_inbox_symlink(&self.root.join("inbox"))?;
         refuse_inbox_symlink(&entry.file)?;
-        write_atomic(&entry.file, lines.join("\n") + "\n")?;
+        write_private_atomic(&entry.file, lines.join("\n") + "\n")?;
         Ok(())
     }
 }
@@ -1067,99 +1088,6 @@ fn is_inbox_month_filename(name: &OsStr) -> bool {
         && &bytes[7..] == b".md"
 }
 
-/// Replace a file through a sibling temporary file.
-///
-/// The temporary file is created, never opened by name a second time, so the
-/// bytes go to the file this call made and to nothing else. Writing by name
-/// would follow whatever already answers to it: a symlink planted at the
-/// temporary path is a write straight through the corpus wall, and the rename
-/// that follows would then install the symlink as the node.
-///
-/// The temporary file is removed when either writing or renaming fails, so a
-/// failed write does not leave debris that could be mistaken for corpus data.
-pub(crate) fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
-    let (tmp, file) = create_temporary_sibling(path)?;
-    let result =
-        write_and_close(file, contents.as_ref()).and_then(|()| std::fs::rename(&tmp, path));
-    if let Err(error) = result {
-        match std::fs::remove_file(&tmp) {
-            Ok(()) => {}
-            Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => {}
-            Err(cleanup) => {
-                return Err(Error::corpus(format!(
-                    "atomic write to {} failed: {error}; removing {} failed: {cleanup}",
-                    path.display(),
-                    tmp.display()
-                )));
-            }
-        }
-        return Err(Error::io_at("writing", path, error));
-    }
-    Ok(())
-}
-
-/// Write the whole of `contents` and close the file, so the rename that
-/// follows moves a file nobody still holds open.
-fn write_and_close(mut file: std::fs::File, contents: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
-    file.write_all(contents)
-}
-
-/// How many names a single write tries before giving up. Two names collide
-/// only when another writer picks the same counter in the same nanosecond
-/// under the same process id, or when something is planting files under each
-/// name as fast as they are tried. A few attempts cover the first and a bound
-/// keeps the second from spinning.
-const TEMPORARY_NAME_ATTEMPTS: u32 = 8;
-
-/// Create a temporary file beside `path` and hand back its name and its open
-/// handle.
-///
-/// `create_new` is the guard: it opens with `O_CREAT | O_EXCL`, which refuses
-/// a name that already exists instead of following it, so a symlink sitting at
-/// the temporary path is a refusal rather than a write to its target. The
-/// handle comes back with the name because reopening by name afterwards would
-/// hand the same opening back to whoever won the race.
-///
-/// The name carries a nonce, and not only for the race. A fixed name that
-/// `O_EXCL` refuses would wedge every later write to that file behind one
-/// stale temporary left by a killed process, and nothing here deletes what it
-/// did not create. `.tmp` stays the extension so a temporary that does outlive
-/// a crash stays invisible to `load_all` and to the inbox, which both match on
-/// the name.
-///
-/// The name is built by appending to `path` as given, so a corpus reached
-/// through a symlinked root writes beside the file the caller named. Nothing
-/// is resolved or canonicalized.
-fn create_temporary_sibling(path: &Path) -> Result<(PathBuf, std::fs::File)> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    for _ in 0..TEMPORARY_NAME_ATTEMPTS {
-        let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.as_nanos());
-        let mut name = path.as_os_str().to_os_string();
-        name.push(format!(".{:x}-{count:x}-{nanos:x}.tmp", std::process::id()));
-        let tmp = PathBuf::from(name);
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&tmp)
-        {
-            Ok(file) => return Ok((tmp, file)),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(Error::io_at("writing", path, error)),
-        }
-    }
-    Err(Error::corpus(format!(
-        "no free temporary name beside {} after {TEMPORARY_NAME_ATTEMPTS} tries; \
-         something is creating files under them",
-        path.display()
-    )))
-}
-
 /// A commit `neb` made after a write.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -1233,7 +1161,7 @@ fn ensure_lock_ignored(root: &Path) -> Result<()> {
         .rfind(|line| !line.is_empty() && !line.starts_with(b"#"));
     if last_rule == Some(expected.as_bytes()) {
         return if is_symlink {
-            write_atomic(&path, contents)
+            write_private_atomic(&path, contents)
         } else {
             Ok(())
         };
@@ -1244,7 +1172,7 @@ fn ensure_lock_ignored(root: &Path) -> Result<()> {
     }
     contents.extend_from_slice(expected.as_bytes());
     contents.push(b'\n');
-    write_atomic(&path, contents)
+    write_private_atomic(&path, contents)
 }
 
 /// Run git at the corpus root. The process not starting at all is the one
@@ -1779,8 +1707,13 @@ fn hard_links_beside(_path: &Path) -> Result<Vec<PathBuf>> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "fixtures are planted directly, beside the helper under test"
+)]
 mod tests {
     use super::*;
+    use crate::fs::{Step, create_temporary_sibling, recording};
 
     #[test]
     fn atomic_write_removes_its_temporary_file_when_rename_fails() {
@@ -1788,7 +1721,7 @@ mod tests {
         let destination = dir.path().join("destination");
         std::fs::create_dir(&destination).unwrap();
 
-        let error = write_atomic(&destination, "replacement").unwrap_err();
+        let error = write_private_atomic(&destination, "replacement").unwrap_err();
         let message = error.to_string();
         assert!(message.contains("writing"), "{message}");
         assert!(
@@ -1827,7 +1760,7 @@ mod tests {
         let planted = dir.path().join("destination.md.tmp");
         std::os::unix::fs::symlink(&outside, &planted).unwrap();
 
-        write_atomic(&destination, "replacement").unwrap();
+        write_private_atomic(&destination, "replacement").unwrap();
 
         assert_eq!(
             std::fs::read_to_string(&outside).unwrap(),
@@ -1851,6 +1784,89 @@ mod tests {
                 .file_type()
                 .is_symlink(),
             "the planted path is not ours to delete"
+        );
+    }
+
+    /// The order is the durability: bytes flushed before the rename, so the
+    /// name never points at a file the device has not got, and the directory
+    /// flushed after it, so the rename itself is not lost to a crash.
+    #[test]
+    fn write_atomic_syncs_the_file_before_rename_and_the_parent_after() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("node.md");
+
+        let (result, steps) = recording(|| write_private_atomic(&destination, "contents"));
+        result.unwrap();
+
+        let Some(Step::Write { path: tmp, bytes }) = steps.first() else {
+            panic!("the first step is not the write: {steps:?}");
+        };
+        assert_eq!(bytes, b"contents");
+        assert_eq!(tmp.parent(), Some(dir.path()), "{}", tmp.display());
+        let mut expected = vec![
+            Step::Write {
+                path: tmp.clone(),
+                bytes: b"contents".to_vec(),
+            },
+            Step::SyncAll(tmp.clone()),
+            Step::Rename {
+                from: tmp.clone(),
+                to: destination.clone(),
+            },
+        ];
+        if cfg!(unix) {
+            expected.push(Step::SyncDir(dir.path().to_path_buf()));
+        }
+        assert_eq!(steps, expected);
+        assert_eq!(std::fs::read_to_string(&destination).unwrap(), "contents");
+    }
+
+    /// Seven `write(2)` calls for one capture could be cut anywhere by a
+    /// crash. One buffer, one `write_all`, then the data flushed.
+    #[test]
+    fn a_capture_line_is_built_whole_and_written_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let corpus = Corpus::init(&dir.path().join("corpus")).unwrap();
+        let month = dir
+            .path()
+            .join("corpus")
+            .join("inbox")
+            .join(format!("{}.md", &stamp()[..7]));
+        // A month file whose last line lost its newline to a hand edit.
+        std::fs::write(&month, "- [0001] 2026-09-01T00:00 an earlier thought").unwrap();
+
+        let (entry, steps) = recording(|| corpus.capture("a thought, torn nowhere"));
+        let entry = entry.unwrap();
+
+        let line = format!("\n- [{}] {} a thought, torn nowhere\n", entry.id, entry.at);
+        assert_eq!(
+            steps,
+            [
+                Step::Write {
+                    path: month.clone(),
+                    bytes: line.clone().into_bytes(),
+                },
+                Step::SyncData(month.clone()),
+            ],
+            "the repair newline and the line are one write, then synced"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&month).unwrap(),
+            format!("- [0001] 2026-09-01T00:00 an earlier thought{line}")
+        );
+
+        // The next capture needs no repair, and is still one write.
+        let (entry, steps) = recording(|| corpus.capture("and another"));
+        let entry = entry.unwrap();
+        assert_eq!(
+            steps,
+            [
+                Step::Write {
+                    path: month.clone(),
+                    bytes: format!("- [{}] {} and another\n", entry.id, entry.at).into_bytes(),
+                },
+                Step::SyncData(month.clone()),
+            ]
         );
     }
 

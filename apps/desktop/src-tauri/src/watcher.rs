@@ -40,7 +40,8 @@ pub fn start(app: AppHandle, root: &Path) -> notify::Result<RecommendedWatcher> 
     // a watch on a missing directory fails, so make it exist. This is what
     // `Corpus::init` and `capture` both do.
     let inbox = root.join("inbox");
-    std::fs::create_dir_all(&inbox)?;
+    nebula_core::fs::create_private_dir_all(&inbox)
+        .map_err(|error| notify::Error::generic(&error.to_string()))?;
     watcher.watch(&root.join("nodes"), RecursiveMode::Recursive)?;
     watcher.watch(&inbox, RecursiveMode::Recursive)?;
 

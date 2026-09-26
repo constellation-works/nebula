@@ -1,0 +1,8 @@
+# Methods that bypass a shared helper. Each entry names the helper to use.
+disallowed-methods = [
+    # STD-03 §R5 and STD-05 §R8: every durable file goes through one helper
+    # that fsyncs the file and its directory and creates it owner-only.
+    { path = "std::fs::write", reason = "use nebula_core::fs::write_private_atomic, the durable write helper" },
+    # STD-05 §R8: every directory nebula creates is 0700, never the umask's.
+    { path = "std::fs::create_dir_all", reason = "use nebula_core::fs::create_private_dir_all, which creates directories 0700" },
+]
