@@ -2132,6 +2132,114 @@ fn open_or_init_says_whether_it_created_the_corpus() {
     assert!(!created, "an existing corpus is opened, not created");
 }
 
+#[test]
+fn discover_finds_the_nearest_corpus_at_or_above_the_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let outer = dir.path().join("outer");
+    let inner = outer.join("projects").join("inner");
+    Corpus::init(&outer).unwrap();
+    Corpus::init(&inner).unwrap();
+    let deep = inner.join("notes").join("deep");
+    std::fs::create_dir_all(&deep).unwrap();
+
+    assert_eq!(Corpus::discover(&outer), Some(outer.clone()));
+    assert_eq!(Corpus::discover(&outer.join("nodes")), Some(outer.clone()));
+    assert_eq!(Corpus::discover(&outer.join("projects")), Some(outer));
+    assert_eq!(Corpus::discover(&inner.join("nodes")), Some(inner.clone()));
+    assert_eq!(Corpus::discover(&deep), Some(inner));
+    assert_eq!(Corpus::discover(dir.path()), None);
+    // The start need not exist: the walk is over the path, not the disk.
+    assert_eq!(
+        Corpus::discover(&deep.join("not-yet")),
+        Corpus::discover(&deep)
+    );
+}
+
+#[test]
+fn discover_requires_nodes_beside_a_config_that_names_a_corpus() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases: [(&str, bool, Option<&str>); 6] = [
+        ("nodes-only", true, None),
+        (
+            "config-only",
+            false,
+            Some("schema_version: 2\ncorpus_id: neb-000001\n"),
+        ),
+        ("no-corpus-id", true, Some("schema_version: 2\n")),
+        (
+            "empty-corpus-id",
+            true,
+            Some("schema_version: 2\ncorpus_id: ''\n"),
+        ),
+        ("not-yaml", true, Some("corpus_id: [unclosed\n")),
+        // An older schema still counts, so `neb migrate` works from inside.
+        (
+            "v1",
+            true,
+            Some("schema_version: 1\ncorpus_id: neb-000001\ndomains: []\n"),
+        ),
+    ];
+    for (name, nodes, config) in cases {
+        let root = dir.path().join(name);
+        std::fs::create_dir_all(&root).unwrap();
+        if nodes {
+            std::fs::create_dir(root.join("nodes")).unwrap();
+        }
+        if let Some(config) = config {
+            std::fs::write(root.join("config.yaml"), config).unwrap();
+        }
+        let expected = (name == "v1").then(|| root.clone());
+        assert_eq!(Corpus::discover(&root), expected, "{name}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn discover_walks_the_path_as_spelled_and_never_resolves_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("real").join("corpus");
+    Corpus::init(&root).unwrap();
+
+    // Through a symlinked parent, the root comes back in the alias spelling.
+    let alias = dir.path().join("alias");
+    symlink(dir.path().join("real"), &alias).unwrap();
+    assert_eq!(
+        Corpus::discover(&alias.join("corpus").join("nodes")),
+        Some(alias.join("corpus"))
+    );
+
+    // A link into the corpus from outside is a directory outside it, the way
+    // `cd ..` from there leaves it: the walk does not follow the link back.
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    symlink(root.join("nodes"), elsewhere.join("ideas")).unwrap();
+    assert_eq!(Corpus::discover(&elsewhere.join("ideas")), None);
+}
+
+/// A symlinked `nodes/` is found, not walked past, so opening it refuses by
+/// name rather than resolution quietly settling on some other corpus.
+#[cfg(unix)]
+#[test]
+fn discover_finds_a_corpus_whose_nodes_is_a_symlink_so_open_can_refuse_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let outer = dir.path().join("outer");
+    Corpus::init(&outer).unwrap();
+    let root = outer.join("linked");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::write(
+        root.join("config.yaml"),
+        "schema_version: 2\ncorpus_id: neb-000001\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(outer.join("nodes"), root.join("nodes")).unwrap();
+
+    assert_eq!(Corpus::discover(&root), Some(root.clone()));
+    let refused = Corpus::open(Some(root)).expect_err("a symlinked nodes/ is refused");
+    assert!(refused.to_string().contains("is a symlink"), "{refused}");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_corpus_that_cannot_be_created_names_the_root_it_aimed_at() {

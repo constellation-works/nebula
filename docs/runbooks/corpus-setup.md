@@ -30,11 +30,18 @@ setting: when it is absent, the command prints the opt-in command above. If the
 file already names a different corpus, `--set-root` refuses to replace it;
 review the two paths and pass `--force` only when redirecting the machine is
 intentional.
-The resolver checks `--root`, `$NEBULA_ROOT`, that config file, then
-`~/.nebula` in that order. An exported-but-empty `$NEBULA_ROOT` is treated as
-unset, not as the current directory, so it falls through to the config file
-and then `~/.nebula`; an explicit `--root ""` is refused outright rather than
-resolving to the current directory. You can still export the environment
+The resolver checks `--root`, `$NEBULA_ROOT`, the current directory, that
+config file, then `~/.nebula` in that order. The current directory counts when
+it is a corpus or anywhere under one: the nearest directory at or above it that
+holds `nodes/` beside a `config.yaml` naming a `corpus_id` is used, the way git
+finds a repository, and the innermost of two nested corpora wins. The walk
+follows the directory as the shell spells it (`$PWD`) and never resolves a
+symlink. Only an existing corpus is found this way, so `neb capture` never
+creates one because of where it was run.
+
+An exported-but-empty `$NEBULA_ROOT` is treated as unset, not as the current
+directory itself, so it falls through to the steps after it; an explicit
+`--root ""` is refused outright rather than resolving to the current directory. You can still export the environment
 variable when you want a shell-specific override:
 
 ```sh

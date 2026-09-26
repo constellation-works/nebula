@@ -12,9 +12,9 @@ use std::time::Duration;
 /// A capture should tell the UI promptly when another writer is busy.
 pub const CAPTURE_LOCK_WAIT: Duration = Duration::from_millis(150);
 
-/// Where the corpus is expected: `--root`, else `$NEBULA_ROOT`, else
-/// `~/.config/nebula/root`, else `~/.nebula`. The CLI's rule, so the app and
-/// the terminal never disagree.
+/// Where the corpus is expected: `$NEBULA_ROOT`, else the corpus the working
+/// directory is in, else `~/.config/nebula/root`, else `~/.nebula`. The CLI's
+/// rule without `--root`, so the app and the terminal never disagree.
 pub fn resolve_root() -> Result<PathBuf> {
     Corpus::resolve_root(None)
 }

@@ -22,6 +22,13 @@ this repository ends up. Keeping them apart means this code can be published
 without a decision about the notes, and the notes can be backed up without
 dragging a build tree along.
 
+Every command finds the corpus through `--root`, else `$NEBULA_ROOT`, else the
+nearest corpus at or above the current directory (a `nodes/` beside a
+`config.yaml` naming a `corpus_id`, found the way git finds a repository), else
+the path in `~/.config/nebula/root`, else `~/.nebula`. Only an existing corpus
+is found from the current directory, so `neb capture` can create one only at an
+explicit or configured root, and it says so when it does.
+
 ```
 nebula   = the CLI, the checker, the index builder   (this repo)
 corpus   = nodes/ and inbox/                          (elsewhere, private)

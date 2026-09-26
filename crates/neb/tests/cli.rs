@@ -134,8 +134,23 @@ impl Corpus {
 }
 
 /// Run against an isolated home directory so root discovery is part of the
-/// fixture rather than a property of the developer's shell.
+/// fixture rather than a property of the developer's shell. The working
+/// directory is the fixture's own temporary directory, which holds corpora
+/// but is not one, so no corpus is found from it.
 fn run_from_home(
+    home: &Path,
+    root: Option<&Path>,
+    args: &[&str],
+    nebula_root: Option<&Path>,
+) -> Run {
+    run_in(home.parent().unwrap_or(home), home, root, args, nebula_root)
+}
+
+/// [`run_from_home`] from a chosen working directory, with `PWD` set to it
+/// the way a shell sets it after `cd`, so the spelling of `cwd` is what the
+/// binary sees.
+fn run_in(
+    cwd: &Path,
     home: &Path,
     root: Option<&Path>,
     args: &[&str],
@@ -146,6 +161,8 @@ fn run_from_home(
         cmd.arg("--root").arg(root);
     }
     cmd.args(args)
+        .current_dir(cwd)
+        .env("PWD", cwd)
         .env("HOME", home)
         .env("NO_COLOR", "1")
         .env_remove("OBSERVATORY_ROOT");
@@ -929,6 +946,226 @@ fn root_discovery_prefers_flag_then_environment_then_config_then_default() {
     run_from_home(&default_home, None, &["check"], None)
         .assert_ok()
         .says("0 nodes");
+}
+
+/// Seed a corpus at `root` with one capture whose text names it, so a later
+/// `inbox` shows which corpus a command resolved to.
+fn corpus_marked(home: &Path, root: &Path, mark: &str) {
+    run_from_home(home, Some(root), &["capture", "--quiet", mark], None).assert_ok();
+}
+
+/// `inbox` from `cwd`, asserting it read the corpus marked `expected` and
+/// none of the `others`.
+fn inbox_reads(run: Run, expected: &str, others: &[&str]) {
+    let run = run.assert_ok().says(expected);
+    for other in others.iter().filter(|other| **other != expected) {
+        assert!(
+            !run.stdout().contains(other),
+            "`neb {}` read `{other}` instead of `{expected}`:\n{}",
+            run.args,
+            run.stdout()
+        );
+    }
+}
+
+/// Standing inside a corpus, or anywhere under it, is a choice of corpus.
+/// Capture writes there and announces nothing, because nothing was created.
+#[test]
+fn a_corpus_is_found_from_its_root_and_every_directory_under_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let root = dir.path().join("corpus");
+    run_from_home(&home, Some(&root), &["init"], None).assert_ok();
+    let deep = root.join("notes").join("deep");
+    std::fs::create_dir_all(&deep).unwrap();
+
+    for (cwd, text) in [
+        (root.clone(), "from the root"),
+        (root.join("nodes"), "from nodes"),
+        (deep.clone(), "from a directory of my own"),
+    ] {
+        let run = run_in(&cwd, &home, None, &["capture", "--quiet", text], None).assert_ok();
+        assert_eq!(run.stderr(), "", "an existing corpus is not news");
+        run_in(&cwd, &home, None, &["check"], None)
+            .assert_ok()
+            .says("0 nodes");
+    }
+
+    run_from_home(&home, Some(&root), &["inbox"], None)
+        .assert_ok()
+        .says("from the root")
+        .says("from nodes")
+        .says("from a directory of my own");
+    assert!(
+        !home.join(".nebula").exists(),
+        "discovery must not fall through to the default corpus"
+    );
+}
+
+/// `--root` > `$NEBULA_ROOT` > the working directory's corpus >
+/// `~/.config/nebula/root` > `~/.nebula`, one step at a time.
+#[test]
+fn the_working_directory_corpus_sits_between_the_environment_and_the_machine_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let explicit = dir.path().join("explicit");
+    let environment = dir.path().join("environment");
+    let local = dir.path().join("local");
+    let configured = dir.path().join("configured");
+    let outside = dir.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    run_from_home(&home, Some(&configured), &["init", "--set-root"], None).assert_ok();
+    for (root, mark) in [
+        (&explicit, "mark-explicit"),
+        (&environment, "mark-environment"),
+        (&local, "mark-local"),
+        (&configured, "mark-configured"),
+    ] {
+        corpus_marked(&home, root, mark);
+    }
+    let marks = [
+        "mark-explicit",
+        "mark-environment",
+        "mark-local",
+        "mark-configured",
+        "mark-default",
+    ];
+    let inside = local.join("nodes");
+
+    let flag = run_in(
+        &inside,
+        &home,
+        Some(&explicit),
+        &["inbox"],
+        Some(&environment),
+    );
+    inbox_reads(flag, "mark-explicit", &marks);
+    let env = run_in(&inside, &home, None, &["inbox"], Some(&environment));
+    inbox_reads(env, "mark-environment", &marks);
+    let cwd = run_in(&inside, &home, None, &["inbox"], None);
+    inbox_reads(cwd, "mark-local", &marks);
+    let config = run_in(&outside, &home, None, &["inbox"], None);
+    inbox_reads(config, "mark-configured", &marks);
+
+    // With no configured root, the working directory still beats the
+    // default, and outside any corpus the default is what is left.
+    let bare_home = dir.path().join("bare-home");
+    corpus_marked(&bare_home, &bare_home.join(".nebula"), "mark-default");
+    let cwd = run_in(&inside, &bare_home, None, &["inbox"], None);
+    inbox_reads(cwd, "mark-local", &marks);
+    let default = run_in(&outside, &bare_home, None, &["inbox"], None);
+    inbox_reads(default, "mark-default", &marks);
+}
+
+/// The nearest corpus wins, so a corpus kept inside another is found from
+/// inside itself and the outer one from everywhere else in it.
+#[test]
+fn the_nearest_of_two_nested_corpora_wins() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let outer = dir.path().join("outer");
+    let inner = outer.join("projects").join("inner");
+    corpus_marked(&home, &outer, "mark-outer");
+    corpus_marked(&home, &inner, "mark-inner");
+    let marks = ["mark-outer", "mark-inner"];
+
+    let deep = run_in(&inner.join("nodes"), &home, None, &["inbox"], None);
+    inbox_reads(deep, "mark-inner", &marks);
+    let between = run_in(&outer.join("projects"), &home, None, &["inbox"], None);
+    inbox_reads(between, "mark-outer", &marks);
+}
+
+/// Discovery only ever finds a corpus that exists, so it cannot steer
+/// capture into creating one. A directory with only half the marker, or a
+/// `config.yaml` that names no corpus, is walked past untouched, and capture
+/// creates the corpus it would have created anyway, saying so.
+#[test]
+fn capture_never_adopts_a_directory_that_only_looks_like_a_corpus() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let lookalike = dir.path().join("lookalike");
+    let config_only = dir.path().join("config-only");
+    let nodes_only = dir.path().join("nodes-only");
+    std::fs::create_dir_all(lookalike.join("nodes")).unwrap();
+    write(&lookalike.join("config.yaml"), "name: some other tool\n");
+    std::fs::create_dir_all(&config_only).unwrap();
+    write(
+        &config_only.join("config.yaml"),
+        "schema_version: 2\ncorpus_id: neb-000001\n",
+    );
+    std::fs::create_dir_all(nodes_only.join("nodes")).unwrap();
+
+    let default = home.join(".nebula");
+    // Distinct texts, so no capture is reported as a duplicate of another.
+    for (i, (cwd, text)) in [
+        (lookalike.join("nodes"), "from the lookalike"),
+        (config_only.clone(), "from the config-only directory"),
+        (nodes_only, "from the nodes-only directory"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let run = run_in(cwd, &home, None, &["capture", "--quiet", text], None).assert_ok();
+        let expected = if i == 0 {
+            format!("{CREATED_NOTICE}{}\n", default.display())
+        } else {
+            String::new()
+        };
+        assert_eq!(run.stderr(), expected, "only the default is ever created");
+    }
+    assert!(default.join("inbox").is_dir(), "the captures landed there");
+    assert!(!lookalike.join("inbox").exists() && !config_only.join("inbox").exists());
+    assert!(!config_only.join("nodes").exists());
+    assert_eq!(
+        std::fs::read_to_string(lookalike.join("config.yaml")).unwrap(),
+        "name: some other tool\n"
+    );
+}
+
+/// Paths are used as given. A corpus reached through a symlink resolves to
+/// the spelling the shell used, as `$PWD` carries it, and a `$PWD` that no
+/// longer names the working directory is ignored rather than trusted.
+#[cfg(unix)]
+#[test]
+fn a_corpus_found_through_a_symlink_keeps_the_spelling_of_the_working_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let real = dir.path().join("real");
+    let alias = dir.path().join("alias");
+    run_from_home(&home, Some(&real.join("corpus")), &["init"], None).assert_ok();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let spelled = alias.join("corpus");
+
+    let run = run_in(
+        &spelled.join("nodes"),
+        &home,
+        None,
+        &["init", "--json"],
+        None,
+    )
+    .assert_ok();
+    let value: serde_json::Value = serde_json::from_str(&run.stdout()).expect("stdout is JSON");
+    assert_eq!(value["root"], spelled.to_str().unwrap());
+
+    // A stale `$PWD`: the OS's own answer stands, which is still this corpus.
+    let out = Command::new(bin())
+        .args(["init", "--json"])
+        .current_dir(spelled.join("nodes"))
+        .env("PWD", dir.path())
+        .env("HOME", &home)
+        .env("NO_COLOR", "1")
+        .env_remove("NEBULA_ROOT")
+        .env_remove("OBSERVATORY_ROOT")
+        .output()
+        .unwrap();
+    let run = Run {
+        args: "init --json under a stale PWD".into(),
+        out,
+    }
+    .assert_ok();
+    let value: serde_json::Value = serde_json::from_str(&run.stdout()).expect("stdout is JSON");
+    let root = PathBuf::from(value["root"].as_str().unwrap());
+    assert!(root.ends_with("real/corpus"), "{}", root.display());
 }
 
 /// An exported-but-blank `NEBULA_ROOT` must be treated as unset, not as the

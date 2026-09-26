@@ -27,8 +27,12 @@ is the one thing this skill forbids outright. Read
 
 ## Where the corpus is
 
-`--root <dir>`, else `$NEBULA_ROOT`, else the one-line path in
-`~/.config/nebula/root`, else `~/.nebula`. The corpus is private and **never
+`--root <dir>`, else `$NEBULA_ROOT`, else the nearest corpus at or above the
+working directory (a `nodes/` beside a `config.yaml` with a `corpus_id`; the
+innermost wins), else the one-line path in `~/.config/nebula/root`, else
+`~/.nebula`. So a shell that has `cd`'d into a corpus uses that corpus even when
+another is configured; pass `--root` when the working directory is not the
+corpus you mean. The corpus is private and **never
 inside the nebula repository** (`codebases/nebula`); never commit `nodes/`,
 `inbox/` or `config.yaml` there. Before the first write of a session run `neb
 check` — it confirms the root resolves, the schema is v2, and the corpus is

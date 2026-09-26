@@ -88,12 +88,14 @@ Options:
                   directed acyclic graph. Nothing is ever deleted: refuted and abandoned \
                   ideas are what stop you re-treading ground.",
     after_help = "The corpus lives outside this repository. It is found via --root, else \
-                  $NEBULA_ROOT, else ~/.config/nebula/root, else ~/.nebula.",
+                  $NEBULA_ROOT, else the nearest corpus at or above the current directory, \
+                  else ~/.config/nebula/root, else ~/.nebula.",
     disable_help_subcommand = true,
     help_template = HELP_TEMPLATE
 )]
 struct Cli {
-    /// Corpus location. Defaults to `$NEBULA_ROOT`, else `~/.config/nebula/root`, else `~/.nebula`.
+    /// Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in,
+    /// else `~/.config/nebula/root`, else `~/.nebula`.
     #[arg(long, global = true, value_name = "DIR")]
     root: Option<PathBuf>,
 
@@ -1379,7 +1381,9 @@ fn run(cli: Cli) -> Outcome {
             }
             // Capture must work on a corpus that does not exist yet. Being
             // told to run a setup command is precisely the friction that
-            // loses the thought.
+            // loses the thought. A root found from the working directory is
+            // one that already holds a corpus, so only an explicit or a
+            // configured root can ever be created here.
             let resolved_root = Corpus::resolve_root(root)?;
             let default_root_warning = Corpus::warning_before_default_init(&resolved_root)?;
             let (corpus, created) = Corpus::open_or_init(Some(resolved_root.clone()))?;
