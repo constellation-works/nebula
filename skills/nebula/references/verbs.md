@@ -46,6 +46,37 @@ hints, and `committed <hash>`. Under `--json` the line saying nothing
 matched and the line saying a bound cut the result are still written to
 stderr; counts, hints and `committed` are not.
 
+A list is a table. On a terminal it has one header row, then one line per
+record, never wrapped or cut; columns are two spaces apart, a count is
+right-aligned under its header, and an empty cell reads `-`. Piped or
+redirected, the same records are one tab-separated line each, with no
+header and no colour, and every column is there (`-` when empty), so `cut
+-f3` is always the same field:
+
+| verb | columns |
+|---|---|
+| `list` | `STATUS ID TAGS TITLE`, the tags comma-joined in one cell |
+| `inbox` | `ID AT TEXT` |
+| `near` | `BAND STATUS ID TITLE LINKED` |
+| `tag list` | `TAG COUNT` |
+| `review --short` | `ID WHY` |
+| `log` | `HASH DATE MESSAGE` |
+
+```
+// neb list --tag design        (on a terminal)
+STATUS      ID                        TAGS           TITLE
+abandoned   a-single-global-taxonomy  design         A single global taxonomy
+hypothesis  tags-beat-domains         design,corpus  Tags beat domains
+
+// neb list --tag design | cat
+abandoned	a-single-global-taxonomy	design	A single global taxonomy
+hypothesis	tags-beat-domains	design,corpus	Tags beat domains
+```
+
+An empty list prints nothing on stdout, header included. `show`, `trace`,
+`impact`, `check` and `review` are reports, not lists, and keep their own
+layouts.
+
 Colour is decided once, per stream: text is coloured only for a terminal,
 never when that stream is piped or redirected, when `TERM=dumb`, or when
 `NO_COLOR` is set to a non-empty value. `CLICOLOR_FORCE` never colours a
@@ -662,8 +693,8 @@ kill: a corpus of 50+ nodes needs a cross-cutting query that tags cannot answer
 shape as current `show`; a date means the final commit on that date as
 `neb log` dates it, which is the commit's own day in the offset it was
 recorded with. The reader's timezone never changes which revision a date
-names. A date before the node existed is refused. `neb log <NODE>` prints
-short hash, date, and message. When no commit has touched the node, text output says `no commits
+names. A date before the node existed is refused. `neb log <NODE>` is a table of
+short hash, date and message. When no commit has touched the node, text output says `no commits
 touched this node`; its JSON stays `[]`. Otherwise its JSON keeps the full hash:
 
 ```json
@@ -739,16 +770,17 @@ reorders anything; the order is the score's.
 
 Given a node, each neighbour's `linked` lists the edges already joining it
 to that node, either way round, as `{from, type, to}` in declaration order;
-text appends `linked: parent (<kinds>)`, `linked: child (<kinds>)` or
-`linked: contradicts`. It is `null` when there is no such edge, and always
-for free text (and so for the `near` of `capture` and `promote`). A linked
+text's `LINKED` column says `parent (<kinds>)`, `child (<kinds>)` or
+`contradicts`. It is `null` (`-` in text) when there is no such edge, and
+always for free text. The `near:` block `capture` and `promote` print is not
+a table: one line per neighbour, band first. A linked
 neighbour is a link that exists, not one to make.
 
 Nodes sharing no word are left out, so an empty answer (`"items": []` with
 `"total": 0`, or nothing in text, with `nothing near: no node shares a word
 with this` on stderr in both) is a real finding: the
 thought is unlike anything in the corpus. It ranks candidates for a human to
-read; it never writes anything, and passing its first line straight to
+read; it never writes anything, and passing its top candidate straight to
 `--parent` unread is the automatic linking the spec rules out.
 
 ```json
@@ -764,9 +796,10 @@ read; it never writes anything, and passing its first line straight to
   "truncated": false
 }
 
-// neb near tags-beat-domains        (the node's own text is the query; it is not in the answer)
-strong abandoned  a-single-global-taxonomy A single global taxonomy  linked: contradicts
-some   seed       required-categorical-fields-drift Required categorical fields drift  linked: parent (derives-from)
+// neb near tags-beat-domains        (on a terminal; the node's own text is the query, and it is not in the answer)
+BAND    STATUS     ID                                 TITLE                              LINKED
+strong  abandoned  a-single-global-taxonomy           A single global taxonomy           contradicts
+some    seed       required-categorical-fields-drift  Required categorical fields drift  parent (derives-from)
 ```
 
 `neb trace` prints a tree on a terminal, drawn from the same walk `--json`
@@ -868,7 +901,7 @@ graph BT
 | verb | does | flags |
 |---|---|---|
 | `neb review` | the weekly report: stale hypotheses (≥ 30 days), untouched seeds (≥ 90), hypotheses created ≥ 14 days ago with no references, hypotheses whose kill nobody human wrote, inbox waiting ≥ 14 | `--since <DAYS>`, `--out <FILE>`, `--limit <N>` (per section) |
-| `neb review --short` | the quick glance, one line each: hypotheses created ≥ 14 days ago with no references, seeds untouched ≥ 90 days, inbox entries waiting ≥ 14 days | `--tag <TAG>`×, `--limit <N>` (lines) |
+| `neb review --short` | the quick glance, one `ID WHY` row each: hypotheses created ≥ 14 days ago with no references, seeds untouched ≥ 90 days, inbox entries waiting ≥ 14 days | `--tag <TAG>`×, `--limit <N>` (lines) |
 
 Both forms are read-only by the spec's hard rule. `--short` refuses `--since`
 and `--out`, and `--tag` needs `--short`.

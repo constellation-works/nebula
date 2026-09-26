@@ -8,9 +8,12 @@
 //! - `errln!` writes a line to stderr, as `eprintln!` did;
 //! - [`stdout`] is a [`Write`] handle on stdout, for code that takes one,
 //!   such as `triage` and the completion script;
-//! - [`paint`] and [`bold`] colour text for the stream it is bound for, and
+//! - [`paint`] and [`bold`] colour text for the stream it is bound for,
+//!   [`colours`] says whether a stream is coloured, and
 //!   [`stdout_on_terminal`] and [`stdin_on_terminal`] say what the streams
-//!   are attached to. [`terminal`] decides all of that, once.
+//!   are attached to. [`terminal`] decides all of that, once. [`paint_if`]
+//!   and [`bold_if`] colour text for a renderer handed that answer, such as
+//!   a table.
 //!
 //! The streams are explicit in the names, so moving a line from one stream to
 //! the other is a one-word change.
@@ -36,7 +39,9 @@ use std::fmt;
 use std::io::{self, ErrorKind, Write};
 use std::sync::{Mutex, PoisonError};
 
-pub use terminal::{Role, Stream, bold, paint, stdin_on_terminal, stdout_on_terminal};
+pub use terminal::{
+    Role, Stream, bold, bold_if, colours, paint, paint_if, stdin_on_terminal, stdout_on_terminal,
+};
 
 /// Write to stdout, formatted as `print!` formats.
 macro_rules! out {

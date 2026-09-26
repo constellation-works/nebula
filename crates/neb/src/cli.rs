@@ -1714,7 +1714,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&json::List::new(inbox.0, limit.map(|_| cut)))?;
             } else {
-                out!("{}", render::inbox(&inbox));
+                out!("{}", render::inbox(&inbox, render::Target::stdout()));
             }
             notify(json, Some(notice));
             Ok(ok)
@@ -2000,7 +2000,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&counts)?;
             } else {
-                out!("{}", render::tags(&counts));
+                out!("{}", render::tags(&counts, render::Target::stdout()));
             }
             notify(json, render::tags_notice(&counts));
             Ok(ok)
@@ -2195,7 +2195,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&history)?;
             } else {
-                out!("{}", render::history(&history));
+                out!("{}", render::history(&history, render::Target::stdout()));
             }
             notify(json, render::history_notice(&history));
             Ok(ok)
@@ -2214,7 +2214,7 @@ fn run(cli: Cli) -> Outcome {
                 let nodes = listing.0.iter().map(json::Node::from).collect();
                 out_json(&json::List::new(nodes, limit.map(|_| cut)))?;
             } else {
-                out!("{}", render::list(&listing.0));
+                out!("{}", render::list(&listing.0, render::Target::stdout()));
             }
             notify(
                 json,
@@ -2239,7 +2239,7 @@ fn run(cli: Cli) -> Outcome {
             if json {
                 out_json(&json::Capped::new(near.0, (matched, truncated)))?;
             } else {
-                out!("{}", render::near(&near));
+                out!("{}", render::near(&near, render::Target::stdout()));
             }
             notify(json, notice);
             Ok(ok)
@@ -2367,7 +2367,7 @@ fn short_review(
     if json {
         out_json(&json::List::new(report.0, limit.map(|_| cut)))?;
     } else {
-        out!("{}", render::open(&report));
+        out!("{}", render::open(&report, render::Target::stdout()));
     }
     notify(json, notice);
     Ok(())
