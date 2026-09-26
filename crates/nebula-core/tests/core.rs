@@ -514,6 +514,52 @@ fn settling_an_inbox_entry_cannot_reach_a_file_outside_the_corpus() {
 
 #[cfg(unix)]
 #[test]
+fn capture_refuses_a_symlinked_active_month_without_changing_its_target() {
+    let (dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "existing thought").unwrap();
+    let outside = dir.path().join("outside-inbox.md");
+    std::fs::rename(&entry.file, &outside).unwrap();
+    let before = std::fs::read(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, &entry.file).unwrap();
+
+    let error = ops::capture(&corpus, "must stay inside").unwrap_err();
+
+    assert!(matches!(error, Error::Corpus(message) if message.contains("symlink")));
+    assert_eq!(std::fs::read(&outside).unwrap(), before);
+    assert!(
+        std::fs::symlink_metadata(&entry.file)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn inbox_writes_refuse_a_symlinked_directory_without_changing_its_target() {
+    let (dir, corpus) = corpus();
+    let entry = ops::capture(&corpus, "existing thought").unwrap();
+    let inbox_dir = entry.file.parent().unwrap();
+    let outside_dir = dir.path().join("outside-inbox");
+    std::fs::rename(inbox_dir, &outside_dir).unwrap();
+    let outside_month = outside_dir.join(entry.file.file_name().unwrap());
+    let before = std::fs::read(&outside_month).unwrap();
+    std::os::unix::fs::symlink(&outside_dir, inbox_dir).unwrap();
+
+    let capture_error = ops::capture(&corpus, "must stay inside").unwrap_err();
+    let settle_error = corpus.settle_inbox(&entry, "dropped").unwrap_err();
+    let drop_error = ops::drop(&corpus, &entry.id).unwrap_err();
+    let promote_error = ops::promote(&corpus, &entry.id, &Promotion::default(), 0).unwrap_err();
+
+    for error in [capture_error, settle_error, drop_error, promote_error] {
+        assert!(matches!(error, Error::Corpus(message) if message.contains("symlink")));
+    }
+    assert_eq!(std::fs::read(&outside_month).unwrap(), before);
+    assert!(corpus.load_all().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
 fn a_config_write_cannot_reach_a_file_outside_the_corpus() {
     let (dir, mut corpus) = corpus();
     let outside = dir.path().join("outside-sentinel.txt");
