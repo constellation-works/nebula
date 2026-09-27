@@ -113,13 +113,13 @@ pub enum Error {
     /// runs in, so a relative one would find or create a different corpus
     /// from each.
     #[error(
-        "the corpus root setting {} must be an absolute path, not `{}`",
-        .setting.display(),
+        "the corpus root {} must be an absolute path, not `{}`",
+        .setting.as_ref().map_or_else(|| "argument".to_owned(), |p| format!("setting {}", p.display())),
         .root.display()
     )]
     RelativeRootSetting {
-        /// The machine setting file.
-        setting: PathBuf,
+        /// The machine setting file it was read from; absent for an argument.
+        setting: Option<PathBuf>,
         /// The path it holds or would hold.
         root: PathBuf,
     },

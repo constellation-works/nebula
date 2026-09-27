@@ -9,6 +9,81 @@ use crate::harness::{
 use crate::support;
 use std::path::PathBuf;
 
+/// Paste the actual hint into a shell, from another directory, against the
+/// real binary. Spaces and shell metacharacters must remain one literal path.
+#[cfg(unix)]
+#[test]
+fn init_default_hint_regression_runs_as_printed() {
+    for name in ["rel", "my corpus", "it's a $corpus; (draft)"] {
+        for positional in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            let cwd = dir.path().join("work");
+            std::fs::create_dir_all(&cwd).unwrap();
+            let args = if positional {
+                vec!["init", name]
+            } else {
+                vec!["--root", name, "init"]
+            };
+            let run = run_in(&cwd, &home, None, &args, None).assert_ok();
+            let stderr = run.stderr();
+            let recipe = stderr
+                .split_once("run `")
+                .expect("init suggests setting the default")
+                .1
+                .split_once("` to make this corpus")
+                .unwrap()
+                .0;
+            let words = shlex::split(recipe).expect("hint is valid shell syntax");
+            assert_eq!(words.len(), 4, "{recipe}");
+            assert_eq!(words[0], "neb");
+            assert_eq!(words[1], "init");
+            assert_eq!(std::path::Path::new(&words[2]), cwd.join(name));
+            assert_eq!(words[3], "--set-root");
+
+            // A shell function selects this build without depending on PATH.
+            let script = format!("neb() {{ \"$NEB_TEST_BIN\" \"$@\"; }}; {recipe}");
+            let pasted = output(
+                support::command("sh", &home)
+                    .current_dir(dir.path())
+                    .env("NEB_TEST_BIN", crate::harness::bin())
+                    .args(["-c", &script]),
+            );
+            assert!(
+                pasted.status.success(),
+                "{recipe}: {}",
+                String::from_utf8_lossy(&pasted.stderr)
+            );
+            assert_eq!(
+                std::fs::read_to_string(home.join(".config/nebula/root")).unwrap(),
+                format!("{}\n", cwd.join(name).display())
+            );
+        }
+    }
+}
+
+#[test]
+fn init_relative_argument_regression_names_the_input_not_the_setting_file() {
+    for args in [
+        vec!["--json", "init", "rel", "--set-root"],
+        vec!["--json", "--root", "rel", "init", "--set-root"],
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let run = run_in(dir.path(), &home, None, &args, None);
+        let error = run.refusal();
+        assert_eq!(error["code"], "relative_root_setting");
+        let message = error["error"].as_str().unwrap();
+        assert!(
+            message.contains("argument") && message.contains("`rel`"),
+            "{error}"
+        );
+        assert!(!message.contains(".config/nebula/root"), "{error}");
+        assert!(!dir.path().join("rel").exists());
+        assert!(!home.join(".config/nebula/root").exists());
+    }
+}
+
 #[test]
 fn repeated_init_and_set_root_preserve_the_existing_corpus_byte_for_byte() {
     let c = Corpus::new();

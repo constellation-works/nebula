@@ -187,7 +187,7 @@ impl Corpus {
         let root = PathBuf::from(root);
         if !root.is_absolute() {
             return Err(Error::RelativeRootSetting {
-                setting: path.to_path_buf(),
+                setting: Some(path.to_path_buf()),
                 root,
             });
         }
@@ -306,7 +306,14 @@ impl Corpus {
     /// it is the remedy that refusal suggests.
     pub(crate) fn check_root_config(locations: &Locations, root: &Path, force: bool) -> Result<()> {
         let path = Self::root_config_path(locations)?;
-        Self::root_setting(&path, &Self::root_setting_contents(root))?;
+        Self::root_setting(&path, &Self::root_setting_contents(root)).map_err(|mut error| {
+            // The same validation rule applies, but this value came from
+            // the caller, not from the setting file we have yet to read.
+            if let Error::RelativeRootSetting { setting, .. } = &mut error {
+                *setting = None;
+            }
+            error
+        })?;
         let configured = match Self::configured_root(locations) {
             Ok(configured) => configured,
             Err(Error::EmptyRootSetting(_) | Error::RelativeRootSetting { .. }) => None,

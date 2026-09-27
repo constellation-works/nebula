@@ -2,6 +2,7 @@
 
 use crate::cli::args::{Cli, OnOff};
 use crate::cli::emit::{notify, out_json, report_commit, warn_root};
+use crate::cli::failure::shell_word;
 use crate::cli::{Invocation, Outcome};
 use crate::output::{self, errln, out, outln};
 use crate::render;
@@ -39,7 +40,7 @@ pub(in crate::cli) fn init(
                 "{}",
                 render::notice(&format!(
                     "run `neb init {} --set-root` to make this corpus the machine default",
-                    target.display()
+                    shell_word(&locations.absolute(target).to_string_lossy())
                 ))
             );
         }

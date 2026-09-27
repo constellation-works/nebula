@@ -48,7 +48,7 @@ fn environment_errors_name_their_value_or_setting() {
         ),
         (
             Error::RelativeRootSetting {
-                setting: PathBuf::from("/h/.config/nebula/root"),
+                setting: Some(PathBuf::from("/h/.config/nebula/root")),
                 root: PathBuf::from("rel"),
             },
             &["`rel`", "/h/.config/nebula/root"],
