@@ -6,7 +6,10 @@ for every write is the same:
 1. Say what you are about to run and why, in one line.
 2. Run it.
 3. Run `neb check`.
-4. Report the changed ids and the check line (`N nodes, E errors, W warnings`).
+4. Report the changed ids and the check line (`N nodes, E errors, W warnings, U unreadable files`).
+
+The check line is on stderr; nouns are singular for a count of 1. Unreadable
+files count as errors, and the node count includes only readable nodes.
 
 If `check` reports an error after your write, stop and show it; do not write
 again until the human has seen it. If it reports a warning you caused (rule 10,
@@ -105,7 +108,8 @@ Then `neb check` one last time and report it.
 ## Worked transcript
 
 Fixture: three nodes, one hypothesis with a kill and a reference, one seed,
-one refuted; one live inbox entry.
+one refuted; one live inbox entry. The example root is `/Users/you/.nebula`;
+the transcript shows stdout and stderr together.
 This transcript uses `agent:session` as the example agent label; use your own
 session or crew label after `agent:` in a real session.
 
@@ -113,7 +117,8 @@ session or crew label after `agent:` in a real session.
 
 ```sh
 $ neb check
-3 nodes, 0 errors, 0 warnings
+corpus: /Users/you/.nebula
+3 nodes, 0 errors, 0 warnings, 0 unreadable files
 $ neb inbox --json
 [ { "id": "a6e8", "at": "2026-09-12T18:16:42+02:00", "text": "nebula review as a weekly orbit routine" } ]
 $ neb near --json "nebula review as a weekly orbit routine"
@@ -139,7 +144,8 @@ $ neb list --json | jq -c '.[] | {id, status, tags}'
 $ neb promote a6e8 --title "Review as a weekly Orbit routine" --parent tags-beat-domains --tag design --by agent:session --task DANI-10348 --run jrun-20260913-0113-c3
 review-as-a-weekly-orbit-routine /…/nodes/review-as-a-weekly-orbit-routine.md
 $ neb check
-4 nodes, 0 errors, 0 warnings
+corpus: /Users/you/.nebula
+4 nodes, 0 errors, 0 warnings, 0 unreadable files
 ```
 
 > **agent:** Promoted `review-as-a-weekly-orbit-routine` (seed, parent
@@ -152,7 +158,7 @@ $ neb check
 $ neb status review-as-a-weekly-orbit-routine abandoned --why "belongs in the skill, not the graph"
 review-as-a-weekly-orbit-routine seed -> abandoned
 $ neb check --json
-{ "findings": [], "nodes": 4 }
+{ "root": "/Users/you/.nebula", "unreadable": [], "findings": [], "nodes": 4 }
 ```
 
 > **agent:** Abandoned with your reason; it stays in the graph so the question
