@@ -27,6 +27,39 @@ fn capture_works_before_a_corpus_exists() {
 
 const CREATED_NOTICE: &str = "note: created a new corpus at ";
 
+fn normalized_cli_path(path: &Path) -> PathBuf {
+    path.components().collect()
+}
+
+#[test]
+fn capture_names_a_root_built_from_a_tmpdir_with_a_trailing_slash_consistently() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let tmpdir = dir.path().join("tmp");
+    std::fs::create_dir(&tmpdir).unwrap();
+    let tmpdir = format!("{}/", tmpdir.display());
+    let root = PathBuf::from(format!("{tmpdir}/corpus"));
+
+    let mut command = neb_command(&home);
+    command
+        .arg("--root")
+        .arg(&root)
+        .args(["capture", "--quiet", "x"])
+        .env("TMPDIR", &tmpdir);
+    let out = output(&mut command);
+
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        format!("{CREATED_NOTICE}{}\n", normalized_cli_path(&root).display())
+    );
+    assert!(root.join("inbox").is_dir());
+}
+
 /// A mistyped `--root` or `$NEBULA_ROOT` must not split the corpus silently.
 /// Capture still creates rather than refuses; it says where, on stderr, once.
 #[test]
@@ -44,7 +77,10 @@ fn capture_names_the_corpus_it_creates_on_stderr_only_the_first_time() {
         let first = run_from_home(&home, root, &["capture", "x"], nebula_root).assert_ok();
         assert_eq!(
             first.stderr(),
-            format!("{CREATED_NOTICE}{}\n", target.display()),
+            format!(
+                "{CREATED_NOTICE}{}\n",
+                normalized_cli_path(target).display()
+            ),
             "exactly one line naming the new corpus"
         );
         let id = first.stdout_trim();
@@ -69,7 +105,7 @@ fn capture_json_names_the_corpus_it_creates_on_stderr_and_keeps_the_payload() {
     let first = run_from_home(&home, Some(&root), &["capture", "--json", "x"], None).assert_ok();
     assert_eq!(
         first.stderr(),
-        format!("{CREATED_NOTICE}{}\n", root.display())
+        format!("{CREATED_NOTICE}{}\n", normalized_cli_path(&root).display())
     );
     let again = run_from_home(&home, Some(&root), &["capture", "--json", "y"], None).assert_ok();
     assert_eq!(again.stderr(), "");
@@ -141,7 +177,7 @@ fn capture_relative_root_notice_keeps_symlinked_working_directory() {
     .assert_ok();
     assert_eq!(
         run.stderr(),
-        format!("{CREATED_NOTICE}{}\n", root.display())
+        format!("{CREATED_NOTICE}{}\n", normalized_cli_path(&root).display())
     );
     assert!(root.join("inbox").is_dir());
 }
@@ -387,7 +423,10 @@ fn capture_never_adopts_a_directory_that_only_looks_like_a_corpus() {
     .assert_ok();
     assert_eq!(
         run.stderr(),
-        format!("{CREATED_NOTICE}{}\n", default.display())
+        format!(
+            "{CREATED_NOTICE}{}\n",
+            normalized_cli_path(&default).display()
+        )
     );
     assert!(default.join("inbox").is_dir());
     assert!(!config_only.join("nodes").exists());

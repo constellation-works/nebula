@@ -50,7 +50,11 @@ else
     echo "hostile-env: skipping nebula-desktop: webkit2gtk-4.1 is not installed"
 fi
 
-scratch="$(mktemp -d "${TMPDIR:-/tmp}/nebula-hostile.XXXXXX")"
+scratch_parent="${TMPDIR:-/tmp}"
+while [[ "$scratch_parent" == */ && "$scratch_parent" != "/" ]]; do
+    scratch_parent="${scratch_parent%/}"
+done
+scratch="$(mktemp -d "${scratch_parent%/}/nebula-hostile.XXXXXX")"
 failed=0
 # Kept when anything failed, so the logs can be read.
 trap '[[ "$failed" -ne 0 ]] || rm -rf "$scratch"' EXIT
