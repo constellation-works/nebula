@@ -4,6 +4,54 @@
 use crate::harness::{Corpus, corpus_repo, git, log, write};
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+#[test]
+fn observatory_machine_setting_refuses_non_regular_files() {
+    crate::root::machine_setting_refuses_non_regular_files(
+        "observatory-root",
+        &["--json", "config", "observatory-root"],
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn machine_settings_follow_regular_symlinks_and_allow_missing_targets() {
+    use crate::harness::run_from_home;
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let root = dir.path().join("configured-corpus");
+    let obs = dir.path().join("observatory");
+    run_from_home(&home, Some(&root), &["init", "--set-root"], None).assert_ok();
+    run_from_home(
+        &home,
+        Some(&root),
+        &["config", "observatory-root", obs.to_str().unwrap()],
+        None,
+    )
+    .assert_ok();
+    for name in ["root", "observatory-root"] {
+        let setting = home.join(".config/nebula").join(name);
+        let target = dir.path().join(name);
+        std::fs::rename(&setting, &target).unwrap();
+        symlink(&target, &setting).unwrap();
+    }
+    run_from_home(&home, None, &["list"], None).assert_ok();
+    run_from_home(&home, None, &["config", "observatory-root"], None)
+        .assert_ok()
+        .says(obs.to_str().unwrap());
+
+    for name in ["root", "observatory-root"] {
+        std::fs::remove_file(dir.path().join(name)).unwrap();
+    }
+    run_from_home(&home, Some(&home.join(".nebula")), &["init"], None).assert_ok();
+    run_from_home(&home, None, &["list"], None).assert_ok();
+    run_from_home(&home, None, &["config", "observatory-root"], None)
+        .assert_ok()
+        .says("no observatory root");
+}
+
 /// An Observatory checkout in research layout v2: records are files under
 /// `questions/`, `hypotheses/` and `theories/`, and directories under
 /// `research/`. Only what a test cites is created, so an id that should not

@@ -173,10 +173,9 @@ impl Corpus {
     /// a different corpus from each working directory (STD-02 §R28).
     pub(crate) fn configured_root(locations: &Locations) -> Result<Option<PathBuf>> {
         let path = Self::root_config_path(locations)?;
-        match std::fs::read_to_string(&path) {
-            Ok(raw) => Self::root_setting(&path, &raw).map(Some),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(Error::io_at("reading", &path, error)),
+        match read_machine_setting(&path)? {
+            Some(raw) => Self::root_setting(&path, &raw).map(Some),
+            None => Ok(None),
         }
     }
 
@@ -229,10 +228,8 @@ impl Corpus {
             Err(Error::HomeUnset) => return Ok(None),
             Err(error) => return Err(error),
         };
-        let raw = match std::fs::read_to_string(&path) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(Error::io_at("reading", &path, error)),
+        let Some(raw) = read_machine_setting(&path)? else {
+            return Ok(None);
         };
         let root = PathBuf::from(raw.trim());
         if !root.is_absolute() {
@@ -460,6 +457,23 @@ impl Corpus {
         self.config.commit = enabled;
         self.config.save(&self.root)
     }
+}
+
+/// Machine settings may be symlinks, but their targets must be regular files.
+/// The shared reader checks before opening, opens nonblocking on Unix, then
+/// checks the descriptor before reading, including when a target was swapped.
+fn read_machine_setting(path: &Path) -> Result<Option<String>> {
+    let Some(bytes) = crate::fs_impl::read_regular_bytes(path, crate::fs_impl::Links::Follow)?
+    else {
+        return Ok(None);
+    };
+    String::from_utf8(bytes).map(Some).map_err(|error| {
+        Error::io_at(
+            "reading",
+            path,
+            std::io::Error::new(std::io::ErrorKind::InvalidData, error),
+        )
+    })
 }
 
 /// Check the nodes directory entry without resolving the corpus root. A root
