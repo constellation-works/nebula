@@ -208,6 +208,35 @@ describe("GraphView", () => {
     expect(canvas().querySelector("g.scene")!.getAttribute("transform")).not.toBe(first);
     fireEvent.click(screen.getByRole("button", { name: "Previous match" }));
     expect(canvas().querySelector('g.node[data-id="n1"]')).toHaveClass("node--selected");
+    expect(canvas().querySelector("g.scene")!.getAttribute("transform")).toBe(first);
+  });
+
+  it("keeps a match-focus request until the initial layout is ready", async () => {
+    const gate = deferred<void>();
+    const layout = layoutClient.layoutGraph;
+    const layoutSpy = vi.spyOn(layoutClient, "layoutGraph").mockImplementation(async (graph) => {
+      const laid = await layout(graph);
+      await gate.promise;
+      return laid;
+    });
+    mocked.graph.mockResolvedValue(synthetic(4));
+    mocked.graphSearch.mockResolvedValue(["n2"]);
+    render(<GraphView />);
+    await waitFor(() => expect(layoutSpy).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search graph" }), { target: { value: "evidence" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next match" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Next match" }));
+    expect(drawnNodes()).toHaveLength(0);
+
+    const pendingLayout = layoutSpy.mock.results[0]!.value;
+    await act(async () => {
+      gate.resolve();
+      await pendingLayout;
+    });
+    await waitFor(() => expect(drawnNodes()).toHaveLength(4));
+    expect(canvas().querySelector('g.node[data-id="n2"]')).toHaveClass("node--selected");
+    expect(canvas().querySelector("g.scene")!.getAttribute("transform")).not.toBe("translate(40 40) scale(1)");
   });
 
   it("combines tags with search and retains the canvas when no node matches", async () => {
@@ -357,24 +386,37 @@ describe("GraphView", () => {
     expect(canvas().querySelector("g.scene")).toHaveAttribute("transform", fitted);
   });
 
-  it("refetches on corpus-changed and keeps the selection", async () => {
+  it("refetches after match navigation without replacing the user's viewport", async () => {
     let fire: () => void = () => {};
     mocked.onCorpusChanged.mockImplementation(async (handler) => {
       fire = handler;
       return () => {};
     });
     mocked.graph.mockResolvedValue(synthetic(5));
+    mocked.graphSearch.mockResolvedValue(["n4"]);
+    const layoutSpy = vi.spyOn(layoutClient, "layoutGraph");
     render(<GraphView />);
     await waitFor(() => expect(drawnNodes()).toHaveLength(5));
-    fireEvent.click(canvas().querySelector('g.node[data-id="n4"]')!);
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search graph" }), { target: { value: "evidence" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next match" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Next match" }));
     await screen.findByRole("complementary", { name: "Node" });
+    expect(canvas().querySelector('g.node[data-id="n4"]')).toHaveClass("node--selected");
+    const focusedViewport = canvas().querySelector("g.scene")!.getAttribute("transform");
 
     fireEvent.wheel(canvas(), { deltaX: 12, deltaY: 30 });
+    fireEvent.wheel(canvas(), { ctrlKey: true, clientX: 100, clientY: 80, deltaY: -120 });
     const viewport = canvas().querySelector("g.scene")!.getAttribute("transform");
-    expect(viewport).toBe("translate(28 10) scale(1)");
+    expect(viewport).not.toBeNull();
+    expect(viewport).not.toBe(focusedViewport);
 
     mocked.graph.mockResolvedValue(synthetic(6));
     act(() => fire());
+    await waitFor(() => expect(layoutSpy).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      await layoutSpy.mock.results[1]!.value;
+    });
     await waitFor(() => expect(drawnNodes()).toHaveLength(6));
     expect(mocked.graph).toHaveBeenCalledTimes(2);
     expect(canvas().querySelector('g.node[data-id="n4"]')).toHaveClass("node--selected");

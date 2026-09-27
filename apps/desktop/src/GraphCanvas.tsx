@@ -219,6 +219,7 @@ export function GraphCanvas({ layout, selected, lineage, matches, isolatedIds, f
   const viewRef = useRef(view);
   viewRef.current = view;
   const fitted = useRef(-1);
+  const focusedSerial = useRef<number | null>(null);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number; moved: boolean } | null>(null);
 
   // Fit on the first layout that has size, then only when asked, so a refetch
@@ -235,9 +236,10 @@ export function GraphCanvas({ layout, selected, lineage, matches, isolatedIds, f
   }, [layout, fitRequest]);
 
   useEffect(() => {
-    if (focus === null) return;
+    if (focus === null || focus.serial === focusedSerial.current) return;
     const node = layout.nodes.find((n) => n.id === focus.id);
     if (node === undefined) return;
+    focusedSerial.current = focus.serial;
     const svg = svgRef.current;
     const k = Math.max(1, viewRef.current.k);
     setView({
