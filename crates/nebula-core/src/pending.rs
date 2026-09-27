@@ -17,12 +17,15 @@
 //! **Recovery** (STD-03 §R9) runs when a writer takes the corpus lock, before
 //! its own op, and decides from the record and the files, never from age:
 //!
-//! - The node exists: it was written after the record, under the same lock
+//! - The node loads as a valid regular node file: it was written after the record, under the same lock
 //!   that checked it did not exist yet, so the promotion is decided. The live
 //!   line is struck `-> <node>` (if a hand edit has already settled or removed
 //!   it, there is nothing left to strike), and the record goes.
 //! - The node does not exist: nothing was decided. The record goes, and the
 //!   entry stays waiting. No node is written by guesswork.
+//! - The target cannot be inspected or loaded as that node: writers and
+//!   reads that would present its entry refuse with the target's error.
+//!   The record and live entry stay intact for inspection.
 //! - The record cannot be read, or names an operation this build does not
 //!   know: every writer refuses with [`Error::PendingWriteUnreadable`], and
 //!   so do the reads that would present its entry, until a person has looked
@@ -200,11 +203,16 @@ impl Corpus {
     }
 
     /// Whether the files say the recorded write passed its point of no
-    /// return. For a promotion that is the node: it is written after the
-    /// record, under the lock that checked it did not exist yet.
+    /// return. A promotion needs a readable, valid node agreeing with its
+    /// file name, not just an occupied path. Only confirmed absence means
+    /// undecided; every other load failure keeps the obligation intact.
     fn decided(&self, write: &PendingWrite) -> Result<bool> {
         match write {
-            PendingWrite::Promote { node, .. } => Ok(self.node_path(node)?.exists()),
+            PendingWrite::Promote { node, .. } => match self.load(node) {
+                Ok(_) => Ok(true),
+                Err(Error::NoSuchNode(_)) => Ok(false),
+                Err(error) => Err(error),
+            },
         }
     }
 }
