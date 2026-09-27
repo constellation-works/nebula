@@ -29,6 +29,8 @@
 //!
 //! A failure other than a closed pipe latches too, for the same reason, and
 //! [`finish`] hands it back so `main` refuses with it once the verb is done.
+//! Record writes use [`finish_written`] after rendering and reporting the
+//! commit, so a failed report names the write that already landed.
 //! Writes to stderr are best effort: when stderr is gone there is nowhere to
 //! say so, and a warning must never cost the command.
 
@@ -112,11 +114,23 @@ impl Closable for Vec<u8> {
 }
 
 /// Flush stdout, and hand back a write to it that failed for any reason but
-/// a closed pipe. `main` calls this once, after the verb has run.
+/// a closed pipe. `main` calls this after the verb has run; a write handler
+/// may already have checked it with [`finish_written`].
 pub(crate) fn finish() -> Result<(), StdoutFailed> {
     // The latch has already absorbed any error; what it recorded is below.
     let _ = STDOUT.flush(&mut io::stdout().lock());
     STDOUT.failure()
+}
+
+/// Finish reporting a successful write, naming its resolved target if only
+/// the output failed. Call after checking the write and commit outcomes,
+/// and only when the operation actually wrote (not for an unchanged edit).
+/// A closed pipe remains silent; a skipped commit still counts as a write.
+pub(crate) fn finish_written(target: impl fmt::Display) -> Result<(), StdoutFailed> {
+    finish().map_err(|mut failure| {
+        failure.written = Some(target.to_string());
+        failure
+    })
 }
 
 /// The target of `out!` and `outln!`.
@@ -141,18 +155,28 @@ pub(crate) fn best_effort(err: &mut impl Write, args: fmt::Arguments<'_>) {
 /// A write to stdout failed with something other than a closed pipe: a full
 /// disk behind a redirect, say. `main` refuses with it.
 #[derive(Debug)]
-pub(crate) struct StdoutFailed(io::Error);
+pub(crate) struct StdoutFailed {
+    source: io::Error,
+    written: Option<String>,
+}
 
 impl fmt::Display for StdoutFailed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "could not write to stdout: {}", self.0)
+        write!(f, "could not write to stdout: {}", self.source)?;
+        if let Some(target) = &self.written {
+            write!(f, "; write landed for {target}; do not repeat the write")?;
+        }
+        Ok(())
     }
 }
 
 /// A write to a stream the caller treats as stdout failed.
 impl From<io::Error> for StdoutFailed {
     fn from(e: io::Error) -> Self {
-        Self(e)
+        Self {
+            source: e,
+            written: None,
+        }
     }
 }
 
@@ -226,7 +250,7 @@ impl Latch {
             return Ok(());
         }
         match std::mem::replace(&mut *state, State::Closed) {
-            State::Failed(e) => Err(StdoutFailed(e)),
+            State::Failed(e) => Err(e.into()),
             State::Open | State::Closed => Ok(()),
         }
     }

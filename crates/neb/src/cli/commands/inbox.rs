@@ -22,6 +22,7 @@ pub(in crate::cli) fn capture(cx: Invocation<'_>, quiet: bool, text: Vec<String>
     let k = if quiet { 0 } else { NEAR_DEFAULT };
     let done = verb::capture_at(locations, root, &text, k, &commits.options())?;
     let captured = done.value;
+    let written = captured.entry.id.clone();
     if let Some(warning) = &captured.warning {
         warn_root(locations, warning, &captured.root);
     }
@@ -60,6 +61,7 @@ pub(in crate::cli) fn capture(cx: Invocation<'_>, quiet: bool, text: Vec<String>
         out!("{}", render::suggestions(&near));
     }
     committed?;
+    output::finish_written(&written)?;
     Ok(ok)
 }
 
@@ -137,6 +139,7 @@ pub(in crate::cli) fn promote(
     let committed = report_commit(corpus.root(), commits, done.commit);
     note_close_tags(&done.close_tags);
     committed?;
+    output::finish_written(&created.doc.node.id)?;
     Ok(ok)
 }
 
@@ -157,6 +160,7 @@ pub(in crate::cli) fn drop(cx: Invocation<'_>, entry: String) -> Outcome {
         outln!("dropped {}", render::bold(&entry));
     }
     report_commit(corpus.root(), commits, done.commit)?;
+    output::finish_written(&entry)?;
     Ok(ok)
 }
 
