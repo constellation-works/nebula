@@ -5,6 +5,40 @@ use crate::handoff::observatory_with_h012;
 use crate::harness::{Corpus, run_from_home};
 
 #[test]
+fn json_preserves_stored_terminal_controls() {
+    let c = Corpus::new();
+    let title = "Escape\u{1b}[31m title";
+    let body = "first line\nsecond \u{1b}[2J line";
+    let by = "agent:\u{1b}[32m";
+    let note = "note \u{1b}[0m text";
+    c.run(&["new", title, "--id", "escape", "--body", body, "--by", by])
+        .assert_ok();
+    c.run(&[
+        "cite",
+        "escape",
+        "--kind",
+        "discussion",
+        "--note",
+        note,
+        "--by",
+        by,
+    ])
+    .assert_ok();
+
+    let shown: serde_json::Value =
+        serde_json::from_str(&c.run(&["show", "--json", "escape"]).assert_ok().stdout()).unwrap();
+    assert_eq!(shown["node"]["title"], title);
+    assert_eq!(shown["node"]["title_by"], by);
+    assert_eq!(shown["body"], body);
+    assert_eq!(shown["node"]["references"][0]["note"], note);
+    assert_eq!(shown["node"]["references"][0]["by"], by);
+
+    let trace: serde_json::Value =
+        serde_json::from_str(&c.run(&["trace", "--json", "escape"]).assert_ok().stdout()).unwrap();
+    assert_eq!(trace[0]["title"], title);
+}
+
+#[test]
 #[allow(clippy::too_many_lines)] // One contract matrix is easier to audit than split verb lists.
 fn every_documented_json_verb_emits_machine_readable_json() {
     let init_dir = tempfile::tempdir().unwrap();

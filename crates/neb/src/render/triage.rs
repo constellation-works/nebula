@@ -2,7 +2,7 @@
 //! decision did, and the session's closing count.
 
 use super::report::neighbour;
-use super::{bold, dim};
+use super::{bold, dim, inline_text};
 use nebula_core::triage::{Step, Tally, Waiting};
 use std::fmt::Write as _;
 
@@ -23,7 +23,7 @@ pub(crate) fn waiting(w: &Waiting) -> String {
         bold(&w.entry.id),
         dim(&format!("{}{age}", w.entry.at))
     );
-    let _ = writeln!(out, "  {}", w.entry.text);
+    let _ = writeln!(out, "  {}", inline_text(&w.entry.text));
     if w.near.is_empty() {
         let _ = writeln!(
             out,
@@ -35,7 +35,7 @@ pub(crate) fn waiting(w: &Waiting) -> String {
         let _ = writeln!(out, "  {} {}", bold(&(i + 1).to_string()), neighbour(n));
     }
     if let Some(title) = &w.title {
-        let _ = writeln!(out, "  {} {title}", dim("title:"));
+        let _ = writeln!(out, "  {} {}", dim("title:"), inline_text(title));
     }
     out
 }
@@ -65,7 +65,9 @@ pub(crate) fn step(step: &Step) -> String {
             dim(&created.path.display().to_string())
         ),
         Step::Dropped { entry } => format!("dropped {}\n", bold(&entry.id)),
-        Step::Titled { title: Some(title) } => format!("{} {title}\n", dim("title:")),
+        Step::Titled { title: Some(title) } => {
+            format!("{} {}\n", dim("title:"), inline_text(title))
+        }
         Step::Titled { title: None } => format!("{}\n", dim("title: the captured text")),
         Step::Skipped { entry } => format!("{}\n", dim(&format!("skipped {}", entry.id))),
         Step::Quit => String::new(),

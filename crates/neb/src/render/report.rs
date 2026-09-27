@@ -1,7 +1,7 @@
 //! The multi-line renderings: one function per report the core returns.
 
 use super::table::{Cell, Column, Table, Target};
-use super::{Notice, bold, count, dim, paint, status_badge, status_cell};
+use super::{Notice, bold, count, dim, inline_text, paint, prose_text, status_badge, status_cell};
 use crate::output::Role;
 use nebula_core::{
     Band, CommitSetting, DroppedLegacy, EdgeType, HUMAN, INBOX_DAYS, Impact, Inbox,
@@ -17,7 +17,7 @@ use std::path::Path;
 /// would bury the one line an agent wrote.
 fn by(label: Option<&str>) -> String {
     match label.filter(|by| *by != HUMAN) {
-        Some(by) => format!(" {}", dim(&format!("({by})"))),
+        Some(by) => format!(" {}", dim(&format!("({})", inline_text(by)))),
         None => String::new(),
     }
 }
@@ -30,7 +30,12 @@ pub(crate) fn node(view: &NodeView) -> String {
     let n = &view.node;
     let mut out = String::new();
     let _ = writeln!(out, "{} {}", status_badge(n.status), bold(&n.id));
-    let _ = writeln!(out, "{}{}", n.title, by(n.title_by.as_deref()));
+    let _ = writeln!(
+        out,
+        "{}{}",
+        inline_text(&n.title),
+        by(n.title_by.as_deref())
+    );
     if !n.tags.is_empty() {
         let _ = writeln!(out, "{} {}", dim("tags:"), n.tags.join(", "));
     }
@@ -45,10 +50,22 @@ pub(crate) fn node(view: &NodeView) -> String {
     if let Some(k) = &n.kill {
         // Whose falsifier this is decides how much the hypothesis is worth,
         // so an unconfirmed one says so where the human will read it.
-        let _ = writeln!(out, "{} {k}{}\n", dim("kill:"), by(n.kill_by.as_deref()));
+        let _ = writeln!(
+            out,
+            "{} {}{}\n",
+            dim("kill:"),
+            inline_text(k),
+            by(n.kill_by.as_deref())
+        );
     }
     if let Some(c) = &n.closed {
-        let _ = writeln!(out, "{} {} {}", dim("closed:"), c.why, dim(&c.at));
+        let _ = writeln!(
+            out,
+            "{} {} {}",
+            dim("closed:"),
+            inline_text(&c.why),
+            dim(&c.at)
+        );
         // A hand-off names where the idea went, so where that record is on
         // this machine belongs right under it.
         if let Some(record) = &view.handed_off_to {
@@ -59,14 +76,14 @@ pub(crate) fn node(view: &NodeView) -> String {
                 .and_then(|l| l.path.as_ref())
                 .map_or_else(
                     || dim("(does not resolve; check the observatory root)"),
-                    |path| dim(&path.display().to_string()),
+                    |path| dim(&inline_text(&path.display().to_string())),
                 );
             let _ = writeln!(out, "        {located}");
         }
         out.push('\n');
     }
     if !view.body.is_empty() {
-        let _ = writeln!(out, "{}\n", view.body);
+        let _ = writeln!(out, "{}\n", prose_text(&view.body));
     }
     if !n.edges.is_empty() {
         let _ = writeln!(out, "{}", dim("edges"));
@@ -82,28 +99,35 @@ pub(crate) fn node(view: &NodeView) -> String {
                 Some(uri) => {
                     let _ = writeln!(
                         out,
-                        "  {} {:<10} {uri}{}",
+                        "  {} {:<10} {}{}",
                         bold(&r.id),
-                        r.kind,
+                        inline_text(&r.kind),
+                        inline_text(uri),
                         by(r.by.as_deref())
                     );
                 }
                 None => {
-                    let _ = writeln!(out, "  {} {}{}", bold(&r.id), r.kind, by(r.by.as_deref()));
+                    let _ = writeln!(
+                        out,
+                        "  {} {}{}",
+                        bold(&r.id),
+                        inline_text(&r.kind),
+                        by(r.by.as_deref())
+                    );
                 }
             }
             // An observatory reference stores a record id, so where that
             // record actually is on this machine is the useful line.
             if let Some(link) = view.observatory.iter().find(|l| l.reference == r.id) {
                 let located = match &link.path {
-                    Some(path) => dim(&path.display().to_string()),
+                    Some(path) => dim(&inline_text(&path.display().to_string())),
                     None => dim("(does not resolve; check the observatory root)"),
                 };
                 let _ = writeln!(out, "     {located}");
             }
             let text = r.note.as_deref().map_or("(no note)", str::trim);
             for line in text.split('\n') {
-                let _ = writeln!(out, "     {}", dim(line));
+                let _ = writeln!(out, "     {}", dim(&inline_text(line)));
             }
         }
         out.push('\n');
@@ -121,7 +145,11 @@ pub(crate) fn observatory_root(setting: &ObservatoryRoot) -> String {
         ObservatorySource::Unset => return String::new(),
     };
     setting.root.as_ref().map_or_else(String::new, |root| {
-        format!("{} {}\n", bold(&root.display().to_string()), dim(&source))
+        format!(
+            "{} {}\n",
+            bold(&inline_text(&root.display().to_string())),
+            dim(&source)
+        )
     })
 }
 
@@ -157,7 +185,7 @@ pub(crate) fn observatory_root_notes(setting: &ObservatoryRoot, saved: bool) -> 
             "config.yaml still carries a legacy observatory_root ({}), ignored here; \
              once every machine has its own setting, remove it with \
              `neb config observatory-root --drop-legacy`.",
-            legacy.display()
+            inline_text(&legacy.display().to_string())
         )));
     }
     notes
@@ -169,12 +197,12 @@ pub(crate) fn dropped_legacy(dropped: &DroppedLegacy, config: &Path) -> Notice {
     Notice::always(match &dropped.removed {
         Some(path) => format!(
             "removed the legacy observatory_root ({}) from {}",
-            path.display(),
-            config.display()
+            inline_text(&path.display().to_string()),
+            inline_text(&config.display().to_string())
         ),
         None => format!(
             "no legacy observatory_root key in {}; nothing removed",
-            config.display()
+            inline_text(&config.display().to_string())
         ),
     })
 }
@@ -254,7 +282,7 @@ pub(super) fn neighbour(n: &Neighbour) -> String {
         band(n.band),
         status_badge(n.status),
         bold(&n.id),
-        dim(&n.title)
+        dim(&inline_text(&n.title))
     );
     if let Some(linked) = linked(n) {
         let _ = write!(line, "  linked: {linked}");
@@ -424,15 +452,18 @@ pub(crate) fn tags_notice(counts: &TagCounts) -> Option<Notice> {
 
 /// The invariant report's findings, one line each.
 pub(crate) fn check(report: &Report) -> String {
-    let mut out = format!("corpus: {}\n", report.root.display());
+    let mut out = format!(
+        "corpus: {}\n",
+        inline_text(&report.root.display().to_string())
+    );
     for file in &report.unreadable {
         let _ = writeln!(
             out,
             "{} {} [{}] {}",
             paint(Role::of("severity", "error"), "ERROR"),
-            bold(&file.path.display().to_string()),
+            bold(&inline_text(&file.path.display().to_string())),
             file.code,
-            file.message
+            inline_text(&file.message)
         );
     }
     for f in &report.findings {
@@ -447,7 +478,7 @@ pub(crate) fn check(report: &Report) -> String {
             paint(Role::of("severity", token), tag),
             dim(&format!("[{}]", f.rule)),
             bold(where_),
-            f.message
+            inline_text(&f.message)
         );
     }
     out
@@ -530,7 +561,13 @@ pub(crate) fn review(
             text.push_str("_none_\n\n");
         } else {
             for item in items {
-                let _ = writeln!(text, "- `{}` {} — {}", item.id, item.title, item.reason);
+                let _ = writeln!(
+                    text,
+                    "- `{}` {} — {}",
+                    item.id,
+                    inline_text(&item.title),
+                    inline_text(&item.reason)
+                );
             }
             if cut > 0 {
                 let _ = writeln!(text, "- _… and {cut} more; raise --limit for more_");
@@ -547,7 +584,7 @@ pub(crate) fn migration(report: &MigrationReport) -> String {
     for n in &report.rewritten {
         let _ = writeln!(out, "{}", bold(&n.id));
         for note in &n.notes {
-            let _ = writeln!(out, "  {note}");
+            let _ = writeln!(out, "  {}", inline_text(note));
         }
     }
     if report.config_rewritten {
