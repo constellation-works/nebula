@@ -45,6 +45,7 @@ jobs:
       - run: make terminal-guard
       - run: ./scripts/check-dependency-direction.sh
       - run: ./scripts/check-test-modules.sh
+      - run: ./scripts/check-file-size.sh
       # `--locked` everywhere: a stale Cargo.lock fails instead of being
       # silently rewritten.
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings

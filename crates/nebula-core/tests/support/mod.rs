@@ -12,9 +12,10 @@
 //!   [`ChildGuard`] that kills and reaps it on drop and waits for it only up to
 //!   a deadline (STD-03 §R17, §R18).
 //!
-//! `crates/nebula-core/tests/core.rs` declares this module;
-//! `crates/neb/tests/cli.rs` and `apps/desktop/src-tauri/tests/roundtrip.rs`
-//! include it by path, so there is one list of what a test may not inherit.
+//! `crates/nebula-core/tests/core/main.rs`, `crates/neb/tests/cli/main.rs`,
+//! `apps/desktop/src-tauri/tests/roundtrip.rs` and
+//! `apps/desktop/src-tauri/tests/commands.rs` each declare it by path, so
+//! there is one list of what a test may not inherit.
 //! A variable a test needs (`NEBULA_ROOT`, `EDITOR`, `GIT_DIR`) is set on its
 //! command after the builder.
 
@@ -54,8 +55,8 @@ pub(crate) const CLEARED: &[&str] = &[
 /// What `git rev-parse --local-env-vars` prints: the variables that point git
 /// at one particular repository, as a git hook or `git rebase --exec`
 /// exports them. Listed rather than asked for, so building a command runs no
-/// process; `cli.rs` checks the list against the installed git. Every other
-/// inherited `GIT_*` is removed as well.
+/// process; `cli/containment.rs` checks the list against the installed git.
+/// Every other inherited `GIT_*` is removed as well.
 pub(crate) const GIT_LOCAL_ENV: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_CONFIG",

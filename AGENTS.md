@@ -29,12 +29,12 @@ Never commit node or inbox content here. The corpus is found at runtime through
 directory, else `~/.config/nebula/root`, else `~/.nebula`, and `/corpus` is
 gitignored as a backstop. Fixtures for tests belong in a
 temporary directory, which is what
-`crates/neb/tests/cli.rs` and `crates/nebula-core/tests/core.rs` do.
+`crates/neb/tests/cli/` and `crates/nebula-core/tests/core/` do.
 
 Tests never touch the host either. `crates/nebula-core/tests/support` gives
 each test process a temporary `HOME` and git environment before any test
 thread starts, and is the one place a test creates a child: through the
-fixture helpers, `neb_command`/`git_command` in `cli.rs`, or
+fixture helpers, `neb_command`/`git_command` in `cli/harness.rs`, or
 `support::command`. They clear `NEBULA_ROOT`, `OBSERVATORY_ROOT`, the editor,
 the Orbit run context, the terminal settings and every `GIT_*`, and stop git
 discovery at the fixture's temporary root; a test that needs one of those
