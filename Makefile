@@ -1,4 +1,4 @@
-.PHONY: help build release run dev check test goldens doctest hostile-env-test types types-check fmt fmt-check release-check standards-check terminal-guard dependency-direction test-modules file-size clippy ci-lint audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
+.PHONY: help build release run dev check test goldens doctest hostile-env-test webview-test types types-check fmt fmt-check release-check standards-check terminal-guard dependency-direction test-modules file-size clippy ci-lint audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
 
 # ------------------------------------------------------------
 # Config
@@ -48,6 +48,8 @@ help:
 	@echo "  make test          Run all tests, every crate"
 	@echo "  make goldens       Check CLI fixtures (UPDATE=1 regenerates them)"
 	@echo "  make hostile-env-test  Run the suites under a hostile HOME, TMPDIR and GIT_DIR"
+	@echo "  make webview-test  Test the production CSP in a native webview (pnpm, cargo;"
+	@echo "                     Linux also needs xvfb-run and WebKitGTK system libs)"
 	@echo "  make doctest       Run the documentation examples, every crate"
 	@echo "  make types         Regenerate apps/desktop/src/types from nebula-core"
 	@echo "  make types-check   Fail if apps/desktop/src/types differs from a fresh export"
@@ -64,7 +66,8 @@ help:
 	@echo "                     pnpm audit)"
 	@echo "  make tree          Print dependency tree"
 	@echo "  make ci            Full CI pass (ci-fast, tests, doctest, types-check,"
-	@echo "                     audit, desktop-check)"
+	@echo "                     hostile-env-test, audit, desktop-check, webview-test;"
+	@echo "                     requires pnpm, cargo-deny and native webview support)"
 	@echo "  make ci-fast       Pre-handoff gate (fmt-check, release-check, standards-check,"
 	@echo "                     terminal-guard, dependency-direction, test-modules,"
 	@echo "                     file-size, clippy)"
@@ -121,6 +124,18 @@ doctest:
 # GIT_DIR exported, checking that no test touched the host.
 hostile-env-test:
 	CARGO="$(CARGO)" ./scripts/hostile-env-test.sh
+
+# CI's production CSP test. A missing pnpm or Linux display runner fails here;
+# REQUIRE_WEBVIEW=1 also makes missing native webview capabilities fatal.
+webview-test:
+	@command -v "$(PNPM)" >/dev/null 2>&1 || { echo "webview-test needs pnpm ($(PNPM))" >&2; exit 1; }
+	@if [ "$$(uname -s)" = Linux ]; then command -v xvfb-run >/dev/null 2>&1 || { echo "webview-test needs xvfb-run on Linux" >&2; exit 1; }; fi
+	$(PNPM) --dir $(DESKTOP) install --frozen-lockfile
+	@if [ "$$(uname -s)" = Linux ]; then \
+		REQUIRE_WEBVIEW=1 xvfb-run --auto-servernum $(PNPM) --dir $(DESKTOP) test:webview; \
+	else \
+		REQUIRE_WEBVIEW=1 $(PNPM) --dir $(DESKTOP) test:webview; \
+	fi
 
 # The TypeScript bindings are generated, never edited: this is the only way
 # they change. The script exports into a fresh directory and replaces the
@@ -186,9 +201,10 @@ tree:
 	$(CARGO) tree $(LOCKED) -e features
 
 # Full CI pass: every check .github/workflows/ci.yml runs, across its jobs.
-# Keep the two aligned. `audit` fetches the advisory database, so it needs the
-# network, and it fails when cargo-deny or pnpm is not installed.
-ci: ci-fast test doctest types-check audit desktop-check
+# Keep the two aligned. `audit` needs network, cargo-deny and pnpm; the native
+# webview gate needs pnpm and a supported display/webview (xvfb-run on Linux).
+# Missing required capabilities fail rather than silently skipping a CI check.
+ci: ci-fast test doctest types-check hostile-env-test audit desktop-check webview-test
 
 # Pre-handoff gate: every cheap check CI runs, plus clippy (STD-02 §R22).
 # `test`, `doctest` and `types-check` each need a full build of their own (the
