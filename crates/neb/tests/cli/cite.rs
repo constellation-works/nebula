@@ -4,6 +4,67 @@
 use crate::harness::{Corpus, write};
 
 #[test]
+fn reference_id_boundary_refuses_cite_and_handoff_without_writing() {
+    for suffix in [
+        "18446744073709551615",
+        "18446744073709551616",
+        "999999999999999999999999999999999999999999",
+    ] {
+        let c = Corpus::new();
+        let id = c.seed("counter", "Counter");
+        let path = c.node_file(&id);
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let before = raw.replace("status: seed", &format!("status: seed\nreferences:\n- id: r{suffix}\n  kind: discussion\n  note: counter\n  added: 2026-09-27"));
+        write(&path, &before);
+        for args in [
+            vec![
+                "--json",
+                "cite",
+                &id,
+                "--kind",
+                "discussion",
+                "--note",
+                "next",
+            ],
+            vec!["--json", "handoff", &id, "H012", "--note", "next"],
+        ] {
+            let refused = c.run(&args).refusal();
+            assert_eq!(refused["code"], "reference_ids_exhausted");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn reference_id_boundary_allocates_the_last_id_once() {
+    let c = Corpus::new();
+    let id = c.seed("counter", "Counter");
+    let path = c.node_file(&id);
+    let raw = std::fs::read_to_string(&path).unwrap();
+    write(&path, &raw.replace("status: seed", "status: seed\nreferences:\n- id: r18446744073709551614\n  kind: discussion\n  note: counter\n  added: 2026-09-27"));
+    let out = c
+        .run(&[
+            "--json",
+            "cite",
+            &id,
+            "--kind",
+            "discussion",
+            "--note",
+            "last",
+        ])
+        .assert_ok()
+        .stdout();
+    let result: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(result["reference"], "r18446744073709551615");
+    let before = std::fs::read_to_string(&path).unwrap();
+    let refused = c
+        .run(&["--json", "cite", &id, "--kind", "discussion"])
+        .refusal();
+    assert_eq!(refused["code"], "reference_ids_exhausted");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+}
+
+#[test]
 fn cite_observatory_refusal_preserves_path_and_uri_case() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");

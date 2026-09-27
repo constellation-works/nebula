@@ -116,6 +116,7 @@ impl Error {
         EmptyCapture => "empty_capture", Argument,
         EmptyNote => "empty_note", Argument,
         InboxIdsExhausted => "inbox_ids_exhausted", State,
+        ReferenceIdsExhausted => "reference_ids_exhausted", State,
         InboxEntryForeign => "inbox_entry_foreign", State,
         InboxEntryMissing => "inbox_entry_missing", State,
         InboxEntryChanged => "inbox_entry_changed", State,

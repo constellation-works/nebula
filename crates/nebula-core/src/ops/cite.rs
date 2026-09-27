@@ -119,7 +119,7 @@ fn attach(corpus: &Corpus, node: &mut Node, args: &Citation, by: Option<String>)
             from: corpus.root().join("nodes"),
         });
     }
-    let reference = node.next_reference_id();
+    let reference = node.next_reference_id()?;
     node.references.push(Reference {
         id: reference.clone(),
         kind,
