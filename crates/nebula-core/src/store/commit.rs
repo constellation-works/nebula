@@ -193,7 +193,7 @@ pub(crate) fn ignore_rules() -> [String; 3] {
 /// below the root that follows a symlink, and it follows it only to a regular
 /// file: a FIFO or a device at `.gitignore`, or at the end of its link, is
 /// [`Error::NotRegularFile`] rather than read.
-pub(super) fn ensure_lock_ignored(root: &Path) -> Result<()> {
+pub(crate) fn ensure_lock_ignored(root: &Path) -> Result<()> {
     let path = root.join(GITIGNORE_FILE);
     let is_symlink = match std::fs::symlink_metadata(&path) {
         Ok(metadata) => metadata.file_type().is_symlink(),

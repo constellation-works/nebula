@@ -200,17 +200,17 @@ impl Staged {
 /// [`crate::verb::migrate`] is this and the commit that records it, under
 /// the one lock.
 pub fn run(locations: &Locations, root: Option<PathBuf>) -> Result<MigrationReport> {
-    run_then(locations, root, |_| ()).map(|(_, report, ())| report)
+    run_then(locations, root, |_| ()).map(|(_, report, _)| report)
 }
 
 /// [`run`], then `after` on the migrated root while the lock is still held:
 /// the root, the report, and what `after` returned. `after` is not run when
-/// the migration refuses.
+/// the migration refuses or changes nothing.
 pub(crate) fn run_then<T>(
     locations: &Locations,
     root: Option<PathBuf>,
     after: impl FnOnce(&Path) -> T,
-) -> Result<(PathBuf, MigrationReport, T)> {
+) -> Result<(PathBuf, MigrationReport, Option<T>)> {
     locations.write_gate(crate::locations::WriteIntent::Ordinary)?;
     let root = Corpus::resolve_root(locations, root)?;
     store::refuse_nodes_symlink(&root)?;
@@ -221,7 +221,6 @@ pub(crate) fn run_then<T>(
     // that should run beside another. Taken after the corpus is known to be
     // there, so a missing one still reports itself as missing.
     let _lock = CorpusLock::acquire(&root)?;
-    refuse_dirty_tree(locations, &root)?;
     // Validate the config before touching a node. In particular, a future
     // schema may contain fields this build does not know how to preserve, so
     // treating it as v1 would turn migration into a destructive downgrade.
@@ -234,6 +233,9 @@ pub(crate) fn run_then<T>(
         Declared::Older { version, raw } => (version, Some(raw)),
         Declared::Newer { version } => return Err(config::schema_mismatch(&root, version)),
     };
+    if version != config::SCHEMA_VERSION {
+        refuse_dirty_tree(locations, &root)?;
+    }
     let steps = steps_from(version).ok_or_else(|| config::schema_mismatch(&root, version))?;
 
     let mut staged = Staged::read(&root, existing.clone())?;
@@ -259,12 +261,25 @@ pub(crate) fn run_then<T>(
     }
     let (writes, config) = verified(&staged)?;
 
-    // Nothing has been written yet; everything that could refuse has.
     let mut report = MigrationReport {
         nodes: staged.nodes.len(),
         minted_corpus_id: staged.minted_corpus_id.clone(),
         ..MigrationReport::default()
     };
+    let config_changed = existing.as_deref() != Some(config.render()?.as_str());
+    if writes.is_empty() && !config_changed {
+        // A verified no-op neither needs a clean tree nor commits any user
+        // edits that appeared since migration, even with commits enabled.
+        return Ok((root, report, None));
+    }
+    if version == config::SCHEMA_VERSION {
+        // Current-schema normalization still rewrites content, so it keeps
+        // the same recoverability requirement as a schema upgrade.
+        refuse_dirty_tree(locations, &root)?;
+    }
+    // All content has passed preflight. Install the same runtime exclusions
+    // as init before changing nodes, keeping config last as the ledger.
+    store::ensure_lock_ignored(&root)?;
     for (node, id) in writes {
         store::refuse_nodes_symlink(&root)?;
         crate::fs_impl::write_private_atomic(&node.path, &node.text)?;
@@ -274,12 +289,12 @@ pub(crate) fn run_then<T>(
         });
     }
     // Last: the ledger. Idempotence is byte equality here as for the nodes.
-    if existing.as_deref() != Some(config.render()?.as_str()) {
+    if config_changed {
         config.save(&root)?;
         report.config_rewritten = true;
     }
     let after = after(&root);
-    Ok((root, report, after))
+    Ok((root, report, Some(after)))
 }
 
 /// Read back what the steps produced with the current model, in memory: each

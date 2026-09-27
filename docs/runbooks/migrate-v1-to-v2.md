@@ -21,7 +21,8 @@ full mapping this runbook operationalizes.
 neb migrate
 ```
 
-If `$NEBULA_ROOT` is a git repository with uncommitted changes, this refuses:
+If `$NEBULA_ROOT` needs migration and is a git repository with uncommitted
+changes, this refuses:
 
 ```
 error: /corpus has uncommitted changes, and the migration must be its own commit; nothing was changed
@@ -157,15 +158,23 @@ what it meant.
 
 ## Idempotence
 
-Run it again and nothing changes:
+Run it again immediately, even before committing the migration. An unchanged
+current-schema corpus exits 0 and prints this exact notice on stderr:
 
 ```
 already at schema 2; nothing changed
 ```
 
 A node already in v2 form renders back to exactly the bytes on disk, so a
-second run rewrites nothing and no node's `updated` timestamp moves. The same
-property makes a run that stopped part way safe to repeat: the config still
+second run rewrites nothing and no node's `updated` timestamp moves. It also
+makes no commit, even with `commit: true`, and leaves staged and untracked
+work alone. Strict current-schema validation still runs; a valid hand edit
+that needs normalization still requires a clean tree before it is rewritten.
+
+Migration installs the same `.gitignore` rules as `neb init`, preserving
+existing entries and ignoring `/.lock`, `/.pending` and `*.tmp`.
+
+The same property makes a run that stopped part way safe to repeat: the config still
 declares v1, the nodes already written convert to themselves, and the rerun
 finishes the rest.
 
