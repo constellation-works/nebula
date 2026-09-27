@@ -1,0 +1,84 @@
+name: nightly environment checks
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  timezone:
+    name: timezone (${{ matrix.tz }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        tz:
+          - Etc/GMT+12
+          - Pacific/Kiritimati
+          - America/St_Johns
+          - Asia/Kathmandu
+          - Australia/Lord_Howe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with: { toolchain: '1.98.1' }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: test TZ=${{ matrix.tz }}
+        env:
+          TZ: ${{ matrix.tz }}
+        run: cargo test --locked -p neb -p nebula-core
+
+  locale-umask:
+    name: locale and umask (${{ matrix.condition }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        condition: [locale-C, umask-077, umask-002]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with: { toolchain: '1.98.1' }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: test ${{ matrix.condition }}
+        run: |
+          case '${{ matrix.condition }}' in
+            locale-C) export LC_ALL=C LANG=C ;;
+            umask-077) umask 077 ;;
+            umask-002) umask 002 ;;
+            *) echo 'unknown locale/umask condition' >&2; exit 1 ;;
+          esac
+          cargo test --locked -p neb -p nebula-core
+
+  hostile-environment:
+    name: hostile environment (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with: { toolchain: '1.98.1' }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: hostile HOME, TMPDIR and GIT_DIR (${{ matrix.os }})
+        env:
+          HOSTILE_ENV_DESKTOP: ${{ runner.os == 'Linux' && '0' || '1' }}
+        run: ./scripts/hostile-env-test.sh
+
+  degraded-host:
+    name: degraded host (no git, read-only corpus)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with: { toolchain: '1.98.1' }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: no-git and read-only corpus smoke
+        run: ./scripts/env-smoke.sh
