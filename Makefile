@@ -155,10 +155,12 @@ dependency-direction:
 	./scripts/check-dependency-direction.sh
 
 # Every `src/**/tests/*.rs` file is declared in that directory's `mod.rs`
-# (STD-02 §R19), and every file of a `tests/<suite>/` integration suite by its
-# `main.rs` or the module above it. An undeclared file never runs.
+# (STD-02 §R19). Integration suites must have a Cargo test target and declare
+# their files. The fixture cases exercise the real guard, including missing
+# targets that would otherwise make Cargo run zero tests.
 test-modules:
 	./scripts/check-test-modules.sh
+	python3 scripts/check-integration-test-modules.py --self-test
 
 # Every .rs file under crates/ and apps/desktop/src-tauri/ is at most 800
 # lines, or names why in a `// size: <reason>` line in its first five

@@ -3,9 +3,8 @@
 # `src/**/tests/` directory is declared in that directory's `mod.rs`, and
 # every such directory is declared as `mod tests;` by the module it tests
 # (`<module>/mod.rs`, or `lib.rs`/`main.rs` at a crate root).
-# The same holds for a crate-root integration suite split across a
-# directory: `tests/<suite>/main.rs` is the test target, and every other file
-# under `tests/<suite>/` is a module it or a module below it declares.
+# Integration suites are checked against Cargo's actual test targets, including
+# explicit [[test]] entries and crates with autotests disabled.
 # An undeclared file or directory compiles to nothing, so its tests silently
 # never run. Scans the workspace crates and the desktop shell.
 set -euo pipefail
@@ -40,31 +39,9 @@ while IFS= read -r file; do
   fi
 done < <(find crates apps/desktop/src-tauri -path '*/src/*' -path '*/tests/*' -name '*.rs' | sort)
 
-# Integration suites: `<dir>/<name>.rs` is declared by `<dir>/main.rs` at the
-# suite's root, or below it by `<dir>/mod.rs` or `<dir>.rs`; `<dir>/mod.rs`
-# is declared by the directory above it the same way.
-for main in crates/*/tests/*/main.rs apps/desktop/src-tauri/tests/*/main.rs; do
-  [[ -f "$main" ]] || continue
-  while IFS= read -r file; do
-    [[ "$file" == "$main" ]] && continue
-    dir=$(dirname "$file")
-    name=$(basename "$file" .rs)
-    if [[ "$name" == "mod" ]]; then
-      name=$(basename "$dir")
-      dir=$(dirname "$dir")
-    fi
-    declared=0
-    for owner in "$dir/main.rs" "$dir/mod.rs" "$dir.rs"; do
-      if [[ -f "$owner" ]] && declares "$owner" "$name"; then
-        declared=1
-      fi
-    done
-    if [[ "$declared" -eq 0 ]]; then
-      echo "test-modules: $file is not declared by its suite $main (add \`mod $name;\` to the module that owns $dir)" >&2
-      fail=1
-    fi
-  done < <(find "$(dirname "$main")" -name '*.rs' | sort)
-done
+if ! python3 scripts/check-integration-test-modules.py --check; then
+  fail=1
+fi
 
 if [[ "$fail" -eq 0 ]]; then
   echo "test-modules: ok"
