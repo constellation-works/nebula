@@ -16,8 +16,14 @@ the only irreplaceable part of the system.
 ## Create it
 
 ```sh
-neb init ~/corpus/nebula --set-root
+export NEBULA_ROOT="$HOME/corpus/nebula"
+neb init "$NEBULA_ROOT" --set-root
 ```
+
+Choose the absolute path in the export before running these commands; quotes
+also support paths with spaces, such as `"$HOME/My Notes/nebula"`. The export
+binds the path in this shell immediately, for both `neb` and the git commands
+below. Continue only after initialization succeeds.
 
 `--set-root` writes this non-default location to
 `~/.config/nebula/root`, so every command finds it even from shells that do
@@ -58,8 +64,13 @@ directory itself, so it falls through to the steps after it; an explicit
 variable when you want a shell-specific override:
 
 ```sh
-echo 'export NEBULA_ROOT=$HOME/corpus/nebula' >> ~/.zshrc
+echo 'export NEBULA_ROOT="$HOME/corpus/nebula"' >> ~/.zshrc
 ```
+
+Use the same path you chose above. Editing `.zshrc` affects future shells;
+it does not set the current shell's variable. Neither does `--set-root`:
+git does not read nebula's machine setting. The export in "Create it" sets
+the current shell without requiring a new login shell.
 
 A single command can override it with `--root`, which is how tests and agents
 initialize throwaway corpora. Those commands omit `--set-root` so a scratch
@@ -74,10 +85,15 @@ The recommended setup is a **private repository at the corpus root** — `git
 init` inside the corpus, not in whatever directory contains it:
 
 ```sh
-git -C "$NEBULA_ROOT" init
-git -C "$NEBULA_ROOT" add -A
-git -C "$NEBULA_ROOT" commit -m "corpus"
+git -C "${NEBULA_ROOT:?Set NEBULA_ROOT to the initialized corpus path}" init &&
+git -C "${NEBULA_ROOT:?Set NEBULA_ROOT to the initialized corpus path}" add -A &&
+git -C "${NEBULA_ROOT:?Set NEBULA_ROOT to the initialized corpus path}" commit -m "corpus"
 ```
+
+Each `:?` expansion refuses an unset or empty root before git runs; git's
+`-C ""` would otherwise use the caller's directory. A nonexistent directory
+is refused by `git -C`, and `&&` stops the recipe if an earlier step fails.
+In a later shell, export the chosen absolute path again before continuing.
 
 `neb init` writes `/.lock`, `/.pending` and `*.tmp` to the corpus
 `.gitignore`, in that order and after any rules already there, so the advisory
@@ -106,8 +122,8 @@ Use a private remote. The corpus mixes work and personal material, and unlike
 this repository it is not safe to publish.
 
 ```sh
-git -C "$NEBULA_ROOT" remote add origin <private-remote>
-git -C "$NEBULA_ROOT" push -u origin HEAD
+git -C "${NEBULA_ROOT:?Set NEBULA_ROOT to the initialized corpus path}" remote add origin <private-remote>
+git -C "${NEBULA_ROOT:?Set NEBULA_ROOT to the initialized corpus path}" push -u origin HEAD
 ```
 
 `neb migrate` refuses to run against a dirty git tree, so keep the corpus
@@ -135,7 +151,7 @@ still holds the id alone:
 $ neb capture "tags beat domains"
 3f2a
 committed 8c1d2e0
-$ git -C "$NEBULA_ROOT" log --oneline -1
+$ git -C "${NEBULA_ROOT:?Set NEBULA_ROOT to the initialized corpus path}" log --oneline -1
 8c1d2e0 neb capture 3f2a
 ```
 
@@ -145,9 +161,9 @@ What it does, and does not do:
   `.gitignore` under the corpus root and nothing else. Anything else under the
   root, and everything outside it, is left as it was. The message is
   `neb <verb> <ids>`.
-- It never pushes. Push on your own schedule (`git -C "$NEBULA_ROOT" push`),
+- It never pushes. Push on your own schedule (`git -C "${NEBULA_ROOT:?Set NEBULA_ROOT to the initialized corpus path}" push`),
   or from a cron job, and the remote is your off-disk copy.
-- It needs a git identity, like any commit: `git -C "$NEBULA_ROOT" config
+- It needs a git identity, like any commit: `git -C "${NEBULA_ROOT:?Set NEBULA_ROOT to the initialized corpus path}" config
   user.name ...` and `user.email` if your global config has none.
 - The commit names the corpus paths as its pathspec, so a `neb` commit is
   always exactly the corpus. Anything else staged in the repository — an
