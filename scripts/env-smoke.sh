@@ -14,7 +14,15 @@ neb="${CARGO_TARGET_DIR:-$repo_root/target}/debug/neb"
 scratch_base="${ORBIT_SCRATCH_DIR:-${TMPDIR:-/tmp}}"
 scratch="$(mktemp -d "$scratch_base/nebula-env-smoke.XXXXXX")"
 failed=0
-trap 'if (( failed == 0 )); then chmod -R u+w "$scratch"; rm -r -- "$scratch"; else echo "env-smoke: fixtures and logs kept in $scratch" >&2; fi' EXIT
+cleanup() {
+    chmod -R u+w "$scratch"
+    if (( failed == 0 )); then
+        rm -r -- "$scratch"
+    else
+        echo "env-smoke: fixtures and logs kept in $scratch" >&2
+    fi
+}
+trap cleanup EXIT
 
 export HOME="$scratch/home" XDG_CONFIG_HOME="$scratch/home/.config"
 export TMPDIR="$scratch"
