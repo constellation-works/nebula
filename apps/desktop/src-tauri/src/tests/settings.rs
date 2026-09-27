@@ -152,10 +152,18 @@ fn final_symlink_settings_are_refused_without_touching_the_target() {
 #[cfg(unix)]
 #[test]
 fn socket_settings_are_refused_without_connecting_or_writing() {
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::net::UnixListener;
 
-    let dir = tempfile::tempdir().unwrap();
+    // Unix socket paths use a fixed-size sun_path (104 bytes on macOS).
+    // Keep this fixture independent of TMPDIR, which hostile-env tests lengthen.
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let path = dir.path().join(FILE_NAME);
+    assert!(
+        path.as_os_str().as_bytes().len() < 104,
+        "socket path exceeds macOS sun_path limit: {}",
+        path.display()
+    );
     let _listener = UnixListener::bind(&path).unwrap();
 
     let (settings, warning) = load(dir.path());
