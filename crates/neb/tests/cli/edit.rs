@@ -202,15 +202,106 @@ fn edit_refuses_when_the_editor_exits_unsuccessfully() {
     let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
     let script = editor_script(&c, "fail-editor.sh", "#!/bin/sh\nexit 42\n");
 
-    c.run_with_env(&["edit", &id], &[("EDITOR", script.to_str().unwrap())])
-        .assert_fails()
-        .says("exited unsuccessfully; the node was not changed");
+    c.run_with_env(
+        &["edit", &id],
+        &[
+            ("EDITOR", script.to_str().unwrap()),
+            ("TMPDIR", c.workdir().to_str().unwrap()),
+        ],
+    )
+    .assert_fails()
+    .says("exited unsuccessfully; the node was not changed");
 
     assert_eq!(
         std::fs::read_to_string(c.node_file(&id)).unwrap(),
         before,
         "an editor failure must not change the node"
     );
+}
+
+/// Early refusals must retain bytes even when they cannot be decoded, or the
+/// editor saved by replacing the original temporary inode.
+#[cfg(unix)]
+#[test]
+fn edit_nonzero_exit_preserves_exact_bytes() {
+    assert_early_refusal_preserves_bytes(42, "editor_unsuccessful");
+}
+
+#[cfg(unix)]
+#[test]
+fn edit_decode_failure_preserves_exact_bytes() {
+    assert_early_refusal_preserves_bytes(0, "io_at");
+}
+
+#[cfg(unix)]
+fn assert_early_refusal_preserves_bytes(exit: i32, code: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    for json in [false, true] {
+        for replace in [false, true] {
+            let c = Corpus::new();
+            let id = c
+                .run(&["new", "Early refusal", "--body", "original"])
+                .assert_ok()
+                .stdout_trim();
+            let before = corpus_bytes(&c.root);
+            let marker = c.workdir().join("editor-path");
+            let save = if replace {
+                "printf '\\377valuable body\\000\\n' > \"$1.new\"\nchmod 644 \"$1.new\"\nmv \"$1.new\" \"$1\""
+            } else {
+                "printf '\\377valuable body\\000\\n' > \"$1\""
+            };
+            let script = editor_script(
+                &c,
+                "early-refusal.sh",
+                &format!(
+                    "#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n{save}\nexit {exit}\n",
+                    marker.display()
+                ),
+            );
+            let args = if json {
+                vec!["--json", "edit", &id]
+            } else {
+                vec!["edit", &id]
+            };
+            let run = c
+                .run_with_env(
+                    &args,
+                    &[
+                        ("EDITOR", script.to_str().unwrap()),
+                        ("TMPDIR", c.workdir().to_str().unwrap()),
+                    ],
+                )
+                .assert_fails();
+            let message = if json {
+                let refusal = run.refusal();
+                assert_eq!(refusal["code"], code);
+                refusal["error"].as_str().unwrap().to_owned()
+            } else {
+                run.stderr()
+            };
+            assert!(
+                message.contains(if exit == 0 {
+                    "UTF-8"
+                } else {
+                    "exited unsuccessfully"
+                }),
+                "{message}"
+            );
+            let path = PathBuf::from(std::fs::read_to_string(marker).unwrap());
+            assert!(path.exists(), "edited file was deleted: {}", path.display());
+            assert!(
+                message.contains(&format!("kept at {}", path.display())),
+                "{message}"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), b"\xffvaluable body\0\n");
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(corpus_bytes(&c.root), before);
+        }
+    }
 }
 
 #[cfg(unix)]

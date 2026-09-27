@@ -83,11 +83,47 @@ pub(super) fn edit_body(body: &str) -> std::result::Result<Edited, Failure> {
             source,
         })?;
     if !status.success() {
-        return Err(EditorError::Unsuccessful(editor_name).into());
+        return Err(keep_editor_file(
+            EditorError::Unsuccessful(editor_name).into(),
+            file,
+        ));
     }
-    let text = std::fs::read_to_string(file.path())
-        .map_err(|e| Error::io_at("reading", file.path(), e))?;
+    let text = match std::fs::read_to_string(file.path()) {
+        Ok(text) => text,
+        Err(error) => {
+            let refused = Error::io_at("reading", file.path(), error).into();
+            return Err(keep_editor_file(refused, file));
+        }
+    };
     Ok(Edited { text, file })
+}
+
+/// Preserve an early refusal without requiring readable UTF-8. Disable
+/// deletion before attempting recovery, including when recovery itself fails.
+/// Reopen by path: editors may replace the inode the original handle names.
+fn keep_editor_file(refused: Failure, file: tempfile::NamedTempFile) -> Failure {
+    let Failure(refusal) = refused;
+    let mut path = file.into_temp_path();
+    path.disable_cleanup(true);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Failure(refusal.not_kept(&Error::io_at("reading", &path, error).to_string()));
+        }
+        Err(error) => {
+            return Failure(refusal.kept_at(&path).hinted(Some(format!(
+                "The editor file was left in place; {}",
+                Error::io_at("reading", &path, error)
+            ))));
+        }
+    };
+    // Even an editor that replaced the file with a more permissive one
+    // leaves an owner-only, durable recovery file. An atomic write failure
+    // leaves the existing file in place; the original refusal stays primary.
+    let hint = nebula_core::fs::write_private_atomic(&path, bytes)
+        .err()
+        .map(|error| format!("Could not make the editor file durable and owner-only: {error}"));
+    Failure(refusal.kept_at(&path).hinted(hint))
 }
 
 /// `refused`, after keeping the text the person typed (STD-03 §R30).
