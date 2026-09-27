@@ -5,7 +5,7 @@ use crate::cli::emit::{
 };
 use crate::cli::failure::Failure;
 use crate::cli::{Invocation, Outcome};
-use crate::output::outln;
+use crate::output::{self, outln};
 use crate::render::{self, json};
 use nebula_core::verb::{self, CiteReport};
 use nebula_core::{Citation, Corpus, Handoff};
@@ -64,6 +64,7 @@ pub(in crate::cli) fn cite(
         }
     }
     report_commit(corpus.root(), commits, done.commit)?;
+    output::finish_written(&node)?;
     Ok(ok)
 }
 
@@ -120,5 +121,6 @@ pub(in crate::cli) fn handoff(
         }
     }
     report_commit(corpus.root(), commits, done.commit)?;
+    output::finish_written(&node)?;
     Ok(ok)
 }

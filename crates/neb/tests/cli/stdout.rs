@@ -3,6 +3,134 @@
 use crate::handoff::observatory_with_h012;
 use crate::harness::{Corpus, Run, closed_stdout, corpus_repo, dirt, git, log, neb_command};
 
+/// Linux exercises the reported full-device failure directly. macOS has no
+/// /dev/full, so an unconnected local datagram socket supplies a non-EPIPE
+/// write failure without filling the fixture's disk.
+fn failed_stdout(c: &Corpus, args: &[&str]) -> Run {
+    use crate::support::{ChildGuard, DEADLINE};
+    use std::process::Stdio;
+
+    #[cfg(target_os = "linux")]
+    let sink = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    #[cfg(not(target_os = "linux"))]
+    let sink = std::os::fd::OwnedFd::from(std::os::unix::net::UnixDatagram::unbound().unwrap());
+    let mut cmd = c.command(args);
+    cmd.stdin(Stdio::null()).stdout(sink).stderr(Stdio::piped());
+    Run {
+        args: args.join(" "),
+        out: ChildGuard::spawn(&mut cmd)
+            .unwrap()
+            .wait_with_output(DEADLINE)
+            .unwrap(),
+    }
+}
+
+fn assert_write_landed(run: &Run, id: &str, json: bool) {
+    assert_eq!(run.out.status.code(), Some(1), "{}", run.stderr());
+    let message = if json {
+        let refusal = run.refusal();
+        assert_eq!(refusal["code"], "stdout");
+        refusal["error"].as_str().unwrap().to_owned()
+    } else {
+        run.stderr()
+    };
+    assert!(message.contains("write landed"), "{message}");
+    assert!(message.contains(id), "{message}");
+}
+
+fn failed_stdout_after_new(json: bool) {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let before = log(&c.root).len();
+    let mut args = vec!["new", "Output failed", "--id", "landed-idea"];
+    if json {
+        args.push("--json");
+    }
+    let run = failed_stdout(&c, &args);
+    // Verify the durable outcome before checking its diagnostic.
+    assert_eq!(log(&c.root).len(), before + 1);
+    assert!(dirt(&c.root).is_empty());
+    c.run(&["show", "landed-idea"]).assert_ok();
+    assert_write_landed(&run, "landed-idea", json);
+}
+
+#[test]
+fn failed_stdout_after_new_text_names_the_landed_write() {
+    failed_stdout_after_new(false);
+}
+
+#[test]
+fn failed_stdout_after_new_json_names_the_landed_write() {
+    failed_stdout_after_new(true);
+}
+
+#[test]
+fn failed_stdout_names_other_completed_record_writes() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    c.run(&["new", "First"]).assert_ok();
+    c.run(&["new", "Second"]).assert_ok();
+    for args in [
+        vec!["note", "first", "A note"],
+        vec!["sharpen", "first", "--kill", "A counterexample", "--json"],
+        vec!["tag", "first", "--add", "physics", "--json"],
+        vec![
+            "cite",
+            "first",
+            "--uri",
+            "https://example.com",
+            "--note",
+            "Source",
+            "--json",
+        ],
+        vec!["link", "first", "contradicts", "second", "--json"],
+    ] {
+        let before = log(&c.root).len();
+        let run = failed_stdout(&c, &args);
+        assert_eq!(log(&c.root).len(), before + 1, "{}", run.stderr());
+        assert!(dirt(&c.root).is_empty());
+        assert_write_landed(&run, "first", args.contains(&"--json"));
+        if args[0] == "link" {
+            assert!(run.stderr().contains("second"));
+        }
+    }
+    let run = failed_stdout(&c, &["capture", "-q", "A captured thought", "--json"]);
+    let inbox: serde_json::Value =
+        serde_json::from_str(&c.run(&["inbox", "--json"]).assert_ok().stdout()).unwrap();
+    let id = inbox[0]["id"].as_str().unwrap();
+    assert!(dirt(&c.root).is_empty());
+    assert_write_landed(&run, id, true);
+    let run = failed_stdout(&c, &["promote", id, "--title", "Promoted", "--json"]);
+    assert!(dirt(&c.root).is_empty());
+    assert_write_landed(&run, "promoted", true);
+}
+
+#[test]
+fn failed_stdout_distinguishes_reads_noops_and_uncommitted_writes() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    c.run(&["new", "Existing", "--tag", "physics"]).assert_ok();
+    let before = log(&c.root).len();
+    for args in [
+        vec!["show", "existing", "--json"],
+        vec!["tag", "existing", "--add", "physics", "--json"],
+    ] {
+        let run = failed_stdout(&c, &args);
+        assert_eq!(run.out.status.code(), Some(1));
+        assert!(run.stderr().contains("could not write to stdout"));
+        assert!(!run.stderr().contains("write landed"));
+        assert_eq!(log(&c.root).len(), before);
+        assert!(dirt(&c.root).is_empty());
+    }
+    let run = failed_stdout(&c, &["new", "Uncommitted", "--no-commit", "--json"]);
+    assert_eq!(log(&c.root).len(), before);
+    assert!(!dirt(&c.root).is_empty());
+    assert_write_landed(&run, "uncommitted", true);
+}
+
 /// A stdout closed under `neb`: exit 0, and on stderr exactly `stderr`,
 /// what the verb says there with its stdout open. A reader that went away
 /// adds no error, and takes no notice away: counts and the `committed` line

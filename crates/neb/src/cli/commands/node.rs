@@ -5,7 +5,7 @@ use crate::cli::editor::{body_value, edit_body, keep_refused};
 use crate::cli::emit::{note_close_tags, notify, out_json, out_node_view, report_commit};
 use crate::cli::failure::Failure;
 use crate::cli::{Invocation, Outcome};
-use crate::output::{out, outln};
+use crate::output::{self, out, outln};
 use crate::render::{self, json};
 use nebula_core::verb;
 use nebula_core::{Corpus, EdgeType, NewNode, Status, graph};
@@ -65,6 +65,7 @@ pub(in crate::cli) fn new(
     let committed = report_commit(corpus.root(), commits, done.commit);
     note_close_tags(&done.close_tags);
     committed?;
+    output::finish_written(&created.doc.node.id)?;
     Ok(ok)
 }
 
@@ -115,6 +116,9 @@ pub(in crate::cli) fn edit(cx: Invocation<'_>, node: String, by: Option<String>)
     let shown = done.value.view.map_or(Ok(()), out_node_view);
     committed?;
     shown?;
+    if done.value.changed {
+        output::finish_written(&node)?;
+    }
     Ok(ok)
 }
 
@@ -138,6 +142,7 @@ pub(in crate::cli) fn confirm_kill(cx: Invocation<'_>, node: String) -> Outcome 
         outln!("{} kill condition confirmed as yours", render::bold(&node));
     }
     report_commit(corpus.root(), commits, done.commit)?;
+    output::finish_written(&done.value.node.id)?;
     Ok(ok)
 }
 
@@ -183,6 +188,7 @@ pub(in crate::cli) fn sharpen(
         );
     }
     report_commit(corpus.root(), commits, done.commit)?;
+    output::finish_written(&sharpened.doc.node.id)?;
     Ok(ok)
 }
 
@@ -215,6 +221,7 @@ pub(in crate::cli) fn status(
         );
     }
     report_commit(corpus.root(), commits, done.commit)?;
+    output::finish_written(&changed.doc.node.id)?;
     Ok(ok)
 }
 
@@ -247,6 +254,13 @@ pub(in crate::cli) fn link(
         );
     }
     report_commit(corpus.root(), commits, done.commit)?;
+    output::finish_written(
+        done.value
+            .iter()
+            .map(|doc| doc.node.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", "),
+    )?;
     Ok(ok)
 }
 
@@ -312,6 +326,9 @@ pub(in crate::cli) fn tag(
     let committed = report_commit(corpus.root(), commits, done.commit);
     note_close_tags(&done.close_tags);
     committed?;
+    if done.value.written {
+        output::finish_written(&doc.node.id)?;
+    }
     Ok(ok)
 }
 
@@ -347,5 +364,6 @@ pub(in crate::cli) fn note(
     let shown = done.value.view.map_or(Ok(()), out_node_view);
     committed?;
     shown?;
+    output::finish_written(&node)?;
     Ok(ok)
 }
