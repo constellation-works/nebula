@@ -173,6 +173,31 @@ git -C "$NEBULA_ROOT" commit -m "neb" -- nodes inbox config.yaml .gitignore
 `--no-commit` on a verb skips its commit once, if you need to keep working
 before sorting the repository out.
 
+If the `git` executable is missing from `PATH` or not installed, the verb exits
+1 with code `git` and prints a start refusal:
+
+```
+error: git start failed in /corpus: No such file or directory (os error 2)
+```
+
+Under `--json`, stderr carries the refusal envelope (`code: "git"`, exit 1)
+and stdout retains the write's payload (such as the new node or inbox entry).
+The write is already on disk. **Do not retry the write**: retrying `neb new`
+or `neb promote` with the same id will fail with `node_exists`. To recover
+safely:
+
+1. Restore or install `git` so it is on `PATH`.
+2. Catch up the uncommitted write: either run your next writing command
+   (its commit sweeps up earlier uncommitted writes) or commit manually:
+
+```sh
+git -C "$NEBULA_ROOT" add nodes inbox config.yaml .gitignore
+git -C "$NEBULA_ROOT" commit -m "neb" -- nodes inbox config.yaml .gitignore
+```
+
+3. If this host is not meant to use git, turn commits off with
+   `neb config commit off`, or pass `--no-commit` for one invocation.
+
 Work staged elsewhere in the repository never blocks a `neb` commit and never
 rides in one: the commit names the corpus paths (`nodes/`, `inbox/`,
 `config.yaml`, and the generated `.gitignore`), so anything else stays staged
