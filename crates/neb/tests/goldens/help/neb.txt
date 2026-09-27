@@ -58,3 +58,5 @@ Options:
           Print version
 
 The corpus lives outside this repository. It is found via --root, else $NEBULA_ROOT, else the nearest corpus at or above the current directory, else ~/.config/nebula/root, else ~/.nebula.
+
+Use `neb help` or `neb help <COMMAND>` for full help.

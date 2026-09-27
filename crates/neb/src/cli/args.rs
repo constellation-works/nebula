@@ -6,7 +6,7 @@
 //! clap: they are the `ValueEnum` wrappers that keep `--help` listing the
 //! possible values and the shell completions offering them.
 
-use super::help::HELP_TEMPLATE;
+use super::help::{ABOUT, HELP_TEMPLATE};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use nebula_core::{EdgeType, NEAR_DEFAULT, Status};
 use std::path::PathBuf;
@@ -15,15 +15,12 @@ use std::path::PathBuf;
 #[command(
     name = "neb",
     version,
-    about = "Idea lineage graph",
-    long_about = "Capture a half-formed thought in five seconds. Trace where any idea came \
-                  from years later.\n\nIdeas branch, merge and die, so the structure is a \
-                  directed acyclic graph. Nothing is ever deleted: refuted and abandoned \
-                  ideas are what stop you re-treading ground.",
+    about = ABOUT,
+    long_about = ABOUT,
     after_help = "The corpus lives outside this repository. It is found via --root, else \
                   $NEBULA_ROOT, else the nearest corpus at or above the current directory, \
-                  else ~/.config/nebula/root, else ~/.nebula.",
-    disable_help_subcommand = true,
+                  else ~/.config/nebula/root, else ~/.nebula.\n\n\
+                  Use `neb help` or `neb help <COMMAND>` for full help.",
     help_template = HELP_TEMPLATE
 )]
 pub(crate) struct Cli {

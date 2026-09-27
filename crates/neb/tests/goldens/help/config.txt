@@ -7,6 +7,7 @@ Usage: neb config [OPTIONS] <COMMAND>
 Commands:
   observatory-root  Where the Observatory checkout is on this machine, so `cite --kind observatory --uri <record-id>` resolves. A directory is saved to `~/.config/nebula/observatory-root`, never into the corpus, which travels between machines. Without one, prints the effective root and which setting supplied it: `$OBSERVATORY_ROOT`, else this machine's setting, else a legacy `observatory_root` key in `config.yaml`
   commit            Whether each mutating verb commits the corpus afterwards, when the root is inside a git work tree. Off by default. The commit stages `nodes/`, `inbox/`, `config.yaml` and the generated `.gitignore` and commits those paths alone, whatever else is staged, as `neb <verb> <ids>`. It never pushes. `--no-commit` skips it once
+  help              Print this message or the help of the given subcommand(s)
 
 Options:
       --root <DIR>
