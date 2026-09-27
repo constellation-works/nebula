@@ -57,7 +57,13 @@ fn session_resolve_root_uses_the_given_locations() {
     );
 
     let configured = dir.path().join("configured");
-    Corpus::write_root_config(&locations, &configured, false).unwrap();
+    let setting_dir = home.join(".config").join("nebula");
+    nebula_core::fs::create_private_dir_all(&setting_dir).unwrap();
+    nebula_core::fs::write_private_atomic(
+        &setting_dir.join("root"),
+        format!("{}\n", configured.display()),
+    )
+    .unwrap();
     assert_eq!(session::resolve_root(&locations).unwrap(), configured);
 
     let named = dir.path().join("named");

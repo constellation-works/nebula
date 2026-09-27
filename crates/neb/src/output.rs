@@ -32,14 +32,14 @@
 //! Writes to stderr are best effort: when stderr is gone there is nowhere to
 //! say so, and a warning must never cost the command.
 
-mod terminal;
+pub(crate) mod terminal;
 
 use crate::render::Refusal;
 use std::fmt;
 use std::io::{self, ErrorKind, Write};
 use std::sync::{Mutex, PoisonError};
 
-pub use terminal::{
+pub(crate) use terminal::{
     Role, Stream, bold, bold_if, colours, paint, paint_if, stdin_on_terminal, stdout_on_terminal,
 };
 
@@ -74,12 +74,12 @@ static STDOUT: Latch = Latch::new();
 /// It never returns an error: a failed write stops stdout and reads as
 /// success (see the module docs). Ask [`Closable::is_closed`] whether anyone
 /// is still reading.
-pub fn stdout() -> Stdout {
+pub(crate) fn stdout() -> Stdout {
     Stdout(())
 }
 
 /// See [`stdout`].
-pub struct Stdout(());
+pub(crate) struct Stdout(());
 
 impl Write for Stdout {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
@@ -93,7 +93,7 @@ impl Write for Stdout {
 
 /// A writer that can tell when nobody reads it any more, so a session writing
 /// to it knows to stop asking questions.
-pub trait Closable: Write {
+pub(crate) trait Closable: Write {
     /// Whether writes have stopped reaching a reader.
     fn is_closed(&self) -> bool;
 }
@@ -113,7 +113,7 @@ impl Closable for Vec<u8> {
 
 /// Flush stdout, and hand back a write to it that failed for any reason but
 /// a closed pipe. `main` calls this once, after the verb has run.
-pub fn finish() -> Result<(), StdoutFailed> {
+pub(crate) fn finish() -> Result<(), StdoutFailed> {
     // The latch has already absorbed any error; what it recorded is below.
     let _ = STDOUT.flush(&mut io::stdout().lock());
     STDOUT.failure()
@@ -121,27 +121,27 @@ pub fn finish() -> Result<(), StdoutFailed> {
 
 /// The target of `out!` and `outln!`.
 #[doc(hidden)]
-pub fn write_out(args: fmt::Arguments<'_>) {
+pub(crate) fn write_out(args: fmt::Arguments<'_>) {
     // `Stdout` returns no error but `Interrupted`, which `write_fmt` retries.
     let _ = stdout().write_fmt(args);
 }
 
 /// The target of `errln!`.
 #[doc(hidden)]
-pub fn write_err(args: fmt::Arguments<'_>) {
+pub(crate) fn write_err(args: fmt::Arguments<'_>) {
     best_effort(&mut io::stderr().lock(), args);
 }
 
 /// Write to stderr, or to a stand-in for it, and ignore a failure: there is
 /// nowhere left to report one.
-fn best_effort(err: &mut impl Write, args: fmt::Arguments<'_>) {
+pub(crate) fn best_effort(err: &mut impl Write, args: fmt::Arguments<'_>) {
     let _ = err.write_fmt(args);
 }
 
 /// A write to stdout failed with something other than a closed pipe: a full
 /// disk behind a redirect, say. `main` refuses with it.
 #[derive(Debug)]
-pub struct StdoutFailed(io::Error);
+pub(crate) struct StdoutFailed(io::Error);
 
 impl fmt::Display for StdoutFailed {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -176,10 +176,10 @@ enum State {
 
 /// Stops a stream at its first failed write, so that no failure to write
 /// output can end a command early.
-struct Latch(Mutex<State>);
+pub(crate) struct Latch(Mutex<State>);
 
 impl Latch {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self(Mutex::new(State::Open))
     }
 
@@ -205,22 +205,22 @@ impl Latch {
         }
     }
 
-    fn write(&self, stream: &mut impl Write, buf: &[u8]) -> io::Result<usize> {
+    pub(crate) fn write(&self, stream: &mut impl Write, buf: &[u8]) -> io::Result<usize> {
         Ok(self.pass(|| stream.write(buf))?.unwrap_or(buf.len()))
     }
 
-    fn flush(&self, stream: &mut impl Write) -> io::Result<()> {
+    pub(crate) fn flush(&self, stream: &mut impl Write) -> io::Result<()> {
         self.pass(|| stream.flush()).map(drop)
     }
 
-    fn is_open(&self) -> bool {
+    pub(crate) fn is_open(&self) -> bool {
         let state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         matches!(*state, State::Open)
     }
 
     /// The failure that stopped the stream, unless it was a closed pipe,
     /// which is how a pipe is supposed to end. Taken once.
-    fn failure(&self) -> Result<(), StdoutFailed> {
+    pub(crate) fn failure(&self) -> Result<(), StdoutFailed> {
         let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         if !matches!(*state, State::Failed(_)) {
             return Ok(());
@@ -228,99 +228,6 @@ impl Latch {
         match std::mem::replace(&mut *state, State::Closed) {
             State::Failed(e) => Err(StdoutFailed(e)),
             State::Open | State::Closed => Ok(()),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A stream that fails every call with `kind` and counts the calls that
-    /// reached it.
-    struct Failing {
-        kind: ErrorKind,
-        calls: usize,
-    }
-
-    impl Failing {
-        fn new(kind: ErrorKind) -> Self {
-            Self { kind, calls: 0 }
-        }
-    }
-
-    impl Write for Failing {
-        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
-            self.calls += 1;
-            Err(self.kind.into())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            self.calls += 1;
-            Err(self.kind.into())
-        }
-    }
-
-    #[test]
-    fn broken_pipe_is_latched_and_later_writes_are_skipped() {
-        let latch = Latch::new();
-        let mut stream = Failing::new(ErrorKind::BrokenPipe);
-        assert_eq!(latch.write(&mut stream, b"first").unwrap(), 5);
-        assert_eq!(stream.calls, 1);
-        assert!(!latch.is_open());
-
-        assert_eq!(latch.write(&mut stream, b"second").unwrap(), 6);
-        latch.flush(&mut stream).unwrap();
-        assert_eq!(stream.calls, 1, "nothing reaches a closed stream");
-        assert!(latch.failure().is_ok(), "a closed pipe is no failure");
-    }
-
-    #[test]
-    fn other_stdout_errors_become_a_refusal() {
-        let latch = Latch::new();
-        let mut stream = Failing::new(ErrorKind::StorageFull);
-        assert_eq!(latch.write(&mut stream, b"payload").unwrap(), 7);
-        latch.write(&mut stream, b"more").unwrap();
-        assert_eq!(stream.calls, 1, "a failed stream is written no further");
-
-        let refused = Refusal::from(latch.failure().unwrap_err());
-        assert_eq!(refused.code, "stdout");
-        let said = &refused.message;
-        assert!(said.starts_with("could not write to stdout: "), "{said}");
-        assert!(
-            said.ends_with(&io::Error::from(ErrorKind::StorageFull).to_string()),
-            "{said}"
-        );
-        assert!(latch.failure().is_ok(), "reported once");
-    }
-
-    #[test]
-    fn an_open_stream_writes_through_and_has_no_failure() {
-        let latch = Latch::new();
-        let mut buf = Vec::new();
-        assert_eq!(latch.write(&mut buf, b"one\n").unwrap(), 4);
-        latch.flush(&mut buf).unwrap();
-        assert_eq!(buf, b"one\n");
-        assert!(latch.is_open());
-        assert!(latch.failure().is_ok());
-        assert!(latch.is_open(), "asking about a failure leaves it open");
-    }
-
-    #[test]
-    fn interrupted_is_retried_rather_than_latched() {
-        let latch = Latch::new();
-        let mut stream = Failing::new(ErrorKind::Interrupted);
-        let e = latch.write(&mut stream, b"x").unwrap_err();
-        assert_eq!(e.kind(), ErrorKind::Interrupted);
-        assert!(latch.is_open());
-    }
-
-    #[test]
-    fn a_failed_stderr_write_never_panics() {
-        for kind in [ErrorKind::BrokenPipe, ErrorKind::Other] {
-            let mut stream = Failing::new(kind);
-            best_effort(&mut stream, format_args!("warning: {}\n", "lost"));
-            assert_eq!(stream.calls, 1);
         }
     }
 }

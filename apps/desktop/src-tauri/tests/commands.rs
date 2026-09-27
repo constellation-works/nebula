@@ -7,9 +7,8 @@
 //! else; these would not.
 
 use nebula_core::{Committed, Corpus, Error, ops};
-use nebula_desktop::error::IpcError;
 use nebula_desktop::session::{self, CommitReport, Written};
-use nebula_desktop::state::AppState;
+use nebula_desktop::{AppState, IpcError};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

@@ -22,3 +22,6 @@ mod render;
 fn main() -> std::process::ExitCode {
     cli::main()
 }
+
+#[cfg(test)]
+mod tests;

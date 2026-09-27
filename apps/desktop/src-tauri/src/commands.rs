@@ -37,7 +37,7 @@ async fn blocking<T: Send + 'static>(
 /// `locked` code, which the capture box retries; once the line is written the
 /// command succeeds, and a refused commit is in its report.
 #[tauri::command]
-pub async fn capture<R: Runtime>(
+pub(crate) async fn capture<R: Runtime>(
     app: AppHandle<R>,
     text: String,
 ) -> Result<Written<InboxEntry>, IpcError> {
@@ -50,7 +50,7 @@ pub async fn capture<R: Runtime>(
 
 /// Every unsettled capture, oldest first.
 #[tauri::command]
-pub async fn inbox<R: Runtime>(app: AppHandle<R>) -> Result<Vec<InboxEntry>, IpcError> {
+pub(crate) async fn inbox<R: Runtime>(app: AppHandle<R>) -> Result<Vec<InboxEntry>, IpcError> {
     blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
         Ok(session::inbox(&corpus)?)
@@ -60,7 +60,7 @@ pub async fn inbox<R: Runtime>(app: AppHandle<R>) -> Result<Vec<InboxEntry>, Ipc
 
 /// Drop one unsettled entry without blocking the webview on the corpus lock.
 #[tauri::command]
-pub async fn drop_entry<R: Runtime>(
+pub(crate) async fn drop_entry<R: Runtime>(
     app: AppHandle<R>,
     entry: String,
 ) -> Result<Written<InboxEntry>, IpcError> {
@@ -75,7 +75,7 @@ pub async fn drop_entry<R: Runtime>(
 
 /// Promote one entry as an unlinked root node.
 #[tauri::command]
-pub async fn promote_root<R: Runtime>(
+pub(crate) async fn promote_root<R: Runtime>(
     app: AppHandle<R>,
     entry: String,
 ) -> Result<Written<Created>, IpcError> {
@@ -90,7 +90,7 @@ pub async fn promote_root<R: Runtime>(
 
 /// The whole corpus as nodes and edges.
 #[tauri::command]
-pub async fn graph<R: Runtime>(app: AppHandle<R>) -> Result<GraphExport, IpcError> {
+pub(crate) async fn graph<R: Runtime>(app: AppHandle<R>) -> Result<GraphExport, IpcError> {
     blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
         Ok(session::graph(&corpus)?)
@@ -100,7 +100,7 @@ pub async fn graph<R: Runtime>(app: AppHandle<R>) -> Result<GraphExport, IpcErro
 
 /// IDs matching id, title, body, or status in the current corpus.
 #[tauri::command]
-pub async fn graph_search<R: Runtime>(
+pub(crate) async fn graph_search<R: Runtime>(
     app: AppHandle<R>,
     query: String,
 ) -> Result<Vec<String>, IpcError> {
@@ -113,13 +113,13 @@ pub async fn graph_search<R: Runtime>(
 
 /// The capture shortcut loaded and registered at startup.
 #[tauri::command]
-pub fn capture_shortcut<R: Runtime>(app: AppHandle<R>) -> String {
+pub(crate) fn capture_shortcut<R: Runtime>(app: AppHandle<R>) -> String {
     app.state::<AppState>().capture_shortcut()
 }
 
 /// Replace the global capture shortcut without restarting the app.
 #[tauri::command]
-pub async fn set_capture_shortcut<R: Runtime>(
+pub(crate) async fn set_capture_shortcut<R: Runtime>(
     app: AppHandle<R>,
     shortcut: String,
 ) -> Result<String, IpcError> {
@@ -128,7 +128,7 @@ pub async fn set_capture_shortcut<R: Runtime>(
 
 /// Read the OS login registration, which persists outside settings.json.
 #[tauri::command]
-pub async fn launch_at_login<R: Runtime>(app: AppHandle<R>) -> Result<bool, IpcError> {
+pub(crate) async fn launch_at_login<R: Runtime>(app: AppHandle<R>) -> Result<bool, IpcError> {
     blocking(move || {
         app.autolaunch()
             .is_enabled()
@@ -139,7 +139,7 @@ pub async fn launch_at_login<R: Runtime>(app: AppHandle<R>) -> Result<bool, IpcE
 
 /// Enable or disable OS login registration and return the resulting state.
 #[tauri::command]
-pub async fn set_launch_at_login<R: Runtime>(
+pub(crate) async fn set_launch_at_login<R: Runtime>(
     app: AppHandle<R>,
     enabled: bool,
 ) -> Result<bool, IpcError> {
@@ -162,7 +162,7 @@ pub async fn set_launch_at_login<R: Runtime>(
 
 /// One node in full.
 #[tauri::command]
-pub async fn node<R: Runtime>(app: AppHandle<R>, id: String) -> Result<NodeView, IpcError> {
+pub(crate) async fn node<R: Runtime>(app: AppHandle<R>, id: String) -> Result<NodeView, IpcError> {
     blocking(move || {
         let corpus = app.state::<AppState>().corpus()?;
         Ok(session::node(&corpus, &id)?)
@@ -172,7 +172,10 @@ pub async fn node<R: Runtime>(app: AppHandle<R>, id: String) -> Result<NodeView,
 
 /// Hand the node's file to whatever the OS opens `.md` with.
 #[tauri::command]
-pub async fn open_in_editor<R: Runtime>(app: AppHandle<R>, id: String) -> Result<(), IpcError> {
+pub(crate) async fn open_in_editor<R: Runtime>(
+    app: AppHandle<R>,
+    id: String,
+) -> Result<(), IpcError> {
     let lookup = app.clone();
     let path = blocking(move || {
         let corpus = lookup.state::<AppState>().corpus()?;
@@ -188,7 +191,7 @@ pub async fn open_in_editor<R: Runtime>(app: AppHandle<R>, id: String) -> Result
 /// the root could not be resolved, whose reason `startup_warnings` and every
 /// corpus command report.
 #[tauri::command]
-pub async fn corpus_path<R: Runtime>(app: AppHandle<R>) -> Option<String> {
+pub(crate) async fn corpus_path<R: Runtime>(app: AppHandle<R>) -> Option<String> {
     app.state::<AppState>()
         .corpus_root()
         .ok()
@@ -198,14 +201,14 @@ pub async fn corpus_path<R: Runtime>(app: AppHandle<R>) -> Option<String> {
 /// Startup issues captured before the webview opened, such as an unresolved
 /// corpus root or settings and global-shortcut failures.
 #[tauri::command]
-pub async fn startup_warnings<R: Runtime>(app: AppHandle<R>) -> Vec<String> {
+pub(crate) async fn startup_warnings<R: Runtime>(app: AppHandle<R>) -> Vec<String> {
     app.state::<AppState>().startup_warnings()
 }
 
 /// Try the corpus again after the user has fixed the path. Starts the watcher
 /// if this is the first time the corpus could be opened.
 #[tauri::command]
-pub async fn reload<R: Runtime>(app: AppHandle<R>) -> Result<(), IpcError> {
+pub(crate) async fn reload<R: Runtime>(app: AppHandle<R>) -> Result<(), IpcError> {
     blocking(move || {
         let state = app.state::<AppState>();
         ensure_watching(&app, &state)?;
@@ -218,7 +221,7 @@ pub async fn reload<R: Runtime>(app: AppHandle<R>) -> Result<(), IpcError> {
 /// Start the watcher once the corpus can be opened; idempotent. Opening
 /// first matters: the watcher creates `inbox/` if it is missing, and that
 /// must never happen under a root that is not a corpus.
-pub fn ensure_watching<R: Runtime>(
+pub(crate) fn ensure_watching<R: Runtime>(
     app: &AppHandle<R>,
     state: &AppState,
 ) -> Result<(), DesktopError> {

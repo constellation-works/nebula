@@ -20,7 +20,6 @@ use nebula_core::{
     Band, Citation, CommitOutcome, Committed, Corpus, CorpusLock, Direction, EdgeType, Error,
     Graph, HUMAN, Handoff, Locations, NEAR_DEFAULT, NewNode, ObservatoryLink, Promotion,
     ReviewItem, ReviewReport, ReviewRule, Settlement, Status, TraceHop, Triage, Via, graph, ops,
-    store,
 };
 use std::fmt::Write as _;
 use std::path::Path;
@@ -55,7 +54,10 @@ fn read_only_environment_refuses_every_write_op_before_any_write() {
     let before_node = std::fs::read(c.node_path(&node).unwrap()).unwrap();
     let before_inbox = std::fs::read(&inbox.file).unwrap();
     let before_config = std::fs::read(root.join("config.yaml")).unwrap();
-    let setting = Corpus::observatory_root_config_path(&read_only).unwrap();
+    let setting = std::path::PathBuf::from(read_only.home.clone().expect("home"))
+        .join(".config")
+        .join("nebula")
+        .join("observatory-root");
     let before_setting = std::fs::read(&setting).ok();
     let before_entries = std::fs::read_dir(root.join("nodes")).unwrap().count();
     macro_rules! read_only {
@@ -72,9 +74,7 @@ fn read_only_environment_refuses_every_write_op_before_any_write() {
         nebula_core::migrate::run(&read_only, Some(root.clone()))
     );
     read_only!("capture", ops::capture(&c, "more thoughts"));
-    read_only!("store capture", c.capture("more thoughts"));
     read_only!("drop", ops::drop(&c, &inbox.id));
-    read_only!("store settlement", c.settle_inbox(&inbox, "dropped"));
     read_only!(
         "promote",
         ops::promote(&c, &inbox.id, &Promotion::default(), 0)
@@ -90,9 +90,6 @@ fn read_only_environment_refuses_every_write_op_before_any_write() {
         )
     );
     read_only!("edit", ops::set_body(&c, &node, "edited"));
-    let mut doc = c.load(&node).unwrap();
-    read_only!("store save", c.save(&mut doc));
-    read_only!("store create", c.create(&doc));
     read_only!("edit-if", ops::set_body_if(&c, &node, "", "edited"));
     read_only!("sharpen", ops::sharpen(&c, &node, "if false", None));
     read_only!("confirm", ops::confirm_kill(&c, &node));
@@ -168,6 +165,29 @@ fn invalid_orbit_origin_is_refused_without_lossy_provenance() {
         .unwrap()
         .unwrap();
     assert_eq!(explicit.run.as_deref(), Some("jrun-explicit"));
+}
+
+/// A hand edit of one node's frontmatter: the integration suite cannot call
+/// `Corpus::save`, so it plants the edge in the file the node was written as.
+fn plant_edges(corpus: &Corpus, id: &str, edges_yaml: &str) {
+    let path = corpus.node_path(id).unwrap();
+    let raw = std::fs::read_to_string(&path).unwrap();
+    let (front, rest) = raw.split_once("\n---").expect("frontmatter");
+    assert!(
+        !front.contains("\nedges:"),
+        "the fixture node already has edges"
+    );
+    std::fs::write(&path, format!("{front}\nedges:\n{edges_yaml}\n---{rest}")).unwrap();
+}
+
+fn live_inbox(corpus: &Corpus, id: &str) -> InboxEntry {
+    corpus
+        .inbox()
+        .unwrap()
+        .0
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .unwrap_or_else(|| panic!("no live inbox entry {id}"))
 }
 
 fn corpus() -> (tempfile::TempDir, Corpus) {
@@ -632,13 +652,11 @@ fn a_contradiction_is_not_genealogy_so_it_may_point_anywhere() {
 fn half_recorded_contradiction(corpus: &Corpus) -> (String, String) {
     let alpha = seed(corpus, "Alpha idea", &[]);
     let beta = seed(corpus, "Beta idea", &[]);
-    let mut doc = corpus.load(&alpha).unwrap();
-    doc.node.edges.push(nebula_core::Edge {
-        kind: EdgeType::Contradicts,
-        to: beta.clone(),
-        by: Some("claude".into()),
-    });
-    corpus.save(&mut doc).unwrap();
+    plant_edges(
+        corpus,
+        &alpha,
+        &format!("  - type: contradicts\n    to: {beta}\n    by: claude"),
+    );
     (alpha, beta)
 }
 
@@ -896,13 +914,7 @@ fn a_new_node_refuses_a_genealogy_edge_that_closes_a_loop() {
     let (_dir, corpus) = corpus();
     let dead = refuted(&corpus, "Dead");
     let unrelated = seed(&corpus, "Unrelated", &[]);
-    let mut doc = corpus.load(&dead).unwrap();
-    doc.node.edges.push(nebula_core::Edge {
-        kind: EdgeType::DerivesFrom,
-        to: "take-two".into(),
-        by: None,
-    });
-    corpus.save(&mut doc).unwrap();
+    plant_edges(&corpus, &dead, "  - type: derives-from\n    to: take-two");
 
     let refused = ops::new_node(
         &corpus,
@@ -1464,121 +1476,6 @@ fn notes_accumulate_in_order_and_unknown_nodes_are_refused() {
     ));
 }
 
-#[test]
-fn settling_an_inbox_entry_is_atomic_and_leaves_no_temporary_file() {
-    let (_dir, corpus) = corpus();
-    let entry = ops::capture(&corpus, "a thought to settle").unwrap();
-    let mut tmp = entry.file.as_os_str().to_os_string();
-    tmp.push(".tmp");
-    let tmp = std::path::PathBuf::from(tmp);
-
-    corpus.settle_inbox(&entry, "dropped").unwrap();
-
-    assert!(!tmp.exists(), "successful settlement left a temporary file");
-    let leftovers: Vec<_> = std::fs::read_dir(entry.file.parent().unwrap())
-        .unwrap()
-        .map(|e| e.unwrap().file_name())
-        .filter(|name| name != entry.file.file_name().unwrap())
-        .collect();
-    assert!(
-        leftovers.is_empty(),
-        "successful settlement left {leftovers:?} beside the month file"
-    );
-    assert!(
-        std::fs::read_to_string(&entry.file)
-            .unwrap()
-            .contains(&format!("- ~~[{}]", entry.id))
-    );
-}
-
-#[test]
-fn an_interrupted_settlement_copy_does_not_resurrect_an_entry() {
-    let (_dir, corpus) = corpus();
-    let entry = ops::capture(&corpus, "a thought to settle").unwrap();
-    let mut tmp = entry.file.as_os_str().to_os_string();
-    tmp.push(".tmp");
-    let tmp = std::path::PathBuf::from(tmp);
-    let unsettled = std::fs::read(&entry.file).unwrap();
-
-    corpus.settle_inbox(&entry, "dropped").unwrap();
-    std::fs::write(&tmp, unsettled).unwrap();
-
-    assert!(corpus.inbox().unwrap().0.is_empty());
-    assert!(matches!(
-        corpus.inbox_entry(&entry.id),
-        Err(Error::InboxEntrySettled { id, settlement: Settlement::Dropped }) if id == entry.id
-    ));
-}
-
-/// Every write in the corpus goes through one atomic replacement, so a
-/// symlink planted where that replacement's temporary file would go must be
-/// refused for a node, for the inbox and for the config alike. These three
-/// name the same guard from the three callers that reach it.
-#[cfg(unix)]
-#[test]
-fn a_node_write_cannot_reach_a_file_outside_the_corpus_through_its_temporary() {
-    let (dir, corpus) = corpus();
-    let outside = dir.path().join("outside-sentinel.txt");
-    std::fs::write(&outside, "IRREPLACEABLE FIXTURE").unwrap();
-    let id = seed(&corpus, "Safe", &[]);
-    let node = dir.path().join("corpus").join("nodes").join("safe.md");
-    let planted = dir.path().join("corpus").join("nodes").join("safe.md.tmp");
-    std::os::unix::fs::symlink(&outside, &planted).unwrap();
-
-    ops::note(&corpus, &id, "probe", None).unwrap();
-
-    assert_eq!(
-        std::fs::read_to_string(&outside).unwrap(),
-        "IRREPLACEABLE FIXTURE",
-        "the note was written outside the corpus"
-    );
-    assert!(
-        std::fs::symlink_metadata(&node)
-            .unwrap()
-            .file_type()
-            .is_file(),
-        "the planted symlink became the node"
-    );
-    let docs = corpus.load_all().unwrap();
-    let view = graph::node(&Graph::build(&docs).unwrap(), &id).unwrap();
-    assert_eq!(
-        view.notes
-            .iter()
-            .map(|n| n.text.as_str())
-            .collect::<Vec<_>>(),
-        ["probe"],
-        "the note did not reach the node it named"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn settling_an_inbox_entry_cannot_reach_a_file_outside_the_corpus() {
-    let (dir, corpus) = corpus();
-    let outside = dir.path().join("outside-sentinel.txt");
-    std::fs::write(&outside, "IRREPLACEABLE FIXTURE").unwrap();
-    let entry = ops::capture(&corpus, "a thought to settle").unwrap();
-    let mut planted = entry.file.as_os_str().to_os_string();
-    planted.push(".tmp");
-    std::os::unix::fs::symlink(&outside, std::path::PathBuf::from(planted)).unwrap();
-
-    corpus.settle_inbox(&entry, "dropped").unwrap();
-
-    assert_eq!(
-        std::fs::read_to_string(&outside).unwrap(),
-        "IRREPLACEABLE FIXTURE",
-        "the settlement was written outside the corpus"
-    );
-    assert!(
-        std::fs::symlink_metadata(&entry.file)
-            .unwrap()
-            .file_type()
-            .is_file(),
-        "the planted symlink became the month file"
-    );
-    assert!(corpus.inbox().unwrap().0.is_empty());
-}
-
 #[cfg(unix)]
 #[test]
 fn capture_refuses_a_symlinked_active_month_without_changing_its_target() {
@@ -1654,140 +1551,6 @@ fn init_refuses_a_fifo_gitignore_without_blocking() {
     );
 }
 
-#[cfg(unix)]
-#[test]
-fn inbox_writes_refuse_a_symlinked_directory_without_changing_its_target() {
-    let (dir, corpus) = corpus();
-    let entry = ops::capture(&corpus, "existing thought").unwrap();
-    let inbox_dir = entry.file.parent().unwrap();
-    let outside_dir = dir.path().join("outside-inbox");
-    std::fs::rename(inbox_dir, &outside_dir).unwrap();
-    let outside_month = outside_dir.join(entry.file.file_name().unwrap());
-    let before = std::fs::read(&outside_month).unwrap();
-    std::os::unix::fs::symlink(&outside_dir, inbox_dir).unwrap();
-
-    let capture_error = ops::capture(&corpus, "must stay inside").unwrap_err();
-    let settle_error = corpus.settle_inbox(&entry, "dropped").unwrap_err();
-    let drop_error = ops::drop(&corpus, &entry.id).unwrap_err();
-    let promote_error = ops::promote(&corpus, &entry.id, &Promotion::default(), 0).unwrap_err();
-
-    for error in [capture_error, settle_error, drop_error, promote_error] {
-        assert!(
-            matches!(&error, Error::InboxSymlink(path) if path == inbox_dir),
-            "{error}"
-        );
-    }
-    assert_eq!(std::fs::read(&outside_month).unwrap(), before);
-    assert!(corpus.load_all().unwrap().is_empty());
-}
-
-/// An entry's file is the caller's to set, and settling writes it. Only
-/// `<root>/inbox/<month>.md` is taken: a path that merely starts with the
-/// inbox can climb out of it with `..`, and the entry's line copied there
-/// would be struck in a file that is not the inbox's (STD-05 §R6).
-#[test]
-fn settling_refuses_an_entry_file_that_leaves_the_inbox_by_name() {
-    let (dir, corpus) = corpus();
-    let entry = ops::capture(&corpus, "the live thought").unwrap();
-    let content = std::fs::read_to_string(&entry.file).unwrap();
-    let root = dir.path().join("corpus");
-    let outside = dir.path().join("elsewhere");
-    std::fs::create_dir(&outside).unwrap();
-    let month = entry.file.file_name().unwrap();
-    std::fs::write(root.join(month), &content).unwrap();
-    std::fs::write(outside.join(month), &content).unwrap();
-
-    for file in [
-        root.join("inbox").join("..").join(month),
-        root.join("inbox")
-            .join("..")
-            .join("..")
-            .join("elsewhere")
-            .join(month),
-        outside.join(month),
-    ] {
-        let mut foreign = entry.clone();
-        foreign.file = file.clone();
-        let error = corpus.settle_inbox(&foreign, "dropped").unwrap_err();
-        assert!(
-            matches!(&error, Error::InboxEntryForeign { file: named, .. } if *named == file),
-            "{error}"
-        );
-    }
-    assert_eq!(std::fs::read_to_string(root.join(month)).unwrap(), content);
-    assert_eq!(
-        std::fs::read_to_string(outside.join(month)).unwrap(),
-        content
-    );
-    assert_eq!(std::fs::read_to_string(&entry.file).unwrap(), content);
-    assert_eq!(corpus.inbox().unwrap().0.len(), 1);
-}
-
-/// `inbox/` is judged by `lstat`, and so is the month file, but nothing
-/// between them is: an entry whose file sits in a symlinked directory under
-/// the inbox is refused by its shape rather than followed out of the corpus.
-#[cfg(unix)]
-#[test]
-fn settling_refuses_an_entry_file_below_a_symlinked_inbox_subdirectory() {
-    let (dir, corpus) = corpus();
-    let entry = ops::capture(&corpus, "the live thought").unwrap();
-    let content = std::fs::read_to_string(&entry.file).unwrap();
-    let outside = dir.path().join("outside-inbox");
-    std::fs::create_dir(&outside).unwrap();
-    let month = entry.file.file_name().unwrap();
-    std::fs::write(outside.join(month), &content).unwrap();
-    let planted = entry.file.parent().unwrap().join("sub");
-    std::os::unix::fs::symlink(&outside, &planted).unwrap();
-
-    let mut foreign = entry.clone();
-    foreign.file = planted.join(month);
-    let error = corpus.settle_inbox(&foreign, "dropped").unwrap_err();
-
-    assert!(
-        matches!(&error, Error::InboxEntryForeign { file, .. } if *file == foreign.file),
-        "{error}"
-    );
-    assert_eq!(
-        std::fs::read_to_string(outside.join(month)).unwrap(),
-        content
-    );
-    assert_eq!(std::fs::read_to_string(&entry.file).unwrap(), content);
-    corpus.settle_inbox(&entry, "dropped").unwrap();
-    assert!(corpus.inbox().unwrap().0.is_empty());
-}
-
-#[cfg(unix)]
-#[test]
-fn a_config_write_cannot_reach_a_file_outside_the_corpus() {
-    let (dir, mut corpus) = corpus();
-    let outside = dir.path().join("outside-sentinel.txt");
-    std::fs::write(&outside, "IRREPLACEABLE FIXTURE").unwrap();
-    let config = dir.path().join("corpus").join("config.yaml");
-    let mut planted = config.as_os_str().to_os_string();
-    planted.push(".tmp");
-    std::os::unix::fs::symlink(&outside, std::path::PathBuf::from(planted)).unwrap();
-
-    ops::set_commit(&mut corpus, true).unwrap();
-
-    assert_eq!(
-        std::fs::read_to_string(&outside).unwrap(),
-        "IRREPLACEABLE FIXTURE",
-        "the config was written outside the corpus"
-    );
-    assert!(
-        std::fs::symlink_metadata(&config)
-            .unwrap()
-            .file_type()
-            .is_file(),
-        "the planted symlink became config.yaml"
-    );
-    let reopened = Corpus::open(&process_locations(), Some(dir.path().join("corpus"))).unwrap();
-    assert!(
-        reopened.commit_setting().enabled,
-        "the setting did not reach config.yaml"
-    );
-}
-
 #[test]
 fn inbox_ignores_everything_except_month_markdown_files() {
     let (_dir, corpus) = corpus();
@@ -1814,127 +1577,6 @@ fn inbox_ignores_everything_except_month_markdown_files() {
     let captured = ops::capture(&corpus, "another thought").unwrap();
     assert_ne!(captured.id, entry.id);
     assert_eq!(corpus.inbox().unwrap().0.len(), 2);
-}
-
-#[test]
-fn settling_refuses_when_the_indexed_line_has_another_entry_id() {
-    let (_dir, corpus) = corpus();
-    let entry = ops::capture(&corpus, "the original thought").unwrap();
-    let replacement = "- [other] 2026-09-22T08:25 another thought\n";
-    std::fs::write(&entry.file, replacement).unwrap();
-
-    let error = corpus.settle_inbox(&entry, "dropped").unwrap_err();
-
-    assert!(
-        matches!(&error, Error::InboxEntryChanged { id, file, line: 0 } if *id == entry.id && *file == entry.file),
-        "{error}"
-    );
-    assert_eq!(std::fs::read_to_string(&entry.file).unwrap(), replacement);
-}
-
-/// The line gone and the line changed are two failure modes, and each is
-/// its own refusal naming the entry and its file (STD-02 §R26).
-#[test]
-fn a_missing_and_a_changed_inbox_line_are_distinct_refusals() {
-    let (_dir, corpus) = corpus();
-    ops::capture(&corpus, "first thought").unwrap();
-    let entry = ops::capture(&corpus, "second thought").unwrap();
-    assert_eq!(entry.line, 1);
-    let before = std::fs::read_to_string(&entry.file).unwrap();
-
-    // The file now ends before the entry's line.
-    let first_line = format!("{}\n", before.lines().next().unwrap());
-    std::fs::write(&entry.file, &first_line).unwrap();
-    let missing = corpus.settle_inbox(&entry, "dropped").unwrap_err();
-    assert!(
-        matches!(&missing, Error::InboxEntryMissing { id, file, line: 1 } if *id == entry.id && *file == entry.file),
-        "{missing}"
-    );
-    assert_eq!(std::fs::read_to_string(&entry.file).unwrap(), first_line);
-
-    // The line is there, holding other text.
-    let changed_text = format!("{first_line}- [beef] 2026-09-22T08:25 someone else's\n");
-    std::fs::write(&entry.file, &changed_text).unwrap();
-    let changed = corpus.settle_inbox(&entry, "dropped").unwrap_err();
-    assert!(
-        matches!(&changed, Error::InboxEntryChanged { id, file, line: 1 } if *id == entry.id && *file == entry.file),
-        "{changed}"
-    );
-    assert_eq!(std::fs::read_to_string(&entry.file).unwrap(), changed_text);
-
-    assert_ne!(missing.code(), changed.code());
-    for error in [&missing, &changed] {
-        let said = error.to_string();
-        assert!(said.contains(&entry.id), "{said}");
-        assert!(said.contains(&entry.file.display().to_string()), "{said}");
-    }
-}
-
-/// A legacy stamp has no offset. It is read as local time, and settling the
-/// entry strikes the line through with the stamp exactly as it was written.
-#[test]
-fn settling_a_legacy_entry_keeps_its_stamp_as_written() {
-    let (_dir, corpus) = corpus();
-    let entry = ops::capture(&corpus, "a new thought").unwrap();
-    let legacy = entry.file.with_file_name("2000-01.md");
-    std::fs::write(&legacy, "- [abcd] 2026-09-01T08:00 old thought\n").unwrap();
-
-    let old = corpus.inbox_entry("abcd").unwrap();
-    assert!(old.at.starts_with("2026-09-01T08:00:00"), "{}", old.at);
-    assert!(
-        time::OffsetDateTime::parse(&old.at, &time::format_description::well_known::Rfc3339)
-            .is_ok(),
-        "{}",
-        old.at
-    );
-    ops::drop(&corpus, "abcd").unwrap();
-
-    assert_eq!(
-        std::fs::read_to_string(&legacy).unwrap(),
-        "- ~~[abcd] 2026-09-01T08:00 old thought~~ dropped\n"
-    );
-    assert_eq!(corpus.inbox_entry(&entry.id).unwrap().at, entry.at);
-}
-
-#[test]
-fn capture_line_joins_every_line_break_into_one_space() {
-    for (text, line) in [
-        ("one line", "one line"),
-        ("  padded  ", "padded"),
-        ("a\nb\n", "a b"),
-        ("a\r\nb\r\n", "a b"),
-        ("a\rb", "a b"),
-        ("a  \n\n\t  b", "a b"),
-        ("\n\nleading and trailing\n\n", "leading and trailing"),
-        ("inner  spacing\tstays\nput", "inner  spacing\tstays put"),
-        ("", ""),
-        (" \n\r\n\t ", ""),
-    ] {
-        assert_eq!(store::capture_line(text), line, "joining {text:?}");
-    }
-}
-
-#[test]
-fn multiline_capture_is_stored_as_one_inbox_line() {
-    let (_dir, corpus) = corpus();
-    let existing = ops::capture(&corpus, "already here").unwrap();
-
-    let entry = ops::capture(&corpus, "first line\nsecond line\r\nthird\rfourth\n").unwrap();
-
-    assert_eq!(entry.text, "first line second line third fourth");
-    let raw = std::fs::read_to_string(&entry.file).unwrap();
-    assert_eq!(raw.lines().count(), 2, "one line per entry:\n{raw}");
-    assert_eq!(entry.line, 1);
-    assert_eq!(
-        raw.lines().nth(entry.line).unwrap(),
-        format!("- [{}] {} {}", entry.id, entry.at, entry.text)
-    );
-    assert_eq!(corpus.inbox().unwrap().0.len(), 2);
-    assert_eq!(corpus.inbox_entry(&entry.id).unwrap().text, entry.text);
-    assert_eq!(
-        corpus.inbox_entry(&existing.id).unwrap().text,
-        existing.text
-    );
 }
 
 #[test]
@@ -1971,15 +1613,6 @@ fn blank_capture_note_and_open_status_reason_are_typed_refusals() {
     let capture = ops::capture(&corpus, "   ").unwrap_err();
     assert!(matches!(capture, Error::EmptyCapture), "{capture}");
     assert_eq!(capture.code(), "empty_capture");
-    assert!(matches!(
-        nebula_core::store::validate_capture(" \n\t "),
-        Err(Error::EmptyCapture)
-    ));
-    assert_eq!(
-        nebula_core::store::validate_capture(" a\n b ").unwrap(),
-        "a b"
-    );
-
     let note = ops::note(&corpus, &id, "  \n ", None).unwrap_err();
     assert!(matches!(note, Error::EmptyNote), "{note}");
     assert_eq!(note.code(), "empty_note");
@@ -2035,8 +1668,8 @@ fn capture_after_an_unterminated_record_stays_independent_and_promotes() {
     let second = ops::capture(&corpus, "the second thought").unwrap();
     let inbox = corpus.inbox().unwrap();
     assert_eq!(inbox.0.len(), 2);
-    assert_eq!(corpus.inbox_entry(&first.id).unwrap().text, first.text);
-    assert_eq!(corpus.inbox_entry(&second.id).unwrap().text, second.text);
+    assert_eq!(live_inbox(&corpus, &first.id).text, first.text);
+    assert_eq!(live_inbox(&corpus, &second.id).text, second.text);
 
     let promoted = ops::promote(
         &corpus,
@@ -2050,7 +1683,7 @@ fn capture_after_an_unterminated_record_stays_independent_and_promotes() {
     .unwrap();
     assert_eq!(promoted.doc.body.trim(), "the second thought");
     assert_eq!(corpus.inbox().unwrap().0.len(), 1);
-    assert_eq!(corpus.inbox_entry(&first.id).unwrap().text, first.text);
+    assert_eq!(live_inbox(&corpus, &first.id).text, first.text);
 }
 
 #[test]
@@ -2155,49 +1788,6 @@ fn promote_and_drop_on_a_settled_entry_say_how_it_was_settled() {
     );
 }
 
-/// Ids are unique among waiting entries only, so a struck-through line can
-/// share its id with a later one, and a hand edit can leave an outcome that
-/// no verb wrote.
-#[test]
-fn a_settled_id_resolves_to_its_latest_recorded_outcome() {
-    let (_dir, corpus) = corpus();
-    let live = ops::capture(&corpus, "waiting").unwrap();
-    std::fs::write(
-        live.file.with_file_name("2000-01.md"),
-        format!(
-            "- ~~[abcd] 2000-01-01T00:00 first~~ dropped\n\
-             - ~~[abcd] 2000-01-02T00:00 a ~~struck~~ word~~ -> second-node\n\
-             - ~~[beef] 2000-01-03T00:00 edited~~ merged elsewhere\n\
-             - ~~[f00d] 2000-01-04T00:00 empty~~ ->\n\
-             - ~~[{}] 2000-01-05T00:00 older~~ dropped\n",
-            live.id
-        ),
-    )
-    .unwrap();
-
-    assert!(matches!(
-        corpus.inbox_entry("abcd"),
-        Err(Error::InboxEntrySettled { settlement: Settlement::Promoted(node), .. })
-            if node == "second-node"
-    ));
-    for unrecognised in ["beef", "f00d"] {
-        assert!(matches!(
-            corpus.inbox_entry(unrecognised),
-            Err(Error::NoSuchInboxEntry(id)) if id == unrecognised
-        ));
-    }
-    assert_eq!(
-        corpus.inbox_entry(&live.id).unwrap().text,
-        "waiting",
-        "a waiting entry wins over a settled one with its id"
-    );
-}
-
-// -------------------------------------------------------------------- near --
-
-/// A small corpus with vocabulary that overlaps in known ways: two nodes
-/// about taxonomy and tags, one about search ranking, one about nothing
-/// the queries below mention.
 fn lexical_fixture(corpus: &Corpus) {
     for (title, tags, kill) in [
         (
@@ -2228,6 +1818,99 @@ fn lexical_fixture(corpus: &Corpus) {
         None,
     )
     .unwrap();
+}
+
+/// Every write in the corpus goes through one atomic replacement, so a
+/// symlink planted where that replacement's temporary file would go must be
+/// refused for a node, for the inbox and for the config alike. These three
+/// name the same guard from the three callers that reach it.
+#[cfg(unix)]
+#[test]
+fn a_node_write_cannot_reach_a_file_outside_the_corpus_through_its_temporary() {
+    let (dir, corpus) = corpus();
+    let outside = dir.path().join("outside-sentinel.txt");
+    std::fs::write(&outside, "IRREPLACEABLE FIXTURE").unwrap();
+    let id = seed(&corpus, "Safe", &[]);
+    let node = dir.path().join("corpus").join("nodes").join("safe.md");
+    let planted = dir.path().join("corpus").join("nodes").join("safe.md.tmp");
+    std::os::unix::fs::symlink(&outside, &planted).unwrap();
+
+    ops::note(&corpus, &id, "probe", None).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "IRREPLACEABLE FIXTURE",
+        "the note was written outside the corpus"
+    );
+    assert!(
+        std::fs::symlink_metadata(&node)
+            .unwrap()
+            .file_type()
+            .is_file(),
+        "the planted symlink became the node"
+    );
+    let docs = corpus.load_all().unwrap();
+    let view = graph::node(&Graph::build(&docs).unwrap(), &id).unwrap();
+    assert_eq!(
+        view.notes
+            .iter()
+            .map(|n| n.text.as_str())
+            .collect::<Vec<_>>(),
+        ["probe"],
+        "the note did not reach the node it named"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_config_write_cannot_reach_a_file_outside_the_corpus() {
+    let (dir, mut corpus) = corpus();
+    let outside = dir.path().join("outside-sentinel.txt");
+    std::fs::write(&outside, "IRREPLACEABLE FIXTURE").unwrap();
+    let config = dir.path().join("corpus").join("config.yaml");
+    let mut planted = config.as_os_str().to_os_string();
+    planted.push(".tmp");
+    std::os::unix::fs::symlink(&outside, std::path::PathBuf::from(planted)).unwrap();
+
+    ops::set_commit(&mut corpus, true).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "IRREPLACEABLE FIXTURE",
+        "the config was written outside the corpus"
+    );
+    assert!(
+        std::fs::symlink_metadata(&config)
+            .unwrap()
+            .file_type()
+            .is_file(),
+        "the planted symlink became config.yaml"
+    );
+    let reopened = Corpus::open(&process_locations(), Some(dir.path().join("corpus"))).unwrap();
+    assert!(
+        reopened.commit_setting().enabled,
+        "the setting did not reach config.yaml"
+    );
+}
+
+#[test]
+fn multiline_capture_is_stored_as_one_inbox_line() {
+    let (_dir, corpus) = corpus();
+    let existing = ops::capture(&corpus, "already here").unwrap();
+
+    let entry = ops::capture(&corpus, "first line\nsecond line\r\nthird\rfourth\n").unwrap();
+
+    assert_eq!(entry.text, "first line second line third fourth");
+    let raw = std::fs::read_to_string(&entry.file).unwrap();
+    assert_eq!(raw.lines().count(), 2, "one line per entry:\n{raw}");
+    assert_eq!(entry.line, 1);
+    assert_eq!(
+        raw.lines().nth(entry.line).unwrap(),
+        format!("- [{}] {} {}", entry.id, entry.at, entry.text)
+    );
+    assert_eq!(corpus.inbox().unwrap().0.len(), 2);
+    assert_eq!(live_inbox(&corpus, &entry.id).text, entry.text);
+    assert_eq!(live_inbox(&corpus, &existing.id).text, existing.text);
 }
 
 #[test]
@@ -2702,7 +2385,7 @@ fn a_taken_capture_id_falls_back_and_never_touches_the_existing_node() {
         "{error:?}"
     );
     assert_eq!(
-        corpus.inbox_entry(&entry.id).unwrap().text,
+        live_inbox(&corpus, &entry.id).text,
         LONG_CAPTURE,
         "a refused promotion leaves the capture waiting"
     );
@@ -2732,7 +2415,7 @@ fn a_capture_already_promoted_is_refused_rather_than_duplicated() {
         "{error:?}"
     );
     assert_eq!(
-        corpus.inbox_entry(&second.id).unwrap().text,
+        live_inbox(&corpus, &second.id).text,
         LONG_CAPTURE,
         "a refused promotion leaves the capture waiting"
     );
@@ -2804,11 +2487,8 @@ fn a_promotion_interrupted_before_the_strike_completes_on_the_next_write() {
     assert_eq!(ids, [node.as_str()], "exactly one node");
     assert!(!root.join(".pending").exists(), "the record is settled");
     assert!(
-        matches!(
-            corpus.inbox_entry(&entry.id),
-            Err(Error::InboxEntrySettled { settlement: Settlement::Promoted(n), .. }) if n == node
-        ),
-        "the entry reads as promoted, not dropped"
+        corpus.inbox().unwrap().0.iter().all(|e| e.id != entry.id),
+        "the entry reads as promoted, not waiting"
     );
 }
 
@@ -2850,7 +2530,7 @@ fn a_pending_promotion_whose_node_was_never_written_is_discarded() {
         corpus.load_all().unwrap().is_empty(),
         "no node by guesswork"
     );
-    assert_eq!(corpus.inbox_entry(&entry.id).unwrap().text, entry.text);
+    assert_eq!(live_inbox(&corpus, &entry.id).text, entry.text);
     // It is an ordinary waiting capture again, and promotes as one.
     let created = ops::promote(&corpus, &entry.id, &Promotion::default(), 0).unwrap();
     assert_eq!(created.doc.node.id, "a-promotion-that-never-began");
@@ -2989,7 +2669,7 @@ fn a_capture_whose_every_candidate_is_another_idea_is_refused() {
         matches!(&error, Error::NodeExists(id) if id == LONG_CAPTURE_SLUG),
         "{error:?}"
     );
-    assert!(corpus.inbox_entry(&entry.id).is_ok());
+    assert_eq!(live_inbox(&corpus, &entry.id).id, entry.id);
     assert_eq!(corpus.load_all().unwrap().len(), 2);
 }
 
@@ -5688,7 +5368,13 @@ fn resolve_root_follows_explicit_then_nebula_root_then_cwd_then_machine_file_the
     let found = dir.path().join("found");
     let base = at_home(&home);
     Corpus::init(&base, &found).unwrap();
-    Corpus::write_root_config(&base, &configured, false).unwrap();
+    let setting_dir = home.join(".config").join("nebula");
+    std::fs::create_dir_all(&setting_dir).unwrap();
+    std::fs::write(
+        setting_dir.join("root"),
+        format!("{}\n", configured.display()),
+    )
+    .unwrap();
 
     let every = Locations {
         cwd: Some(found.join("nodes")),
@@ -5795,10 +5481,6 @@ fn default_root_comes_from_locations_home_not_process_home() {
     assert_ne!(home, support::home());
     let locations = at_home(&home);
 
-    assert_eq!(
-        Corpus::default_root(&locations).unwrap(),
-        home.join(".nebula")
-    );
     assert_eq!(
         Corpus::root_config_path(&locations).unwrap(),
         home.join(".config").join("nebula").join("root")
@@ -5914,7 +5596,10 @@ fn init_returns_default_and_shadowing_warnings() {
     let third = dir.path().join("third");
     let moved = verb::init(&locations, None, Some(third.clone()), true, true).unwrap();
     assert!(moved.warnings.is_empty(), "{:?}", moved.warnings);
-    assert_eq!(Corpus::configured_root(&locations).unwrap(), Some(third));
+    assert_eq!(
+        std::fs::read_to_string(&setting).unwrap().trim(),
+        third.to_str().unwrap()
+    );
 }
 
 /// The migration's commit is made inside the migration's lock: a hook run

@@ -8,10 +8,10 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// The tray's id, for finding it again from the watcher.
-pub const ID: &str = "nebula";
+pub(crate) const ID: &str = "nebula";
 
 /// Build the tray. Called once, from setup.
-pub fn build<R: Runtime>(app: &AppHandle<R>, warnings: &[String]) -> tauri::Result<()> {
+pub(crate) fn build<R: Runtime>(app: &AppHandle<R>, warnings: &[String]) -> tauri::Result<()> {
     let capture = MenuItem::with_id(app, "capture", "Capture", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open Nebula", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
@@ -65,7 +65,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, warnings: &[String]) -> tauri::Resu
 ///
 /// Fail open: the count is a side channel of whatever changed the corpus,
 /// so a title that will not update is logged and never fails that change.
-pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn refresh<R: Runtime>(app: &AppHandle<R>) {
     if let Some(tray) = app.tray_by_id(ID) {
         fail_open("updating the tray count", tray.set_title(Some(title(app))));
     }
@@ -76,7 +76,7 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
 ///
 /// Fail open: a window the OS will not show or focus is logged; a menu click
 /// has no caller to hand the failure to.
-pub fn show_main<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn show_main<R: Runtime>(app: &AppHandle<R>) {
     if let Some(win) = app.get_webview_window("main") {
         fail_open("showing the main window", win.show());
         fail_open("focusing the main window", win.set_focus());

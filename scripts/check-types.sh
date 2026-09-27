@@ -12,8 +12,8 @@
 # Fix mode (UPDATE=1): replace the committed directory's contents with the
 # fresh export, deleting stale files. `make types` and `pnpm gen-types` run it.
 #
-# The generator is the one `ts_export` test in nebula-core's lib, selected by
-# exact name: every root type is listed there, and `export_all` follows their
+# The generator is the one `ts_export` test in nebula-core's lib tests, selected
+# by exact name: every root type is listed there, and `export_all` follows their
 # dependencies. The per-type `#[ts(export)]` tests are left out on purpose, so
 # that an emptied or renamed generator shows up as "generated nothing" instead
 # of as a partial set.
@@ -22,7 +22,7 @@ cd "$(dirname "$0")/.."
 export LC_ALL=C
 
 TYPES_DIR=apps/desktop/src/types
-GENERATOR=ts_export::writes_the_typescript_bindings
+GENERATOR=tests::ts_export::writes_the_typescript_bindings
 CARGO=${CARGO:-cargo}
 
 tmp=$(mktemp -d)

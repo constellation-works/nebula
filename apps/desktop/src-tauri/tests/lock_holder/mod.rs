@@ -25,7 +25,7 @@ const ROOT_VAR: &str = "NEBULA_DESKTOP_TEST_HOLD_LOCK";
 const HELD: &str = "NEBULA_TEST_LOCK_HELD";
 
 /// The label the child records as the lock's holder.
-pub const LABEL: &str = "desktop test holder";
+pub(crate) const LABEL: &str = "desktop test holder";
 
 /// In the child only: hold the lock, then exit without reaching `main`.
 #[ctor::ctor]
@@ -63,14 +63,14 @@ fn hold(root: &Path) -> Result<(), String> {
 
 /// Another process holding `root`'s lock. Dropping it kills the holder;
 /// [`LockHolder::release`] lets it exit cleanly and checks that it did.
-pub struct LockHolder {
+pub(crate) struct LockHolder {
     child: ChildGuard,
 }
 
 impl LockHolder {
     /// Start the holder and wait, up to [`support::DEADLINE`], until it has
     /// the lock.
-    pub fn start(root: &Path) -> Self {
+    pub(crate) fn start(root: &Path) -> Self {
         let exe = std::env::current_exe().expect("the test binary's path");
         let mut child = ChildGuard::spawn(
             support::command(exe, support::home())
@@ -109,12 +109,12 @@ impl LockHolder {
     }
 
     /// The holder's process id, which its lock record carries.
-    pub fn pid(&self) -> u32 {
+    pub(crate) fn pid(&self) -> u32 {
         self.child.id()
     }
 
     /// Close the holder's stdin and wait for it to let go and exit 0.
-    pub fn release(mut self) {
+    pub(crate) fn release(mut self) {
         drop(self.child.take_stdin());
         let status = self
             .child

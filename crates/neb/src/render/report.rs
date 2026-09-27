@@ -26,7 +26,7 @@ fn by(label: Option<&str>) -> String {
 ///
 /// The header is the status and id, the title with its author when that is
 /// not the human, then a labelled line for the tags and one for the dates.
-pub fn node(view: &NodeView) -> String {
+pub(crate) fn node(view: &NodeView) -> String {
     let n = &view.node;
     let mut out = String::new();
     let _ = writeln!(out, "{} {}", status_badge(n.status), bold(&n.id));
@@ -111,7 +111,7 @@ pub fn node(view: &NodeView) -> String {
 
 /// Where `observatory` references resolve, and what set that: one line,
 /// or nothing when no root is set.
-pub fn observatory_root(setting: &ObservatoryRoot) -> String {
+pub(crate) fn observatory_root(setting: &ObservatoryRoot) -> String {
     let source = match setting.source {
         ObservatorySource::Env => format!("(${OBSERVATORY_ROOT_ENV})"),
         ObservatorySource::Machine => "(this machine: ~/.config/nebula/observatory-root)".into(),
@@ -126,7 +126,7 @@ pub fn observatory_root(setting: &ObservatoryRoot) -> String {
 /// The advice around an observatory root, for stderr. `saved` is true right
 /// after `neb config observatory-root <DIR>`, so a machine setting the
 /// environment outranks says so rather than seeming lost.
-pub fn observatory_root_notes(setting: &ObservatoryRoot, saved: bool) -> Vec<Notice> {
+pub(crate) fn observatory_root_notes(setting: &ObservatoryRoot, saved: bool) -> Vec<Notice> {
     let mut notes = Vec::new();
     match (&setting.root, setting.source) {
         (Some(_), ObservatorySource::Config) => notes.push(Notice::human(format!(
@@ -163,7 +163,7 @@ pub fn observatory_root_notes(setting: &ObservatoryRoot, saved: bool) -> Vec<Not
 
 /// What `--drop-legacy` did to `config`, in every mode: the key it removed,
 /// or that there was none and the file was left alone.
-pub fn dropped_legacy(dropped: &DroppedLegacy, config: &Path) -> Notice {
+pub(crate) fn dropped_legacy(dropped: &DroppedLegacy, config: &Path) -> Notice {
     Notice::always(match &dropped.removed {
         Some(path) => format!(
             "removed the legacy observatory_root ({}) from {}",
@@ -180,7 +180,7 @@ pub fn dropped_legacy(dropped: &DroppedLegacy, config: &Path) -> Notice {
 /// The part of a `tag` request that changed nothing, in every mode: each tag
 /// that was not on `node` to remove or was on it to add, then, when the tags
 /// came out as they were, that the node was not written.
-pub fn retag_notes(node: &str, done: &Retagged) -> Vec<Notice> {
+pub(crate) fn retag_notes(node: &str, done: &Retagged) -> Vec<Notice> {
     let absent = done
         .absent
         .iter()
@@ -197,12 +197,12 @@ pub fn retag_notes(node: &str, done: &Retagged) -> Vec<Notice> {
 }
 
 /// A write that would change nothing, so did not happen, in every mode.
-pub fn unchanged(node: &str) -> Notice {
+pub(crate) fn unchanged(node: &str) -> Notice {
     Notice::always(format!("no change; {node} not written"))
 }
 
 /// Whether writes are committed, as `neb config commit` reports it.
-pub fn commit_setting(setting: CommitSetting) -> String {
+pub(crate) fn commit_setting(setting: CommitSetting) -> String {
     if setting.enabled {
         format!("{} {}\n", bold("on"), dim("(config.yaml)"))
     } else {
@@ -211,14 +211,14 @@ pub fn commit_setting(setting: CommitSetting) -> String {
 }
 
 /// How to turn committing on, when it is off.
-pub fn commit_setting_hint(setting: CommitSetting) -> Option<Notice> {
+pub(crate) fn commit_setting_hint(setting: CommitSetting) -> Option<Notice> {
     (!setting.enabled).then(|| {
         Notice::human("turn it on with `neb config commit on` once the corpus is a git repository")
     })
 }
 
 /// Captures waiting to be promoted or dropped, as a table.
-pub fn inbox(inbox: &Inbox, to: Target) -> String {
+pub(crate) fn inbox(inbox: &Inbox, to: Target) -> String {
     let mut table = Table::new([Column::left("ID"), Column::left("AT"), Column::left("TEXT")]);
     for e in &inbox.0 {
         table.row([Cell::bold(&e.id), Cell::muted(&e.at), Cell::plain(&e.text)]);
@@ -228,7 +228,7 @@ pub fn inbox(inbox: &Inbox, to: Target) -> String {
 
 /// How many captures wait. `waiting` is how many there are in all, which is
 /// more than `shown` when `--limit` cut the listing.
-pub fn inbox_notice(shown: usize, waiting: usize) -> Notice {
+pub(crate) fn inbox_notice(shown: usize, waiting: usize) -> Notice {
     if waiting == 0 {
         Notice::always("inbox is empty")
     } else if shown < waiting {
@@ -300,7 +300,7 @@ fn linked(n: &Neighbour) -> Option<String> {
 /// The nodes closest to a query, best first, as a table. `LINKED` is the
 /// edges a node already shares with the one asked about, and `-` for none
 /// or for free text.
-pub fn near(near: &Near, to: Target) -> String {
+pub(crate) fn near(near: &Near, to: Target) -> String {
     let mut table = Table::new([
         Column::left("BAND"),
         Column::left("STATUS"),
@@ -322,7 +322,7 @@ pub fn near(near: &Near, to: Target) -> String {
 
 /// The notice for `near`: no node shares a word with the query, or `-k`
 /// cut the `matched` nodes that do to the `shown` best.
-pub fn near_notice(shown: usize, matched: usize) -> Option<Notice> {
+pub(crate) fn near_notice(shown: usize, matched: usize) -> Option<Notice> {
     if matched == 0 {
         Some(Notice::always(
             "nothing near: no node shares a word with this",
@@ -339,7 +339,7 @@ pub fn near_notice(shown: usize, matched: usize) -> Option<Notice> {
 /// The nearest nodes after a `capture` or a `promote`, indented under the
 /// id the verb printed, and nothing at all when there are none: the verb's
 /// own line stays the whole story for a thought unlike anything here.
-pub fn suggestions(near: &[Neighbour]) -> String {
+pub(crate) fn suggestions(near: &[Neighbour]) -> String {
     let mut out = String::new();
     if near.is_empty() {
         return out;
@@ -352,7 +352,7 @@ pub fn suggestions(near: &[Neighbour]) -> String {
 }
 
 /// What descends from a node, and what contradicts it.
-pub fn impact(report: &Impact, id: &str) -> String {
+pub(crate) fn impact(report: &Impact, id: &str) -> String {
     let mut out = String::new();
     for (via, heading) in [
         (Via::Descends, format!("descends from `{id}`:")),
@@ -376,7 +376,7 @@ pub fn impact(report: &Impact, id: &str) -> String {
 }
 
 /// The notice for a node nothing descends from or contradicts.
-pub fn impact_notice(report: &Impact) -> Option<Notice> {
+pub(crate) fn impact_notice(report: &Impact) -> Option<Notice> {
     report
         .0
         .is_empty()
@@ -384,7 +384,7 @@ pub fn impact_notice(report: &Impact) -> Option<Notice> {
 }
 
 /// Nodes that need attention, as a table.
-pub fn open(report: &OpenReport, to: Target) -> String {
+pub(crate) fn open(report: &OpenReport, to: Target) -> String {
     let mut table = Table::new([Column::left("ID"), Column::left("WHY")]);
     for item in &report.0 {
         table.row([Cell::bold(&item.id), Cell::plain(&item.why)]);
@@ -394,7 +394,7 @@ pub fn open(report: &OpenReport, to: Target) -> String {
 
 /// The notice for `review --short`: nothing needs attention, or `--limit`
 /// cut the list. `all` is how long it was before the cut.
-pub fn open_notice(shown: usize, all: usize) -> Option<Notice> {
+pub(crate) fn open_notice(shown: usize, all: usize) -> Option<Notice> {
     if all == 0 {
         Some(Notice::always("nothing needs attention"))
     } else if shown < all {
@@ -407,7 +407,7 @@ pub fn open_notice(shown: usize, all: usize) -> Option<Notice> {
 }
 
 /// Every tag with the number of nodes carrying it, as a table.
-pub fn tags(counts: &TagCounts, to: Target) -> String {
+pub(crate) fn tags(counts: &TagCounts, to: Target) -> String {
     let mut table = Table::new([Column::left("TAG"), Column::right("COUNT")]);
     for t in &counts.0 {
         table.row([Cell::bold(&t.tag), Cell::muted(t.count.to_string())]);
@@ -416,12 +416,12 @@ pub fn tags(counts: &TagCounts, to: Target) -> String {
 }
 
 /// The notice for a corpus with no tags.
-pub fn tags_notice(counts: &TagCounts) -> Option<Notice> {
+pub(crate) fn tags_notice(counts: &TagCounts) -> Option<Notice> {
     counts.0.is_empty().then(|| Notice::always("no tags"))
 }
 
 /// The invariant report's findings, one line each.
-pub fn check(report: &Report) -> String {
+pub(crate) fn check(report: &Report) -> String {
     let mut out = String::new();
     for file in &report.unreadable {
         let _ = writeln!(
@@ -452,7 +452,7 @@ pub fn check(report: &Report) -> String {
 }
 
 /// The invariant report's tally: how many nodes, errors and warnings.
-pub fn check_tally(report: &Report) -> Notice {
+pub(crate) fn check_tally(report: &Report) -> Notice {
     let errors = report
         .findings
         .iter()
@@ -476,7 +476,7 @@ pub fn check_tally(report: &Report) -> Notice {
 
 /// The notice for a report `--limit` cut: how many findings it left out.
 /// The markdown says so under each cut section too, since it is the file.
-pub fn review_notice(omitted: &[(ReviewRule, usize)]) -> Option<Notice> {
+pub(crate) fn review_notice(omitted: &[(ReviewRule, usize)]) -> Option<Notice> {
     let cut: usize = omitted.iter().map(|(_, n)| n).sum();
     (cut > 0).then(|| {
         Notice::always(format!(
@@ -491,7 +491,7 @@ pub fn review_notice(omitted: &[(ReviewRule, usize)]) -> Option<Notice> {
 /// Sectioned by rule, with the thresholds in the headings, so the file says
 /// what it was asking when it was written. `omitted` is how many findings
 /// `--limit` cut from each rule, and each cut section ends saying so.
-pub fn review(
+pub(crate) fn review(
     report: &ReviewReport,
     hypothesis_days: i64,
     seed_days: i64,
@@ -540,7 +540,7 @@ pub fn review(
 }
 
 /// What a migration did, node by node.
-pub fn migration(report: &MigrationReport) -> String {
+pub(crate) fn migration(report: &MigrationReport) -> String {
     let mut out = String::new();
     for n in &report.rewritten {
         let _ = writeln!(out, "{}", bold(&n.id));
@@ -567,7 +567,7 @@ pub fn migration(report: &MigrationReport) -> String {
 }
 
 /// What a migration came to: nothing, or how much, and what to run next.
-pub fn migration_notice(report: &MigrationReport) -> Notice {
+pub(crate) fn migration_notice(report: &MigrationReport) -> Notice {
     if report.rewritten.is_empty() && !report.config_rewritten {
         Notice::human("already at schema 2; nothing changed")
     } else {
@@ -576,33 +576,5 @@ pub fn migration_notice(report: &MigrationReport) -> Notice {
             report.rewritten.len(),
             count(report.nodes, "node")
         ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use nebula_core::TagCount;
-
-    #[test]
-    fn tag_list_counts_right_aligned() {
-        let counts = TagCounts(vec![
-            TagCount {
-                tag: "physics".into(),
-                count: 5,
-            },
-            TagCount {
-                tag: "filler".into(),
-                count: 150,
-            },
-        ]);
-        let drawn = tags(&counts, Target::Terminal { colour: false });
-        let lines: Vec<&str> = drawn.lines().collect();
-        assert_eq!(
-            lines,
-            ["TAG      COUNT", "physics      5", "filler     150"]
-        );
-        let end = lines[0].len();
-        assert!(lines.iter().all(|l| l.len() == end), "{lines:?}");
     }
 }

@@ -24,16 +24,16 @@
 //! The ops in [`crate::ops`] stay public, one write each, for a caller that
 //! composes its own; every surface in this repository goes through here.
 
-use crate::check::{self, OBSERVATORY, Report};
+use crate::check_impl::{self as check, OBSERVATORY, Report};
 use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
-use crate::graph::{self, Graph, Neighbour, NodeView};
+use crate::graph_impl::{self as graph, Graph, Neighbour, NodeView};
 use crate::locations::{Locations, WriteIntent};
 use crate::lock::{CorpusLock, LOCK_WAIT};
 use crate::model::{Doc, EdgeType, Status};
-use crate::ops::{
-    self, Citation, Cited, CloseTag, Created, DroppedLegacy, HandedOff, Handoff, Initialized,
-    NewNode, Promotion, Retagged, StatusChange,
+use crate::ops_impl::{
+    self as ops, Citation, Cited, CloseTag, Created, DroppedLegacy, HandedOff, Handoff,
+    Initialized, NewNode, Promotion, Retagged, StatusChange,
 };
 use crate::store::{self, CommitOutcome, Corpus, InboxEntry};
 use crate::{migrate, migrate::MigrationReport};
@@ -332,8 +332,14 @@ pub fn set_commit(
 
 // ----------------------------------------------------------------- inbox --
 
+pub(crate) use capture_locked as capture;
+
 /// Append one line to the inbox and commit it.
-pub fn capture(corpus: &Corpus, text: &str, options: &WriteOptions) -> Result<Written<InboxEntry>> {
+pub fn capture_locked(
+    corpus: &Corpus,
+    text: &str,
+    options: &WriteOptions,
+) -> Result<Written<InboxEntry>> {
     let _lock = options.lock(corpus)?;
     let entry = ops::capture(corpus, text)?;
     let commit = options.commit(corpus, "capture", &[&entry.id]);

@@ -274,7 +274,7 @@ impl Staged {
             .map(|path| {
                 // Only a regular file: migration rewrites what it reads, and
                 // a symlink or a FIFO here is refused as a scan refuses it.
-                let text = crate::fs::read_regular_text(&path)?.ok_or_else(|| {
+                let text = crate::fs_impl::read_regular_text(&path)?.ok_or_else(|| {
                     Error::io_at("reading", &path, std::io::ErrorKind::NotFound.into())
                 })?;
                 Ok(StagedNode {
@@ -377,7 +377,7 @@ pub(crate) fn run_then<T>(
     };
     for (node, id) in writes {
         store::refuse_nodes_symlink(&root)?;
-        crate::fs::write_private_atomic(&node.path, &node.text)?;
+        crate::fs_impl::write_private_atomic(&node.path, &node.text)?;
         report.rewritten.push(NodeMigration {
             id,
             notes: node.notes.clone(),
@@ -460,7 +460,7 @@ pub(crate) fn v1_node_under_current_schema(
     path: &Path,
     version: u32,
 ) -> Option<Error> {
-    let raw = crate::fs::read_regular_text(path).ok()??;
+    let raw = crate::fs_impl::read_regular_text(path).ok()??;
     let (front, _) = model::split_frontmatter(&raw, path).ok()?;
     serde_yaml_ng::from_str::<V1Node>(front).ok()?;
     let fields: serde_yaml_ng::Mapping = serde_yaml_ng::from_str(front).ok()?;

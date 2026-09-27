@@ -84,7 +84,7 @@
 //! cannot break the order.
 
 use crate::error::{Error, Result};
-use crate::fs::{Links, open_regular, overwrite_in_place, private_open_options, read_capped};
+use crate::fs_impl::{Links, open_regular, overwrite_in_place, private_open_options, read_capped};
 use fs4::{FileExt, TryLockError};
 use std::collections::HashMap;
 use std::fs::File;
@@ -118,17 +118,17 @@ pub const LOCK_WAIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(20);
 
 /// The label a holder records when its process never named itself.
-const DEFAULT_LABEL: &str = "nebula";
+pub(crate) const DEFAULT_LABEL: &str = "nebula";
 
 /// The most of a holder record a waiter reads. A record is a few dozen
 /// bytes; anything larger is not one, and is not read into memory to find
 /// that out.
-const RECORD_CAP: usize = 4096;
+pub(crate) const RECORD_CAP: usize = 4096;
 
 /// The longest label a holder records, in characters. Enough for a verb and
 /// the id it names; a longer one is cut rather than refused, because the
 /// label only explains a wait.
-const LABEL_CAP: usize = 160;
+pub(crate) const LABEL_CAP: usize = 160;
 
 /// Who holds a lock, as the holder recorded it in the lock file.
 ///
@@ -293,17 +293,17 @@ pub(crate) fn held_by_this_thread(root: &Path) -> bool {
 /// canonicalized, and two spellings of one directory are two gates in this
 /// process — which costs nothing, because `flock` still excludes them.
 #[derive(Debug, Default)]
-struct Gate {
-    held: Mutex<Option<Held>>,
+pub(crate) struct Gate {
+    pub(crate) held: Mutex<Option<Held>>,
 }
 
 /// Who holds one root's lock in this process, and how deep.
 #[derive(Debug)]
-struct Held {
+pub(crate) struct Held {
     /// The thread inside the critical section. Only it may re-enter.
     thread: ThreadId,
     /// How many live [`CorpusLock`]s that thread has taken.
-    depth: usize,
+    pub(crate) depth: usize,
     /// The open file description carrying the `flock`. Written only to
     /// record and clear the holder; dropping it releases the lock.
     file: File,
@@ -315,7 +315,7 @@ fn gates() -> &'static Mutex<HashMap<PathBuf, Arc<Gate>>> {
     GATES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn gate_for(root: &Path) -> Arc<Gate> {
+pub(crate) fn gate_for(root: &Path) -> Arc<Gate> {
     let mut gates = gates().lock().unwrap_or_else(PoisonError::into_inner);
     Arc::clone(gates.entry(root.to_path_buf()).or_default())
 }
@@ -323,7 +323,7 @@ fn gate_for(root: &Path) -> Arc<Gate> {
 /// A poisoned gate is a thread that panicked mid-write. The corpus write it
 /// was making is atomic per file, so the lock itself is still sound: take the
 /// state as it stands rather than turning someone else's panic into ours.
-fn held(gate: &Gate) -> MutexGuard<'_, Option<Held>> {
+pub(crate) fn held(gate: &Gate) -> MutexGuard<'_, Option<Held>> {
     gate.held.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -417,7 +417,7 @@ fn record_holder(file: &File, label: &str) {
 /// The holder a waiter reads out of `path`, or `None` when there is no
 /// usable record: empty, oversized, a symlink, unparsable, or with a label
 /// no holder would write. `None` still means the lock is held.
-fn read_holder(path: &Path) -> Option<LockHolder> {
+pub(crate) fn read_holder(path: &Path) -> Option<LockHolder> {
     let bytes = read_capped(path, RECORD_CAP).ok()??;
     let record: Record = serde_json::from_slice(&bytes).ok()?;
     if record.label.is_empty() || record.label != clean_label(&record.label) {
@@ -434,7 +434,7 @@ fn read_holder(path: &Path) -> Option<LockHolder> {
 /// A label as a record stores it: no control characters, which a terminal
 /// rendering the refusal would act on, cut to [`LABEL_CAP`] characters, and
 /// [`DEFAULT_LABEL`] when nothing is left.
-fn clean_label(label: &str) -> String {
+pub(crate) fn clean_label(label: &str) -> String {
     let cleaned: String = label
         .chars()
         .map(|c| if c.is_control() { '?' } else { c })
@@ -451,304 +451,4 @@ fn clean_label(label: &str) -> String {
 /// The label of a lock taken without one.
 fn process_label() -> &'static str {
     PROCESS_LABEL.get().map_or(DEFAULT_LABEL, String::as_str)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn root() -> tempfile::TempDir {
-        tempfile::tempdir().expect("tempdir")
-    }
-
-    #[test]
-    fn the_lock_file_is_created_under_the_root_and_outlives_the_guard() {
-        let dir = root();
-        let lock = CorpusLock::acquire(dir.path()).expect("first acquire");
-        assert!(dir.path().join(LOCK_FILE).exists());
-        drop(lock);
-        assert!(
-            dir.path().join(LOCK_FILE).exists(),
-            "the file stays; deleting it would race a process holding the old inode"
-        );
-        drop(CorpusLock::acquire(dir.path()).expect("the next writer gets in"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_lock_file_is_created_owner_only() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let dir = root();
-        drop(CorpusLock::acquire(dir.path()).expect("acquire"));
-        let mode = std::fs::metadata(dir.path().join(LOCK_FILE))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600);
-    }
-
-    #[test]
-    fn a_lock_file_that_cannot_be_opened_is_named() {
-        let dir = root();
-        let missing = dir.path().join("missing");
-        let error = CorpusLock::acquire(&missing).expect_err("no directory to hold the lock");
-        assert!(
-            matches!(
-                &error,
-                Error::IoAt { action: "opening", path, .. } if *path == missing.join(LOCK_FILE)
-            ),
-            "expected the lock path in {error:?}"
-        );
-    }
-
-    /// The CLI holds the lock across a verb and the commit that records it,
-    /// and the op it calls takes the same lock again. Without re-entry that
-    /// second take would wait on the first for five seconds and then refuse.
-    #[test]
-    fn one_thread_may_take_the_same_lock_again() {
-        let dir = root();
-        let outer = CorpusLock::acquire(dir.path()).expect("outer");
-        let inner = CorpusLock::acquire_within(dir.path(), Duration::ZERO).expect("re-entry");
-        assert!(outer.is_outermost() && !inner.is_outermost());
-        drop(inner);
-
-        // The outer guard still holds it: only the last drop releases.
-        let gate = gate_for(dir.path());
-        assert_eq!(held(&gate).as_ref().map(|h| h.depth), Some(1));
-        drop(outer);
-        assert!(held(&gate).is_none());
-    }
-
-    #[test]
-    fn held_by_this_thread_reports_only_the_holding_thread() {
-        let dir = root();
-        assert!(!held_by_this_thread(dir.path()), "nobody holds it yet");
-
-        let outer = CorpusLock::acquire(dir.path()).expect("outer");
-        let inner = CorpusLock::acquire(dir.path()).expect("re-entry");
-        assert!(held_by_this_thread(dir.path()));
-        let path = dir.path().to_path_buf();
-        let elsewhere = std::thread::spawn(move || held_by_this_thread(&path))
-            .join()
-            .expect("the other thread did not panic");
-        assert!(!elsewhere, "another thread does not hold it");
-
-        // Still held until the last guard goes.
-        drop(inner);
-        assert!(held_by_this_thread(dir.path()));
-        drop(outer);
-        assert!(!held_by_this_thread(dir.path()));
-
-        let other = root();
-        let _held = CorpusLock::acquire(dir.path()).expect("again");
-        assert!(
-            !held_by_this_thread(other.path()),
-            "holding one root is not holding another"
-        );
-    }
-
-    /// Hold `root`'s lock as `label` on another thread, run `waiter` on
-    /// this one while it is held, then let the holder go.
-    fn while_held_elsewhere<T>(root: &Path, label: &str, waiter: impl FnOnce() -> T) -> T {
-        let (held_tx, held_rx) = std::sync::mpsc::sync_channel(0);
-        let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<()>(0);
-        std::thread::scope(|scope| {
-            let holder = scope.spawn(move || {
-                let lock = CorpusLock::acquire_as(root, LOCK_WAIT, label).expect("the holder");
-                held_tx.send(()).expect("the waiter is listening");
-                // Until the waiter is done, or gone.
-                let _ = done_rx.recv();
-                drop(lock);
-            });
-            held_rx.recv().expect("the holder took the lock");
-            let out = waiter();
-            done_tx.send(()).expect("the holder is waiting");
-            holder.join().expect("the holder did not panic");
-            out
-        })
-    }
-
-    /// Replace the lock file's contents by hand, the way a torn write, a
-    /// crash or a stranger would leave them.
-    fn scribble(root: &Path, bytes: &[u8]) {
-        use std::io::Write as _;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(root.join(LOCK_FILE))
-            .and_then(|mut file| file.write_all(bytes))
-            .expect("scribbling on the lock file");
-    }
-
-    #[test]
-    fn a_timeout_names_the_holder() {
-        let dir = root();
-        let refused = while_held_elsewhere(dir.path(), "test holder", || {
-            CorpusLock::acquire_within(dir.path(), Duration::from_millis(50)).map(|_| ())
-        });
-        let Err(Error::Locked {
-            root,
-            holder: Some(holder),
-        }) = &refused
-        else {
-            panic!("expected a named holder, got {refused:?}");
-        };
-        assert_eq!(root, dir.path());
-        assert_eq!(holder.pid, std::process::id());
-        assert_eq!(holder.label, "test holder");
-        assert!(holder.since <= SystemTime::now(), "{holder:?}");
-        assert!(
-            SystemTime::now()
-                .duration_since(holder.since)
-                .is_ok_and(|age| age < Duration::from_secs(60)),
-            "taken just now: {holder:?}"
-        );
-        assert!(
-            refused
-                .as_ref()
-                .unwrap_err()
-                .to_string()
-                .contains("`test holder`, pid "),
-            "the message names it: {refused:?}"
-        );
-    }
-
-    /// The record only explains a wait. Whatever the file holds, a lock
-    /// somebody has is refused as held — never taken as free because its
-    /// record could not be read.
-    #[test]
-    fn an_unreadable_holder_record_is_still_contention() {
-        let oversized = format!(
-            r#"{{"pid":1,"since":"2026-09-26T00:00:00Z","label":"{}"}}"#,
-            "x".repeat(RECORD_CAP)
-        );
-        let cases: [(&str, &[u8]); 6] = [
-            ("garbage", b"\xff\x00 not a record at all"),
-            ("empty", b""),
-            ("truncated", br#"{"pid":1,"since":"2026-09-"#),
-            (
-                "a bad time",
-                br#"{"pid":1,"since":"yesterday","label":"neb"}"#,
-            ),
-            (
-                "a control character",
-                b"{\"pid\":1,\"since\":\"2026-09-26T00:00:00Z\",\"label\":\"\\u001b[2J\"}",
-            ),
-            ("oversized", oversized.as_bytes()),
-        ];
-        for (case, bytes) in cases {
-            let dir = root();
-            let refused = while_held_elsewhere(dir.path(), "test holder", || {
-                scribble(dir.path(), bytes);
-                CorpusLock::acquire_within(dir.path(), Duration::from_millis(50)).map(|_| ())
-            });
-            assert!(
-                matches!(&refused, Err(Error::Locked { holder: None, .. })),
-                "{case}: got {refused:?}"
-            );
-            assert!(
-                refused
-                    .unwrap_err()
-                    .to_string()
-                    .contains("(an unidentified writer)"),
-                "{case}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_record_is_cleared_on_release_and_not_rewritten_on_reentry() {
-        let dir = root();
-        let path = dir.path().join(LOCK_FILE);
-        let outer = CorpusLock::acquire_as(dir.path(), Duration::ZERO, "outer").expect("outer");
-        let recorded = read_holder(&path).expect("the holder recorded itself");
-        assert_eq!(recorded.label, "outer");
-        assert_eq!(recorded.pid, std::process::id());
-
-        let inner = CorpusLock::acquire_as(dir.path(), Duration::ZERO, "inner").expect("re-entry");
-        assert_eq!(read_holder(&path), Some(recorded.clone()), "re-entry wrote");
-        drop(inner);
-        assert_eq!(
-            read_holder(&path),
-            Some(recorded),
-            "an inner release cleared the outer holder's record"
-        );
-
-        drop(outer);
-        assert_eq!(std::fs::metadata(&path).expect("the file stays").len(), 0);
-    }
-
-    /// The record is written into the file the lock opened, so a symlink at
-    /// `.lock` would have it empty the link's target. It is refused instead,
-    /// and the target is left as it was.
-    #[cfg(unix)]
-    #[test]
-    fn a_symlinked_lock_file_is_refused_and_its_target_untouched() {
-        let dir = root();
-        let target = dir.path().join("precious");
-        scribble_new(&target, b"keep me");
-        std::os::unix::fs::symlink(&target, dir.path().join(LOCK_FILE)).expect("symlink");
-
-        let error = CorpusLock::acquire(dir.path()).expect_err("a symlinked lock file");
-        assert!(
-            matches!(
-                &error,
-                Error::NotRegularFile {
-                    path,
-                    found: crate::fs::EntryKind::Symlink,
-                } if *path == dir.path().join(LOCK_FILE)
-            ),
-            "{error:?}"
-        );
-        assert_eq!(std::fs::read(&target).expect("target"), b"keep me");
-    }
-
-    #[cfg(unix)]
-    fn scribble_new(path: &Path, bytes: &[u8]) {
-        use std::io::Write as _;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(path)
-            .and_then(|mut file| file.write_all(bytes))
-            .expect("writing a fixture");
-    }
-
-    #[test]
-    fn a_label_is_recorded_without_control_characters_and_within_bounds() {
-        assert_eq!(clean_label("neb edit a-node"), "neb edit a-node");
-        assert_eq!(clean_label("neb edit \u{1b}[2J"), "neb edit ?[2J");
-        assert_eq!(clean_label("  "), DEFAULT_LABEL);
-        assert_eq!(clean_label(&"x".repeat(1000)).chars().count(), LABEL_CAP);
-    }
-
-    #[test]
-    fn a_second_thread_waits_and_then_refuses_with_the_root_it_wanted() {
-        let dir = root();
-        let held_by_us = CorpusLock::acquire(dir.path()).expect("held");
-        let path = dir.path().to_path_buf();
-
-        let refused = std::thread::spawn(move || {
-            CorpusLock::acquire_within(&path, Duration::from_millis(50)).map(|_| ())
-        })
-        .join()
-        .expect("the waiter did not panic");
-
-        assert!(
-            matches!(&refused, Err(Error::Locked { root, .. }) if root == dir.path()),
-            "got {refused:?}"
-        );
-        drop(held_by_us);
-
-        // And once it is free, another thread gets in. The guard is not
-        // `Send`, so it is taken and dropped over there rather than handed
-        // back.
-        let path = dir.path().to_path_buf();
-        std::thread::spawn(move || {
-            CorpusLock::acquire_within(&path, Duration::from_millis(50)).map(|_| ())
-        })
-        .join()
-        .expect("no panic")
-        .expect("the lock is free again");
-    }
 }

@@ -60,15 +60,59 @@ mod locations;
 mod lock;
 mod pending;
 
-pub mod check;
-pub mod fs;
-pub mod graph;
-pub mod migrate;
-pub mod model;
-pub mod ops;
-pub mod store;
-pub mod triage;
-pub mod verb;
+#[path = "check.rs"]
+mod check_impl;
+#[path = "fs.rs"]
+mod fs_impl;
+#[path = "graph.rs"]
+mod graph_impl;
+#[path = "migrate.rs"]
+mod migrate_impl;
+mod model;
+#[path = "ops.rs"]
+mod ops_impl;
+mod store;
+#[path = "triage.rs"]
+mod triage_impl;
+#[path = "verb.rs"]
+mod verb_impl;
+
+/// The invariant checker. Only the items this module re-exports are public.
+pub mod check {
+    pub use crate::check_impl::*;
+}
+
+/// Durable, owner-only writes. Only the items this module re-exports are public.
+pub mod fs {
+    pub use crate::fs_impl::*;
+}
+
+/// Pure queries over a [`Graph`](crate::Graph).
+pub mod graph {
+    pub use crate::graph_impl::*;
+}
+
+/// v1 → v2 migration.
+pub mod migrate {
+    pub use crate::migrate_impl::*;
+}
+
+/// Mutations. Each one holds the corpus lock across its write.
+pub mod ops {
+    pub use crate::ops_impl::capture_locked as capture;
+    pub use crate::ops_impl::*;
+}
+
+/// The inbox, one entry at a time.
+pub mod triage {
+    pub use crate::triage_impl::*;
+}
+
+/// One call per command: the lock, the write, the commit, then the advice.
+pub mod verb {
+    pub use crate::verb_impl::capture_locked as capture;
+    pub use crate::verb_impl::*;
+}
 
 #[cfg(test)]
 mod tests;
@@ -98,55 +142,3 @@ pub use ops::{
 };
 pub use store::{CommitOutcome, Committed, Corpus, HistoryEntry, Inbox, InboxEntry, Settlement};
 pub use triage::Triage;
-
-/// Writes `apps/desktop/src/types/*.ts` from the types above.
-///
-/// The desktop is the consumer most likely to drift silently, because nothing
-/// runs its shapes against a corpus on CI. So the TypeScript is generated from
-/// the Rust rather than hand-written, and this is the test that generates it:
-/// `cargo test -p nebula-core --features ts`.
-#[cfg(all(test, feature = "ts"))]
-mod ts_export {
-    use super::*;
-    use ts_rs::{Config, TS};
-
-    /// Every type that appears in a public return value or a `--json` payload.
-    /// `export_all` follows each one's dependencies, so listing the roots is
-    /// enough. The destination is `TS_RS_EXPORT_DIR`, set in `.cargo/config.toml`.
-    #[test]
-    fn writes_the_typescript_bindings() {
-        let cfg = Config::from_env();
-        Doc::export_all(&cfg).unwrap();
-        Node::export_all(&cfg).unwrap();
-        Inbox::export_all(&cfg).unwrap();
-        Trace::export_all(&cfg).unwrap();
-        Impact::export_all(&cfg).unwrap();
-        OpenReport::export_all(&cfg).unwrap();
-        ReviewReport::export_all(&cfg).unwrap();
-        GraphExport::export_all(&cfg).unwrap();
-        NodeView::export_all(&cfg).unwrap();
-        Listing::export_all(&cfg).unwrap();
-        TagCounts::export_all(&cfg).unwrap();
-        Report::export_all(&cfg).unwrap();
-        MigrationReport::export_all(&cfg).unwrap();
-        Created::export_all(&cfg).unwrap();
-        Captured::export_all(&cfg).unwrap();
-        Near::export_all(&cfg).unwrap();
-        Cited::export_all(&cfg).unwrap();
-        CloseTag::export_all(&cfg).unwrap();
-        StatusChange::export_all(&cfg).unwrap();
-        HandedOff::export_all(&cfg).unwrap();
-        Initialized::export_all(&cfg).unwrap();
-        Direction::export_all(&cfg).unwrap();
-        ObservatoryRoot::export_all(&cfg).unwrap();
-        CommitSetting::export_all(&cfg).unwrap();
-        Committed::export_all(&cfg).unwrap();
-        HistoryEntry::export_all(&cfg).unwrap();
-
-        assert!(
-            cfg.out_dir().join("Node.ts").exists(),
-            "the bindings should land in {}",
-            cfg.out_dir().display()
-        );
-    }
-}

@@ -2,7 +2,7 @@
 //! starts a process.
 
 use crate::config::{Config, SCHEMA_VERSION};
-use crate::migrate::{MIGRATIONS, Staged, StagedNode};
+use crate::migrate_impl::{MIGRATIONS, Staged, StagedNode};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 

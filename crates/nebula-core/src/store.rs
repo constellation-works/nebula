@@ -16,7 +16,7 @@
 
 use crate::config::{self, CommitSetting, Config, Declared, ObservatoryRoot};
 use crate::error::{Error, Result};
-use crate::fs::{
+use crate::fs_impl::{
     EntryKind, Links, append_private, create_private_dir_all, create_private_new,
     read_regular_bytes, read_regular_text, regular_file_at, write_private_atomic,
 };
@@ -36,6 +36,30 @@ use time::{
 };
 
 /// A corpus on disk.
+///
+/// Writers that do not take the corpus lock are crate-private. A consumer
+/// outside this crate cannot name the store module or call them.
+///
+/// ```compile_fail
+/// fn save_is_crate_private(corpus: &nebula_core::Corpus, doc: &mut nebula_core::Doc) {
+///     corpus.save(doc).ok();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn settle_inbox_is_crate_private(
+///     corpus: &nebula_core::Corpus,
+///     entry: &nebula_core::InboxEntry,
+/// ) {
+///     corpus.settle_inbox(entry, "dropped").ok();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn the_store_module_is_private() {
+///     let _ = std::any::type_name::<nebula_core::store::Corpus>();
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct Corpus {
     root: PathBuf,
@@ -188,7 +212,7 @@ impl Corpus {
     }
 
     /// The root used when no command, environment, or machine setting names one.
-    pub fn default_root(locations: &Locations) -> Result<PathBuf> {
+    pub(crate) fn default_root(locations: &Locations) -> Result<PathBuf> {
         Ok(locations.home()?.join(".nebula"))
     }
 
@@ -282,7 +306,7 @@ impl Corpus {
     /// by name rather than skipped or used: skipping would send every
     /// command to `~/.nebula` without a word, and a relative path would name
     /// a different corpus from each working directory (STD-02 §R28).
-    pub fn configured_root(locations: &Locations) -> Result<Option<PathBuf>> {
+    pub(crate) fn configured_root(locations: &Locations) -> Result<Option<PathBuf>> {
         let path = Self::root_config_path(locations)?;
         match std::fs::read_to_string(&path) {
             Ok(raw) => Self::root_setting(&path, &raw).map(Some),
@@ -313,7 +337,7 @@ impl Corpus {
     }
 
     /// What the corpus root setting holds when it names `root`.
-    fn root_setting_contents(root: &Path) -> String {
+    pub(crate) fn root_setting_contents(root: &Path) -> String {
         format!("{}\n", root.display())
     }
 
@@ -321,7 +345,7 @@ impl Corpus {
     /// is, beside [`Self::root_config_path`]. A machine setting rather than a
     /// corpus one, because the corpus travels between machines and the
     /// checkout's path does not.
-    pub fn observatory_root_config_path(locations: &Locations) -> Result<PathBuf> {
+    pub(crate) fn observatory_root_config_path(locations: &Locations) -> Result<PathBuf> {
         Ok(Self::machine_settings_dir(locations)?.join("observatory-root"))
     }
 
@@ -334,7 +358,7 @@ impl Corpus {
     /// is present but empty or relative is refused rather than skipped,
     /// because falling through to the legacy key would resolve records
     /// against another machine's path without a word.
-    pub fn configured_observatory_root(locations: &Locations) -> Result<Option<PathBuf>> {
+    pub(crate) fn configured_observatory_root(locations: &Locations) -> Result<Option<PathBuf>> {
         let path = match Self::observatory_root_config_path(locations) {
             Ok(path) => path,
             Err(Error::HomeUnset) => return Ok(None),
@@ -400,7 +424,11 @@ impl Corpus {
     /// and the write happen under [`Self::lock_machine_settings`], and the
     /// file is replaced whole: a symlink at `root` is replaced by a regular
     /// file, and whatever it pointed at is left alone.
-    pub fn write_root_config(locations: &Locations, root: &Path, force: bool) -> Result<PathBuf> {
+    pub(crate) fn write_root_config(
+        locations: &Locations,
+        root: &Path,
+        force: bool,
+    ) -> Result<PathBuf> {
         let _lock = Self::lock_machine_settings(locations)?;
         let path = Self::root_config_path(locations)?;
         Self::check_root_config(locations, root, force)?;
@@ -1018,7 +1046,7 @@ impl Corpus {
     /// ([`crate::model`] refuses an unsafe one) and that agreed with its file
     /// ([`Self::load`]), and this is the last of the three places that has to
     /// hold for a write to land where the node already lives.
-    pub fn save(&self, doc: &mut Doc) -> Result<()> {
+    pub(crate) fn save(&self, doc: &mut Doc) -> Result<()> {
         self.locations
             .write_gate(crate::locations::WriteIntent::Ordinary)?;
         let path = self.node_path(&doc.node.id)?;
@@ -1030,7 +1058,7 @@ impl Corpus {
     ///
     /// Judged on the entry itself: a symlink or anything else that is not a
     /// regular file is [`Error::NotRegularFile`], never replaced.
-    pub fn create(&self, doc: &Doc) -> Result<()> {
+    pub(crate) fn create(&self, doc: &Doc) -> Result<()> {
         self.locations
             .write_gate(crate::locations::WriteIntent::Ordinary)?;
         let path = self.node_path(&doc.node.id)?;
@@ -1151,7 +1179,7 @@ impl Corpus {
     )]
     fn read_node(&self, path: &Path) -> Result<Doc> {
         model::read(path).map_err(|error| match error {
-            Error::Yaml { .. } => crate::migrate::v1_node_under_current_schema(
+            Error::Yaml { .. } => crate::migrate_impl::v1_node_under_current_schema(
                 &self.root,
                 path,
                 self.config.schema_version,
@@ -1232,7 +1260,7 @@ impl Corpus {
     /// The line, with the newline that repairs a month file missing its last
     /// one, is built whole and handed to one append, so a crash can lose the
     /// capture but never leave half of it in the inbox.
-    pub fn capture(&self, text: &str) -> Result<InboxEntry> {
+    pub(crate) fn capture(&self, text: &str) -> Result<InboxEntry> {
         self.capture_at(text, &stamp())
     }
 
@@ -1335,7 +1363,7 @@ impl Corpus {
     /// An id that only a struck-through line carries is refused with how
     /// that line says it was settled, rather than as an id nobody captured:
     /// the record is there, so the refusal can point at what became of it.
-    pub fn inbox_entry(&self, id: &str) -> Result<InboxEntry> {
+    pub(crate) fn inbox_entry(&self, id: &str) -> Result<InboxEntry> {
         if let Some(entry) = self.inbox()?.0.into_iter().find(|e| e.id == id) {
             return Ok(entry);
         }
@@ -1373,7 +1401,7 @@ impl Corpus {
     /// The line is never removed. What an idea looked like before it had a name
     /// is part of its history, and a dropped capture is a record of a road not
     /// taken rather than a mistake to erase.
-    pub fn settle_inbox(&self, entry: &InboxEntry, outcome: &str) -> Result<()> {
+    pub(crate) fn settle_inbox(&self, entry: &InboxEntry, outcome: &str) -> Result<()> {
         self.locations
             .write_gate(crate::locations::WriteIntent::Ordinary)?;
         // Guard against settling an entry that belongs to a different corpus,
@@ -1450,7 +1478,7 @@ pub(crate) fn refuse_nodes_symlink(root: &Path) -> Result<()> {
 ///
 /// [`Corpus::capture`] applies it, so the CLI, the desktop app and anything
 /// else that captures store the same line for the same text.
-pub fn capture_line(text: &str) -> String {
+pub(crate) fn capture_line(text: &str) -> String {
     text.split(['\n', '\r'])
         .map(str::trim)
         .filter(|line| !line.is_empty())
@@ -1465,7 +1493,7 @@ pub fn capture_line(text: &str) -> String {
 /// for the capture calls it first, so blank text is refused before any
 /// directory exists rather than after one was made for it (STD-02 §R24,
 /// §R34).
-pub fn validate_capture(text: &str) -> Result<String> {
+pub(crate) fn validate_capture(text: &str) -> Result<String> {
     let line = capture_line(text);
     if line.is_empty() {
         return Err(Error::EmptyCapture);
@@ -1535,7 +1563,7 @@ fn refuse_inbox_symlink(path: &Path) -> Result<()> {
 }
 
 /// Whether a file name is one of the inbox's `YYYY-MM.md` month files.
-fn is_inbox_month_filename(name: &OsStr) -> bool {
+pub(crate) fn is_inbox_month_filename(name: &OsStr) -> bool {
     let Some(name) = name.to_str() else {
         return false;
     };
@@ -1653,14 +1681,14 @@ fn staged_paths<'a>(at: GitAt<'_>, pathspec: &[&'a str]) -> Result<Vec<&'a str>>
 /// is excluded too, although no corpus path names it, so a pathspec that
 /// ever widens cannot sweep it in. `init` writes the matching ignore rules
 /// ([`ignore_rules`]), so a person's own `git add -A` skips both as well.
-const NEVER_STAGED: [&str; 2] = [":(exclude,glob)**/*.tmp", ":(exclude).pending"];
+pub(crate) const NEVER_STAGED: [&str; 2] = [":(exclude,glob)**/*.tmp", ":(exclude).pending"];
 
 /// The rules `init` keeps last in the corpus `.gitignore`, in this order:
 /// the advisory lock and the pending-write record at the root, which say
 /// which process is writing and what it is part-way through, and every
 /// temporary file a killed write leaves behind ([`NEVER_STAGED`]). None of
 /// them is corpus content.
-fn ignore_rules() -> [String; 3] {
+pub(crate) fn ignore_rules() -> [String; 3] {
     [
         format!("/{LOCK_FILE}"),
         format!("/{PENDING_FILE}"),
@@ -1907,7 +1935,7 @@ pub(crate) fn stamp() -> String {
 /// purpose: `+00:00` is a local offset of zero that was read, `Z` is a
 /// fallback, so a stamp never passes a guess off as local time
 /// (STD-01 §R11).
-fn format_stamp(instant: OffsetDateTime, offset: Option<UtcOffset>) -> String {
+pub(crate) fn format_stamp(instant: OffsetDateTime, offset: Option<UtcOffset>) -> String {
     match offset {
         Some(offset) => instant.to_offset(offset).format(format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second][offset_hour sign:mandatory]:[offset_minute]"
@@ -1935,7 +1963,7 @@ pub(crate) fn parse_stamp(stamp: &str) -> Option<OffsetDateTime> {
 
 /// A stamp as RFC 3339: itself when it already is, the legacy form read as
 /// [`parse_stamp`] reads it, and `None` when it is neither.
-fn rfc3339_stamp(stamp: &str) -> Option<String> {
+pub(crate) fn rfc3339_stamp(stamp: &str) -> Option<String> {
     if OffsetDateTime::parse(stamp, &Rfc3339).is_ok() {
         return Some(stamp.to_string());
     }
@@ -2291,528 +2319,4 @@ fn hard_links_beside(path: &Path) -> Result<Vec<PathBuf>> {
 #[cfg(not(unix))]
 fn hard_links_beside(_path: &Path) -> Result<Vec<PathBuf>> {
     Ok(Vec::new())
-}
-
-#[cfg(test)]
-#[allow(
-    clippy::disallowed_methods,
-    reason = "fixtures are planted directly, beside the helper under test"
-)]
-mod tests {
-    use super::*;
-    use crate::fs::{Step, create_temporary_sibling, recording};
-
-    /// Load and `--set-root` share this one rule, and it reads only what it
-    /// is handed: no `HOME`, no file.
-    #[test]
-    fn root_setting_is_validated_by_one_function() {
-        let setting = Path::new("/h/.config/nebula/root");
-
-        for contents in ["", "\n", "  \t\n"] {
-            let error = Corpus::root_setting(setting, contents).unwrap_err();
-            assert!(
-                matches!(&error, Error::EmptyRootSetting(path) if path == setting),
-                "{contents:?}: {error:?}"
-            );
-            assert!(
-                error.to_string().contains("/h/.config/nebula/root"),
-                "{error}"
-            );
-        }
-
-        for contents in ["relcorpus", "relcorpus\n", "./corpus\n", "~/corpus\n"] {
-            let error = Corpus::root_setting(setting, contents).unwrap_err();
-            assert!(
-                matches!(
-                    &error,
-                    Error::RelativeRootSetting { setting: path, root }
-                        if path == setting && root == Path::new(contents.trim())
-                ),
-                "{contents:?}: {error:?}"
-            );
-            let message = error.to_string();
-            assert!(message.contains("/h/.config/nebula/root"), "{message}");
-            assert!(message.contains(contents.trim()), "{message}");
-        }
-
-        for contents in ["/srv/corpus", "/srv/corpus\n", "  /srv/my corpus \n"] {
-            assert_eq!(
-                Corpus::root_setting(setting, contents).unwrap(),
-                PathBuf::from(contents.trim())
-            );
-        }
-
-        // The write path hands it exactly what it would write.
-        let root = Path::new("/srv/corpus");
-        assert_eq!(
-            Corpus::root_setting(setting, &Corpus::root_setting_contents(root)).unwrap(),
-            root
-        );
-    }
-
-    #[test]
-    fn atomic_write_removes_its_temporary_file_when_rename_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let destination = dir.path().join("destination");
-        std::fs::create_dir(&destination).unwrap();
-
-        let error = write_private_atomic(&destination, "replacement").unwrap_err();
-        let message = error.to_string();
-        assert!(message.contains("writing"), "{message}");
-        assert!(
-            message.contains(&destination.display().to_string()),
-            "{message}"
-        );
-        assert!(
-            matches!(error, Error::IoAt { source, .. } if source.raw_os_error().is_some()),
-            "the OS cause was not preserved: {message}"
-        );
-        assert!(
-            destination.is_dir(),
-            "the failed rename left the target alone"
-        );
-        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .filter(|name| name != OsStr::new("destination"))
-            .collect();
-        assert!(
-            leftovers.is_empty(),
-            "the failed rename left temporary files: {leftovers:?}"
-        );
-    }
-
-    /// The reported break: a symlink planted at the temporary path turned an
-    /// ordinary note into a write outside the corpus, and then became the node.
-    #[cfg(unix)]
-    #[test]
-    fn atomic_write_never_writes_through_a_temporary_planted_as_a_symlink() {
-        let dir = tempfile::tempdir().unwrap();
-        let outside = dir.path().join("outside-sentinel.txt");
-        std::fs::write(&outside, "IRREPLACEABLE FIXTURE").unwrap();
-        let destination = dir.path().join("destination.md");
-        std::fs::write(&destination, "original").unwrap();
-        let planted = dir.path().join("destination.md.tmp");
-        std::os::unix::fs::symlink(&outside, &planted).unwrap();
-
-        write_private_atomic(&destination, "replacement").unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(&outside).unwrap(),
-            "IRREPLACEABLE FIXTURE",
-            "the write reached a file outside the corpus"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&destination).unwrap(),
-            "replacement"
-        );
-        assert!(
-            std::fs::symlink_metadata(&destination)
-                .unwrap()
-                .file_type()
-                .is_file(),
-            "the planted symlink was renamed onto the destination"
-        );
-        assert!(
-            std::fs::symlink_metadata(&planted)
-                .unwrap()
-                .file_type()
-                .is_symlink(),
-            "the planted path is not ours to delete"
-        );
-    }
-
-    /// The order is the durability: bytes flushed before the rename, so the
-    /// name never points at a file the device has not got, and the directory
-    /// flushed after it, so the rename itself is not lost to a crash.
-    #[test]
-    fn write_atomic_syncs_the_file_before_rename_and_the_parent_after() {
-        let dir = tempfile::tempdir().unwrap();
-        let destination = dir.path().join("node.md");
-
-        let (result, steps) = recording(|| write_private_atomic(&destination, "contents"));
-        result.unwrap();
-
-        let Some(Step::Write { path: tmp, bytes }) = steps.first() else {
-            panic!("the first step is not the write: {steps:?}");
-        };
-        assert_eq!(bytes, b"contents");
-        assert_eq!(tmp.parent(), Some(dir.path()), "{}", tmp.display());
-        let mut expected = vec![
-            Step::Write {
-                path: tmp.clone(),
-                bytes: b"contents".to_vec(),
-            },
-            Step::SyncAll(tmp.clone()),
-            Step::Rename {
-                from: tmp.clone(),
-                to: destination.clone(),
-            },
-        ];
-        if cfg!(unix) {
-            expected.push(Step::SyncDir(dir.path().to_path_buf()));
-        }
-        assert_eq!(steps, expected);
-        assert_eq!(std::fs::read_to_string(&destination).unwrap(), "contents");
-    }
-
-    /// Seven `write(2)` calls for one capture could be cut anywhere by a
-    /// crash. One buffer, one `write_all`, then the data flushed.
-    #[test]
-    fn a_capture_line_is_built_whole_and_written_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let corpus =
-            Corpus::init(&crate::Locations::default(), &dir.path().join("corpus")).unwrap();
-        let month = dir
-            .path()
-            .join("corpus")
-            .join("inbox")
-            .join(format!("{}.md", &stamp()[..7]));
-        // A month file whose last line lost its newline to a hand edit.
-        std::fs::write(&month, "- [0001] 2026-09-01T00:00 an earlier thought").unwrap();
-
-        let (entry, steps) = recording(|| corpus.capture("a thought, torn nowhere"));
-        let entry = entry.unwrap();
-
-        let line = format!("\n- [{}] {} a thought, torn nowhere\n", entry.id, entry.at);
-        assert_eq!(
-            steps,
-            [
-                Step::Write {
-                    path: month.clone(),
-                    bytes: line.clone().into_bytes(),
-                },
-                Step::SyncData(month.clone()),
-            ],
-            "the repair newline and the line are one write, then synced"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&month).unwrap(),
-            format!("- [0001] 2026-09-01T00:00 an earlier thought{line}")
-        );
-
-        // The next capture needs no repair, and is still one write.
-        let (entry, steps) = recording(|| corpus.capture("and another"));
-        let entry = entry.unwrap();
-        assert_eq!(
-            steps,
-            [
-                Step::Write {
-                    path: month.clone(),
-                    bytes: format!("- [{}] {} and another\n", entry.id, entry.at).into_bytes(),
-                },
-                Step::SyncData(month.clone()),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_temporary_sibling_is_fresh_each_time_and_hides_from_corpus_listings() {
-        let dir = tempfile::tempdir().unwrap();
-        let node = dir.path().join("safe.md");
-        let (first, _handle) = create_temporary_sibling(&node).unwrap();
-        let (second, _handle) = create_temporary_sibling(&node).unwrap();
-
-        assert_ne!(
-            first, second,
-            "a stale temporary must not wedge the next write"
-        );
-        for tmp in [&first, &second] {
-            assert_eq!(tmp.parent(), node.parent(), "the temporary is a sibling");
-            assert!(
-                tmp.file_name()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .starts_with("safe.md."),
-                "the temporary does not name its destination: {}",
-                tmp.display()
-            );
-            assert_eq!(
-                tmp.extension(),
-                Some(OsStr::new("tmp")),
-                "`load_all` reads every `.md` in `nodes`, so a temporary may not be one"
-            );
-        }
-
-        let (month, _handle) = create_temporary_sibling(&dir.path().join("2026-09.md")).unwrap();
-        assert!(
-            !is_inbox_month_filename(month.file_name().unwrap()),
-            "the inbox would read this temporary as a month file: {}",
-            month.display()
-        );
-    }
-
-    /// Crash debris and the pending record stay out of every commit, and
-    /// out of a person's `git add -A` once `init` has run.
-    #[test]
-    fn commits_and_ignore_rules_cover_debris_and_the_pending_record() {
-        assert_eq!(
-            NEVER_STAGED,
-            [
-                ":(exclude,glob)**/*.tmp".to_string(),
-                format!(":(exclude){PENDING_FILE}")
-            ]
-        );
-        // What the exclusion and the ignore rule both match on is the name
-        // every temporary the write helper makes ends with.
-        let dir = tempfile::tempdir().unwrap();
-        let (tmp, _handle) = create_temporary_sibling(&dir.path().join("a.md")).unwrap();
-        assert_eq!(
-            tmp.extension(),
-            Some(OsStr::new("tmp")),
-            "{}",
-            tmp.display()
-        );
-        assert_eq!(
-            ignore_rules(),
-            [
-                format!("/{LOCK_FILE}"),
-                format!("/{PENDING_FILE}"),
-                "*.tmp".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn stamp_names_the_offset_it_used() {
-        let instant = time::macros::datetime!(2026-09-26 06:11:05.25 UTC);
-
-        let fallback = format_stamp(instant, None);
-        assert_eq!(fallback, "2026-09-26T06:11:05Z");
-        let local = format_stamp(instant, Some(time::macros::offset!(+2)));
-        assert_eq!(local, "2026-09-26T08:11:05+02:00");
-        let zero = format_stamp(instant, Some(UtcOffset::UTC));
-        assert_eq!(zero, "2026-09-26T06:11:05+00:00");
-        for stamp in [fallback, local, zero, stamp()] {
-            let parsed = OffsetDateTime::parse(&stamp, &Rfc3339)
-                .unwrap_or_else(|error| panic!("{stamp}: {error}"));
-            assert_eq!(parse_stamp(&stamp), Some(parsed), "{stamp}");
-            assert!(
-                stamp.ends_with('Z') || stamp[stamp.len() - 6..].starts_with(['+', '-']),
-                "{stamp} does not name its offset"
-            );
-            assert_eq!(stamp.find('.'), None, "{stamp} is to the second");
-        }
-    }
-
-    #[test]
-    fn a_legacy_stamp_reads_as_local_time_and_rfc3339_as_written() {
-        let legacy = rfc3339_stamp("2026-09-01T08:00").unwrap();
-        assert!(legacy.starts_with("2026-09-01T08:00:00"), "{legacy}");
-        let parsed = OffsetDateTime::parse(&legacy, &Rfc3339).unwrap();
-        assert_eq!(parse_stamp("2026-09-01T08:00"), Some(parsed));
-
-        for written in ["2026-09-01T08:00:00+02:00", "2026-09-01T08:00:00.5-05:30"] {
-            assert_eq!(rfc3339_stamp(written).as_deref(), Some(written));
-        }
-        for unreadable in ["someday", "2026-09-01", "2026-09-01T08:00:00", ""] {
-            assert_eq!(rfc3339_stamp(unreadable), None, "{unreadable}");
-            assert_eq!(parse_stamp(unreadable), None, "{unreadable}");
-        }
-    }
-
-    #[test]
-    fn a_short_title_slugifies_whole() {
-        assert_eq!(slugify("Tags beat domains"), "tags-beat-domains");
-    }
-
-    #[test]
-    fn unicode_titles_slugify_to_stable_valid_ids() {
-        for (title, expected) in [
-            ("Ünïcode título → ok", "ünïcode-título-ok"),
-            ("시간은 프레임의 수다", "시간은-프레임의-수다"),
-            ("Tags beat domains", "tags-beat-domains"),
-        ] {
-            let slug = slugify(title);
-            assert_eq!(slug, expected);
-            assert!(is_slug(&slug), "derived id is not a valid slug: {slug}");
-        }
-    }
-
-    #[test]
-    fn a_slug_over_the_limit_never_ends_mid_word() {
-        let word = "abcdefg"; // 7 chars, so units of 8 with the joining dash
-        let title = [word; 9].join(" ");
-        let slug = slugify(&title);
-        assert!(slug.chars().count() <= 60, "slug is over the limit: {slug}");
-        assert!(!slug.is_empty());
-        assert!(
-            slug.split('-').all(|w| w == word),
-            "slug has a partial word: {slug}"
-        );
-    }
-
-    /// The title behind the frozen id in the bug report: the naive
-    /// `.chars().take(60)` cut landed on a dash-adjacent boundary here by
-    /// coincidence, but the fixed rule (cut at the last dash at or before 60)
-    /// still applies and drops the trailing word rather than keeping a slug
-    /// that happens to look intact.
-    #[test]
-    fn every_surviving_word_is_whole() {
-        let title = "Self-authored structure is a paved path, imposed structure is rigidity";
-        let slug = slugify(title);
-        assert!(slug.chars().count() <= 60);
-        assert!(!slug.is_empty());
-        assert!(!slug.ends_with('-'));
-        let words: Vec<String> = title
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .filter(|w| !w.is_empty())
-            .map(str::to_ascii_lowercase)
-            .collect();
-        for part in slug.split('-') {
-            assert!(
-                words.iter().any(|w| w == part),
-                "fragment `{part}` is not a whole word from the title"
-            );
-        }
-    }
-
-    /// The capture from the v0.2 evaluation: a 60-character sentence slug
-    /// becomes five significant words, with longer fallbacks behind it.
-    #[test]
-    fn a_long_capture_mints_a_short_id_from_its_significant_words() {
-        let text = "gravity might be a scarcity gradient in some shared resource";
-        let ids = capture_ids(text);
-        assert_eq!(
-            ids,
-            [
-                "gravity-scarcity-gradient-shared-resource",
-                "gravity-might-be-a-scarcity-gradient-in-some-shared-resource",
-            ]
-        );
-        assert_eq!(ids.last().unwrap(), &slugify(text), "the full slug is last");
-        for id in &ids {
-            assert!(is_slug(id) && is_path_safe_id(id), "{id}");
-        }
-    }
-
-    #[test]
-    fn collision_fallbacks_add_one_significant_word_at_a_time() {
-        let ids = capture_ids("the map is not the territory but the atlas is a map of maps");
-        assert_eq!(
-            ids,
-            [
-                "map-not-territory-atlas-map",
-                "map-not-territory-atlas-map-maps",
-                "the-map-is-not-the-territory-but-the-atlas-is-a-map-of-maps",
-            ]
-        );
-        assert!(
-            ids[0].split('-').count() <= CAPTURE_ID_WORDS,
-            "the first choice is within the bound: {}",
-            ids[0]
-        );
-    }
-
-    #[test]
-    fn a_short_capture_keeps_the_slug_it_always_had() {
-        for text in [
-            "search ranking decays with age",
-            "the human's own words",
-            "a thought",
-            "시간은 프레임의 수다",
-        ] {
-            assert_eq!(capture_ids(text), [slugify(text)], "{text}");
-        }
-    }
-
-    /// Words past the 60-character cut of the full slug still count: the
-    /// short id is built from the whole sentence, then capped.
-    #[test]
-    fn a_capture_id_draws_on_words_past_the_full_slugs_cut() {
-        let text = "it is what it is and it was what it was and so it goes on and on forever";
-        // Every word but `goes` and `forever` is a stop word, so those two
-        // and nothing else carry the id.
-        assert_eq!(capture_ids(text)[0], "goes-forever");
-        assert!(!slugify(text).contains("forever"), "{}", slugify(text));
-
-        let stop_only = "it is what it is and so it was";
-        assert_eq!(capture_ids(stop_only)[0], "it-is-what-it-is");
-    }
-
-    #[test]
-    fn a_capture_that_reduces_to_nothing_has_no_id() {
-        assert!(capture_ids("→ … !!").is_empty());
-        assert!(capture_ids(&"a".repeat(61)).is_empty());
-    }
-
-    #[test]
-    fn a_title_with_no_dash_in_the_first_60_chars_reduces_to_empty() {
-        // One long run with no separator: there is no dash to cut at, so the
-        // whole thing reduces to nothing rather than a truncated fragment
-        // standing in for the title.
-        let title = "a".repeat(61);
-        assert_eq!(slugify(&title), "");
-    }
-
-    /// The rule an id has to satisfy before it is joined into a path. Every
-    /// spelling here that escapes `nodes/` reached a file outside the corpus
-    /// before this existed.
-    #[test]
-    fn an_id_that_is_not_one_file_name_is_refused() {
-        for id in [
-            "../../escaped",
-            "../escaped",
-            "..",
-            ".",
-            "./escaped",
-            "nodes/other",
-            "a\\b",
-            "/etc/passwd",
-            "/absolute",
-            "",
-            " ",
-            " leading",
-            "trailing ",
-            "new\nline",
-            "nul\0byte",
-        ] {
-            assert!(!is_path_safe_id(id), "accepted `{id}`");
-        }
-    }
-
-    /// The rule is about path structure, not about which alphabet an idea was
-    /// named in: every id a verb has ever derived stays valid.
-    #[test]
-    fn an_ordinary_id_including_a_unicode_one_is_accepted() {
-        for id in [
-            "safe",
-            "self-authored-structure",
-            "ünïcode-título-ok",
-            "시간은-프레임의-수다",
-            "..leading-dots",
-            "a",
-        ] {
-            assert!(is_path_safe_id(id), "refused `{id}`");
-            assert_eq!(
-                Path::new(id).components().count(),
-                1,
-                "`{id}` is more than one component"
-            );
-        }
-        // Everything `slugify` produces satisfies the weaker rule, which is
-        // what keeps the two checks from ever disagreeing about a new node.
-        for title in [
-            "Tags beat domains",
-            "Ünïcode título → ok",
-            "시간은 프레임의 수다",
-        ] {
-            let slug = slugify(title);
-            assert!(is_slug(&slug) && is_path_safe_id(&slug), "{slug}");
-        }
-    }
-
-    #[test]
-    fn is_slug_matches_what_slugify_would_produce() {
-        assert!(is_slug("self-authored-structure"));
-        assert!(is_slug(&"a".repeat(60)));
-        assert!(!is_slug(""));
-        assert!(!is_slug("Has-Capitals"));
-        assert!(!is_slug("trailing-"));
-        assert!(!is_slug("-leading"));
-        assert!(!is_slug("double--dash"));
-        assert!(!is_slug("has space"));
-        assert!(!is_slug(&"a".repeat(61)));
-    }
 }
