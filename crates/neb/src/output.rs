@@ -80,6 +80,13 @@ pub(crate) fn stdout() -> Stdout {
     Stdout(())
 }
 
+/// Send an interactive child's UI and diagnostics to stderr, reserving
+/// stdout for neb's payload. This preserves the terminal handle rather
+/// than capturing output, so an editor can still draw while reading stdin.
+pub(crate) fn child_diagnostics() -> std::process::Stdio {
+    io::stderr().into()
+}
+
 /// See [`stdout`].
 pub(crate) struct Stdout(());
 

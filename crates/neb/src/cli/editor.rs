@@ -77,6 +77,8 @@ pub(super) fn edit_body(body: &str) -> std::result::Result<Edited, Failure> {
     let status = ProcessCommand::new(program)
         .args(words)
         .arg(file.path())
+        // Editor UI must not become part of the verb's payload (STD-01 §R12).
+        .stdout(crate::output::child_diagnostics())
         .status()
         .map_err(|source| EditorError::Start {
             editor: editor_name.clone(),
