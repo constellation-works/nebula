@@ -49,8 +49,14 @@ impl Corpus {
         Self::default_root(locations)
     }
 
-    /// The nearest directory at or above `start` with a `nodes/` directory.
-    /// `None` when no ancestor does.
+    /// The nearest directory at or above `start` with `nodes/` and positive
+    /// corpus evidence; `None` when no ancestor has both. Evidence is either
+    /// a `config.yaml` with a top-level `schema_version` or `corpus_id` key
+    /// (regardless of value), an unparseable/unreadable config, or, when the
+    /// config is absent, a real `inbox/` directory or regular `.lock` file.
+    /// The latter markers identify config-less legacy or damaged corpora.
+    /// A lone `nodes/`, a parsable foreign config, and config without nodes
+    /// fall through to the configured or default corpus.
     ///
     /// Discovery identifies the target, not whether its config is healthy.
     /// Opening validates the config and refuses a missing or malformed one
@@ -58,9 +64,10 @@ impl Corpus {
     /// Migration can therefore find a legacy corpus from before config.yaml.
     ///
     /// The nearest corpus wins. The walk is lexical and never resolves a
-    /// symlink: the root keeps the spelling of `start`. A `nodes` symlink
-    /// (even a dangling one) also stops the walk so opening refuses it by
-    /// name instead of selecting another corpus.
+    /// symlink: the root keeps the spelling of `start`. With the same evidence,
+    /// a `nodes` symlink (even dangling) also stops the walk so opening refuses
+    /// it by name. Config symlinks and special files are never read; they stop
+    /// discovery as unreadable configs so opening can name the refusal.
     pub fn discover(start: &Path) -> Option<PathBuf> {
         start
             .ancestors()
@@ -495,8 +502,25 @@ fn holds_content(root: &Path) -> Result<bool> {
     Ok(false)
 }
 
-/// Whether `dir` marks a corpus, independently of config validity.
+/// Whether `dir` has both halves of the discovery marker; see `discover`.
 fn holds_corpus(dir: &Path) -> bool {
-    std::fs::symlink_metadata(dir.join("nodes"))
+    if !std::fs::symlink_metadata(dir.join("nodes"))
         .is_ok_and(|metadata| metadata.is_dir() || metadata.file_type().is_symlink())
+    {
+        return false;
+    }
+    match crate::fs_impl::read_regular_text(&dir.join(config::FILE)) {
+        Ok(Some(raw)) => match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&raw) {
+            Ok(value) => value.get("schema_version").is_some() || value.get("corpus_id").is_some(),
+            // Integrity check: do not redirect a damaged corpus's writes.
+            Err(_) => true,
+        },
+        Ok(None) => {
+            std::fs::symlink_metadata(dir.join("inbox")).is_ok_and(|metadata| metadata.is_dir())
+                || std::fs::symlink_metadata(dir.join(".lock"))
+                    .is_ok_and(|metadata| metadata.is_file())
+        }
+        // Keep unsafe/unreadable entries at this root for opening to refuse.
+        Err(_) => true,
+    }
 }

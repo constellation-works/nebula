@@ -379,58 +379,58 @@ fn the_nearest_of_two_nested_corpora_wins() {
     inbox_reads(between, "mark-outer", &marks);
 }
 
-/// A nodes directory is a boundary even if its config belongs to another
-/// tool: refuse there rather than adopting it or writing to a fallback.
+/// Unrelated projects and incomplete layouts must reach the standing corpus.
 #[test]
 fn capture_never_adopts_a_directory_that_only_looks_like_a_corpus() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = dir.path().join("home");
-    let lookalike = dir.path().join("lookalike");
-    let config_only = dir.path().join("config-only");
-    std::fs::create_dir_all(lookalike.join("nodes")).unwrap();
-    write(&lookalike.join("config.yaml"), "name: some other tool\n");
-    std::fs::create_dir_all(&config_only).unwrap();
-    write(
-        &config_only.join("config.yaml"),
-        "schema_version: 2\ncorpus_id: neb-000001\n",
-    );
-
-    let refusal = run_in(
-        &lookalike.join("nodes"),
-        &home,
-        None,
-        &["capture", "--json", "x"],
-        None,
-    )
-    .refusal();
-    assert_eq!(refusal["code"], "schema_mismatch");
-    assert!(!home.join(".nebula").exists());
-    assert!(!lookalike.join("inbox").exists());
-    assert_eq!(
-        std::fs::read_to_string(lookalike.join("config.yaml")).unwrap(),
-        "name: some other tool\n"
-    );
-
-    // A config without nodes still is not a discovery marker.
-    let default = home.join(".nebula");
-    let run = run_in(
-        &config_only,
-        &home,
-        None,
-        &["capture", "--quiet", "x"],
-        None,
-    )
-    .assert_ok();
-    assert_eq!(
-        run.stderr(),
-        format!(
-            "{CREATED_NOTICE}{}\n",
-            normalized_cli_path(&default).display()
-        )
-    );
-    assert!(default.join("inbox").is_dir());
-    assert!(!config_only.join("nodes").exists());
-    assert!(!config_only.join("inbox").exists());
+    for configured in [false, true] {
+        for (name, nodes, config) in [
+            ("nodes-only", true, None),
+            ("foreign-config", true, Some("name: some other tool\n")),
+            (
+                "config-only",
+                false,
+                Some("schema_version: 2\ncorpus_id: neb-000001\n"),
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            let fallback = if configured {
+                let root = dir.path().join("configured");
+                run_from_home(&home, Some(&root), &["init", "--set-root"], None).assert_ok();
+                root
+            } else {
+                home.join(".nebula")
+            };
+            let lookalike = dir.path().join(name);
+            let cwd = lookalike.join(if nodes { "nodes" } else { "deep" });
+            std::fs::create_dir_all(&cwd).unwrap();
+            if let Some(config) = config {
+                write(&lookalike.join("config.yaml"), config);
+            }
+            let before = snapshot_corpus_files(&lookalike);
+            let run = run_in(&cwd, &home, None, &["capture", "--quiet", name], None).assert_ok();
+            assert_eq!(
+                run.stderr(),
+                if configured {
+                    String::new()
+                } else {
+                    format!(
+                        "{CREATED_NOTICE}{}\n",
+                        normalized_cli_path(&fallback).display()
+                    )
+                }
+            );
+            run_from_home(&home, Some(&fallback), &["inbox"], None)
+                .assert_ok()
+                .says(name);
+            run_in(&cwd, &home, None, &["check"], None).assert_ok();
+            run_in(&cwd, &home, None, &["list"], None).assert_ok();
+            assert_eq!(snapshot_corpus_files(&lookalike), before);
+            assert!(!lookalike.join("inbox").exists());
+            assert!(!lookalike.join(".lock").exists());
+            assert_eq!(lookalike.join("nodes").exists(), nodes);
+        }
+    }
 }
 
 /// Paths are used as given. A corpus reached through a symlink resolves to
@@ -666,9 +666,11 @@ fn discovery_regression_broken_local_config_never_falls_back() {
                 dir.path().join("local")
             };
             let cwd = root.join("nodes");
-            std::fs::create_dir_all(&cwd).unwrap();
+            run_from_home(&home, Some(&root), &["init"], None).assert_ok();
             if let Some(config) = config {
                 write(&root.join("config.yaml"), config);
+            } else {
+                std::fs::remove_file(root.join("config.yaml")).unwrap();
             }
             let before = (snapshot_corpus_files(&root), snapshot_corpus_files(&other));
             for args in [vec!["list"], vec!["check"], vec!["capture", "x"]] {

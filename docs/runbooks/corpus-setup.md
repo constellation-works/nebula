@@ -37,9 +37,17 @@ resolved against the working directory, and `--set-root` replaces it without
 The resolver checks `--root`, `$NEBULA_ROOT`, the current directory, that
 config file, then `~/.nebula` in that order. The current directory counts when
 it is a corpus or anywhere under one: the nearest directory at or above it that
-holds a `nodes/` directory is used, and the innermost of two nested corpora
-wins. A missing or malformed `config.yaml` refuses there instead of falling
-back to a different corpus. `neb check` names the checked root in text and
+holds `nodes/` plus positive corpus evidence is used, and the innermost of two
+nested corpora wins. Evidence means `config.yaml` has a top-level
+`schema_version` or `corpus_id` key (even with an invalid value), or cannot be
+parsed or read. When config is absent, a real `inbox/` directory or regular
+`.lock` file alongside `nodes/` identifies a legacy or damaged corpus. Opening
+refuses a missing or malformed config there instead of falling back; `neb migrate`
+can find a config-less legacy corpus by these same markers. A lone `nodes/`,
+`nodes/` with another tool's parsable config, or a config without `nodes/` falls
+through to the configured or default corpus. A `nodes` symlink counts only with
+the same evidence and is then refused by name. Config symlinks and special files
+count as unreadable; discovery never reads through them. `neb check` names the checked root in text and
 in its JSON `root` field. The walk follows the directory as the shell spells it
 (`$PWD`) and never resolves a symlink. Only an existing corpus is found this way, so `neb capture` never
 creates one because of where it was run.
