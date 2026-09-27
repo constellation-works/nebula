@@ -200,7 +200,17 @@ pub(crate) fn ensure_lock_ignored(root: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Err(error) => return Err(Error::io_at("inspecting", &path, error)),
     };
-    let mut contents = read_regular_bytes(&path, Links::Follow)?.unwrap_or_default();
+    let original = read_regular_bytes(&path, Links::Follow)?.unwrap_or_default();
+    let contents = with_runtime_ignores(original.clone());
+    if contents != original || is_symlink {
+        write_private_atomic(&path, contents)?;
+    }
+    Ok(())
+}
+
+/// The exact bytes installed by `ensure_lock_ignored`, also used to prove
+/// that an interrupted migration owns a dirty ignore file.
+pub(crate) fn with_runtime_ignores(mut contents: Vec<u8>) -> Vec<u8> {
     let ours = ignore_rules();
     let rules: Vec<&[u8]> = contents
         .split(|byte| *byte == b'\n')
@@ -219,11 +229,7 @@ pub(crate) fn ensure_lock_ignored(root: &Path) -> Result<()> {
         })
         .unwrap_or(0);
     if present == ours.len() {
-        return if is_symlink {
-            write_private_atomic(&path, contents)
-        } else {
-            Ok(())
-        };
+        return contents;
     }
 
     if !contents.is_empty() && !contents.ends_with(b"\n") {
@@ -233,7 +239,7 @@ pub(crate) fn ensure_lock_ignored(root: &Path) -> Result<()> {
         contents.extend_from_slice(rule.as_bytes());
         contents.push(b'\n');
     }
-    write_private_atomic(&path, contents)
+    contents
 }
 
 /// Run git at the corpus root, through the one supervised runner. Git not

@@ -234,7 +234,7 @@ pub(crate) fn run_then<T>(
         Declared::Newer { version } => return Err(config::schema_mismatch(&root, version)),
     };
     if version != config::SCHEMA_VERSION {
-        refuse_dirty_tree(locations, &root)?;
+        refuse_dirty_tree(locations, &root, Some((version, existing.clone())))?;
     }
     let steps = steps_from(version).ok_or_else(|| config::schema_mismatch(&root, version))?;
 
@@ -275,7 +275,7 @@ pub(crate) fn run_then<T>(
     if version == config::SCHEMA_VERSION {
         // Current-schema normalization still rewrites content, so it keeps
         // the same recoverability requirement as a schema upgrade.
-        refuse_dirty_tree(locations, &root)?;
+        refuse_dirty_tree(locations, &root, None)?;
     }
     // All content has passed preflight. Install the same runtime exclusions
     // as init before changing nodes, keeping config last as the ledger.
@@ -350,14 +350,19 @@ fn preflight_nodes(root: &Path, staged: &Staged, version: u32) -> Result<()> {
     Ok(())
 }
 
-/// A corpus under git with uncommitted changes is refused, so the migration
-/// lands as its own commit and the pre-migration state stays recoverable.
+/// A corpus under git with unrelated uncommitted changes is refused, so the
+/// migration lands as its own commit and the pre-migration state stays
+/// recoverable. Old schemas may resume only proven migration output.
 /// A corpus with no repository at or above it is migrated as is.
 ///
 /// Fails closed (integrity, STD-02 §R31): inside a repository, git that
 /// cannot say whether the tree is clean refuses the migration, because
 /// unknown is not clean and the rewrite that follows touches every node.
-fn refuse_dirty_tree(locations: &Locations, root: &Path) -> Result<()> {
+fn refuse_dirty_tree(
+    locations: &Locations,
+    root: &Path,
+    recovery: Option<(u32, Option<String>)>,
+) -> Result<()> {
     let at = locations.git_at(root);
     if !store::inside_work_tree(at)? {
         return Ok(());
@@ -367,7 +372,18 @@ fn refuse_dirty_tree(locations: &Locations, root: &Path) -> Result<()> {
     // Without excluding it here the first `neb` write of the day would leave
     // `migrate` refusing for good.
     let exclude = format!(":(exclude){LOCK_FILE}");
-    let status = store::git(at, &["status", "--porcelain", "--", ".", &exclude])?;
+    let status = store::git(
+        at,
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--",
+            ".",
+            &exclude,
+        ],
+    )?;
     if !status.status.success() {
         return Err(Error::Git {
             root: root.to_path_buf(),
@@ -375,8 +391,141 @@ fn refuse_dirty_tree(locations: &Locations, root: &Path) -> Result<()> {
             stderr: status.stderr.text(),
         });
     }
-    if !status.stdout.is_empty() {
-        return Err(Error::DirtyTree(root.to_path_buf()));
+    let dirty = status.stdout_whole(root, "status")?;
+    if status.stdout.is_empty() {
+        return Ok(());
+    }
+    if let Some((version, config)) = recovery {
+        return verify_interrupted(at, dirty, version, config);
+    }
+    Err(Error::DirtyTree(root.to_path_buf()))
+}
+
+/// Prove recovery from committed input, not from the plausibility of dirty
+/// v2 data. No journal or extra corpus format is needed: HEAD is the durable
+/// pre-migration snapshot, and every accepted change must be its exact output.
+/// Staged changes, deleted/renamed files, and edits outside those outputs are
+/// refused. This is an accident guard, not proof of which process wrote bytes.
+fn verify_interrupted(
+    at: crate::git::GitAt<'_>,
+    dirty: &[u8],
+    version: u32,
+    config: Option<String>,
+) -> Result<()> {
+    let refuse = || Error::DirtyTree(at.root.to_path_buf());
+    // Porcelain paths are repository-relative even when the corpus is nested.
+    let prefix = migration_git(at, &["rev-parse", "--show-prefix"])?;
+    let prefix = prefix.strip_suffix(b"\n").unwrap_or(&prefix);
+    let mut paths = Vec::new();
+    for entry in dirty.split(|b| *b == 0).filter(|entry| !entry.is_empty()) {
+        if entry.len() < 4 || entry[2] != b' ' {
+            return Err(refuse());
+        }
+        let path = entry[3..].strip_prefix(prefix).ok_or_else(refuse)?;
+        let path = std::str::from_utf8(path).map_err(|_| refuse())?;
+        let node = Path::new(path).parent() == Some(Path::new("nodes"))
+            && Path::new(path).extension().is_some_and(|ext| ext == "md");
+        if !((entry.starts_with(b" M ") && (node || path == store::GITIGNORE_FILE))
+            || (entry.starts_with(b"?? ") && path == store::GITIGNORE_FILE))
+        {
+            return Err(refuse());
+        }
+        paths.push(path);
+    }
+    // Resolve the moving ref once; every historical byte below comes from it.
+    let head = migration_git(at, &["rev-parse", "--verify", "HEAD"])?;
+    let head = std::str::from_utf8(&head).map_err(|_| refuse())?.trim();
+    if committed_file(at, head, config::FILE)?.as_deref() != config.as_deref().map(str::as_bytes) {
+        return Err(refuse());
+    }
+    let mut baseline = Staged::read(at.root, config)?;
+    for path in &paths {
+        // Atomic migration writes never create executable output. A chmod
+        // alongside otherwise matching bytes is still unrelated user work.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let file = at.root.join(path);
+            let metadata = std::fs::symlink_metadata(&file)
+                .map_err(|error| Error::io_at("inspecting", &file, error))?;
+            if metadata.permissions().mode() & 0o111 != 0 {
+                return Err(refuse());
+            }
+        }
+        let committed = committed_file(at, head, path)?;
+        if *path == store::GITIGNORE_FILE {
+            let expected = store::with_runtime_ignores(committed.clone().unwrap_or_default());
+            if committed.as_deref() == Some(expected.as_slice()) {
+                return Err(refuse());
+            }
+            let actual = crate::fs_impl::read_regular_bytes(
+                &at.root.join(path),
+                crate::fs_impl::Links::Refuse,
+            )?;
+            if actual.as_deref() != Some(expected.as_slice()) {
+                return Err(refuse());
+            }
+        } else {
+            let original =
+                String::from_utf8(committed.ok_or_else(refuse)?).map_err(|_| refuse())?;
+            let node = baseline
+                .nodes
+                .iter_mut()
+                .find(|node| node.path == at.root.join(path))
+                .ok_or_else(refuse)?;
+            node.original.clone_from(&original);
+            node.text = original;
+        }
+    }
+    for migration in steps_from(version).ok_or_else(refuse)? {
+        (migration.step)(&mut baseline)?;
+    }
+    verified(&baseline)?;
+    for path in paths {
+        if path == store::GITIGNORE_FILE {
+            continue;
+        }
+        let node = baseline
+            .nodes
+            .iter()
+            .find(|node| node.path == at.root.join(path))
+            .ok_or_else(refuse)?;
+        let actual = crate::fs_impl::read_regular_text(&node.path)?;
+        if node.text == node.original || actual.as_deref() != Some(node.text.as_str()) {
+            return Err(refuse());
+        }
     }
     Ok(())
+}
+
+/// Read a regular blob from the pinned snapshot; absence is distinct from a
+/// failed git call. Literal pathspecs and NUL framing handle unusual filenames.
+fn committed_file(at: crate::git::GitAt<'_>, head: &str, path: &str) -> Result<Option<Vec<u8>>> {
+    let literal = format!(":(literal){path}");
+    let tree = migration_git(at, &["ls-tree", "-z", head, "--", &literal])?;
+    if tree.is_empty() {
+        return Ok(None);
+    }
+    let refuse = || Error::DirtyTree(at.root.to_path_buf());
+    let end = tree.iter().position(|b| *b == b'\t').ok_or_else(refuse)?;
+    let metadata = std::str::from_utf8(&tree[..end]).map_err(|_| refuse())?;
+    let mut fields = metadata.split_whitespace();
+    if !matches!(fields.next(), Some("100644" | "100755")) || fields.next() != Some("blob") {
+        return Err(refuse());
+    }
+    let oid = fields.next().ok_or_else(refuse)?;
+    migration_git(at, &["cat-file", "blob", oid]).map(Some)
+}
+
+/// Recovery never interprets failed or truncated git output as clean state.
+fn migration_git(at: crate::git::GitAt<'_>, args: &[&str]) -> Result<Vec<u8>> {
+    let out = store::git(at, args)?;
+    if !out.status.success() {
+        return Err(Error::Git {
+            root: at.root.to_path_buf(),
+            context: args[0].to_string(),
+            stderr: out.stderr.text(),
+        });
+    }
+    Ok(out.stdout_whole(at.root, args[0])?.to_vec())
 }

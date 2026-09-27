@@ -22,7 +22,7 @@ neb migrate
 ```
 
 If `$NEBULA_ROOT` needs migration and is a git repository with uncommitted
-changes, this refuses:
+changes unrelated to migration output, this refuses:
 
 ```
 error: /corpus has uncommitted changes, and the migration must be its own commit; nothing was changed
@@ -174,9 +174,33 @@ that needs normalization still requires a clean tree before it is rewritten.
 Migration installs the same `.gitignore` rules as `neb init`, preserving
 existing entries and ignoring `/.lock`, `/.pending` and `*.tmp`.
 
-The same property makes a run that stopped part way safe to repeat: the config still
-declares v1, the nodes already written convert to themselves, and the rerun
-finishes the rest.
+## Recover an interrupted migration
+
+If a run stops after writing some nodes but before writing `config.yaml`, run
+`neb migrate` again. Do not commit or stash the partial conversion first. The
+config still declares v1 (or is still absent), already converted nodes stay
+byte-for-byte unchanged, and the rerun finishes the rest and writes the ledger.
+The usual `commit` setting applies when recovery finishes.
+
+In a git-backed corpus, recovery proves the partial output against a pinned
+`HEAD`: each dirty node must equal the exact conversion of its committed
+regular-file content. The only other accepted dirty path is `.gitignore`, and
+it must equal the existing runtime-rule installer applied to its committed
+bytes (or an empty file if it was absent). The corpus config and index entries
+must be unchanged. This works for a corpus inside a larger repository as well as one
+with its own repository; changes outside the corpus remain outside its scope.
+No separate recovery journal or manual staging is needed.
+
+This is a byte-level accident guard, not a claim about which process wrote the
+files. A hand edit identical to migration output is indistinguishable and safe
+to accept. Other edits, new nodes, deletions, renames, staged changes, and output
+that cannot be verified against git are refused before writing. Preserve and
+separate unrelated work before retrying; do not blindly commit a mixed partial
+migration just to bypass the refusal. Without git, recovery retains the same
+idempotent forward conversion but has no committed snapshot to compare.
+
+After the ledger is written, the current-schema no-op behavior above applies,
+including when interruption occurred before the optional commit.
 
 ## Verify
 

@@ -38,7 +38,9 @@ mod root;
 mod tests;
 
 pub use commit::{CommitOutcome, Committed};
-pub(crate) use commit::{GITIGNORE_FILE, ensure_lock_ignored, git, inside_work_tree};
+pub(crate) use commit::{
+    GITIGNORE_FILE, ensure_lock_ignored, git, inside_work_tree, with_runtime_ignores,
+};
 pub use history::HistoryEntry;
 pub(crate) use inbox::validate_capture;
 pub use inbox::{Inbox, InboxEntry, Settlement};

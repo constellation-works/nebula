@@ -570,3 +570,165 @@ fn migrate_refuses_an_invalid_ignore_file_before_rewriting_nodes() {
     assert_eq!(refused["code"], "not_regular_file", "{refused}");
     assert_eq!(before, every_file_but_lock(&c.root));
 }
+
+/// Reconstruct the persisted boundary after .gitignore and the first atomic
+/// node rename, but before the second node and config ledger. The reference
+/// conversion uses the real CLI too; no manually guessed v2 serialization.
+fn interrupted_git_migration(commit: bool, nested: bool, ignore: Option<&str>) -> Corpus {
+    let second = V1_FIRST.replace("a-first", "b-second");
+    let config = format!("{V1_CONFIG}commit: {commit}\n");
+    let nodes = [("a-first", V1_FIRST), ("b-second", second.as_str())];
+    let c = v1_corpus_of(Some(&config), &nodes);
+    let reference = v1_corpus_of(Some(&config), &nodes);
+    if let Some(ignore) = ignore {
+        write(&c.root.join(".gitignore"), ignore);
+        write(&reference.root.join(".gitignore"), ignore);
+    }
+    git_init(if nested { c.dir.path() } else { &c.root });
+    git_commit_at(&c.root, "2020-01-01", "v1 corpus");
+    reference.run(&["migrate"]).assert_ok();
+    for path in ["nodes/a-first.md", ".gitignore"] {
+        write(
+            &c.root.join(path),
+            &std::fs::read_to_string(reference.root.join(path)).unwrap(),
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(c.node_file("b-second")).unwrap(),
+        second
+    );
+    assert_eq!(
+        std::fs::read_to_string(c.root.join("config.yaml")).unwrap(),
+        config
+    );
+    c
+}
+
+#[test]
+fn migrate_resumes_after_first_node_before_ledger() {
+    for commit in [false, true] {
+        for nested in [false, true] {
+            for ignore in [None, Some("# personal rules\nprivate/"), Some("/.lock\n")] {
+                let c = interrupted_git_migration(commit, nested, ignore);
+                let first = std::fs::read(c.node_file("a-first")).unwrap();
+                let head = git(&c.root, &["rev-parse", "HEAD"]);
+                c.run(&["migrate"])
+                    .assert_ok()
+                    .says("1 of 2 nodes rewritten");
+                assert_eq!(first, std::fs::read(c.node_file("a-first")).unwrap());
+                c.run(&["check"]).assert_ok().says("2 nodes, 0 errors");
+                assert_eq!(head != git(&c.root, &["rev-parse", "HEAD"]), commit);
+                if commit {
+                    assert!(git(&c.root, &["status", "--porcelain"]).is_empty());
+                }
+                c.run(&["migrate"]).assert_ok().says("nothing changed");
+            }
+        }
+    }
+}
+
+#[test]
+fn migrate_resume_refuses_and_preserves_unrelated_changes() {
+    for edit in [
+        "node",
+        "config",
+        "ignore",
+        "untracked",
+        "staged",
+        "deleted",
+        "renamed",
+        "new-node",
+        "mode",
+    ] {
+        let c = interrupted_git_migration(true, false, None);
+        match edit {
+            "node" => write(
+                &c.node_file("a-first"),
+                &format!(
+                    "{}\nHand edit.\n",
+                    std::fs::read_to_string(c.node_file("a-first")).unwrap()
+                ),
+            ),
+            "config" => write(
+                &c.root.join("config.yaml"),
+                &format!("{V1_CONFIG}# hand edit\ncommit: true\n"),
+            ),
+            "ignore" => write(
+                &c.root.join(".gitignore"),
+                "/.lock\n/.pending\n*.tmp\nsecret/\n",
+            ),
+            "untracked" => write(&c.root.join("notes.txt"), "Unrelated work"),
+            "staged" => {
+                git(&c.root, &["add", "nodes/a-first.md"]);
+            }
+            "deleted" => std::fs::remove_file(c.node_file("b-second")).unwrap(),
+            "renamed" => {
+                git(&c.root, &["mv", "nodes/b-second.md", "nodes/renamed.md"]);
+            }
+            "new-node" => write(
+                &c.node_file("new-node"),
+                &V1_FIRST.replace("a-first", "new-node"),
+            ),
+            "mode" => {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(
+                    c.node_file("a-first"),
+                    std::fs::Permissions::from_mode(0o700),
+                )
+                .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = snapshot_corpus_files(&c.root);
+        let status = git(&c.root, &["status", "--porcelain"]);
+        let head = git(&c.root, &["rev-parse", "HEAD"]);
+        let refused = c.run(&["--json", "migrate"]).refusal();
+        assert_eq!(refused["code"], "dirty_tree", "{edit}: {refused}");
+        assert_eq!(before, snapshot_corpus_files(&c.root), "{edit}");
+        assert_eq!(status, git(&c.root, &["status", "--porcelain"]));
+        assert_eq!(head, git(&c.root, &["rev-parse", "HEAD"]));
+    }
+}
+
+/// Both ends of the config-last window recover, including the legacy case
+/// with no config. Odd filenames exercise NUL-delimited git path handling.
+#[test]
+fn migrate_resumes_without_config_at_each_write_boundary() {
+    for converted in [0, 1, 2] {
+        let names = ["a space", "b\nline"];
+        let second = V1_FIRST.replace("a-first", "b-second");
+        let nodes = [(names[0], V1_FIRST), (names[1], second.as_str())];
+        let c = v1_corpus_of(None, &nodes);
+        let reference = v1_corpus_of(None, &nodes);
+        git_init(&c.root);
+        git_commit_at(&c.root, "2020-01-01", "legacy corpus");
+        reference.run(&["migrate"]).assert_ok();
+        write(
+            &c.root.join(".gitignore"),
+            &std::fs::read_to_string(reference.root.join(".gitignore")).unwrap(),
+        );
+        for name in &names[..converted] {
+            write(
+                &c.node_file(name),
+                &std::fs::read_to_string(reference.node_file(name)).unwrap(),
+            );
+        }
+        let report: serde_json::Value =
+            serde_json::from_str(&c.run(&["--json", "migrate"]).assert_ok().stdout()).unwrap();
+        assert_eq!(report["rewritten"].as_array().unwrap().len(), 2 - converted);
+        assert_eq!(report["config_rewritten"], true);
+        assert!(
+            report["minted_corpus_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("neb-")
+        );
+        for name in names {
+            assert_eq!(
+                std::fs::read(c.node_file(name)).unwrap(),
+                std::fs::read(reference.node_file(name)).unwrap()
+            );
+        }
+        c.run(&["migrate"]).assert_ok().says("nothing changed");
+    }
+}
