@@ -240,7 +240,7 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
         }
     }
 
-    interrupted_writes(corpus, &mut r)?;
+    interrupted_writes(corpus, &mut r);
 
     // 1. Genealogy must be acyclic: an idea cannot be its own ancestor.
     //    Diamonds are legal; only a loop is not.
