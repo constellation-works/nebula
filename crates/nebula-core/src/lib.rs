@@ -30,6 +30,8 @@
 //! - `lock`    [`CorpusLock`]: the advisory `.lock` every write holds, and reads never do
 //! - `pending` the `.pending` record that lets the next writer finish an interrupted promotion
 //! - `git`     the one way git is run: own process group, deadline, bounded output
+//! - `id`      node ids from a title or a capture, and the rules an id is held to
+//! - `stamp`   today's date and inbox stamps, written and read back
 //! - [`graph`]  [`Graph`] and the pure queries over it, `near` included
 //! - [`ops`]    the mutations, each enforcing its point-of-action invariants
 //! - [`check`]  the invariant checker, and where an `observatory` record resolves
@@ -56,9 +58,11 @@
 mod config;
 mod error;
 mod git;
+mod id;
 mod locations;
 mod lock;
 mod pending;
+mod stamp;
 
 #[path = "check.rs"]
 mod check_impl;

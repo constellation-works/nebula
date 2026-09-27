@@ -539,7 +539,7 @@ fn v1_to_v2(corpus: &mut Staged) -> Result<()> {
     let corpus_id = if let Some(id) = legacy.corpus_id.filter(|id| !id.is_empty()) {
         id
     } else {
-        let id = store::corpus_id(&corpus.root);
+        let id = crate::id::corpus_id(&corpus.root);
         corpus.minted_corpus_id = Some(id.clone());
         id
     };
@@ -577,7 +577,7 @@ fn convert(v1: V1Node, path: &Path) -> Result<(Node, Vec<String>)> {
     // looked at. A corpus whose id could not name a file would migrate
     // cleanly and then refuse to open, which reads as the migration having
     // broken it.
-    if !store::is_path_safe_id(&v1.id) {
+    if !crate::id::is_path_safe_id(&v1.id) {
         return Err(Error::UnsafeId(v1.id));
     }
 

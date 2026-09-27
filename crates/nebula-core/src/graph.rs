@@ -10,7 +10,8 @@
 use crate::check_impl::{OBSERVATORY, resolve_observatory};
 use crate::error::{Error, Result};
 use crate::model::{self, Doc, EdgeType, Node, Note, Status};
-use crate::store::{self, Inbox};
+use crate::stamp;
+use crate::store::Inbox;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -1101,7 +1102,7 @@ fn to_f64(n: usize) -> f64 {
 
 /// Whether a `YYYY-MM-DD` date is at least `days` old.
 fn older_than(date: &str, days: i64) -> bool {
-    store::days_since(date).is_some_and(|d| d >= days)
+    stamp::days_since(date).is_some_and(|d| d >= days)
 }
 
 /// Captures waiting at least fourteen days.
@@ -1109,7 +1110,7 @@ fn stale_inbox(inbox: &Inbox) -> usize {
     inbox
         .0
         .iter()
-        .filter_map(|entry| store::days_since_stamp(&entry.at))
+        .filter_map(|entry| stamp::days_since_stamp(&entry.at))
         .filter(|days| *days >= INBOX_DAYS)
         .count()
 }

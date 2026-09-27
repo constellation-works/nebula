@@ -6,6 +6,7 @@
 )]
 
 use crate::error::{Error, Result};
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -179,4 +180,110 @@ fn recording_is_off_unless_a_test_asks_for_it() {
     write_private_atomic(&dir.path().join("f"), "x").unwrap();
     let ((), steps) = recording(|| ());
     assert!(steps.is_empty(), "{steps:?}");
+}
+
+#[test]
+fn atomic_write_removes_its_temporary_file_when_rename_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    let destination = dir.path().join("destination");
+    std::fs::create_dir(&destination).unwrap();
+
+    let error = write_private_atomic(&destination, "replacement").unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("writing"), "{message}");
+    assert!(
+        message.contains(&destination.display().to_string()),
+        "{message}"
+    );
+    assert!(
+        matches!(error, Error::IoAt { source, .. } if source.raw_os_error().is_some()),
+        "the OS cause was not preserved: {message}"
+    );
+    assert!(
+        destination.is_dir(),
+        "the failed rename left the target alone"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name != OsStr::new("destination"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "the failed rename left temporary files: {leftovers:?}"
+    );
+}
+
+/// The reported break: a symlink planted at the temporary path turned an
+/// ordinary note into a write outside the corpus, and then became the node.
+#[cfg(unix)]
+#[test]
+fn atomic_write_never_writes_through_a_temporary_planted_as_a_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("outside-sentinel.txt");
+    std::fs::write(&outside, "IRREPLACEABLE FIXTURE").unwrap();
+    let destination = dir.path().join("destination.md");
+    std::fs::write(&destination, "original").unwrap();
+    let planted = dir.path().join("destination.md.tmp");
+    std::os::unix::fs::symlink(&outside, &planted).unwrap();
+
+    write_private_atomic(&destination, "replacement").unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "IRREPLACEABLE FIXTURE",
+        "the write reached a file outside the corpus"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&destination).unwrap(),
+        "replacement"
+    );
+    assert!(
+        std::fs::symlink_metadata(&destination)
+            .unwrap()
+            .file_type()
+            .is_file(),
+        "the planted symlink was renamed onto the destination"
+    );
+    assert!(
+        std::fs::symlink_metadata(&planted)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the planted path is not ours to delete"
+    );
+}
+
+/// The order is the durability: bytes flushed before the rename, so the
+/// name never points at a file the device has not got, and the directory
+/// flushed after it, so the rename itself is not lost to a crash.
+#[test]
+fn write_atomic_syncs_the_file_before_rename_and_the_parent_after() {
+    let dir = tempfile::tempdir().unwrap();
+    let destination = dir.path().join("node.md");
+
+    let (result, steps) = recording(|| write_private_atomic(&destination, "contents"));
+    result.unwrap();
+
+    let Some(Step::Write { path: tmp, bytes }) = steps.first() else {
+        panic!("the first step is not the write: {steps:?}");
+    };
+    assert_eq!(bytes, b"contents");
+    assert_eq!(tmp.parent(), Some(dir.path()), "{}", tmp.display());
+    let mut expected = vec![
+        Step::Write {
+            path: tmp.clone(),
+            bytes: b"contents".to_vec(),
+        },
+        Step::SyncAll(tmp.clone()),
+        Step::Rename {
+            from: tmp.clone(),
+            to: destination.clone(),
+        },
+    ];
+    if cfg!(unix) {
+        expected.push(Step::SyncDir(dir.path().to_path_buf()));
+    }
+    assert_eq!(steps, expected);
+    assert_eq!(std::fs::read_to_string(&destination).unwrap(), "contents");
 }

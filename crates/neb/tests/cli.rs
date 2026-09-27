@@ -364,7 +364,7 @@ fn editor_script(c: &Corpus, name: &str, script: &str) -> PathBuf {
     path
 }
 
-/// `YYYY-MM-DD` for `days` ago, computed the same way `store::days_since`
+/// `YYYY-MM-DD` for `days` ago, computed the same way `stamp::days_since`
 /// computes "now", so fixtures land unambiguously on one side of a threshold
 /// regardless of what day the suite actually runs.
 fn date_days_ago(days: i64) -> String {
@@ -5697,7 +5697,7 @@ fn a_seed_with_a_kill_condition_is_a_rule_13_warning() {
         .says("0 errors, 1 warning");
 }
 
-/// `ops.rs` only ever stamps `created`/`updated` from `store::today()`, so
+/// `ops.rs` only ever stamps `created`/`updated` from `stamp::today()`, so
 /// either field failing to parse, or `updated` landing before `created`, is
 /// a hand edit — and `review`/`open` then silently treat the node as never
 /// stale, since `days_since` returns `None` for a date it cannot parse.

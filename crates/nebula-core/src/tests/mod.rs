@@ -9,11 +9,12 @@ mod error;
 mod fs;
 mod git;
 mod git_forward;
+mod id;
 mod lock;
 mod migrate;
 mod model;
 mod pending;
-mod store;
+mod stamp;
 mod triage;
 #[cfg(feature = "ts")]
 mod ts_export;

@@ -43,11 +43,13 @@ use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
 use crate::fs_impl::create_private_dir_all;
 use crate::graph_impl::{self as graph, Graph, Neighbour, ObservatoryLink};
+use crate::id::{capture_ids, is_slug, slugify};
 use crate::locations::Locations;
 use crate::lock::{self, CorpusLock};
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
 use crate::pending::{Pending, PendingWrite};
-use crate::store::{self, CommitOutcome, Corpus, InboxEntry};
+use crate::stamp;
+use crate::store::{CommitOutcome, Corpus, InboxEntry};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -466,7 +468,7 @@ pub fn promote_with(
     let e = corpus.inbox_entry(entry)?;
     let title = args.title.clone().unwrap_or_else(|| e.text.clone());
     // An explicit id or title decides the id as it always has. Only an id
-    // minted from the raw capture is shortened; see `store::capture_ids`.
+    // minted from the raw capture is shortened; see `id::capture_ids`.
     let id = match (&args.id, &args.title) {
         (Some(id), _) => Some(id.clone()),
         (None, Some(_)) => None,
@@ -522,7 +524,7 @@ pub fn promote_with(
 }
 
 /// The id for a capture promoted with neither a title nor an id: the first
-/// of [`store::capture_ids`] no node has taken.
+/// of [`capture_ids`] no node has taken.
 ///
 /// A candidate is passed over only when the node holding it is a different
 /// idea. One titled with this very text is the same thought already
@@ -534,7 +536,7 @@ pub fn promote_with(
 /// as [`Error::UnusableTitle`]. Called under the corpus lock, so nothing can
 /// take the id between this check and the write.
 fn free_capture_id(corpus: &Corpus, text: &str) -> Result<Option<String>> {
-    let candidates = store::capture_ids(text);
+    let candidates = capture_ids(text);
     for id in &candidates {
         if !corpus.node_path(id)?.exists() {
             return Ok(Some(id.clone()));
@@ -603,12 +605,12 @@ pub fn new_node(corpus: &Corpus, args: &NewNode) -> Result<Created> {
 fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<Doc> {
     let id = match &spec.id {
         Some(id) => {
-            if !store::is_slug(id) {
+            if !is_slug(id) {
                 return Err(Error::InvalidId(id.clone()));
             }
             id.clone()
         }
-        None => store::slugify(&spec.title),
+        None => slugify(&spec.title),
     };
     if id.is_empty() {
         return Err(Error::UnusableTitle(spec.title.clone()));
@@ -634,7 +636,7 @@ fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<
     if let Some(reopened) = spec.reopens.as_ref().filter(|r| spec.parents.contains(r)) {
         return Err(Error::ParentAndReopens(reopened.clone()));
     }
-    let now = store::today();
+    let now = stamp::today();
     let by = model::author(spec.by.as_deref())?;
     let wanted = spec
         .parents
@@ -904,7 +906,7 @@ pub fn note(corpus: &Corpus, id: &str, text: &str, by: Option<&str>) -> Result<D
     let _lock = corpus.lock()?;
     let by = model::author(by)?;
     let mut doc = corpus.load(id)?;
-    doc.body = model::append_note(&doc.body, &store::today(), &text, by.as_deref());
+    doc.body = model::append_note(&doc.body, &stamp::today(), &text, by.as_deref());
     corpus.save(&mut doc)?;
     Ok(doc)
 }
@@ -1108,7 +1110,7 @@ fn attach(corpus: &Corpus, node: &mut Node, args: &Citation, by: Option<String>)
         uri,
         title: args.title.clone(),
         note: args.note.clone(),
-        added: store::today(),
+        added: stamp::today(),
         by,
         origin: args.origin.clone(),
     });
@@ -1196,7 +1198,7 @@ pub fn handoff(
     doc.node.status = Status::Abandoned;
     doc.node.closed = Some(Closed {
         why: model::handoff_why(&record),
-        at: store::today(),
+        at: stamp::today(),
     });
     corpus.save(&mut doc)?;
     let observatory = ObservatoryLink {
@@ -1326,12 +1328,12 @@ pub fn set_status(
     doc.node.closed = match status {
         Status::Refuted => why.map(|why| Closed {
             why: why.to_string(),
-            at: store::today(),
+            at: stamp::today(),
         }),
         Status::Abandoned => why
             .map(|why| Closed {
                 why: why.to_string(),
-                at: store::today(),
+                at: stamp::today(),
             })
             .or_else(|| doc.node.closed.take()),
         Status::Seed | Status::Hypothesis => None,

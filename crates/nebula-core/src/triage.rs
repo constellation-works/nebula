@@ -18,7 +18,8 @@
 use crate::error::{Error, Result};
 use crate::graph_impl::{NEAR_DEFAULT, Neighbour};
 use crate::ops_impl::{self as ops, Created, Promotion};
-use crate::store::{self, Corpus, InboxEntry};
+use crate::stamp;
+use crate::store::{Corpus, InboxEntry};
 use crate::verb_impl::{WriteOptions, Written};
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -134,7 +135,7 @@ impl Triage {
         // second keep their file order; a stamp that does not parse sorts
         // last.
         entries.sort_by_cached_key(|entry| {
-            let at = store::parse_stamp(&entry.at);
+            let at = stamp::parse_stamp(&entry.at);
             (at.is_none(), at)
         });
         Ok(Self {
@@ -279,7 +280,7 @@ impl Triage {
         };
         let near = ops::suggest(corpus, &entry.text, NEAR_DEFAULT)?;
         self.current = Some(Waiting {
-            days: store::days_since_stamp(&entry.at),
+            days: stamp::days_since_stamp(&entry.at),
             entry: entry.clone(),
             near,
             title: None,

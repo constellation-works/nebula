@@ -8,7 +8,8 @@
 use crate::error::{Error, Result};
 use crate::graph_impl::{NEAR_DEFAULT, Neighbour};
 use crate::ops_impl::{self as ops, Created, Promotion};
-use crate::store::{self, Corpus, InboxEntry};
+use crate::stamp::days_since_stamp;
+use crate::store::{Corpus, InboxEntry};
 use crate::verb_impl::{WriteOptions, Written};
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -42,14 +43,14 @@ fn triage_orders_mixed_stamp_forms_by_instant() {
 
     // An entry's age counts from the date its stamp was taken on, as its
     // own offset has it, whichever form the stamp is in.
-    let legacy = store::days_since_stamp("2026-09-01T08:00");
+    let legacy = days_since_stamp("2026-09-01T08:00");
     assert!(legacy.is_some());
     for stamp in [
         "2026-09-01T08:00:00+02:00",
         "2026-09-01T08:00:00Z",
         "2026-09-01T23:30:00-05:00",
     ] {
-        assert_eq!(store::days_since_stamp(stamp), legacy, "{stamp}");
+        assert_eq!(days_since_stamp(stamp), legacy, "{stamp}");
     }
-    assert_eq!(store::days_since_stamp("someday"), None);
+    assert_eq!(days_since_stamp("someday"), None);
 }
