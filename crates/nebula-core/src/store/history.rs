@@ -16,16 +16,11 @@ impl Corpus {
         self.require_git()?;
         self.load(id)?;
         let path = format!("nodes/{id}.md");
+        // The path is the node's identity. Following Git's similarity-based
+        // rename/copy detection can cross into a different node's commits.
         let raw = git_ok(
             self.git_at(),
-            &[
-                "log",
-                "-z",
-                "--follow",
-                "--format=%H%x00%cs%x00%s",
-                "--",
-                &path,
-            ],
+            &["log", "-z", "--format=%H%x00%cs%x00%s", "--", &path],
         )?;
         // `-z` adds a trailing NUL per record. Strip only that framing
         // delimiter; empty subjects are meaningful third fields.

@@ -97,6 +97,35 @@ fn log_json_keeps_mixed_subjects_ordered_and_aligned() {
     }
 }
 
+#[test]
+fn log_does_not_follow_a_similar_new_node_into_another_nodes_history() {
+    let c = Corpus::new();
+    git_init(&c.root);
+
+    c.run(&["new", "Alpha idea", "--id", "alpha"]).assert_ok();
+    git_commit_at(&c.root, "2020-01-01", "add alpha");
+    let alpha_commit = git(&c.root, &["rev-parse", "HEAD"]).trim().to_string();
+
+    c.run(&["new", "Gamma idea", "--id", "gamma"]).assert_ok();
+    git_commit_at(&c.root, "2020-01-02", "add gamma");
+    let gamma_commit = git(&c.root, &["rev-parse", "HEAD"]).trim().to_string();
+
+    c.run(&["note", "gamma", "a later change to gamma"])
+        .assert_ok();
+    git_commit_at(&c.root, "2020-01-03", "note gamma");
+    let gamma_note = git(&c.root, &["rev-parse", "HEAD"]).trim().to_string();
+
+    assert!(c.node_file("alpha").exists(), "alpha remains in the corpus");
+    let json = c.run(&["--json", "log", "gamma"]).assert_ok().stdout();
+    let entries: Vec<serde_json::Value> = serde_json::from_str(&json).expect("log --json");
+    let hashes: Vec<&str> = entries
+        .iter()
+        .map(|entry| entry["hash"].as_str().expect("commit hash"))
+        .collect();
+    assert_eq!(hashes, [gamma_note, gamma_commit], "{entries:?}");
+    assert!(!hashes.contains(&alpha_commit.as_str()), "{entries:?}");
+}
+
 #[cfg(unix)]
 fn real_git() -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
