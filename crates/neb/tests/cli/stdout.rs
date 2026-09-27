@@ -1,7 +1,9 @@
 //! A closed stdout: reads, triage and writes exit quietly and still commit.
 
 use crate::handoff::observatory_with_h012;
-use crate::harness::{Corpus, Run, closed_stdout, corpus_repo, dirt, git, log, neb_command};
+use crate::harness::{Corpus, Run, closed_stdout, corpus_repo, dirt, git, log, neb_command, write};
+use crate::migrate::v1_corpus;
+use crate::observatory::with_legacy_observatory_root;
 
 /// Linux exercises the reported full-device failure directly. macOS has no
 /// /dev/full, so an unconnected local datagram socket supplies a non-EPIPE
@@ -31,7 +33,9 @@ fn failed_stdout(c: &Corpus, args: &[&str]) -> Run {
 fn assert_write_landed(run: &Run, id: &str, json: bool) {
     assert_eq!(run.out.status.code(), Some(1), "{}", run.stderr());
     let message = if json {
-        let refusal = run.refusal();
+        let stderr = run.stderr();
+        let refusal: serde_json::Value =
+            serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
         assert_eq!(refusal["code"], "stdout");
         refusal["error"].as_str().unwrap().to_owned()
     } else {
@@ -129,6 +133,209 @@ fn failed_stdout_distinguishes_reads_noops_and_uncommitted_writes() {
     assert_eq!(log(&c.root).len(), before);
     assert!(!dirt(&c.root).is_empty());
     assert_write_landed(&run, "uncommitted", true);
+}
+
+#[test]
+fn failed_stdout_after_init_names_created_corpus_and_machine_setting() {
+    for (json, set_root) in [(false, false), (true, false), (false, true), (true, true)] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("corpus");
+        let c = Corpus { dir, root };
+        let mut args = vec!["init"];
+        if set_root {
+            args.push("--set-root");
+        }
+        if json {
+            args.push("--json");
+        }
+        let run = failed_stdout(&c, &args);
+        let config = c.root.join("config.yaml");
+        let setting = c.workdir().join(".config/nebula/root");
+        assert!(config.is_file(), "{}", run.stderr());
+        if set_root {
+            assert_eq!(
+                std::fs::read_to_string(&setting).unwrap().trim(),
+                c.root.to_str().unwrap()
+            );
+        } else {
+            assert!(!setting.exists());
+        }
+        assert_write_landed(&run, c.root.to_str().unwrap(), json);
+        if set_root {
+            assert!(
+                run.stderr().contains(setting.to_str().unwrap()),
+                "{}",
+                run.stderr()
+            );
+        }
+    }
+}
+
+#[test]
+fn failed_stdout_after_config_writes_names_effect_and_file() {
+    for json in [false, true] {
+        let (c, _remote) = corpus_repo();
+        let config = c.root.join("config.yaml");
+        let mut args = vec!["config", "commit", "on"];
+        if json {
+            args.push("--json");
+        }
+        let run = failed_stdout(&c, &args);
+        assert!(
+            std::fs::read_to_string(&config)
+                .unwrap()
+                .contains("commit: true")
+        );
+        assert_write_landed(&run, config.to_str().unwrap(), json);
+        assert!(run.stderr().contains("commit setting"), "{}", run.stderr());
+
+        let obs = c.workdir().join("observatory");
+        let setting = c.workdir().join(".config/nebula/observatory-root");
+        let mut args = vec!["config", "observatory-root", obs.to_str().unwrap()];
+        if json {
+            args.push("--json");
+        }
+        let run = failed_stdout(&c, &args);
+        assert_eq!(
+            std::fs::read_to_string(&setting).unwrap().trim(),
+            obs.to_str().unwrap()
+        );
+        assert_write_landed(&run, setting.to_str().unwrap(), json);
+        assert!(
+            run.stderr().contains("observatory root setting"),
+            "{}",
+            run.stderr()
+        );
+
+        with_legacy_observatory_root(&c);
+        let mut args = vec!["config", "observatory-root", "--drop-legacy"];
+        if json {
+            args.push("--json");
+        }
+        let run = failed_stdout(&c, &args);
+        assert!(
+            !std::fs::read_to_string(&config)
+                .unwrap()
+                .contains("observatory_root:")
+        );
+        assert_write_landed(&run, config.to_str().unwrap(), json);
+        assert!(
+            run.stderr().contains("legacy observatory root"),
+            "{}",
+            run.stderr()
+        );
+    }
+}
+
+#[test]
+fn failed_stdout_after_migration_names_rewritten_corpus() {
+    for json in [false, true] {
+        let c = v1_corpus();
+        let config = c.root.join("config.yaml");
+        let mut args = vec!["migrate"];
+        if json {
+            args.push("--json");
+        }
+        let run = failed_stdout(&c, &args);
+        assert!(
+            std::fs::read_to_string(&config)
+                .unwrap()
+                .contains("schema_version: 2")
+        );
+        assert_write_landed(&run, c.root.to_str().unwrap(), json);
+        assert!(run.stderr().contains("migration"), "{}", run.stderr());
+
+        // A second migration validates the corpus but does not rewrite it.
+        let run = failed_stdout(&c, &args);
+        assert_eq!(run.out.status.code(), Some(i32::from(json)));
+        assert!(!run.stderr().contains("write landed"), "{}", run.stderr());
+    }
+}
+
+#[test]
+fn failed_stdout_on_config_reads_and_noop_drop_reports_no_write() {
+    let c = Corpus::new();
+    for args in [
+        vec!["config", "commit", "--json"],
+        vec!["config", "observatory-root", "--json"],
+        vec!["config", "observatory-root", "--drop-legacy", "--json"],
+    ] {
+        let run = failed_stdout(&c, &args);
+        assert_eq!(run.out.status.code(), Some(1), "{}", run.stderr());
+        assert!(!run.stderr().contains("write landed"), "{}", run.stderr());
+    }
+}
+
+#[test]
+fn failed_stdout_on_repeated_init_reports_no_write() {
+    let c = Corpus::new();
+    let config = c.root.join("config.yaml");
+    let before = std::fs::read(&config).unwrap();
+    for args in [vec!["init"], vec!["init", "--json"]] {
+        let run = failed_stdout(&c, &args);
+        assert_eq!(std::fs::read(&config).unwrap(), before);
+        assert_eq!(run.out.status.code(), Some(1));
+        assert!(!run.stderr().contains("write landed"), "{}", run.stderr());
+    }
+}
+
+#[test]
+fn failed_stdout_after_only_machine_root_write_names_setting() {
+    let c = Corpus::new();
+    let config = c.root.join("config.yaml");
+    let before = std::fs::read(&config).unwrap();
+    let run = failed_stdout(&c, &["init", "--set-root", "--json"]);
+    let setting = c.workdir().join(".config/nebula/root");
+    assert_eq!(std::fs::read(&config).unwrap(), before);
+    assert_eq!(
+        std::fs::read_to_string(&setting).unwrap().trim(),
+        c.root.to_str().unwrap()
+    );
+    assert_write_landed(&run, setting.to_str().unwrap(), true);
+    assert!(
+        !run.stderr().contains("corpus initialization"),
+        "{}",
+        run.stderr()
+    );
+}
+
+#[test]
+fn failed_commit_error_takes_precedence_over_failed_stdout() {
+    let (c, _remote) = corpus_repo();
+    write(&c.root.join(".git/index.lock"), "held\n");
+    let run = failed_stdout(&c, &["config", "commit", "on", "--json"]);
+    assert!(
+        std::fs::read_to_string(c.root.join("config.yaml"))
+            .unwrap()
+            .contains("commit: true")
+    );
+    assert_eq!(run.refusal()["code"], "git");
+    assert!(
+        !run.stderr().contains("could not write to stdout"),
+        "{}",
+        run.stderr()
+    );
+}
+
+#[test]
+fn closed_stdout_after_corpus_writes_stays_silent() {
+    let (c, _remote) = corpus_repo();
+    let run = c.run_closed_stdout(&["config", "commit", "on", "--json"], &[], "");
+    assert_closed_quietly(&run, "");
+    assert!(
+        std::fs::read_to_string(c.root.join("config.yaml"))
+            .unwrap()
+            .contains("commit: true")
+    );
+
+    let c = v1_corpus();
+    let run = c.run_closed_stdout(&["migrate", "--json"], &[], "");
+    assert_closed_quietly(&run, "");
+    assert!(
+        std::fs::read_to_string(c.root.join("config.yaml"))
+            .unwrap()
+            .contains("schema_version: 2")
+    );
 }
 
 /// A stdout closed under `neb`: exit 0, and on stderr exactly `stderr`,

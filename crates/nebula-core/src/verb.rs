@@ -177,6 +177,8 @@ pub enum RootWarning {
 pub struct InitReport {
     /// The corpus, as `--json` reports it.
     pub initialized: Initialized,
+    /// Whether this invocation installed or repaired corpus content.
+    pub wrote_corpus: bool,
     /// The machine setting that names the default corpus: written when
     /// `set_root` was given.
     pub setting: PathBuf,
@@ -212,9 +214,11 @@ pub fn init(
             });
         }
     }
-    let initialized = ops::init(locations, root, path, set_root, force)?;
+    let (initialized, wrote_corpus) =
+        ops::init_with_effect(locations, root, path, set_root, force)?;
     Ok(InitReport {
         initialized,
+        wrote_corpus,
         setting: Corpus::root_config_path(locations)?,
         suggest_set_root: !set_root && absent.is_some(),
         warnings,
