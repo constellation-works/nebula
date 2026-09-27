@@ -66,6 +66,7 @@ pub fn new_node(corpus: &Corpus, args: &NewNode) -> Result<Created> {
 pub(super) fn build(corpus: &Corpus, spec: &NewNode, status: Status, body: &str) -> Result<Doc> {
     let id = match &spec.id {
         Some(id) => {
+            crate::id::require_safe_id(id)?;
             if !is_slug(id) {
                 return Err(Error::InvalidId(id.clone()));
             }

@@ -181,7 +181,12 @@ pub(in crate::cli) fn graph(cx: Invocation<'_>, mermaid: bool, from: Option<Stri
             "neb graph needs an output format; pass --json or --mermaid",
         ));
     }
-    let exported = Corpus::open(locations, root)?.query(graph::export)?;
+    let exported = Corpus::open(locations, root)?.query(|graph| {
+        if let Some(id) = from.as_deref() {
+            graph::node(graph, id)?;
+        }
+        graph::export(graph)
+    })?;
     if mermaid {
         out!("{}", render::mermaid(&exported, from.as_deref())?);
     } else {

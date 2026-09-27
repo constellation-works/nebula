@@ -47,6 +47,7 @@ fn the_exit_is_usage_only_for_what_no_corpus_could_accept() {
         Error::UnknownReferenceKind("bogus".into()),
         Error::InvalidObservatoryId("NONSENSE".into()),
         Error::InvalidId("Bad Id".into()),
+        Error::UnsafeId("../x".into()),
     ] {
         assert_eq!(refusal(&usage).exit, Exit::Usage, "{usage:?}");
         assert_eq!(refusal_about(&usage, "n").exit, Exit::Usage, "{usage:?}");
@@ -57,7 +58,6 @@ fn the_exit_is_usage_only_for_what_no_corpus_could_accept() {
             root: PathBuf::from("rel"),
             setting: Some(PathBuf::from("/h/observatory-root")),
         },
-        Error::UnsafeId("../x".into()),
         Error::SeedWithKill,
         Error::RefutedCannotReopen,
     ] {

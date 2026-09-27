@@ -113,6 +113,7 @@ impl<'a> Graph<'a> {
 
     /// One node, or [`Error::NoSuchNode`].
     pub(crate) fn require(&self, id: &str) -> Result<&'a Doc> {
+        crate::id::require_safe_id(id)?;
         self.get(id)
             .ok_or_else(|| Error::NoSuchNode(id.to_string()))
     }

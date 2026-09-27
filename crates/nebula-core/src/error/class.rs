@@ -134,7 +134,7 @@ impl Error {
         InvalidObservatoryId => "invalid_observatory_id", Argument,
         UnresolvedObservatoryRecord => "unresolved_observatory_record", State,
         InvalidId => "invalid_id", Argument,
-        UnsafeId => "unsafe_id", State,
+        UnsafeId => "unsafe_id", Argument,
         IdMismatch => "id_mismatch", State,
         NotRegularFile => "not_regular_file", State,
         Locked => "locked", State,

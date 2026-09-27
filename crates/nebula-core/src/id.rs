@@ -2,9 +2,11 @@
 //! the two rules an id is held to, [`is_slug`] for a new one and
 //! [`is_path_safe_id`] for every one that becomes a path.
 
+use crate::error::{Error, Result};
 use crate::stamp::stamp;
 use std::ffi::OsStr;
 use std::path::{Component, Path};
+use unicode_normalization::UnicodeNormalization;
 
 /// A stable id for a corpus, derived from where it was created and when.
 /// Opaque by design: it identifies, it does not describe.
@@ -22,7 +24,8 @@ pub(crate) fn fnv(s: &str) -> u64 {
     h
 }
 
-/// Turn a title into a node id.
+/// Turn a title into a node id, normalizing Unicode to NFC first.
+/// Existing ids are never normalized or migrated.
 ///
 /// A slug over 60 characters is cut at the last `-` at or before the limit,
 /// never mid-word. A title with no dash in its first 60 characters (one long
@@ -37,7 +40,7 @@ pub(crate) fn slugify(s: &str) -> String {
 fn dashed(s: &str) -> String {
     let mut out = String::new();
     let mut dash = false;
-    for c in s.chars() {
+    for c in s.nfc() {
         if c.is_alphanumeric() {
             out.extend(c.to_lowercase().filter(|lower| lower.is_alphanumeric()));
             dash = false;
@@ -161,4 +164,13 @@ pub(crate) fn is_path_safe_id(id: &str) -> bool {
     let single =
         matches!(components.next(), Some(Component::Normal(name)) if name == OsStr::new(id));
     single && components.next().is_none()
+}
+
+/// Refuse an unsafe caller-supplied node or inbox id before lookup.
+pub(crate) fn require_safe_id(id: &str) -> Result<()> {
+    if is_path_safe_id(id) {
+        Ok(())
+    } else {
+        Err(Error::UnsafeId(id.to_string()))
+    }
 }
