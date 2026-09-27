@@ -111,7 +111,182 @@ fn a_corpus_outside_git_is_told_how_to_start_its_history() {
         .hint
         .expect("a hint");
     assert!(hint.contains("git -C /c init"), "{hint}");
-    assert!(hint.contains("neb config commit on"), "{hint}");
+    assert!(hint.contains("neb --root /c config commit on"), "{hint}");
+}
+
+#[test]
+fn executable_path_hints_quote_paths_and_keep_the_corpus_selected() {
+    let root = PathBuf::from("/state/my corpus 'draft' $HOME; touch marker");
+    let root_text = root.to_string_lossy().into_owned();
+    let no_corpus = refusal(&Error::NoCorpus(root.clone())).hint.unwrap();
+    let words = shlex::split(no_corpus.strip_prefix("Create one with:  ").unwrap())
+        .expect("no-corpus hint parses");
+    assert_eq!(
+        words,
+        vec!["neb".to_owned(), "init".to_owned(), root_text.clone()]
+    );
+
+    let not_git = refusal(&Error::NotGitWorkTree(root.clone())).hint.unwrap();
+    let commands = not_git
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim_start();
+            (line.starts_with("git -C ") || line.starts_with("neb ")).then_some(line)
+        })
+        .map(|command| shlex::split(command).expect("not-git command parses"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        commands,
+        vec![
+            vec![
+                "git".to_owned(),
+                "-C".to_owned(),
+                root_text.clone(),
+                "init".to_owned()
+            ],
+            vec![
+                "neb".to_owned(),
+                "--root".to_owned(),
+                root_text.clone(),
+                "config".to_owned(),
+                "commit".to_owned(),
+                "on".to_owned()
+            ],
+        ]
+    );
+}
+
+#[test]
+fn git_and_ignored_hints_quote_shell_paths() {
+    let root = PathBuf::from("/state/my corpus 'draft' $HOME; touch marker");
+    let root_text = root.to_string_lossy().into_owned();
+    let timed_out = refusal(&Error::GitTimedOut {
+        root: root.clone(),
+        context: "commit".to_owned(),
+        after: std::time::Duration::from_secs(120),
+    })
+    .hint
+    .unwrap();
+    let git_commands = timed_out
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| line.starts_with("git -C "))
+        .map(|line| shlex::split(line).expect("timed-out git command parses"))
+        .collect::<Vec<_>>();
+    assert_eq!(git_commands[0][2], root_text);
+    assert_eq!(git_commands[1][2], root_text);
+    let second_git = git_commands[1]
+        .iter()
+        .position(|word| word == "&&")
+        .unwrap()
+        + 1;
+    assert_eq!(git_commands[1][second_git], "git");
+    assert_eq!(git_commands[1][second_git + 1], "-C");
+    assert_eq!(git_commands[1][second_git + 2], root_text);
+
+    let ignored = refusal(&Error::CorpusIgnored(root.clone())).hint.unwrap();
+    let ignored_git = ignored
+        .lines()
+        .find(|line| line.trim_start().starts_with("git -C "))
+        .unwrap()
+        .trim_start();
+    let ignored_neb = ignored
+        .split_once("neb --root ")
+        .unwrap()
+        .1
+        .lines()
+        .next()
+        .unwrap();
+    let ignored_commands = [ignored_git.to_owned(), format!("neb --root {ignored_neb}")]
+        .map(|line| shlex::split(&line).expect("ignored-corpus command parses"));
+    assert_eq!(ignored_commands[0][2], root_text);
+    assert_eq!(ignored_commands[1][2], root_text);
+}
+
+#[test]
+fn config_repair_hints_quote_paths_and_keep_the_root_selected() {
+    let root = PathBuf::from("/state/my corpus 'draft' $HOME; touch marker");
+    let root_text = root.to_string_lossy().into_owned();
+    let missing_config = refusal(&Error::MissingConfig {
+        path: root.join("config.yaml"),
+    })
+    .hint
+    .unwrap();
+    let missing_migrate = missing_config
+        .split_once("neb --root ")
+        .unwrap()
+        .1
+        .lines()
+        .next()
+        .unwrap();
+    let missing_git = missing_config
+        .split_once("git -C ")
+        .unwrap()
+        .1
+        .lines()
+        .next()
+        .unwrap();
+    let missing_commands = [
+        format!("neb --root {missing_migrate}"),
+        format!("git -C {missing_git}"),
+    ]
+    .map(|line| shlex::split(&line).expect("missing-config command parses"));
+    assert_eq!(missing_commands[0][2], root_text);
+    assert_eq!(missing_commands[1][2], root_text);
+
+    let root_and_path = refusal(&Error::RootAndPathDiffer {
+        root: PathBuf::from("/another-root"),
+        path: root.clone(),
+    })
+    .hint
+    .unwrap();
+    assert_eq!(
+        shlex::split(
+            root_and_path
+                .strip_prefix("Name the corpus once, as the path:  ")
+                .unwrap()
+        )
+        .expect("root-and-path command parses"),
+        vec!["neb".to_owned(), "init".to_owned(), root_text.clone()]
+    );
+}
+
+#[test]
+fn pending_and_lock_recovery_hints_quote_paths() {
+    let root = PathBuf::from("/state/my corpus 'draft' $HOME; touch marker");
+    let pending = root.join(".pending");
+    let hint = refusal(&Error::PendingWriteUnreadable {
+        path: pending.clone(),
+        reason: "bad record".to_owned(),
+    })
+    .hint
+    .expect("pending-write remedy");
+    for command in ["cat", "rm"] {
+        let line = hint
+            .split_once(&format!("{command} "))
+            .expect("command in hint")
+            .1
+            .lines()
+            .next()
+            .unwrap();
+        assert_eq!(
+            shlex::split(&format!("{command} {line}")).expect("pending command parses"),
+            vec![command.to_owned(), pending.to_string_lossy().into_owned()]
+        );
+    }
+
+    let lock = root.join(nebula_core::LOCK_FILE);
+    let hint = refusal(&Error::NotRegularFile {
+        path: lock.clone(),
+        found: nebula_core::fs::EntryKind::Symlink,
+    })
+    .hint
+    .expect("lock remedy");
+    let command = hint.split_once("rm ").unwrap().1;
+    assert_eq!(
+        shlex::split(&format!("rm {command}")).expect("lock command parses"),
+        vec!["rm".to_owned(), lock.to_string_lossy().into_owned()]
+    );
 }
 
 #[test]

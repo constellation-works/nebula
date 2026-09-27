@@ -133,7 +133,7 @@ impl From<KeyError> for Failure {
 
 /// `word` as one shell word: quoted when it needs quoting, so a command
 /// printed for pasting runs as shown.
-pub(super) fn shell_word(word: &str) -> String {
+pub(crate) fn shell_word(word: &str) -> String {
     shlex::try_quote(word).map_or_else(|_| word.to_owned(), std::borrow::Cow::into_owned)
 }
 

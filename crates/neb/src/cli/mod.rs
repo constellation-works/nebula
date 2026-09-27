@@ -29,6 +29,8 @@ mod failure;
 mod help;
 mod triage;
 
+pub(crate) use failure::shell_word;
+
 use crate::output::{self, errln};
 use crate::render;
 use args::{Cli, Command, ConfigSetting};

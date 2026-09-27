@@ -1,7 +1,166 @@
 //! Refusals: the `--json` error envelope on stderr, its codes and hints, and
 //! the exit codes of usage and argument-shape errors.
 
-use crate::harness::{Corpus, break_head, corpus_repo, git_init, snapshot_corpus_files, write};
+use crate::harness::{
+    Corpus, break_head, corpus_repo, git_init, output, snapshot_corpus_files, write,
+};
+use crate::support;
+use std::path::Path;
+
+/// Run printed shell commands against recording functions so their parsed
+/// arguments and any unexpected command are visible without doing the work.
+#[cfg(unix)]
+fn shell_calls(commands: &[String], scratch: &Path) -> Vec<Vec<String>> {
+    let trace = scratch.join("shell-calls");
+    write(&trace, "");
+    let script = format!(
+        r#"record() {{
+  printf 'CALL|%s' "$1" >> "$NEBULA_TEST_TRACE"
+  shift
+  for arg do printf '|%s' "$arg" >> "$NEBULA_TEST_TRACE"; done
+  printf '\n' >> "$NEBULA_TEST_TRACE"
+}}
+neb() {{ record neb "$@"; }}
+git() {{ record git "$@"; }}
+cat() {{ record cat "$@"; }}
+rm() {{ record rm "$@"; }}
+touch() {{ record unexpected_touch "$@"; }}
+{}
+"#,
+        commands.join("\n")
+    );
+    let mut command = support::command("sh", scratch);
+    command
+        .current_dir(scratch)
+        .env("NEBULA_TEST_TRACE", &trace)
+        .env("NEBULA_TEST_EXPANSION", "expanded")
+        .args(["-c", &script]);
+    let out = output(&mut command);
+    assert!(
+        out.status.success(),
+        "shell command failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::read_to_string(trace)
+        .expect("recorded shell calls")
+        .lines()
+        .map(|line| {
+            line.strip_prefix("CALL|")
+                .expect("recorded call marker")
+                .split('|')
+                .map(str::to_owned)
+                .collect()
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn refusal_remedies_quote_shell_sensitive_paths_and_keep_the_root_selected() {
+    let dir = tempfile::tempdir().expect("fixture directory");
+    let root = dir
+        .path()
+        .join("my corpus 'draft' $NEBULA_TEST_EXPANSION; touch marker");
+    let corpus = Corpus { dir, root };
+    let root_text = corpus.root.to_string_lossy().into_owned();
+
+    let no_corpus = corpus.run(&["--json", "list"]).refusal();
+    assert_eq!(no_corpus["code"], "no_corpus");
+    let command = no_corpus["hint"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("Create one with:  ")
+        .expect("init remedy");
+    assert_eq!(
+        shell_calls(&[command.to_owned()], corpus.dir.path()),
+        vec![vec!["neb".to_owned(), "init".to_owned(), root_text.clone()]]
+    );
+
+    corpus.run(&["init"]).assert_ok();
+    let id = corpus.seed("an uncommitted past", "An uncommitted past");
+    let not_git = corpus.run(&["--json", "log", &id]).refusal();
+    assert_eq!(not_git["code"], "not_git_work_tree");
+    let hint = not_git["hint"].as_str().unwrap();
+    let commands = hint
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| line.starts_with("git -C ") || line.starts_with("neb "))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shell_calls(&commands, corpus.dir.path()),
+        vec![
+            vec![
+                "git".to_owned(),
+                "-C".to_owned(),
+                root_text.clone(),
+                "init".to_owned()
+            ],
+            vec![
+                "neb".to_owned(),
+                "--root".to_owned(),
+                root_text.clone(),
+                "config".to_owned(),
+                "commit".to_owned(),
+                "on".to_owned(),
+            ],
+        ]
+    );
+
+    let pending_path = corpus.root.join(".pending");
+    write(&pending_path, "{");
+    let pending = corpus
+        .run(&["--json", "capture", "pending probe"])
+        .refusal();
+    assert_eq!(pending["code"], "pending_write_unreadable");
+    let hint = pending["hint"].as_str().unwrap();
+    let commands = ["cat", "rm"]
+        .iter()
+        .map(|command| {
+            let path = hint
+                .split_once(&format!("{command} "))
+                .expect("pending remedy command")
+                .1
+                .lines()
+                .next()
+                .unwrap();
+            format!("{command} {path}")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shell_calls(&commands, corpus.dir.path()),
+        vec![
+            vec![
+                "cat".to_owned(),
+                pending_path.to_string_lossy().into_owned()
+            ],
+            vec!["rm".to_owned(), pending_path.to_string_lossy().into_owned()],
+        ]
+    );
+
+    std::fs::remove_file(&pending_path).expect("clear malformed fixture record");
+    let lock_path = corpus.root.join(nebula_core::LOCK_FILE);
+    std::fs::remove_file(&lock_path).expect("replace fixture lock with a symlink");
+    let target = corpus.dir.path().join("outside-lock-target");
+    std::fs::write(&target, b"keep this target").expect("symlink target");
+    std::os::unix::fs::symlink(&target, &lock_path).expect("symlink lock fixture");
+    let locked = corpus.run(&["--json", "capture", "lock probe"]).refusal();
+    assert_eq!(locked["code"], "not_regular_file");
+    let command = locked["hint"]
+        .as_str()
+        .unwrap()
+        .split_once("rm ")
+        .expect("lock removal remedy")
+        .1;
+    assert_eq!(
+        shell_calls(&[format!("rm {command}")], corpus.dir.path()),
+        vec![vec![
+            "rm".to_owned(),
+            lock_path.to_string_lossy().into_owned()
+        ]]
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), b"keep this target");
+}
 use crate::migrate::v1_corpus;
 
 /// Under `--json` a refusal is data: one envelope on stderr, stdout left to
@@ -217,7 +376,10 @@ fn list_on_corpus_without_config_refuses_and_leaves_no_file() {
             "{args:?}: {refused}"
         );
         assert!(
-            refused["hint"].as_str().unwrap().contains("neb migrate"),
+            refused["hint"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("neb --root {} migrate", c.root.display())),
             "{args:?}: {refused}"
         );
         assert!(!config.exists(), "`neb {}` wrote a config", args.join(" "));
@@ -269,10 +431,10 @@ fn json_commit_refusals_leave_the_payload_on_stdout() {
     let refused = run.refusal();
     assert_eq!(refused["code"], "corpus_ignored");
     assert!(
-        refused["hint"]
-            .as_str()
-            .unwrap()
-            .contains("neb config commit off"),
+        refused["hint"].as_str().unwrap().contains(&format!(
+            "neb --root {} config commit off",
+            c.root.display()
+        )),
         "{refused}"
     );
     serde_json::from_str::<serde_json::Value>(&run.stdout())
