@@ -34,6 +34,28 @@ pub(crate) use table::Target;
 pub(crate) use tree::{draw as tree, tabbed as trace_lines, trace_notice};
 pub(crate) use triage::{step, tally, triage_keys, waiting};
 
+/// A stored value in a single human-output field. Controls must not change
+/// the terminal state or the shape of a record.
+pub(super) fn inline_text(text: &str) -> String {
+    text.chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect()
+}
+
+/// Stored prose in a human report. Keep its authored line breaks and tabs,
+/// while neutralizing terminal controls (including ESC and C1 controls).
+pub(super) fn prose_text(text: &str) -> String {
+    text.chars()
+        .map(|ch| {
+            if ch.is_control() && ch != '\n' && ch != '\t' {
+                ' '
+            } else {
+                ch
+            }
+        })
+        .collect()
+}
+
 /// Text in `role`'s colour, for stdout.
 pub(crate) fn paint(role: Role, s: &str) -> String {
     output::paint(Stream::Stdout, role, s)
@@ -278,7 +300,7 @@ fn walk_lineage(graph: &GraphExport, at: &str, up: bool, included: &mut HashSet<
 }
 
 fn mermaid_label(title: &str) -> String {
-    title
+    inline_text(title)
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

@@ -2,7 +2,7 @@
 //! a tree for a terminal, and one tab-separated line per node for anything
 //! else (§R9).
 
-use super::{Notice, bold, count, dim, status_badge};
+use super::{Notice, bold, count, dim, inline_text, prose_text, status_badge};
 use nebula_core::{Direction, EdgeType, Trace, TraceNode};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -60,7 +60,7 @@ pub(crate) fn tabbed(trace: &Trace) -> String {
             walk.depth(n),
             n.id,
             n.status,
-            n.title.replace(['\t', '\n'], " ")
+            inline_text(&n.title)
         );
     }
     out
@@ -202,13 +202,13 @@ fn line(n: &TraceNode) -> String {
     let handoff = n
         .handed_off_to
         .as_deref()
-        .map(|record| dim(&format!("  handed off to {record}")))
+        .map(|record| dim(&format!("  handed off to {}", inline_text(record))))
         .unwrap_or_default();
     format!(
         "{} {} {}{handoff}",
         status_badge(n.status),
         bold(&n.id),
-        dim(&n.title)
+        dim(&prose_text(&n.title))
     )
 }
 

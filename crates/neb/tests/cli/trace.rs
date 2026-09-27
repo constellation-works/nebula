@@ -1,7 +1,7 @@
 //! `neb trace` and `neb impact` over the lineage DAG: diamonds, edge kinds,
 //! depth bounds, and the link refusals that keep the graph acyclic.
 
-use crate::harness::Corpus;
+use crate::harness::{Corpus, set_updated};
 use crate::listing::{assert_envelope, json_of};
 
 #[test]
@@ -69,6 +69,56 @@ fn traced_ids(lines: &str) -> Vec<&str> {
         .lines()
         .map(|l| l.split('\t').nth(1).expect("an id field"))
         .collect()
+}
+
+#[test]
+fn stored_controls_cannot_escape_in_trace_show_or_review() {
+    let c = Corpus::new();
+    let title = "Escape\u{1b}[31m title";
+    let body = "first line\nsecond \u{1b}[2J line";
+    let by = "agent:\u{1b}[32m";
+    let note = "first note\nsecond \u{1b}[0m note";
+    c.run(&["new", title, "--id", "escape", "--body", body, "--by", by])
+        .assert_ok();
+    c.run(&[
+        "cite",
+        "escape",
+        "--kind",
+        "discussion",
+        "--note",
+        note,
+        "--by",
+        by,
+    ])
+    .assert_ok();
+
+    for env in [
+        [("NO_COLOR", "1"), ("TERM", "xterm")],
+        [("NO_COLOR", ""), ("TERM", "dumb")],
+    ] {
+        let trace = c
+            .run_with_env(&["trace", "escape"], &env)
+            .assert_ok()
+            .stdout();
+        assert_eq!(trace, "0\tescape\tseed\tEscape [31m title\t-\n");
+
+        let shown = c
+            .run_with_env(&["show", "escape"], &env)
+            .assert_ok()
+            .stdout();
+        assert!(!shown.contains('\u{1b}'), "{shown:?}");
+        assert!(shown.contains("Escape [31m title (agent: [32m)"), "{shown}");
+        assert!(shown.contains("first line\nsecond  [2J line\n"), "{shown}");
+        assert!(
+            shown.contains("first note\n     second  [0m note"),
+            "{shown}"
+        );
+    }
+
+    set_updated(&c.node_file("escape"), "2020-01-01");
+    let review = c.run(&["review"]).assert_ok().stdout();
+    assert!(!review.contains('\u{1b}'), "{review:?}");
+    assert!(review.contains("Escape [31m title"), "{review}");
 }
 
 #[test]
