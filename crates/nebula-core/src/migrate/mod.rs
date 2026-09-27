@@ -298,25 +298,28 @@ pub(crate) fn run_then<T>(
 }
 
 /// Read back what the steps produced with the current model, in memory: each
-/// node that changed, with its id, and the config. A step that produced
+/// node, including its filename identity, and the config. Return the changed
+/// nodes with their ids. A step that produced
 /// something this build cannot read is refused here, before any write,
 /// rather than found by the next verb in a half-written corpus.
 fn verified(staged: &Staged) -> Result<(Vec<(&StagedNode, String)>, Config)> {
     let mut writes = Vec::new();
     for node in &staged.nodes {
-        // Idempotence is byte equality: a node already in v2 form renders
-        // back to exactly what is on disk and is left alone, so a second run
-        // rewrites nothing and `updated` is never bumped by a migration.
-        if node.text == node.original {
-            continue;
-        }
         let doc = model::parse(&node.text, &node.path).map_err(|source| {
             Error::MigratedNodeUnreadable {
                 path: node.path.clone(),
                 source: Box::new(source),
             }
         })?;
-        writes.push((node, doc.node.id));
+        // An unchanged node is still part of the corpus the ledger will
+        // declare readable. Share the loader's filesystem identity rule,
+        // including Unicode respellings and hard-link alias refusal.
+        Corpus::require_file_agrees(&staged.root, &node.path, &doc)?;
+        // Idempotence is byte equality; validation must not skip unchanged
+        // nodes, but neither may it rewrite them or bump `updated`.
+        if node.text != node.original {
+            writes.push((node, doc.node.id));
+        }
     }
     let path = staged.root.join(config::FILE);
     let config: Config = serde_yaml_ng::from_str(staged.config.as_deref().unwrap_or_default())
