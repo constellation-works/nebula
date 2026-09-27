@@ -10,7 +10,7 @@ use fs4::{FileExt, TryLockError};
 use nebula_core::fs::{create_private_dir_all, private_open_options, write_private_atomic};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -108,7 +108,125 @@ fn an_unreadable_settings_file_keeps_the_default_shortcut_and_reports_it() {
     assert_eq!(s.capture_shortcut, DEFAULT_CAPTURE_SHORTCUT);
     let warn = warn.unwrap();
     assert!(warn.contains(&settings_file.display().to_string()));
+    assert!(warn.contains("directory"), "{warn}");
     assert!(warn.contains(DEFAULT_CAPTURE_SHORTCUT));
+}
+
+#[cfg(unix)]
+#[test]
+fn final_symlink_settings_are_refused_without_touching_the_target() {
+    use std::os::unix::fs::symlink;
+
+    for target_exists in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("config");
+        std::fs::create_dir(&dir).unwrap();
+        let target = root.path().join("target");
+        let content = r#"{ "capture_shortcut": "CmdOrCtrl+Shift+N" }"#;
+        if target_exists {
+            std::fs::write(&target, content).unwrap();
+        }
+        let path = dir.join(FILE_NAME);
+        symlink(&target, &path).unwrap();
+
+        let (settings, warning) = load(&dir);
+
+        assert_eq!(settings, Settings::default());
+        let warning = warning.unwrap();
+        assert!(warning.contains(&path.display().to_string()), "{warning}");
+        assert!(warning.contains("symlink"), "{warning}");
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).ok().as_deref(),
+            target_exists.then_some(content)
+        );
+        assert!(!dir.join("settings.lock").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn socket_settings_are_refused_without_connecting_or_writing() {
+    use std::os::unix::net::UnixListener;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(FILE_NAME);
+    let _listener = UnixListener::bind(&path).unwrap();
+
+    let (settings, warning) = load(dir.path());
+
+    assert_eq!(settings, Settings::default());
+    let warning = warning.unwrap();
+    assert!(warning.contains(&path.display().to_string()), "{warning}");
+    assert!(warning.contains("socket"), "{warning}");
+    assert!(
+        std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_socket()
+    );
+    assert!(!dir.path().join("settings.lock").exists());
+}
+
+#[cfg(unix)]
+#[ctor::ctor]
+unsafe fn settings_fifo_load_child() {
+    let Some(dir) = std::env::var_os("NEBULA_TEST_SETTINGS_FIFO_LOAD") else {
+        return;
+    };
+    let dir = Path::new(&dir);
+    write_private_atomic(&dir.join("ready"), b"entered load").unwrap();
+    let (settings, warning) = load(dir);
+    assert_eq!(settings, Settings::default());
+    let warning = warning.expect("a FIFO must produce a startup warning");
+    assert!(warning.contains(&dir.join(FILE_NAME).display().to_string()));
+    assert!(warning.contains("FIFO"), "{warning}");
+    assert!(!dir.join("settings.lock").exists());
+    std::process::exit(0);
+}
+
+#[cfg(unix)]
+#[test]
+fn fifo_settings_are_refused_before_startup_can_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(FILE_NAME);
+    let output = support::output(
+        support::command("mkfifo", support::home()).arg(&path),
+        support::DEADLINE,
+    )
+    .unwrap();
+    assert!(output.status.success());
+
+    let mut child = support::ChildGuard::spawn(
+        support::command(std::env::current_exe().unwrap(), support::home())
+            .env("NEBULA_TEST_SETTINGS_FIFO_LOAD", dir.path()),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !dir.path().join("ready").exists() {
+        assert!(
+            child.try_wait().is_none(),
+            "load child exited before readiness"
+        );
+        assert!(Instant::now() < deadline, "load child never became ready");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let status = child.wait(Duration::from_secs(2));
+    assert!(
+        status.as_ref().is_ok_and(std::process::ExitStatus::success),
+        "{status:?}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_fifo()
+    );
 }
 
 #[path = "../../../../../crates/nebula-core/tests/support/mod.rs"]

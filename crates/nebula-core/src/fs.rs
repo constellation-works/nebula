@@ -374,7 +374,7 @@ fn open_to_read(path: &Path, links: Links) -> Result<Option<File>> {
 /// symlink, a FIFO, a device or a directory at `path` is
 /// [`Error::NotRegularFile`] and nothing is read from it. See
 /// [`open_regular`].
-pub(crate) fn read_regular_text(path: &Path) -> Result<Option<String>> {
+pub fn read_regular_text(path: &Path) -> Result<Option<String>> {
     use std::io::Read as _;
     let Some(mut file) = open_to_read(path, Links::Refuse)? else {
         return Ok(None);

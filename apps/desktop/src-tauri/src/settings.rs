@@ -10,7 +10,8 @@
 use crate::fail_open;
 use fs4::{FileExt, TryLockError};
 use nebula_core::fs::{
-    create_private_dir_all, open_private_lock, validate_private_lock, write_private_atomic,
+    create_private_dir_all, open_private_lock, read_regular_text, validate_private_lock,
+    write_private_atomic,
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -92,9 +93,9 @@ impl Default for Settings {
 /// can show it in the tray and main window.
 pub(crate) fn load(dir: &Path) -> (Settings, Option<String>) {
     let path = dir.join(FILE_NAME);
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(raw) => raw,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+    let raw = match read_regular_text(&path) {
+        Ok(Some(raw)) => raw,
+        Ok(None) => {
             return write_defaults(dir, &path);
         }
         Err(e) => {
@@ -123,12 +124,13 @@ pub(crate) fn load(dir: &Path) -> (Settings, Option<String>) {
 
 fn write_defaults(dir: &Path, path: &Path) -> (Settings, Option<String>) {
     let s = Settings::default();
-    let written = with_lock(dir, || {
-        if path.exists() {
-            return Ok(false);
+    let written = with_lock(dir, || match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            write_file(dir, &s)?;
+            Ok(true)
         }
-        write_file(dir, &s)?;
-        Ok(true)
+        Err(e) => Err(io("inspect", path)(e)),
     });
     if matches!(written, Ok(false)) {
         return load(dir);
