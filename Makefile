@@ -108,6 +108,7 @@ check:
 
 test:
 	$(CARGO) test $(LOCKED) --workspace --all-targets
+	bash scripts/test-bench-compare.sh
 
 goldens:
 	NEB_UPDATE_GOLDENS=$(if $(filter 1,$(UPDATE)),1,0) $(CARGO) test $(LOCKED) -p neb --test goldens
