@@ -670,7 +670,7 @@ fn lifecycle_rules(doc: &Doc, r: &mut Report) {
 fn date_rules(doc: &Doc, r: &mut Report) {
     let n = &doc.node;
     let id = Some(n.id.as_str());
-    // 14. Every date `ops.rs` writes comes from `store::today()`, so
+    // 14. Every date `ops.rs` writes comes from `stamp::today()`, so
     //     `created`/`updated` are always `YYYY-MM-DD` and never move
     //     backwards. A hand edit is the only way either goes wrong, and
     //     `review`/`open` then silently treat the node as never stale,
