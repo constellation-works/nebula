@@ -38,7 +38,7 @@ available. An empty or unset value leaves writes enabled; other values are
 refused.
 
 ```
-nebula   = the CLI, the checker, the index builder   (this repo)
+nebula   = the CLI, checker and desktop app           (this repo)
 corpus   = nodes/ and inbox/                          (elsewhere, private)
 ```
 
@@ -61,6 +61,31 @@ neb completions zsh > ~/.zfunc/_neb
 ```
 
 A corpus written by v0.1 is brought forward in place with `neb migrate`.
+
+## CLI results
+
+`neb --help` lists the shipped verbs. Read commands include `show`, `list`,
+`inbox`, `near`, `trace`, `impact`, `graph`, `log`, `review` and `check`; writes
+include `capture`, `promote`, `drop`, `new`, `edit`, `sharpen`, `status`,
+`link`, `tag`, `note`, `cite` and `handoff`. Use `neb review --short` for the
+quick glance; `neb open` is a deprecated alias. Put `--no-commit` after a
+write verb; the before-verb form is deprecated.
+
+Stdout holds the result alone. List-shaped text is an aligned table on a
+terminal and headerless TSV when piped; notices and commit hashes go to
+stderr. Typed refusals under `--json` emit `{error, code, hint}` on stderr;
+clap parser errors stay prose. Exit 2 means
+an argument no corpus could accept (including clap errors); exit 1 means a
+state refusal or an error-level `check` finding; exit 0 means success.
+`not_regular_file`, `locked`, `io_at` and `unknown_revision` are state
+refusals. The [skill's verb reference](skills/nebula/references/verbs.md)
+lists command flags, JSON shapes and error codes.
+
+With `neb config commit on`, a changed corpus write commits only corpus
+paths, leaving unrelated staged work alone. If no git work tree contains the
+corpus, the write succeeds and stderr says it was not committed. If git
+refuses a commit, the write remains on disk; resolve the git problem before
+making another corpus change.
 
 ## Status
 

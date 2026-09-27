@@ -2,7 +2,7 @@
 type: runbook
 summary: Diagnose a corpus that will not load, repair hand-edited nodes, and recover from an interrupted write.
 tags: [operations, recovery, debugging]
-paths: ["crates/nebula-core/src/model.rs", "crates/nebula-core/src/check.rs", "crates/nebula-core/src/store.rs", "crates/nebula-core/src/pending.rs"]
+paths: ["crates/nebula-core/src/model.rs", "crates/nebula-core/src/check/", "crates/nebula-core/src/store/", "crates/nebula-core/src/pending.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 last_validated: 2026-09-26
@@ -198,8 +198,8 @@ git's own message and, again, never undoes the write.
 The corpus should be a git repository, ideally its own one at the corpus
 root with a private remote (see
 [corpus-setup.md](corpus-setup.md#put-it-under-git)). With `neb config
-commit on`, every verb is one commit named `neb <verb> <ids>`, so the history
-reads as a log of what you did and any state is addressable.
+commit on`, each changed write can make one commit named `neb <verb> <ids>`,
+so the history reads as a log of what you did and any state is addressable.
 
 Since nothing is ever deleted in normal operation, almost any damage is a
 checkout away:

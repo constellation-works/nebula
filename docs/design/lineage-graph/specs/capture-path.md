@@ -9,7 +9,7 @@ doc_role: spec
 type: design
 summary: The five-second capture budget, the inbox format, and why promotion is a separate act.
 tags: [lineage-graph, capture]
-paths: ["crates/nebula-core/src/store.rs", "crates/nebula-core/src/ops.rs"]
+paths: ["crates/nebula-core/src/store/", "crates/nebula-core/src/ops/"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 ---

@@ -186,8 +186,9 @@ such a setting without `--force`, since it names no corpus.
 ```
 
 With `commit` on (off by default) and the corpus root inside a git work
-tree, every mutating verb ends with one commit of `nodes/`, `inbox/` and
-`config.yaml`, named `neb <verb> <ids>`, and prints `committed <hash>` on
+tree, a changed corpus write can end with one commit of `nodes/`, `inbox/`,
+`config.yaml` and the generated `.gitignore`. A commit is named
+`neb <verb> <ids>` and prints `committed <hash>` on
 stderr in text mode (nothing extra in `--json`). It never pushes and never touches a
 path outside the corpus root. The commit names those paths, so anything else
 staged in the repository — before the verb or while it runs — is left staged
@@ -408,8 +409,9 @@ fresh one rather than reach back into a section other prose has closed, and
 every one of them is protected. A body left as it was (outer whitespace aside)
 is not written: `updated` stays, nothing is committed, stderr says
 `no change; <id> not written`, and `--json` still prints the node. `edit`
-takes no `--by`: the body has no per-field author in the current schema. With
-neither environment variable set, `edit` refuses and names both variables.
+accepts `--by` and requires it under an Orbit run, although the body has no
+per-field author in the current schema. With neither environment variable set,
+`edit` refuses and names both variables.
 Unknown nodes are refused (`NoSuchNode`). `--json` is the same `NodeView` as
 `show --json`: `notes` is a list of `{at, text, by}`, oldest first, and `[]`
 when there are none.
@@ -733,8 +735,8 @@ kill: a corpus of 50+ nodes needs a cross-cutting query that tags cannot answer
 ```
 
 `neb show <NODE> --at <HASH|YYYY-MM-DD>` has exactly the same text and JSON
-shape as current `show`; a date means the final commit on that date as
-`neb log` dates it, which is the commit's own day in the offset it was
+shape as current `show`; a date means the newest commit whose own day is on or
+before that date as `neb log` dates it, using the offset it was
 recorded with. The reader's timezone never changes which revision a date
 names. A date before the node existed is refused. `neb log <NODE>` is a table of
 short hash, date and message. When no commit has touched the node, text output says `no commits

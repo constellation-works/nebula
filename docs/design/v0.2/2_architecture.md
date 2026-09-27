@@ -53,44 +53,42 @@ in `AppState::new` and starts at the fallback path resolved from it.
 ## `nebula-core`
 
 The rule: **core is pure with respect to the outside world's presentation.**
-It reads and writes corpus files and nothing else. No terminal, no colour, no
+It reads and writes corpus and machine-setting files. No terminal, no colour, no
 clap, no `println!`, no `anyhow` in the public API, no process exit codes.
 
 ```
 nebula-core/src/
   lib.rs          # re-exports; the public API is exactly what lib.rs names
-  error.rs        # `Error` enum (thiserror); every public fn returns Result<T, Error>
+  error/          # `Error` enum, stable codes and classes; public fallible API returns Result<T, Error>
   model.rs        # Node, Status, Edge, EdgeType, Reference, Origin, Closed, InboxEntry
                   # serde with deny_unknown_fields; this is the file format
   locations.rs    # Locations: the environment and working directory a surface resolved
-  store.rs        # Corpus: open/init, load/save nodes, inbox append/settle, config
+  store/          # Corpus: open/init, load/save nodes, inbox append/settle, commit
   fs.rs           # the one durable write path: temp + fsync + rename + dir fsync,
                   # 0600 files and 0700 directories; clippy.toml refuses std::fs::write
   lock.rs         # CorpusLock: the advisory <root>/.lock every write holds
   pending.rs      # the <root>/.pending record that lets the next writer finish
                   # a promotion interrupted between its node and its strike
-  graph.rs        # Graph: an indexed snapshot of loaded nodes (by_id, parents, children)
+  graph/          # Graph: an indexed snapshot of loaded nodes (by_id, parents, children)
                   # + pure queries: trace, impact, open, review, export
-  ops.rs          # mutations: capture, promote, drop, new, sharpen, link, cite,
+  ops/            # mutations: capture, promote, drop, new, sharpen, link, cite,
                   # set_status, handoff, tag — each enforces its point-of-action invariants
                   # and returns the changed Node(s)
   verb.rs         # one call per command: the lock, the op, the commit, then the advice
-  check.rs        # rules over a Graph → Vec<Finding { rule, severity, node, message }>
-  migrate.rs      # v1 → v2, with its own lenient v1 model kept private to this module
+  check/          # rules over a Graph → Vec<Finding { rule, severity, node, message }>
+  migrate/        # v1 → v2, with its own lenient v1 model kept private to this module
 ```
 
 Design rules for core:
 
-- **Return data, never text.** Every query and op returns a `serde::Serialize`
-  struct. The CLI's `--json` output and the desktop's IPC payload are the same
-  value; there is no second schema to drift. The CLI states that value in
-  full through `render::json`, an absent field `null` and every author
-  label spelled out, where core's own serialisation leaves them to the
-  file's defaults.
-- **Queries are pure over a `Graph`.** `Graph::from(&[Node])` is built once per
-  command; `trace`, `impact`, `open`, `review`, `export` take `&Graph` and
-  allocate nothing global. This is what lets the desktop keep a `Graph` in
-  memory and rebuild it on a file-watch event.
+- **Return data, never text.** Queries and ops return `serde::Serialize`
+  structs. The desktop uses core types and generated TypeScript bindings;
+  the CLI's `render::json` view supplies its fuller command contract, with
+  absent fields as `null` and every author label spelled out. The desktop
+  omits some absent fields in its own IPC payload.
+- **Queries are pure over a `Graph`.** `Graph::build(&[Doc])` indexes the loaded
+  nodes; `trace`, `impact`, `review` and `export` query that snapshot. The
+  desktop refetches after a file-watch event.
 - **Ops take `&Corpus` and typed args, and validate before they write.** A
   caller cannot produce an invalid corpus through core; `check` exists to catch
   hand edits, not core bugs.
@@ -217,12 +215,12 @@ atomic. Three things cover a crash part-way through one:
 ```
 neb/src/
   main.rs         # ExitCode from cli::main()
-  cli.rs          # clap tree; the only file that knows clap
+  cli/            # clap tree, dispatch and commands by noun
   output.rs       # the one owner of stdout/stderr; a closed stdout exits 0
-  render/         # text rendering of core types: tree, table, badges, colour
+  render/         # text and JSON views: tree, table, badges, colour
 ```
 
-`cli.rs` dispatch is a table: parse args → one core operation (a write is
+`cli/` dispatch is a table: parse args → one core operation (a write is
 one call into `nebula_core::verb`; a read is `Corpus::open` plus one query)
 → either
 `--json` (through the `render::json` view where core would leave a field out,

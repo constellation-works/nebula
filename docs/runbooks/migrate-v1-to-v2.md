@@ -2,7 +2,7 @@
 type: runbook
 summary: Bring a v1 corpus (domain, evidence, tasks, graduate) forward to the v2 schema with `neb migrate`.
 tags: [operations, migration, corpus]
-paths: ["crates/nebula-core/src/migrate.rs", "crates/nebula-core/src/config.rs"]
+paths: ["crates/nebula-core/src/migrate/", "crates/nebula-core/src/config.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 last_validated: 2026-09-26

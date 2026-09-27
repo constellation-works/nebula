@@ -2,7 +2,7 @@
 type: runbook
 summary: Create a nebula corpus, point the CLI at it, and put it under version control.
 tags: [operations, setup, corpus]
-paths: ["crates/nebula-core/src/store.rs", "crates/nebula-core/src/config.rs"]
+paths: ["crates/nebula-core/src/store/", "crates/nebula-core/src/config.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 last_validated: 2026-09-21
@@ -115,9 +115,9 @@ neb config commit on
 ```
 
 This writes `commit: true` to `config.yaml` (off by default, and absent from
-the file until turned on). From then on every mutating verb — `capture`,
-`promote`, `drop`, `new`, `sharpen`, `status`, `link`, `tag`, `cite`,
-`handoff`, `note`, `migrate`, `config` — ends with one commit of the corpus
+the file until turned on). From then on changed writes — `capture`,
+`promote`, `drop`, `triage`, `new`, `edit`, `sharpen`, `status`, `link`, `tag`,
+`note`, `cite`, `handoff`, `migrate`, `config` — can end with a commit of the corpus
 paths (`triage` makes one per promote or drop it carries out), and prints
 `committed <hash>` on stderr under its usual output, so `E=$(neb capture -q …)`
 still holds the id alone:

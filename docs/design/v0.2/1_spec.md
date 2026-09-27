@@ -148,7 +148,7 @@ and Orbit provenance, and suppress nearest-node suggestions; run
 | `drop <ref>` | settle an inbox entry without a node |
 | `triage [--by ..]` | interactive: each waiting entry, oldest first, with its age and numbered `near` candidates; one key promotes it as a root (`p`), under a candidate (`1`–`3`), titles it (`t`), drops (`d`), skips (`s`) or stops (`q`). Each decision is `promote` or `drop`, commit included; no `--json` |
 | `new <title> [--parent ..] [--reopens ..] [--contradicts ..] [--tag ..] [--kill ..]` | create a node directly, with its edges; `--contradicts` is written on both nodes |
-| `edit <id>` | edit a node's body in `$VISUAL` or `$EDITOR` |
+| `edit <id> [--by ..]` | edit a node's body in `$VISUAL` or `$EDITOR`; `--by` is required under an Orbit run |
 | `sharpen <id> --kill "..."` | seed becomes hypothesis |
 | `status <id> <status> [--why ..]` | move status under the rules above; reopening requires a new node and a `reopens` edge (`new --reopens <id>`) |
 | `link <from> <type> <to>` | add an edge; refuses a genealogy cycle |
@@ -166,9 +166,10 @@ and Orbit provenance, and suppress nearest-node suggestions; run
 | `review [--since ..] [--out ..] [--limit ..]` | weekly report: stale hypotheses (default 30 days), untouched seeds (default 90 days), hypotheses created at least 14 days ago with no references, unconfirmed kills, and inbox entries waiting at least 14 days; proposes, never mutates |
 | `review --short [--tag ..] [--limit ..]` | quick glance: hypotheses created at least 14 days ago with no references; seeds untouched for at least 90 days; inbox entries waiting at least 14 days |
 
-Every read verb keeps `--json`. The JSON shape **is** the core library's
-return type serialised, with every field present (an absent value `null`, an
-empty list `[]`) and every author label stated; see
+Every corpus read verb keeps `--json`; `completions` and interactive `triage`
+refuse it. The CLI serializes core results through its JSON view, with every
+field present (an absent value `null`, an empty list `[]`) and every author
+label stated; see
 [2_architecture.md](2_architecture.md). `--limit` and `--depth` bound the
 output and default to everything; they and `near -k` take at least 1, and
 `review --since` at least 0, so a value below is a usage error rather than an
@@ -179,7 +180,17 @@ answers in that envelope. Every verb that writes takes `--no-commit`; a
 read-only verb does not offer it. Written before the verb, the flag is
 deprecated: it still skips the commit of a verb that writes, with a warning,
 and is refused before one that does not. A refusal of the command line itself,
-an argument no corpus could accept, exits 2; any other refusal exits 1.
+an argument no corpus could accept, exits 2; state refusals and error-level
+`check` findings exit 1. Under `--json`, typed refusals use
+`{error, code, hint}` on stderr; clap's parser errors remain prose. Human
+stdout holds only the result: list-shaped output is an aligned table on a
+terminal and headerless TSV when piped. Counts, cut notices, hints and commit
+notices go to stderr. With commits enabled, each changed write commits only
+corpus paths; unrelated staged work remains staged. A write outside a git
+repository succeeds with a not-committed note on stderr, while a refused git
+commit leaves the write in place. A `log` date is the commit's own day in its
+recorded offset, and `show --at YYYY-MM-DD` selects the newest commit whose
+own day is on or before that date, independent of the reader's timezone.
 
 ## Invariants
 

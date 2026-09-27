@@ -9,7 +9,7 @@ doc_role: spec
 type: design
 summary: What neb check enforces, where each rule is enforced, and which failures block.
 tags: [lineage-graph, invariants]
-paths: ["crates/nebula-core/src/check.rs", "crates/nebula-core/src/model.rs", "crates/nebula-core/src/ops.rs", "crates/nebula-core/src/store.rs", "crates/nebula-core/src/config.rs"]
+paths: ["crates/nebula-core/src/check/", "crates/nebula-core/src/model.rs", "crates/nebula-core/src/ops/", "crates/nebula-core/src/store/", "crates/nebula-core/src/config.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
 ---
@@ -125,9 +125,9 @@ leaving each such reference visible until it is rewritten.
 
 Rules 12–14 mostly catch states no verb produces: no verb takes `closed`,
 `created`, `updated` or a reference's `added` as free-form input, so there is
-no place for a matching refusal to live. `ops.rs` only ever produces a
+no place for a matching refusal to live. The `ops/` module only produces a
 `closed` block on `refuted`/`abandoned`, a `kill` together with a move to
-`hypothesis`, and a date from `store::today()`. Any other value has to have
+`hypothesis`, and a date from `stamp::today()`. Any other value has to have
 gotten there by hand — `check` is the only place these are ever seen, and it
 never repairs them, only reports.
 

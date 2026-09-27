@@ -2,12 +2,6 @@
 
 ## 0.2.0 — unreleased
 
-- Orbit run provenance now fills missing task and run ids from the resolved
-  environment; explicit flags take precedence. Under an Orbit run, newly
-  supplied words require an explicit `--by`, and kill confirmation is refused
-  with `human_only`. `NEBULA_READ_ONLY=1` refuses every corpus write with
-  `read_only`; other nonempty values are rejected when the environment loads.
-
 The reduced model of `docs/design/v0.2/1_spec.md`. Five days after v0.1 the
 corpus held eight nodes and an empty inbox: the machinery was heavier than the
 habit. This cut keeps what a person actually uses.
@@ -36,6 +30,8 @@ habit. This cut keeps what a person actually uses.
 - `new --status`. `new --kill "..."` starts a hypothesis; without it, a seed.
 - The quick glance (`open` in v0.1, now `review --short`) no longer reports
   references without a note; that is `check` rule 10.
+- The `staged_elsewhere` refusal: a `neb` commit names only corpus paths, so
+  unrelated paths already staged in the containing repository remain staged.
 
 ### Added
 
@@ -86,6 +82,11 @@ habit. This cut keeps what a person actually uses.
   a node as the human's own and changes nothing else; it is what takes a node
   off `review`'s unconfirmed-kill list. `--by` is not `--task`/`--run`, which
   record the Orbit run behind a write.
+- Orbit run provenance fills missing task and run ids from the environment;
+  explicit flags win. Under an Orbit run, new authored words require an
+  explicit `--by` (`by_required`), and `sharpen --confirm` is refused
+  (`human_only`). `NEBULA_READ_ONLY=1` refuses corpus writes (`read_only`);
+  other nonempty values are rejected when the environment loads.
 - Tags are normalised to lowercase kebab-case on every write path (`new`,
   `promote`, `tag`, `migrate`). `neb tag <id> --add <tag> --remove <tag>`
   edits them; `neb tag list` shows every tag with its node count; `--tag` on
@@ -164,20 +165,23 @@ habit. This cut keeps what a person actually uses.
   desktop app can no longer interleave one's load with another's save, leave
   a `contradicts` edge on one side only, or strike the wrong inbox line.
   Reads never take it. A writer waits up to five seconds and then refuses
-  before reading anything (`locked`), so the same command is safe to run
-  again; the lock goes with the process holding it, so there is never a
-  stale one to delete. `config.yaml` is re-read under the lock before a
+  before writing (`locked`). The refusal names the holder's verb or
+  desktop action, PID and age when its bounded record is readable. The lock
+  goes with the process holding it, so there is never a stale one to delete.
+  `config.yaml` is re-read under the lock before a
   setting is rewritten or a commit decided, so two writers no longer erase
   each other's settings. `init` adds `/.lock` to the corpus's `.gitignore`,
   which a `commit` stages with the corpus. Running `init` again on an older
-  corpus adds the rule and changes nothing else; a `.gitignore` that is a
-  symlink, which git does not read, becomes a regular file with the same
-  rules, its target untouched.
+  corpus adds the rule and changes nothing else; a `.gitignore` symlink is
+  replaced with a regular file carrying its rules, leaving its target alone.
+  A FIFO or device there is refused (`not_regular_file`).
 - `neb init <dir> --set-root` makes that corpus the machine default, writing
   its path to `~/.config/nebula/root`. The path must be absolute, and a
   setting that already names another corpus is replaced only with `--force`
-  as well (`root_config_conflict`); both are refused before anything is
-  created. Plain `init` never touches the setting: it prints the
+  as well (`root_config_conflict`); an empty or relative setting is refused
+  at load (`empty_root_setting`, `relative_root_setting`) but may be replaced
+  with `--set-root` without `--force`. Invalid inputs are refused before
+  anything is created. Plain `init` never touches the setting: it prints the
   `--set-root` command when there is none, and warns on stderr when the
   setting names a different corpus from the one it just made. `init` on an
   existing corpus opens it rather than resetting it, and refuses without
@@ -187,24 +191,27 @@ habit. This cut keeps what a person actually uses.
   default, absent from the file until set) and the corpus root inside a git
   work tree, every verb that writes (`capture`, `promote`, `drop`, `triage`,
   `new`, `edit`, `sharpen`, `status`, `link`, `tag`, `note`, `cite`,
-  `handoff`, `migrate`, `config`) ends with one commit of `nodes/`, `inbox/`,
-  `config.yaml` and the generated `.gitignore` under the root, as
-  `neb <verb> <ids>`, and prints `committed <hash>`; `triage` makes one per
-  decision. Never pushes, never stages a path outside the corpus. Something
-  staged elsewhere in the repository is a typed refusal (`StagedElsewhere`)
-  that leaves the write in place: a write is never rolled back because of
-  git. A corpus the containing repository ignores is refused too
+  `handoff`, `migrate`, `config`) can make one commit of `nodes/`, `inbox/`,
+  `config.yaml` and the generated `.gitignore` under the root. A commit is
+  named `neb <verb> <ids>` and prints `committed <hash>` on stderr in text mode;
+  `triage` makes one per decision. Never pushes, never stages a path outside
+  the corpus. The commit uses a pathspec, so unrelated staged work stays staged
+  and out of it. Core reports `CommitOutcome` as committed, disabled,
+  not-a-repository or nothing-to-commit. With commits on but no repository,
+  the write succeeds and stderr says `note: not committed: <root> is not inside
+  a git work tree`, including under `--json`. A git failure after a write is a
+  refusal, but the write is never rolled back. A corpus the containing
+  repository ignores is refused too
   (`CorpusIgnored`), with the fix — a repository at the corpus root — in the
   hint. `--no-commit` after any of those verbs skips the commit once. Only
   their `--help` offers it, and a verb that only reads refuses it as an
-  unknown argument (exit 2); written before the verb, the spelling from when
-  the flag was global, it is still honoured but hidden. `neb config commit`
+  unknown argument (exit 2). `neb config commit`
   with no argument reads the setting (`--json`: `{ "enabled": bool }`) and,
   like every `config` that changes nothing in the corpus, commits nothing;
   `migrate` preserves it and commits itself. With `commit` on, a node whose
   file name is not ASCII commits like any other, where git's quoting of the
-  name used to make it look staged elsewhere. The runbooks now recommend a
-  private repository at the corpus root and cover restoring from it.
+  name used to confuse the older staged-path check. The runbooks now recommend
+  a private repository at the corpus root and cover restoring from it.
 - `neb near <TEXT>... | <NODE>` (`--limit K`/`-k`, default 3): the existing
   nodes closest to free text, or to a node (left out of its own answer), best
   first. Word overlap only — BM25 over title, tags and body, title and tags
@@ -258,17 +265,20 @@ habit. This cut keeps what a person actually uses.
   `review`, the whole walk for `trace`). Without the flag the list is the
   bare array it always was.
 - `--json` covers the writes as well as the reads: each verb that writes
-  prints the value it changed. `new` is `{doc, path}`; `sharpen` and `tag` a
+  prints the value it changed. `new` is `{doc, path, near}`; `sharpen` and `tag` a
   `Doc`; `status` `{doc, from}`; `link` an array, since `contradicts` changes
-  both nodes; `cite` `{doc, reference}`; `drop` the settled entry; `note` and
-  `edit` the `show --json` view; `init` `{root}`.
+  both nodes; `cite` `{doc, reference, observatory}`; `drop` the settled entry;
+  `note` and `edit` the `show --json` view; `init` `{root}`. Absent fields in a
+  node view are `null`, empty lists are `[]`, and author labels are present on
+  write results as on reads. Capped lists return `{items, total, truncated}`.
 - Refusals under `--json` are data: one line on stderr,
   `{"error": "...", "code": "...", "hint": ...}`. `error` is the message,
   `code` a stable `snake_case` name (for a core refusal, the `nebula-core`
-  variant's name: `no_such_node`, `needs_kill`, `staged_elsewhere`, …), and
+  variant's name: `no_such_node`, `needs_kill`, `unknown_revision`, …), and
   `hint` the remedy or `null`. Stdout stays empty, except when a write landed
-  and only its commit was refused. A refusal exits 1 and a command line clap
-  rejects exits 2, with clap's prose even under `--json`. Without `--json`
+  and only its commit was refused. Argument refusals exit 2, including typed
+  arguments that no corpus could accept; state refusals exit 1. Clap rejects
+  also exit 2, with clap's prose even under `--json`. Without `--json`
   every refusal prints what it printed before. An unknown `cite` kind is now a
   typed refusal (`unknown_reference_kind`). `skills/nebula/references/verbs.md`
   documents the envelope and the exit codes.
@@ -289,11 +299,12 @@ habit. This cut keeps what a person actually uses.
   hash, date and message, or `no commits touched this node` (`--json`:
   `[{hash, date, message}]` with the full hash, or `[]`). `neb show <id> --at
   <HASH|YYYY-MM-DD>` prints the node as it was then, in `show`'s own text and
-  JSON; a date means the last commit that day. Both read the history
-  `commit on` writes and are read-only. A corpus outside a git work tree is
-  refused (`not_git_work_tree`), a revision before the node existed is
-  `no_node_at_revision`, and an `--at` that is neither a date nor a hex
-  revision is refused naming the value.
+  JSON; a date means the newest commit whose own recorded day is on or before
+  that date, as `log` prints it, independent of the reader's timezone. Both
+  read the history `commit on` writes and are read-only. A corpus outside a
+  git work tree is refused (`not_git_work_tree`), a revision before the node
+  existed is `no_node_at_revision`, an unknown hash is `unknown_revision`, and
+  an `--at` that is neither a date nor a hex revision is refused naming it.
 - `skills/nebula/`: the agent skill. `SKILL.md` states the two modes (session:
   act and `neb check` after every write; routine: read-only, proposals into
   `review.md`), corpus resolution, capture-from-conversation, provenance and
@@ -317,6 +328,10 @@ habit. This cut keeps what a person actually uses.
   `make desktop-check`; CI gains a `desktop` job (types drift, tsc, vitest,
   clippy). The workspace's `rust-version` moves to 1.88 for the desktop's
   dependency tree.
+- Desktop settings offer a configurable capture shortcut and launch at login.
+  The Graph view supports keyboard navigation of nodes and tabs. The first
+  graph layout is fitted before the drawn frame is shown, so a quick pan or
+  zoom is not reset by a late fit.
 - `Corpus::node_path` is public, so a consumer that hands a node file to the
   OS asks for the path rather than re-deriving the layout. It returns a
   `Result`: an id becomes a path there, so one that is not a single file name
@@ -327,10 +342,14 @@ habit. This cut keeps what a person actually uses.
   colour; tag chips with `+n`; a marker on nodes that `reopens`. Drag or
   scroll to pan, Ctrl+wheel to zoom, click to select and light ancestry and
   descent in two tints, Escape to clear, double-click to open the file. A
-  title search (applied once typing pauses) and a multi-select tag filter
-  apply before layout. The right-hand panel shows the node read-only:
+  debounced search across id, title, body and status, plus a multi-select tag
+  filter, dim nonmatches without changing layout. Previous and Next step
+  through matches; *Lineage only* isolates the selected node, its ancestors
+  and descendants. The right-hand panel shows the node read-only:
   frontmatter, `closed.why`, the body via `react-markdown` + `remark-gfm`
-  with raw HTML shown as text and images loaded only from `https:` URLs,
+  with raw HTML shown as text. Remote `http:` and `https:` Markdown images
+  appear as links opened through the OS, rather than loading in the panel;
+  production and development CSP allow only `img-src 'self' data:`,
   edges as two clickable lists, references as a table whose `http(s)`/`mailto`
   URIs open through the opener plugin. A non-human `by` is named beside the
   title, kill condition, edges and references, and an Observatory reference
@@ -343,11 +362,34 @@ habit. This cut keeps what a person actually uses.
 - The repository is a Cargo workspace. `crates/nebula-core` is the corpus as
   a library (model, store, graph queries, ops, check, migrate) with a typed
   `Error` and no terminal, clap or `anyhow` dependency; `crates/neb` is the
-  CLI, and each verb is one core call plus rendering. Every value core
-  returns is `Serialize`, so `--json` and the desktop app's IPC share one
-  schema. `cargo test -p nebula-core --features ts` (`make types`) generates
-  `apps/desktop/src/types/*.ts` from those types; CI fails if they are stale.
-  Observable CLI behaviour, messages and exit codes are unchanged.
+  CLI, and each verb is one core call plus rendering. Core's successful
+  results are `Serialize`; the desktop consumes core types while the CLI
+  renders a stable JSON view. `cargo test -p nebula-core --features ts`
+  (`make types`) generates `apps/desktop/src/types/*.ts` from those types; CI
+  fails if they are stale.
+  Core has no terminal or environment lookup; the CLI resolves locations once
+  and passes them down. Its JSON view supplies fields core may omit. The
+  split preserves command behaviour; later entries below describe the CLI
+  changes made during standards alignment.
+- The core store, operations, graph, check, error and migration modules, and
+  the CLI dispatcher, are split by responsibility. Integration tests are split
+  by area, and CI guards source file size. The earlier STD-02@2 §R18
+  test-file deviation is retired; see the design decisions.
+- `list`, `inbox`, `near`, `tag list`, `review --short` and `log` now display a
+  header and aligned columns on a terminal. Piped or redirected, they emit
+  headerless TSV, one record per line; absent cells are `-`. `trace` prints
+  a tree on a terminal and tab-separated lines when piped.
+- Human stdout contains the result alone. Counts, empty-result and capped-list
+  notices, hints and commit notices go to stderr; `capture -q` and
+  `promote -q` print only the id. A closed stdout pipe exits successfully
+  after any pending commit completes.
+- Inbox capture timestamps include an RFC 3339 offset. Older offsetless
+  entries remain readable; triage orders both forms by instant and keeps
+  their original stamp when settling them.
+- Corpus files and machine settings are written through one private atomic
+  write helper (file and directory sync; owner-only modes). A settings-file
+  symlink is replaced rather than followed, and machine-setting writes take
+  their lock before the corpus lock.
 - The version is written once, in `[workspace.package]`;
   `scripts/release-check.sh` reads it there.
 - A node's id is checked before it becomes a path, and a node file's name and
@@ -387,15 +429,10 @@ habit. This cut keeps what a person actually uses.
   quiets and stores `an idea`, and `--no-commit`, `--by` or `--limit` there
   take effect instead of being stored. A dash-leading word that belongs to
   the thought goes in quotes or after `--`.
-- `neb open` is merged into `neb review --short`, which prints what `open`
-  did, one line each: hypotheses created fourteen or more days ago with no
-  references, seeds untouched for ninety days or more, and inbox entries
-  waiting fourteen days or more (`--json`: an array of `{id, why}`).
-  `--short` takes `--tag` and `--limit`, and refuses `--since` and `--out`.
-  `open` still works in this release as a hidden alias that forwards to
-  `review --short` and prints `` warning: `neb open` is deprecated; use
-  `neb review --short` `` on stderr; the release after this one removes it.
-  The skill, spec, design docs and runbooks name `review` only.
+- `review --short` is the quick glance: hypotheses created at least fourteen
+  days ago with no references, seeds untouched for ninety days, and inbox
+  entries waiting fourteen days. It takes `--tag` and `--limit`, and refuses
+  `--since` and `--out` (`--json`: an array of `{id, why}`).
 - The corpus is found from the working directory. Resolution is `--root`,
   else `$NEBULA_ROOT`, else the nearest corpus at or above the current
   directory, else `~/.config/nebula/root`, else `~/.nebula`. A corpus is a
@@ -432,7 +469,7 @@ habit. This cut keeps what a person actually uses.
 - `cite` lowercases `--kind` before checking it, so `--kind Paper` stores
   `paper`; anything still outside the vocabulary is refused, naming the kind
   as given.
-- `check` numbers its rules 1 to 16, each once, from one list in
+- `check` numbers its rules 1 to 17, each once, from one list in
   `nebula-core`. The number `check` prints, and `check --json` carries as
   `rule`, is the one in the spec's table and the skill's `invariants.md`.
   Earlier 0.2 builds gave two rules the number 11 and reported Observatory
@@ -446,9 +483,55 @@ habit. This cut keeps what a person actually uses.
   `make standards-check` (`sh docs/standards/check.sh`) fails on any edit to
   them and runs in `make ci` and GitHub CI; `make help` now lists what
   `make ci` runs.
+- CI pins toolchain, actions and pnpm inputs. `make ci-fast` runs the cheap
+  parity checks and Clippy; `make ci` adds the full workspace checks, doctests
+  and generated TypeScript drift check. Golden tests cover CLI help and JSON;
+  a CI webview job checks the production CSP with the native webview. Test
+  children use isolated fixture homes and bounded processes, exercised by
+  `make hostile-env-test`.
+  Dependabot groups minor and patch updates by ecosystem; its adopted major
+  updates and the deferred `ctor` major are recorded in its configuration.
+
+### Deprecated
+
+- `neb open` still forwards to `neb review --short` with a warning; use
+  `review --short` now. The before-verb spelling of `--no-commit` still works
+  before a write with a warning; put it after the verb. The corpus-wide
+  `observatory_root` key remains a warned read-only fallback; set the root
+  per machine and drop the legacy key once every machine is configured.
 
 ### Fixed
 
+- Reads no longer synthesize a missing `config.yaml`. They refuse with
+  `missing_config`, while `migrate` can bring a pre-config corpus forward.
+  `check` reports malformed files separately so one bad node does not hide
+  the rest; strict verbs name every offending file.
+- `edit` runs the editor without a corpus lock and refuses a changed body on
+  save (`edit_conflict`), preserving the edited text outside the corpus for
+  recovery. Standard input is bounded for `capture -` and `--body -`.
+- Git children are supervised with bounded output and deadlines; a timeout
+  returns `git_timed_out` and stops the process group. Git environment that
+  could redirect the child to another repository is cleared.
+- No-op `tag`, `edit` and `config observatory-root --drop-legacy` calls say
+  nothing changed and make no write or commit. `init` refuses conflicting
+  `--root` and positional paths (`root_and_path_differ`, exit 2), and
+  `completions` refuses `--root` and `--json`.
+- Crash debris is excluded from commits. A pending `promote` is settled by
+  the next writer, a one-sided `contradicts` link is completed when retried,
+  and `check` rule 17 reports pending records and temporary files.
+- Node, config, lock, pending and inbox entries that are symlinks, FIFOs,
+  devices or directories are refused as `not_regular_file` before their
+  contents are read or written. A node symlink alias to a sibling node
+  reports `id_mismatch`; `init` copies a regular `.gitignore` symlink target
+  into a new local file, but refuses a non-regular target.
+- I/O refusals name the path and operating-system cause (`io_at`); stdin and
+  unusable `HOME` have distinct typed codes. The generic `Error::Corpus`
+  catch-all is removed, so each core refusal has one code and one exit class.
+- Desktop IPC failures have typed `{code, message}` values. Capture and inbox
+  settle actions report a write that landed even if its commit was refused;
+  the UI warns that it was not committed and avoids offering a duplicate
+  retry. A busy-corpus message names the lock holder when known. The watcher
+  coalesces changes without an unbounded queue.
 - `capture` at a root with no corpus still creates one rather than refuse,
   but now says so on stderr, `note: created a new corpus at <absolute path>`,
   in text and `--json` alike, so a mistyped `--root` or `$NEBULA_ROOT` shows.
