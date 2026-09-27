@@ -84,7 +84,7 @@ fn init_refuses_a_fifo_gitignore_without_blocking() {
 }
 
 #[test]
-fn inbox_ignores_everything_except_month_markdown_files() {
+fn inbox_ignores_non_month_debris_and_refuses_a_directory_month() {
     let (_dir, corpus) = corpus();
     let entry = ops::capture(&corpus, "the live thought").unwrap();
     let inbox_dir = entry.file.parent().unwrap();
@@ -92,7 +92,7 @@ fn inbox_ignores_everything_except_month_markdown_files() {
     for name in ["notes.md", "2026-00.md", "2026-13.md", "2026-09.md.tmp"] {
         std::fs::write(inbox_dir.join(name), b"not utf-8: \xff").unwrap();
     }
-    std::fs::create_dir(inbox_dir.join("2000-01.md")).unwrap();
+    std::fs::create_dir(inbox_dir.join("notes")).unwrap();
 
     #[cfg(target_os = "linux")]
     {
@@ -109,6 +109,14 @@ fn inbox_ignores_everything_except_month_markdown_files() {
     let captured = ops::capture(&corpus, "another thought").unwrap();
     assert_ne!(captured.id, entry.id);
     assert_eq!(corpus.inbox().unwrap().0.len(), 2);
+
+    let invalid = inbox_dir.join("2000-01.md");
+    std::fs::create_dir(&invalid).unwrap();
+    let refused = corpus.inbox();
+    assert!(
+        not_regular(&refused, &invalid, nebula_core::fs::EntryKind::Directory),
+        "{refused:?}"
+    );
 }
 
 #[test]
