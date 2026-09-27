@@ -4,7 +4,6 @@
 
 #![allow(unused_imports)]
 
-mod cli;
 mod output;
 mod output_terminal;
 mod render;
