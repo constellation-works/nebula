@@ -532,6 +532,12 @@ exist; an absolute path or `file:` URI is refused even when it does, because
 it resolves on this machine only. Always pass `--note`: it is the only field
 that matters in a year.
 
+Reference counters use a fixed unsigned 64-bit range on every machine.
+`reference_ids_exhausted` means an existing numeric reference suffix is at
+or beyond `18446744073709551615`; `cite` and `handoff` refuse before changing
+the node. The references remain readable. Do not remove or renumber them
+to make room, since that can reuse an ID; continue the idea in a new node.
+
 `cite --json` returns the changed `doc`, the newly allocated reference id, and
 `observatory`, which is `null` for every kind but `observatory` (see below):
 

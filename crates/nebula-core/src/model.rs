@@ -435,20 +435,36 @@ impl Node {
             .then_some(record)
     }
 
-    /// Next free reference id.
-    pub fn next_reference_id(&self) -> String {
-        format!("r{}", next_reference_index(&self.references))
+    /// Next free reference id, or a refusal if a numeric suffix exhausts
+    /// the fixed `u64` allocation range. Existing IDs remain readable.
+    pub fn next_reference_id(&self) -> Result<String> {
+        Ok(format!("r{}", next_reference_index(&self.references)?))
     }
 }
 
 /// The `n` of the next free `r<n>`. Ids are never reused, so this counts
 /// past the highest ever issued rather than filling gaps left by removals.
-pub(crate) fn next_reference_index(refs: &[Reference]) -> usize {
-    refs.iter()
-        .filter_map(|r| r.id.strip_prefix('r')?.parse::<usize>().ok())
-        .max()
-        .unwrap_or(0)
-        + 1
+pub(crate) fn next_reference_index(refs: &[Reference]) -> Result<u64> {
+    let mut next = 1;
+    for reference in refs {
+        let Some(suffix) = reference.id.strip_prefix('r') else {
+            continue;
+        };
+        // Keep accepting the leading '+' and zeros that integer parsing
+        // accepted before. Nonnumeric legacy IDs are outside this sequence;
+        // an overflowing numeric ID must never be mistaken for one.
+        let digits = suffix.strip_prefix('+').unwrap_or(suffix);
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let successor = digits
+            .parse::<u64>()
+            .ok()
+            .and_then(|index| index.checked_add(1))
+            .ok_or_else(|| Error::ReferenceIdsExhausted(reference.id.clone()))?;
+        next = next.max(successor);
+    }
+    Ok(next)
 }
 
 /// A tag as it is written: lowercase kebab-case. `Physics` becomes `physics`,

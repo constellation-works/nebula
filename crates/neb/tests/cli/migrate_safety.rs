@@ -8,6 +8,49 @@ use crate::harness::{
 use crate::migrate::{V1_CONFIG, v1_corpus};
 use std::path::{Path, PathBuf};
 
+#[test]
+fn reference_id_boundary_migration_refuses_before_any_write() {
+    for suffix in [
+        "18446744073709551614",
+        "18446744073709551615",
+        "18446744073709551616",
+    ] {
+        let c = v1_corpus();
+        let path = c.node_file("wake-retardation");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        // This fixture converts several pieces of evidence, so even one
+        // available ID is insufficient. No earlier node may be rewritten.
+        write(&path, &raw.replace("id: r1\n", &format!("id: r{suffix}\n")));
+        let before = snapshot_corpus_files(&c.root);
+        let refused = c.run(&["--json", "migrate"]).refusal();
+        assert_eq!(refused["code"], "reference_ids_exhausted");
+        assert_eq!(snapshot_corpus_files(&c.root), before);
+    }
+}
+
+#[test]
+fn reference_id_boundary_migration_can_use_the_last_id() {
+    let c = v1_corpus();
+    let path = c.node_file("gravity-as-scarcity");
+    let raw = std::fs::read_to_string(&path).unwrap();
+    // This node converts exactly one evidence entry.
+    write(&path, &raw.replace("evidence:", "references:\n- id: r18446744073709551614\n  kind: discussion\n  note: counter\n  added: 2026-09-27\nevidence:"));
+    c.run(&["migrate"]).assert_ok();
+    let out = c
+        .run(&["--json", "show", "gravity-as-scarcity"])
+        .assert_ok()
+        .stdout();
+    let shown: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        shown["node"]["references"][1]["id"],
+        "r18446744073709551615"
+    );
+    // A second pass does not allocate, and must preserve exhausted IDs.
+    let before = snapshot_corpus_files(&c.root);
+    c.run(&["migrate"]).assert_ok();
+    assert_eq!(snapshot_corpus_files(&c.root), before);
+}
+
 /// A v2 corpus whose nodes are committed, so `migrate` gets past the
 /// dirty-tree refusal and the assertions are about what it does to content.
 fn committed_v2_corpus() -> Corpus {

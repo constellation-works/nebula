@@ -248,13 +248,13 @@ fn convert(v1: V1Node, path: &Path) -> Result<(Node, Vec<String>)> {
 
     let mut refs = Relabel {
         out: Vec::new(),
-        next: 0,
+        next: None,
         updated: &v1.updated,
         notes: &mut notes,
     };
     refs.references(v1.references);
-    refs.evidence(v1.evidence);
-    refs.tasks(v1.tasks);
+    refs.evidence(v1.evidence)?;
+    refs.tasks(v1.tasks)?;
     let edges = refs.edges(v1.edges, path)?;
     let references = refs.out;
 
@@ -291,7 +291,7 @@ fn convert(v1: V1Node, path: &Path) -> Result<(Node, Vec<String>)> {
 /// re-labelled into one, with ids continuing the `r<n>` sequence.
 struct Relabel<'a> {
     out: Vec<Reference>,
-    next: usize,
+    next: Option<u64>,
     updated: &'a str,
     notes: &'a mut Vec<String>,
 }
@@ -316,7 +316,6 @@ impl Relabel<'_> {
                 origin: r.origin.map(Into::into),
             });
         }
-        self.next = model::next_reference_index(&self.out);
     }
 
     /// A `kind: other` reference with a note, which is what every
@@ -328,9 +327,13 @@ impl Relabel<'_> {
         note: String,
         added: String,
         origin: Option<Origin>,
-    ) -> String {
-        let id = format!("r{}", self.next);
-        self.next += 1;
+    ) -> Result<String> {
+        let next = match self.next {
+            Some(next) => next,
+            None => model::next_reference_index(&self.out)?,
+        };
+        let id = format!("r{next}");
+        self.next = next.checked_add(1);
         self.out.push(Reference {
             id: id.clone(),
             kind: "other".into(),
@@ -342,10 +345,10 @@ impl Relabel<'_> {
             by: None,
             origin,
         });
-        id
+        Ok(id)
     }
 
-    fn evidence(&mut self, evidence: Vec<V1Evidence>) {
+    fn evidence(&mut self, evidence: Vec<V1Evidence>) -> Result<()> {
         for ev in evidence {
             let note = ev.note.as_deref().map(str::trim).unwrap_or_default();
             let title = note
@@ -359,13 +362,14 @@ impl Relabel<'_> {
                 format!("[{}/{}] {note}", ev.verdict, ev.strength)
             };
             let added = ev.date.unwrap_or_else(|| self.updated.to_string());
-            let id = self.push(ev.source, title, note, added, ev.origin.map(Into::into));
+            let id = self.push(ev.source, title, note, added, ev.origin.map(Into::into))?;
             self.notes
                 .push(format!("evidence {} -> reference {id}", ev.id));
         }
+        Ok(())
     }
 
-    fn tasks(&mut self, tasks: Vec<V1Task>) {
+    fn tasks(&mut self, tasks: Vec<V1Task>) -> Result<()> {
         for t in tasks {
             let why = t.why.as_deref().map(str::trim).unwrap_or_default();
             let note = if why.is_empty() {
@@ -379,9 +383,10 @@ impl Relabel<'_> {
                 note,
                 self.updated.to_string(),
                 None,
-            );
+            )?;
             self.notes.push(format!("task {} -> reference {id}", t.id));
         }
+        Ok(())
     }
 
     /// The five surviving edge kinds pass through. The evidence graph in
@@ -403,7 +408,7 @@ impl Relabel<'_> {
                         format!("[{kind}] {}", e.to),
                         self.updated.to_string(),
                         None,
-                    );
+                    )?;
                     self.notes
                         .push(format!("edge {kind} {} -> reference {id}", e.to));
                     continue;

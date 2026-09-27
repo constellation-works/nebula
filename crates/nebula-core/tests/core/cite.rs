@@ -16,6 +16,61 @@ pub(super) fn citing(uri: &str) -> Citation {
     }
 }
 
+#[test]
+fn reference_id_boundary_is_a_typed_refusal_before_mutation() {
+    let (_dir, corpus) = corpus();
+    let id = seed(&corpus, "Counter", &[]);
+    ops::cite(&corpus, &id, &citing("https://example.org")).unwrap();
+    let path = corpus.node_path(&id).unwrap();
+    let original = std::fs::read_to_string(&path).unwrap();
+    for reference in [
+        "r18446744073709551615",
+        "r18446744073709551616",
+        "r00018446744073709551615",
+        "r+18446744073709551616",
+    ] {
+        let before = original.replace("id: r1\n", &format!("id: {reference}\n"));
+        std::fs::write(&path, &before).unwrap();
+        let doc = corpus.load(&id).unwrap();
+        assert_eq!(doc.node.references[0].id, reference, "still readable");
+        for refused in [
+            ops::cite(&corpus, &id, &citing("https://example.org/next")).map(|_| ()),
+            ops::handoff(&corpus, &id, &handing("H012"), None).map(|_| ()),
+        ] {
+            assert!(
+                matches!(refused, Err(Error::ReferenceIdsExhausted(ref value)) if value == reference),
+                "{refused:?}"
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn reference_id_boundary_keeps_legacy_spellings_and_uses_the_highest_suffix() {
+    let (_dir, corpus) = corpus();
+    let id = seed(&corpus, "Counter", &[]);
+    ops::cite(&corpus, &id, &citing("https://example.org")).unwrap();
+    let path = corpus.node_path(&id).unwrap();
+    let original = std::fs::read_to_string(&path).unwrap();
+    for (reference, expected) in [
+        ("r+00042", "r43"),
+        ("r4294967295", "r4294967296"),
+        ("legacy", "r1"),
+        ("r18446744073709551614", "r18446744073709551615"),
+    ] {
+        std::fs::write(
+            &path,
+            original.replace("id: r1\n", &format!("id: {reference}\n")),
+        )
+        .unwrap();
+        let cited = ops::cite(&corpus, &id, &citing("https://example.org/next")).unwrap();
+        assert_eq!(cited.reference, expected);
+        assert_eq!(cited.doc.node.references[0].id, reference);
+        assert_eq!(cited.doc.node.references.len(), 2);
+    }
+}
+
 /// Rule 8 at the point of action, as a typed refusal: an absolute path or a
 /// `file:` URI is refused even when it exists on this machine, before any
 /// resolving, and nothing is written. URLs and scheme handles pass.

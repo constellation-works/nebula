@@ -407,6 +407,13 @@ pub enum Error {
     #[error("inbox id namespace exhausted; nothing captured")]
     InboxIdsExhausted,
 
+    /// A numeric reference suffix is at or beyond the fixed `u64` limit,
+    /// so allocating a successor could wrap or reuse an ID.
+    #[error(
+        "reference `{0}` exhausts the reference ID range (maximum suffix 18446744073709551615); nothing was written"
+    )]
+    ReferenceIdsExhausted(String),
+
     /// An inbox entry handed to a corpus whose inbox it is not in. Striking
     /// it would change another corpus's inbox.
     #[error("inbox entry `{id}` is in {}, not in this corpus's inbox {}", .file.display(), .inbox.display())]

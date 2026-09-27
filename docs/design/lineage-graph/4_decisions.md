@@ -255,6 +255,28 @@ else with authority (a URL, a git ref, a shell argument) outside `store/`, or
 if `nebula-core` gains consumers outside this workspace. At that point the
 check belongs in the type.
 
+## Reference allocation checks a fixed counter bound
+
+Reference IDs remain strings, including operator-authored IDs outside the
+allocator's range. New suffixes use `u64`, not pointer-sized `usize`, so a
+synced corpus has the same allocation limit on every machine. Allocation
+checks every numeric `r<n>` suffix and its successor. A suffix at or beyond
+`u64::MAX` returns `ReferenceIdsExhausted` before cite or handoff changes the
+node; migration uses the same allocator. Neither overflow nor a failed
+numeric parse may turn a high suffix into a gap to fill. Leading zeros and
+the previously accepted leading `+` still count numerically; nonnumeric
+legacy IDs do not occupy the numeric sequence.
+
+This deliberately departs from STD-02@3 §R28's load-time bounds refusal.
+An out-of-range reference stays readable and is never rewritten merely
+because this allocator cannot advance it (STD-03@2 §R24). `check` continues
+to judge the reference's content, not whether another reference can be
+allocated. The bound is enforced at the shared allocation point, before
+mutation, including for in-memory nodes that did not pass deserialization.
+What is given up is an early load/check warning; what is preserved is access
+to the node and all its context. Reverses if reference suffixes gain meaning
+beyond allocation or a larger numeric range is needed in real use.
+
 ## The integration suites are split per area, one binary per crate
 
 STD-02@3 §R18 treats about 800 lines as a signal to check for multiple
