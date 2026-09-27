@@ -27,7 +27,7 @@ fn root_setting_is_validated_by_one_function() {
         assert!(
             matches!(
                 &error,
-                Error::RelativeRootSetting { setting: path, root }
+                Error::RelativeRootSetting { setting: Some(path), root }
                     if path == setting && root == Path::new(contents.trim())
             ),
             "{contents:?}: {error:?}"
