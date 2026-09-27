@@ -91,8 +91,8 @@ fn help_rows_match_the_variants() {
     }
     assert_eq!(seen, 27, "template rows need updating for a new subcommand");
     assert!(
-        Cli::command().find_subcommand("help").is_none(),
-        "clap's `help` subcommand should be disabled"
+        !Cli::command().is_disable_help_subcommand_set(),
+        "clap's `help` subcommand must remain enabled"
     );
 }
 

@@ -9,6 +9,12 @@
 //! position its section dictates *and* add its row to the template; the tests
 //! in `tests/help.rs` check the two stay in sync.
 
+/// One description for bare `neb`, short help, and long help.
+pub(super) const ABOUT: &str = "Capture a half-formed thought in five seconds. Trace where any idea came \
+    from years later.\n\nIdeas branch, merge and die, so the structure is a \
+    directed acyclic graph. Nothing is ever deleted: refuted and abandoned \
+    ideas are what stop you re-treading ground.";
+
 /// `neb --help`, with the subcommands grouped by lifecycle stage. Each row's
 /// one-liner is the first line of that variant's doc comment, minus the
 /// trailing period clap strips; `help_rows_match_the_variants` enforces it.

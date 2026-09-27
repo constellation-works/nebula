@@ -3,6 +3,36 @@
 
 use crate::harness::{Corpus, run_from_home};
 
+/// Help aliases reach the same long-help pages through the real entry point.
+#[test]
+fn help_subcommand_matches_long_help() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let paths: Vec<String> =
+        serde_json::from_str(include_str!("../goldens/help/commands.json")).unwrap();
+    for path in paths {
+        let mut flags: Vec<_> = path.split_whitespace().collect();
+        flags.push("--help");
+        let mut alias = vec!["help"];
+        alias.extend(path.split_whitespace());
+        let expected = run_from_home(&home, None, &flags, None).assert_ok();
+        let actual = run_from_home(&home, None, &alias, None).assert_ok();
+        assert_eq!(actual.stdout(), expected.stdout(), "{alias:?}");
+        assert_eq!(actual.stderr(), "", "{alias:?}");
+    }
+}
+
+#[test]
+fn bare_invocation_and_help_share_a_tagline() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let bare = run_from_home(&home, None, &[], None).assert_fails();
+    assert_eq!(bare.out.status.code(), Some(2));
+    assert_eq!(bare.stdout(), "");
+    let help = run_from_home(&home, None, &["--help"], None).assert_ok();
+    assert_eq!(bare.stderr().lines().next(), help.stdout().lines().next());
+}
+
 #[test]
 fn zsh_completions_include_the_cli_commands() {
     let dir = tempfile::tempdir().unwrap();
@@ -97,6 +127,8 @@ fn every_help_page(c: &Corpus) -> Vec<(String, String)> {
     paths.extend(
         listed_commands(&config, &["Commands"])
             .into_iter()
+            // Clap's generated help dispatcher takes command names, not --help.
+            .filter(|name| name != "help")
             .map(|name| vec!["config".to_owned(), name]),
     );
     paths.push(vec!["open".to_owned()]);
