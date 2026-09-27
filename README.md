@@ -23,11 +23,14 @@ without a decision about the notes, and the notes can be backed up without
 dragging a build tree along.
 
 Every command finds the corpus through `--root`, else `$NEBULA_ROOT`, else the
-nearest corpus at or above the current directory (a `nodes/` beside a
-`config.yaml` naming a `corpus_id`, found the way git finds a repository), else
-the path in `~/.config/nebula/root`, else `~/.nebula`. Only an existing corpus
-is found from the current directory, so `neb capture` can create one only at an
-explicit or configured root, and it says so when it does.
+nearest corpus at or above the current directory (holding `nodes/` plus positive
+corpus evidence: a `config.yaml` with a top-level `schema_version` or
+`corpus_id` key, an unparseable or unreadable config, or legacy `inbox/` or
+`.lock` markers; opening refuses a damaged or missing config rather than falling
+back, while a lone `nodes/` falls through), else the path in
+`~/.config/nebula/root`, else `~/.nebula`. Only an existing corpus is found from
+the current directory, so `neb capture` can create one only at an explicit or
+configured root, and it says so when it does.
 
 `ORBIT_TASK_ID` and `ORBIT_RUN_ID` supply missing provenance for `new`,
 `promote`, `cite` and `handoff`; explicit `--task` and `--run` values win.

@@ -28,20 +28,27 @@ is the one thing this skill forbids outright. Read
 ## Where the corpus is
 
 `--root <dir>`, else `$NEBULA_ROOT`, else the nearest corpus at or above the
-working directory (a `nodes/` directory marks it; the innermost wins),
-else the one-line path in `~/.config/nebula/root`, else
+working directory (holding `nodes/` plus positive corpus evidence; the
+innermost wins), else the one-line path in `~/.config/nebula/root`, else
 `~/.nebula`. So a shell that has `cd`'d into a corpus uses that corpus even when
 another is configured; pass `--root` when the working directory is not the
-corpus you mean. The corpus is private and **never
+corpus you mean. Evidence means `config.yaml` has a top-level `schema_version`
+or `corpus_id` key (even with an invalid value), or cannot be parsed or read.
+When config is absent, a real `inbox/` directory or regular `.lock` file
+alongside `nodes/` identifies a legacy or damaged corpus. A lone `nodes/`,
+`nodes/` with another tool's parsable config, or a config without `nodes/` falls
+through to the configured or default corpus. The corpus is private and **never
 inside the nebula repository** (`codebases/nebula`); never commit `nodes/`,
 `inbox/` or `config.yaml` there. Before the first write of a session run `neb
 check` — compare the printed `corpus:` path (the `root` field in `--json`)
 with the intended corpus, then check the findings. A successful check confirms
 the schema is v2 and reports any warnings. If it resolves to `~/.nebula`, stop
-and ask rather than write unless the human has confirmed that is the corpus. A corpus at schema 1 refuses to open
-until `neb migrate`, and so does one with `nodes/` but no `config.yaml`
-(`missing_config`). A malformed config also refuses at that root; discovery
-never skips it for another corpus. Never create that file yourself; see
+and ask rather than write unless the human has confirmed that is the corpus.
+A corpus at schema 1 refuses to open until `neb migrate`, and so does one with
+`nodes/` and legacy markers (`inbox/` or `.lock`) but no `config.yaml`
+(`missing_config`). A malformed or unreadable config also refuses at that root;
+discovery identifies the target and never skips a damaged corpus for another
+corpus. Never create that file yourself; see
 [invariants.md](references/invariants.md).
 
 Plain `neb init` never changes `~/.config/nebula/root`. A human setting up the
