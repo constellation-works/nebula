@@ -23,12 +23,16 @@ impl Corpus {
     /// one that is not [`is_path_safe_id`] is refused rather than joined, so
     /// no caller can be handed a path outside `nodes/`.
     pub fn node_path(&self, id: &str) -> Result<PathBuf> {
+        Self::node_path_at(&self.root, id)
+    }
+
+    fn node_path_at(root: &Path, id: &str) -> Result<PathBuf> {
         // "Ids stay strings, checked where they become paths" (4_decisions.md, STD-02@2 §R14).
         if !is_path_safe_id(id) {
             return Err(Error::UnsafeId(id.to_string()));
         }
-        refuse_nodes_symlink(&self.root)?;
-        Ok(self.root.join("nodes").join(format!("{id}.md")))
+        refuse_nodes_symlink(root)?;
+        Ok(root.join("nodes").join(format!("{id}.md")))
     }
 
     /// Read one node.
@@ -182,7 +186,7 @@ impl Corpus {
             });
         }
         let doc = self.read_node(path)?;
-        self.require_file_agrees(path, &doc)?;
+        Self::require_file_agrees(&self.root, path, &doc)?;
         Ok(doc)
     }
 
@@ -211,8 +215,9 @@ impl Corpus {
 
     /// Refuse a node file whose name is not the id it stores.
     ///
-    /// Both doors come through here. [`Self::load`] arrives with the path the
-    /// caller's id names, and a scan arrives with a path it found on disk;
+    /// Reads and migration preflight come through here. [`Self::load`]
+    /// arrives with the path the caller's id names, and a scan arrives with
+    /// a path it found on disk;
     /// either way the question is the same, and answering it in one place is
     /// what keeps a file called one thing and claiming to be another from
     /// reading as the node it claims — or, through [`Self::save`], from
@@ -248,7 +253,7 @@ impl Corpus {
     /// it with a regular file, leaving whatever it pointed at behind, so
     /// every door refuses it before reading through it
     /// ([`Self::read_node_file`]).
-    fn require_file_agrees(&self, path: &Path, doc: &Doc) -> Result<()> {
+    pub(crate) fn require_file_agrees(root: &Path, path: &Path, doc: &Doc) -> Result<()> {
         let id = OsStr::new(doc.node.id.as_str());
         let refuse = |path: &Path| {
             Err(Error::IdMismatch {
@@ -264,7 +269,7 @@ impl Corpus {
         if path.file_stem() == Some(id) {
             return Ok(());
         }
-        if is_same_entry(path, &self.node_path(&doc.node.id)?) {
+        if is_same_entry(path, &Self::node_path_at(root, &doc.node.id)?) {
             return Ok(());
         }
         refuse(path)

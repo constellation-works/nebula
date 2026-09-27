@@ -8,6 +8,8 @@ use crate::harness::{
 use crate::migrate::{V1_CONFIG, v1_corpus};
 use std::path::{Path, PathBuf};
 
+mod identity;
+
 #[test]
 fn reference_id_boundary_migration_refuses_before_any_write() {
     for suffix in [
@@ -738,9 +740,10 @@ fn migrate_resume_refuses_and_preserves_unrelated_changes() {
 #[test]
 fn migrate_resumes_without_config_at_each_write_boundary() {
     for converted in [0, 1, 2] {
-        let names = ["a space", "b\nline"];
-        let second = V1_FIRST.replace("a-first", "b-second");
-        let nodes = [(names[0], V1_FIRST), (names[1], second.as_str())];
+        let names = ["a space", "b\"quote"];
+        let texts =
+            names.map(|id| V1_FIRST.replace("a-first", &serde_json::to_string(id).unwrap()));
+        let nodes = [(names[0], texts[0].as_str()), (names[1], texts[1].as_str())];
         let c = v1_corpus_of(None, &nodes);
         let reference = v1_corpus_of(None, &nodes);
         git_init(&c.root);
@@ -773,5 +776,6 @@ fn migrate_resumes_without_config_at_each_write_boundary() {
             );
         }
         c.run(&["migrate"]).assert_ok().says("nothing changed");
+        c.run(&["list"]).assert_ok();
     }
 }
