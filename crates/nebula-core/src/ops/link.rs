@@ -29,6 +29,8 @@ pub fn link(
     corpus
         .locations()
         .write_gate(crate::locations::WriteIntent::Authored(by))?;
+    crate::id::require_safe_id(from)?;
+    crate::id::require_safe_id(to)?;
     if from == to {
         return Err(Error::SelfLoop);
     }

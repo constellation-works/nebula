@@ -60,6 +60,11 @@ neb status shear-law-from-scarcity refuted --why "..."
 neb completions zsh > ~/.zfunc/_neb
 ```
 
+New title-derived IDs are slugged after Unicode NFC normalization: `Café`
+and `Café` produce the same `café` ID. Capture duplicate comparisons also
+use NFC. Existing IDs and stored titles are left as written; there is no ID
+migration, and references to existing IDs continue to work.
+
 A corpus written by v0.1 is brought forward in place with `neb migrate`.
 
 ## CLI results
@@ -77,6 +82,9 @@ stderr. Typed refusals under `--json` emit `{error, code, hint}` on stderr;
 clap parser errors stay prose. Exit 2 means
 an argument no corpus could accept (including clap errors); exit 1 means a
 state refusal or an error-level `check` finding; exit 0 means success.
+Unsafe node or inbox IDs such as `../x` are `unsafe_id` argument refusals
+(exit 2), on both reads and writes. `near` accepts arbitrary search text as
+well as existing IDs; text that is not an existing ID remains a search query.
 `not_regular_file`, `locked`, `io_at` and `unknown_revision` are state
 refusals. The [skill's verb reference](skills/nebula/references/verbs.md)
 lists command flags, JSON shapes and error codes.

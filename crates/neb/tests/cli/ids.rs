@@ -442,3 +442,99 @@ fn unicode_ids_still_work_end_to_end() {
     c.run(&["check"]).assert_ok().says("0 errors");
     assert!(c.node_file(&id).exists() && c.node_file(&korean).exists());
 }
+
+#[test]
+fn unsafe_ids_have_one_argument_refusal_across_verbs() {
+    let c = Corpus::new();
+    c.run(&["new", "Safe"]).assert_ok();
+    let entry = c
+        .run(&["capture", "Fixture capture"])
+        .assert_ok()
+        .stdout_trim();
+    for id in ["../x", "/x", "..", "x\\y"] {
+        for args in [
+            vec!["show", id],
+            vec!["show", id, "--at", "abcd"],
+            vec!["trace", id],
+            vec!["impact", id],
+            vec!["log", id],
+            vec!["edit", id],
+            vec!["sharpen", id, "--kill", "fixture"],
+            vec!["sharpen", id, "--confirm"],
+            vec!["status", id, "abandoned"],
+            vec!["tag", id, "--add", "fixture"],
+            vec!["note", id, "fixture"],
+            vec!["cite", id, "--uri", "https://example.test"],
+            vec!["handoff", id, "H012"],
+            vec!["link", id, "derives-from", "safe"],
+            vec!["link", "safe", "derives-from", id],
+            vec!["link", id, "derives-from", id],
+            vec!["new", "Fixture", "--id", id],
+            vec!["new", "Fixture", "--parent", id],
+            vec!["new", "Fixture", "--reopens", id],
+            vec!["new", "Fixture", "--contradicts", id],
+            vec!["promote", id],
+            vec!["drop", id],
+            vec!["promote", &entry, "--id", id],
+            vec!["promote", &entry, "--parent", id],
+        ] {
+            let mut json_args = vec!["--json"];
+            json_args.extend(args);
+            let run = c.run(&json_args);
+            assert_eq!(run.usage_refusal()["code"], "unsafe_id", "{json_args:?}");
+            assert!(run.stdout().is_empty());
+        }
+        let graph = c.run(&["graph", "--mermaid", "--from", id]);
+        assert_eq!(graph.out.status.code(), Some(2), "{}", graph.stderr());
+        graph.says("cannot be a node id");
+    }
+    c.run(&["check"]).assert_ok();
+}
+
+#[test]
+fn nfc_titles_share_slugs_and_duplicate_checks() {
+    for (first, second) in [
+        ("Cafe\u{301} NFC", "Café NFC"),
+        ("Café NFC", "Cafe\u{301} NFC"),
+    ] {
+        let c = Corpus::new();
+        assert_eq!(c.run(&["new", first]).assert_ok().stdout_trim(), "café-nfc");
+        assert_eq!(
+            c.run(&["--json", "new", second]).refusal()["code"],
+            "node_exists"
+        );
+    }
+}
+
+#[test]
+fn nfc_capture_duplicates_do_not_fall_back_to_longer_ids() {
+    let c = Corpus::new();
+    let first = "Café particles scatter beyond distant stellar clouds";
+    let second = "Cafe\u{301} particles scatter beyond distant stellar clouds";
+    let entry = c.run(&["capture", first]).assert_ok().stdout_trim();
+    let repeated = c.run(&["capture", second]).assert_ok();
+    assert!(repeated.stderr().contains(&format!("same as {entry}")));
+    let repeated = repeated.stdout_trim();
+    assert_eq!(
+        c.run(&["promote", &entry]).assert_ok().stdout_trim(),
+        "café-particles-scatter-beyond-distant"
+    );
+    assert_eq!(
+        c.run(&["--json", "promote", &repeated]).refusal()["code"],
+        "node_exists"
+    );
+}
+
+#[test]
+fn existing_non_nfc_ids_are_read_and_written_without_migration() {
+    let c = Corpus::new();
+    c.run(&["new", "Legacy", "--id", "legacy"]).assert_ok();
+    let legacy = "cafe\u{301}";
+    rewrite_stored_id(&c.node_file("legacy"), legacy);
+    std::fs::rename(c.node_file("legacy"), c.node_file(legacy)).unwrap();
+    c.run(&["show", legacy]).assert_ok();
+    c.run(&["note", legacy, "fixture note"]).assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(legacy)).unwrap();
+    assert!(raw.contains(&format!("id: {legacy}\n")));
+    c.run(&["check"]).assert_ok();
+}

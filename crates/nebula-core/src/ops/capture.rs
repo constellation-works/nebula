@@ -13,6 +13,7 @@ use crate::model::Status;
 use crate::pending::{Pending, PendingWrite};
 use crate::store::{Corpus, InboxEntry};
 use std::path::PathBuf;
+use unicode_normalization::UnicodeNormalization;
 
 /// Where [`init`] creates a corpus: `path` if given, else the resolved root.
 ///
@@ -270,7 +271,14 @@ fn free_capture_id(corpus: &Corpus, text: &str) -> Result<Option<String>> {
         if !corpus.node_path(id)?.exists() {
             return Ok(Some(id.clone()));
         }
-        if corpus.load(id)?.node.title.trim() == text.trim() {
+        if corpus
+            .load(id)?
+            .node
+            .title
+            .trim()
+            .nfc()
+            .eq(text.trim().nfc())
+        {
             return Ok(Some(id.clone()));
         }
     }

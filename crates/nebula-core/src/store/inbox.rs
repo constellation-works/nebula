@@ -13,6 +13,7 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use unicode_normalization::UnicodeNormalization;
 
 impl Corpus {
     /// Append a capture to the current month's inbox file.
@@ -129,6 +130,7 @@ impl Corpus {
     /// that line says it was settled, rather than as an id nobody captured:
     /// the record is there, so the refusal can point at what became of it.
     pub(crate) fn inbox_entry(&self, id: &str) -> Result<InboxEntry> {
+        crate::id::require_safe_id(id)?;
         if let Some(entry) = self.inbox()?.0.into_iter().find(|e| e.id == id) {
             return Ok(entry);
         }
@@ -310,12 +312,14 @@ impl Inbox {
     }
 }
 
-/// Text as the duplicate check compares it: lowercase, one space between words.
+/// Text as the duplicate check compares it: lowercase NFC, one space between words.
 fn fold(text: &str) -> String {
     text.split_whitespace()
         .map(str::to_lowercase)
         .collect::<Vec<_>>()
         .join(" ")
+        .nfc()
+        .collect()
 }
 
 /// What became of a settled inbox entry, as its struck-through line records.
