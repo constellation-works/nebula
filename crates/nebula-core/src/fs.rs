@@ -221,8 +221,8 @@ impl std::fmt::Display for EntryKind {
 pub(crate) enum Links {
     /// Refuse it. Every entry below the corpus root is judged this way.
     Refuse,
-    /// Follow it and judge what it names. For `.gitignore` alone, whose
-    /// symlink `init` deliberately replaces with a copy of its target.
+    /// Follow it and judge what it names. For machine settings and for
+    /// `.gitignore`, whose symlink `init` replaces with a copy of its target.
     Follow,
 }
 

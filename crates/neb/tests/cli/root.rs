@@ -8,6 +8,80 @@ use crate::harness::{
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(unix)]
+#[test]
+fn root_machine_setting_refuses_non_regular_files() {
+    machine_setting_refuses_non_regular_files("root", &["--json", "list"]);
+}
+
+/// Exercise both machine-setting readers through the CLI, with no FIFO peer.
+#[cfg(unix)]
+pub(super) fn machine_setting_refuses_non_regular_files(name: &str, args: &[&str]) {
+    use crate::support;
+    use std::os::unix::fs::symlink;
+    use std::time::Duration;
+
+    for kind in ["fifo", "linked-fifo", "directory", "device"] {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let root = dir.path().join("corpus");
+        run_from_home(&home, Some(&root), &["init"], None).assert_ok();
+        let setting = home.join(".config/nebula").join(name);
+        std::fs::create_dir_all(setting.parent().unwrap()).unwrap();
+        match kind {
+            "fifo" | "linked-fifo" => {
+                let fifo = if kind == "fifo" {
+                    setting.clone()
+                } else {
+                    dir.path().join("pipe")
+                };
+                assert!(
+                    output(
+                        support::command("mkfifo", &home)
+                            .args(["-m", "600"])
+                            .arg(&fifo)
+                    )
+                    .status
+                    .success()
+                );
+                if kind == "linked-fifo" {
+                    symlink(&fifo, &setting).unwrap();
+                }
+            }
+            "directory" => std::fs::create_dir(&setting).unwrap(),
+            "device" => symlink("/dev/null", &setting).unwrap(),
+            _ => unreachable!(),
+        }
+        let mut cmd = neb_command(&home);
+        if name != "root" {
+            cmd.arg("--root").arg(&root);
+        }
+        cmd.args(args)
+            .current_dir(dir.path())
+            .env("PWD", dir.path());
+        let run = Run {
+            args: args.join(" "),
+            out: support::output(&mut cmd, Duration::from_secs(2))
+                .unwrap_or_else(|error| panic!("{name} {kind}: {error}")),
+        };
+        let refused = run.refusal();
+        assert_eq!(
+            refused["code"], "not_regular_file",
+            "{name} {kind}: {refused}"
+        );
+        let error = refused["error"].as_str().unwrap();
+        assert!(error.contains(setting.to_str().unwrap()), "{refused}");
+        let expected_kind = match kind {
+            "fifo" | "linked-fifo" => "a FIFO",
+            "directory" => "a directory",
+            "device" => "a device",
+            _ => unreachable!(),
+        };
+        assert!(error.contains(expected_kind), "{refused}");
+        assert!(run.stdout().is_empty());
+    }
+}
+
 #[test]
 fn capture_works_before_a_corpus_exists() {
     let dir = tempfile::tempdir().unwrap();
