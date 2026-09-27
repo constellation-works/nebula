@@ -17,17 +17,20 @@ interface Props {
  * and the two decisions the desktop can make without further details. A
  * settle whose commit was refused or had no repository still settled: the
  * entry leaves the list, and a note above it says the change is not committed.
+ * The capture box stays mounted when a read fails. Its draft and any in-flight
+ * capture live only in that component, so replacing it with the error would
+ * drop text that was never submitted. The error still replaces the list.
  */
 export function InboxView({ inbox }: Props) {
   const { entries, error, loaded, refresh } = inbox;
   const [warning, setWarning] = useState<string | null>(null);
   return (
     <section className="inbox" aria-label="Inbox">
+      <CaptureBox onCaptured={() => void refresh()} />
       {error !== null ? (
         <CorpusError message={error} onReloaded={() => void refresh()} />
       ) : (
         <>
-          <CaptureBox onCaptured={() => void refresh()} />
           {warning && <p className="inbox__warning" role="status">{warning}</p>}
           {loaded && entries.length === 0 ? (
             <p className="inbox__empty">Nothing waiting.</p>

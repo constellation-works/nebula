@@ -281,6 +281,236 @@ describe("InboxView", () => {
   });
 });
 
+describe("capture drafts across inbox read failures", () => {
+  const readError = { code: "io_at", message: "read /corpus/inbox/2026-09.md: io error" };
+  const draft = "irreplaceable draft";
+
+  async function watchingInbox() {
+    let fire: () => void = () => {};
+    mocked.onCorpusChanged.mockImplementation(async (handler) => {
+      fire = handler;
+      return () => {};
+    });
+    render(<Harness />);
+    await screen.findByText("a1b2");
+    return () => act(() => fire());
+  }
+
+  async function failInbox(emit: () => void) {
+    mocked.inbox.mockRejectedValueOnce(readError);
+    emit();
+    expect(await screen.findByRole("alert")).toHaveTextContent(readError.message);
+    return screen.getByLabelText("Capture");
+  }
+
+  /** Type, submit, and optionally replace the draft while that capture is still pending. */
+  async function pendingCapture(initial: string, newer: string | null) {
+    const capture = deferred<Written<InboxEntry>>();
+    mocked.capture.mockReturnValueOnce(capture.promise);
+    const emit = await watchingInbox();
+    const input = screen.getByLabelText("Capture");
+    fireEvent.change(input, { target: { value: initial } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(mocked.capture).toHaveBeenCalledWith(initial));
+    if (newer !== null) fireEvent.change(input, { target: { value: newer } });
+    const duringError = await failInbox(emit);
+    expect(duringError).toHaveValue(newer ?? initial);
+    expect(mocked.capture).toHaveBeenCalledTimes(1);
+    return { capture, emit, initial };
+  }
+
+  it("keeps an unsaved draft editable across a read failure and watcher recovery", async () => {
+    const emit = await watchingInbox();
+    fireEvent.change(screen.getByLabelText("Capture"), { target: { value: draft } });
+
+    const duringError = await failInbox(emit);
+    expect(duringError).toHaveValue(draft);
+    expect(duringError).not.toBeDisabled();
+
+    mocked.inbox.mockResolvedValueOnce(entries);
+    emit();
+    await screen.findByText("a1b2");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const recovered = screen.getByLabelText("Capture");
+    expect(recovered).toHaveValue(draft);
+    expect(recovered).not.toBeDisabled();
+    fireEvent.change(recovered, { target: { value: `${draft} still` } });
+    expect(recovered).toHaveValue(`${draft} still`);
+    expect(mocked.capture).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unsaved draft editable across a read failure and Reload", async () => {
+    const emit = await watchingInbox();
+    fireEvent.change(screen.getByLabelText("Capture"), { target: { value: draft } });
+    const duringError = await failInbox(emit);
+    expect(duringError).toHaveValue(draft);
+    expect(duringError).not.toBeDisabled();
+
+    mocked.inbox.mockResolvedValueOnce(entries);
+    fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(mocked.reload).toHaveBeenCalledTimes(1));
+    await screen.findByText("a1b2");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const recovered = screen.getByLabelText("Capture");
+    expect(recovered).toHaveValue(draft);
+    expect(recovered).not.toBeDisabled();
+    fireEvent.change(recovered, { target: { value: `${draft} still` } });
+    expect(recovered).toHaveValue(`${draft} still`);
+    expect(mocked.capture).not.toHaveBeenCalled();
+  });
+
+  it("clears only the submitted text when a pending capture succeeds during a read failure", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const saved = "saved text";
+    const { capture } = await pendingCapture(saved, null);
+
+    await act(async () => {
+      capture.resolve(landed({ id: "9999", at: "2026-09-13T12:00", text: saved }));
+      await capture.promise;
+    });
+    // The confirmation waits out before the inbox refetches, so the read error is still up.
+    expect(screen.getByLabelText("Capture")).toHaveValue("");
+    expect(screen.getByRole("status")).toHaveTextContent("captured");
+    expect(screen.getByRole("alert")).toHaveTextContent(readError.message);
+    expect(mocked.capture).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CONFIRM_MS + 1);
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Capture")).toHaveValue("");
+    expect(screen.getByText("a1b2")).toBeInTheDocument();
+    expect(mocked.capture).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("keeps a newer draft when a pending capture succeeds during a read failure", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { capture } = await pendingCapture("saved text", "newer draft");
+
+    await act(async () => {
+      capture.resolve(landed({ id: "9999", at: "2026-09-13T12:00", text: "saved text" }));
+      await capture.promise;
+    });
+    expect(screen.getByLabelText("Capture")).toHaveValue("newer draft");
+    expect(screen.getByRole("status")).toHaveTextContent("captured");
+    expect(screen.getByRole("alert")).toHaveTextContent(readError.message);
+    expect(mocked.capture).toHaveBeenCalledTimes(1);
+    expect(mocked.capture).toHaveBeenCalledWith("saved text");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CONFIRM_MS + 1);
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Capture")).toHaveValue("newer draft");
+    expect(screen.queryByText("captured")).not.toBeInTheDocument();
+    expect(mocked.capture).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it("keeps a newer draft and the capture error when a pending capture fails during a read failure", async () => {
+    const { capture, emit } = await pendingCapture("saved text", "newer draft");
+
+    await act(async () => {
+      capture.reject(new Error("offline"));
+      try {
+        await capture.promise;
+      } catch {
+        // CaptureBox renders the rejection and leaves the newer draft in place.
+      }
+    });
+    expect(screen.getByLabelText("Capture")).toHaveValue("newer draft");
+    expect(screen.getByRole("status")).toHaveTextContent("Error: offline");
+    expect(screen.getByRole("alert")).toHaveTextContent(readError.message);
+    expect(mocked.capture).toHaveBeenCalledTimes(1);
+
+    mocked.inbox.mockResolvedValueOnce(entries);
+    emit();
+    await screen.findByText("a1b2");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const recovered = screen.getByLabelText("Capture");
+    expect(recovered).toHaveValue("newer draft");
+    expect(screen.getByRole("status")).toHaveTextContent("Error: offline");
+
+    mocked.capture.mockResolvedValueOnce(landed({ id: "9999", at: "2026-09-13T12:00", text: "newer draft" }));
+    fireEvent.keyDown(recovered, { key: "Enter" });
+    await waitFor(() => expect(mocked.capture).toHaveBeenLastCalledWith("newer draft"));
+    expect(mocked.capture).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the failed text retryable when a pending capture fails during a read failure", async () => {
+    const { capture, emit } = await pendingCapture("saved text", null);
+
+    await act(async () => {
+      capture.reject(new Error("offline"));
+      try {
+        await capture.promise;
+      } catch {
+        // The rejection stays on the status line; the unsent text stays in the box.
+      }
+    });
+    expect(screen.getByLabelText("Capture")).toHaveValue("saved text");
+    expect(screen.getByRole("status")).toHaveTextContent("Error: offline");
+    expect(screen.getByRole("alert")).toHaveTextContent(readError.message);
+
+    mocked.inbox.mockResolvedValueOnce(entries);
+    emit();
+    await screen.findByText("a1b2");
+    expect(screen.getByLabelText("Capture")).toHaveValue("saved text");
+    expect(screen.getByRole("status")).toHaveTextContent("Error: offline");
+    expect(mocked.capture).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a newer draft when a pending capture's commit is refused during a read failure", async () => {
+    const reason = "corpus is ignored; nothing can be committed";
+    const { capture } = await pendingCapture("saved text", "newer draft");
+
+    await act(async () => {
+      capture.resolve({
+        value: { id: "9999", at: "2026-09-13T12:00", text: "saved text" },
+        commit: { status: "refused", error: { code: "corpus_ignored", message: reason } },
+      });
+      await capture.promise;
+    });
+    const input = screen.getByLabelText("Capture");
+    expect(input).toHaveValue("newer draft");
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent(`captured (not committed: ${reason})`);
+    expect(status).toHaveClass("capture__status--warning");
+    expect(mocked.capture).toHaveBeenCalledTimes(1);
+    expect(mocked.capture).toHaveBeenCalledWith("saved text");
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Capture")).toHaveValue("newer draft");
+    expect(screen.getByRole("status")).toHaveTextContent(`captured (not committed: ${reason})`);
+  });
+
+  it("clears submitted text and warns when a pending capture lands outside git during a read failure", async () => {
+    const { capture } = await pendingCapture("saved text", null);
+
+    await act(async () => {
+      capture.resolve({
+        value: { id: "9999", at: "2026-09-13T12:00", text: "saved text" },
+        commit: { status: "not_a_repository" },
+      });
+      await capture.promise;
+    });
+    const input = screen.getByLabelText("Capture");
+    expect(input).toHaveValue("");
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("captured (not committed: not a git repository)");
+    expect(status).toHaveClass("capture__status--warning");
+    expect(mocked.capture).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Capture")).toHaveValue("");
+    expect(screen.getByRole("status")).toHaveTextContent("captured (not committed: not a git repository)");
+    fireEvent.keyDown(screen.getByLabelText("Capture"), { key: "Enter" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mocked.capture).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("useInbox", () => {
   const newer = [{ id: "e5f6", at: "2026-09-13T11:00", text: "newer" }];
 
