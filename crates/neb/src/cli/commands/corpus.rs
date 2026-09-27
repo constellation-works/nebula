@@ -45,7 +45,7 @@ pub(in crate::cli) fn init(
         }
     }
     for warning in &done.warnings {
-        warn_root(warning, target);
+        warn_root(locations, warning, target);
     }
     Ok(ok)
 }

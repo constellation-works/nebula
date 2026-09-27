@@ -7,8 +7,8 @@ use crate::output::{self, errln, outln};
 use crate::render::{self, json};
 use nebula_core::verb::{CommitPolicy, RootWarning, WriteOptions};
 use nebula_core::{
-    CloseTag, CommitOutcome, Corpus, Error, OBSERVATORY_ROOT_ENV, ObservatoryLink, ObservatoryRoot,
-    ObservatorySource,
+    CloseTag, CommitOutcome, Corpus, Error, Locations, OBSERVATORY_ROOT_ENV, ObservatoryLink,
+    ObservatoryRoot, ObservatorySource,
 };
 use std::io::Write;
 use std::path::Path;
@@ -58,7 +58,7 @@ impl CommitOpts {
 
 /// Say on stderr, in every mode, when a machine setting will keep commands
 /// from finding the corpus about to be created at `target`.
-pub(super) fn warn_root(warning: &RootWarning, target: &Path) {
+pub(super) fn warn_root(locations: &Locations, warning: &RootWarning, target: &Path) {
     match warning {
         RootWarning::DefaultWhileConfigured {
             setting,
@@ -76,7 +76,7 @@ pub(super) fn warn_root(warning: &RootWarning, target: &Path) {
             // edit: absolute, since the setting is read from every
             // directory, and quoted, so it runs as printed (STD-02 §R26).
             // Made absolute lexically, as capture's note is.
-            let target = std::path::absolute(target).unwrap_or_else(|_| target.to_path_buf());
+            let target = locations.absolute(target);
             errln!(
                 "warning: {} still points to {}, not {}; run `neb init {} --set-root --force` to point commands at this corpus",
                 setting.display(),

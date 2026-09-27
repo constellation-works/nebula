@@ -202,12 +202,12 @@ impl Locations {
             .filter(|dir| dir.is_absolute())
     }
 
-    /// `path` made absolute against [`Self::cwd`], lexically, as
-    /// `std::path::absolute` would against the process's: `.` components
-    /// go, `..` stays, and nothing is resolved. As given when it is already
-    /// absolute or there is no working directory to join it to.
-    pub(crate) fn absolute(&self, path: &Path) -> PathBuf {
-        let joined = match &self.cwd {
+    /// `path` made absolute against the shell's working directory when it is
+    /// valid, lexically: `.` components go, `..` stays, and symlinks are not
+    /// resolved. An already absolute path keeps its spelling. The CLI uses
+    /// this for paths it shows to the person who invoked it.
+    pub fn absolute(&self, path: &Path) -> PathBuf {
+        let joined = match self.working_dir() {
             Some(cwd) if !path.is_absolute() => cwd.join(path),
             _ => path.to_path_buf(),
         };

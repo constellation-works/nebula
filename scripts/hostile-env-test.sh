@@ -84,6 +84,17 @@ run_suites() {
     echo "hostile-env: $label: $counts"
     if [[ "$status" -ne 0 ]]; then
         grep -E '^test .* FAILED$' "$log" >&2 || tail -n 40 "$log" >&2
+        # Cargo's summary only names failed tests. Print their captured
+        # assertion output as well, bounded per test for the run page.
+        awk '
+            /^---- .* stdout ----$/ { in_failure = 1; lines = 0 }
+            in_failure && /^failures:$/ { in_failure = 0 }
+            in_failure {
+                if (lines < 80) print > "/dev/stderr"
+                else if (lines == 80) print "... failing test output truncated ..." > "/dev/stderr"
+                lines++
+            }
+        ' "$log"
         echo "hostile-env: $label: full log in $log" >&2
         fail "$label: cargo test exited $status"
     fi

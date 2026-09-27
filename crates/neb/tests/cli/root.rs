@@ -116,6 +116,34 @@ fn capture_shows_a_relative_root_it_creates_as_an_absolute_path() {
     assert!(dir.path().join("typo").join("inbox").is_dir());
 }
 
+/// A shell inside a symlinked directory names the new corpus through that
+/// symlink. The notice must name the same place the shell user can see.
+#[cfg(unix)]
+#[test]
+fn capture_relative_root_notice_keeps_symlinked_working_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let real = dir.path().join("real");
+    let alias = dir.path().join("alias");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+
+    let root = alias.join("new-corpus");
+    let run = run_in(
+        &alias,
+        &home,
+        Some(Path::new("new-corpus")),
+        &["capture", "--quiet", "x"],
+        None,
+    )
+    .assert_ok();
+    assert_eq!(
+        run.stderr(),
+        format!("{CREATED_NOTICE}{}\n", root.display())
+    );
+    assert!(root.join("inbox").is_dir());
+}
+
 #[cfg(unix)]
 #[test]
 fn capture_that_cannot_create_its_corpus_names_the_path() {
