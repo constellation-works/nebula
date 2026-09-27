@@ -106,7 +106,7 @@ on `error`:
 | field | type | what it is |
 |---|---|---|
 | `error` | string | What is wrong, in the words the text output uses before its hint. |
-| `code` | string | The refusal's stable `snake_case` name. For a core refusal it is the `nebula-core` variant's name in `snake_case`: `no_such_node`, `cycle`, `self_loop`, `needs_kill`, `refuted_needs_why`, `refuted_cannot_reopen`, `seed_with_kill`, `unknown_reference_kind`, `unresolved_uri`, `absolute_uri`, `schema_mismatch`, `missing_config`, `corpus_ignored`, `git`, `git_timed_out`, `locked`, `edit_conflict`, `input_too_large`, `io_at` (an I/O failure, naming the path), `io_stdin` (standard input could not be read), `stdin_not_utf8`, `empty_capture` (an empty `capture`), `empty_note`, `reason_on_open_status`, `no_kill_to_confirm`, `uri_required`, `invalid_author_label`, `invalid_at`, `not_a_status`, `not_an_edge_type`, `malformed_frontmatter`, `inbox_entry_missing`, `inbox_entry_changed`, `inbox_entry_foreign`, `inbox_ids_exhausted`, `nodes_symlink`, `inbox_symlink`, `not_regular_file` (a node file, `config.yaml`, `.lock` or another corpus file that is a symlink, a FIFO, a device or a directory), `home_unset`, `home_not_unicode`, `empty_root_setting`, `relative_root_setting`, `dirty_tree`, `not_a_v1_status`, `not_a_v1_edge_type`, `migrated_node_unreadable`, `malformed_history`, `no_free_keep_name`, `temp_cleanup_failed`, `no_free_temp_name`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `usage` (arguments that parse but ask for nothing, such as `graph` with no format, `near` with no text, or `--no-commit` before a verb that never commits), `editor_not_configured`, `editor_invalid_command`, `editor_start`, `editor_unsuccessful`, `notes_changed`, `triage_key` (a key `triage` does not know), `triage_title_lost` (input ended while a `triage` title was waiting to be used), `stdout` and `json`. |
+| `code` | string | The refusal's stable `snake_case` name. For a core refusal it is the `nebula-core` variant's name in `snake_case`: `no_such_node`, `cycle`, `self_loop`, `needs_kill`, `refuted_needs_why`, `refuted_cannot_reopen`, `seed_with_kill`, `unknown_reference_kind`, `unresolved_uri`, `absolute_uri`, `schema_mismatch`, `missing_config`, `corpus_ignored`, `git`, `git_timed_out`, `locked`, `edit_conflict`, `input_too_large`, `io_at` (an I/O failure, naming the path), `io_stdin` (standard input could not be read), `stdin_not_utf8`, `empty_capture` (an empty `capture`), `empty_note`, `reason_on_open_status`, `no_kill_to_confirm`, `uri_required`, `invalid_author_label`, `invalid_at`, `not_a_status`, `not_an_edge_type`, `malformed_frontmatter`, `inbox_entry_missing`, `inbox_entry_changed`, `inbox_entry_foreign`, `inbox_ids_exhausted`, `nodes_symlink`, `inbox_symlink`, `not_regular_file` (a node file, `config.yaml`, `.lock` or another corpus file that is a symlink, a FIFO, a device or a directory), `home_unset`, `home_not_unicode`, `empty_root_setting`, `relative_root_setting`, `dirty_tree`, `not_a_v1_status`, `not_a_v1_edge_type`, `migrated_node_unreadable`, `malformed_history`, `no_free_keep_name`, `temp_cleanup_failed`, `no_free_temp_name`, and the rest in [invariants.md](invariants.md#what-each-refusal-means-and-what-to-do). The CLI adds its own: `usage` (arguments that parse but ask for nothing, such as `graph` with no format, `near` with no text, or `--no-commit` before a verb that never commits), `editor_not_configured`, `editor_invalid_command`, `editor_start`, `editor_unsuccessful`, `notes_changed`, `report_in_corpus` (`review --out` resolves inside the corpus; choose an external file), `triage_key` (a key `triage` does not know), `triage_title_lost` (input ended while a `triage` title was waiting to be used), `stdout` and `json`. |
 | `hint` | string or `null` | What to do about it, as the text output words it: often a command to run, such as `neb sharpen <id> --kill "..."`. `null` when the CLI has nothing to add. |
 
 Key order is not significant. A new refusal arrives with its own `code` and
@@ -950,7 +950,7 @@ graph BT
 | `neb review` | the weekly report: stale hypotheses (≥ 30 days), untouched seeds (≥ 90), hypotheses created ≥ 14 days ago with no references, hypotheses whose kill nobody human wrote, inbox waiting ≥ 14 | `--since <DAYS>`, `--out <FILE>`, `--limit <N>` (per section) |
 | `neb review --short` | the quick glance, one `ID WHY` row each: hypotheses created ≥ 14 days ago with no references, seeds untouched ≥ 90 days, inbox entries waiting ≥ 14 days | `--tag <TAG>`×, `--limit <N>` (lines) |
 
-Both forms are read-only by the spec's hard rule. `--short` refuses `--since`
+Both forms leave the corpus read-only by the spec's hard rule. `--short` refuses `--since`
 and `--out`, and `--tag` needs `--short`.
 Notes are reasoning, not context: adding a note does not count as adding a
 reference and does not close the no-references finding after the grace period.
@@ -962,6 +962,13 @@ reference and does not close the no-references finding after the grace period.
     "title": "Tags beat domains", "reason": "no references attached" }
 ]
 ```
+
+`review --out <FILE>` requires an existing parent directory outside the resolved
+corpus root. Destinations inside the corpus, including aliases through symlinks
+or `..`, are refused (`report_in_corpus`, exit 1); a final symlink is never
+followed (`not_regular_file` if it points outside or is dangling). The external
+report is replaced atomically with mode `0600`. `NEBULA_READ_ONLY=1` refuses
+**every** `--out` destination (`read_only`, exit 1); use stdout review instead.
 
 `neb review` without `--json` prints five `##` sections in that order, each
 `_none_` or a `- \`id\` Title — reason` list; `--out review.md` writes it to a
