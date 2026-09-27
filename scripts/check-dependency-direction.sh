@@ -115,7 +115,7 @@ declared_deps() {
       return value
     }
     function package_from(value, name) {
-      if (!match(value, /(^|[,[:space:]])package[[:space:]]*=[[:space:]]*"[^"]+"/)) return ""
+      if (!match(value, /(^|[,{[:space:]])package[[:space:]]*=[[:space:]]*"[^"]+"/)) return ""
       name = substr(value, RSTART, RLENGTH)
       sub(/^[^"]*"/, "", name)
       sub(/"$/, "", name)

@@ -9,16 +9,71 @@ work="$scratch_root/structural-checks-$$"
 mkdir "$work"
 
 cleanup() {
-  for path in "$work"/*/*; do
-    [[ -e "$path" || -L "$path" ]] || continue
-    unlink "$path"
-  done
-  for path in "$work"/*; do
-    [[ -d "$path" ]] && rmdir "$path"
-  done
+  while IFS= read -r -d '' path; do
+    if [[ -d "$path" && ! -L "$path" ]]; then
+      rmdir "$path"
+    else
+      unlink "$path"
+    fi
+  done < <(find "$work" -depth -mindepth 1 -print0)
   rmdir "$work"
 }
 trap cleanup EXIT
+
+dependency_fixture="$work/dependency-fixture"
+mkdir -p "$dependency_fixture/scripts" "$dependency_fixture/crates/nebula-core/src" \
+  "$dependency_fixture/apps/desktop/src-tauri/src"
+cp "$repo_root/scripts/check-dependency-direction.sh" "$dependency_fixture/scripts/"
+
+check_dependency_fixture() {
+  local label="$1" workspace_dep="$2" crate_dep="$3" expected="$4" output status
+  cat >"$dependency_fixture/Cargo.toml" <<EOF
+[workspace]
+members = ["crates/nebula-core"]
+[workspace.dependencies]
+$workspace_dep
+EOF
+  cat >"$dependency_fixture/crates/nebula-core/Cargo.toml" <<EOF
+[package]
+name = "nebula-core"
+[dependencies]
+$crate_dep
+EOF
+  if output=$(/bin/bash "$dependency_fixture/scripts/check-dependency-direction.sh" 2>&1); then
+    status=0
+  else
+    status=$?
+  fi
+  if [[ "$expected" == success && "$status" -eq 0 ]]; then
+    return
+  fi
+  if [[ "$expected" == banned && "$status" -ne 0 && "$output" == *"must not depend on clap"* ]]; then
+    return
+  fi
+  echo "structural-checks: $label: expected $expected, got exit $status:" >&2
+  echo "$output" >&2
+  return 1
+}
+
+# The real checker must resolve both inline spellings and inherited aliases.
+# The compact direct case passed before ORB-13404, bypassing the core ban.
+check_dependency_fixture "compact direct alias" "" \
+  'alias = {package = "clap", version = "4"}' banned
+check_dependency_fixture "spaced direct alias" "" \
+  'alias = { package = "clap", version = "4" }' banned
+check_dependency_fixture "compact allowed alias" "" \
+  'alias = {package = "serde", version = "1"}' success
+check_dependency_fixture "spaced allowed alias" "" \
+  'alias = { package = "serde", version = "1" }' success
+check_dependency_fixture "compact inherited alias" \
+  'alias = {package = "clap", version = "4"}' \
+  'alias = {workspace=true}' banned
+check_dependency_fixture "spaced inherited alias" \
+  'alias = { package = "clap", version = "4" }' \
+  'alias = { workspace = true }' banned
+check_dependency_fixture "compact inherited allowed alias" \
+  'alias = {package = "serde", version = "1"}' \
+  'alias = {workspace=true}' success
 
 tools=(dirname awk basename find sort wc head sed grep python3 cargo)
 
