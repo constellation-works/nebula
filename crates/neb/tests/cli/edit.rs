@@ -6,6 +6,111 @@ use crate::harness::{
 };
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+#[test]
+fn noisy_editor_keeps_success_stdout_to_the_payload() {
+    for json in [true, false] {
+        let c = Corpus::new();
+        let id = c.run(&["new", "Noisy editor"]).assert_ok().stdout_trim();
+        let script = editor_script(
+            &c,
+            "noisy-editor.sh",
+            "#!/bin/sh\nprintf 'editor stdout\\n'\nprintf 'editor stderr\\n' >&2\nIFS= read -r body || exit 71\nprintf '%s\\n' \"$body\" > \"$1\"\n",
+        );
+        let args = if json {
+            vec!["edit", &id, "--json"]
+        } else {
+            vec!["edit", &id]
+        };
+        // The editor still receives the caller's input as well as both
+        // diagnostic streams; only the payload stream is reserved for neb.
+        let input = c.workdir().join("editor-input");
+        write(&input, "Modified body\n");
+        let mut command = c.command(&args);
+        command
+            .env("EDITOR", &script)
+            .stdin(std::fs::File::open(input).unwrap())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let child = crate::support::ChildGuard::spawn(&mut command).unwrap();
+        let run = crate::harness::Run {
+            args: args.join(" "),
+            out: child.wait_with_output(crate::support::DEADLINE).unwrap(),
+        }
+        .assert_ok();
+        if json {
+            let view: serde_json::Value = serde_json::from_str(&run.stdout())
+                .expect("edit stdout must contain exactly one NodeView");
+            assert_eq!(view["node"]["id"], id);
+            assert_eq!(view["body"], "Modified body");
+        } else {
+            assert_eq!(run.stdout_trim(), id);
+        }
+        assert_eq!(run.stderr(), "editor stdout\neditor stderr\n");
+        assert!(
+            std::fs::read_to_string(c.node_file(&id))
+                .unwrap()
+                .ends_with("Modified body\n")
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn noisy_editor_failure_keeps_stdout_empty_and_reports_refusal() {
+    for json in [true, false] {
+        let c = Corpus::new();
+        let id = c
+            .run(&["new", "Failing noisy editor", "--body", "original"])
+            .assert_ok()
+            .stdout_trim();
+        let before = corpus_bytes(&c.root);
+        let script = editor_script(
+            &c,
+            "noisy-failure.sh",
+            "#!/bin/sh\nprintf 'editor stdout\\n'\nprintf 'editor stderr\\n' >&2\nprintf 'unsaved body' > \"$1\"\nexit 42\n",
+        );
+        let args = if json {
+            vec!["edit", &id, "--json"]
+        } else {
+            vec!["edit", &id]
+        };
+        let run = c
+            .run_with_env(
+                &args,
+                &[
+                    ("EDITOR", script.to_str().unwrap()),
+                    ("TMPDIR", c.workdir().to_str().unwrap()),
+                ],
+            )
+            .assert_fails();
+        assert_eq!(run.out.status.code(), Some(1));
+        assert!(
+            run.stdout().is_empty(),
+            "editor diagnostics leaked: {}",
+            run.stdout()
+        );
+        let stderr = run.stderr();
+        let refusal = stderr
+            .strip_prefix("editor stdout\neditor stderr\n")
+            .expect("editor diagnostics go to stderr");
+        if json {
+            let refusal: serde_json::Value =
+                serde_json::from_str(refusal).expect("one JSON refusal follows editor diagnostics");
+            assert_eq!(refusal["code"], "editor_unsuccessful");
+            assert!(
+                refusal["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("exited unsuccessfully; the node was not changed")
+            );
+        } else {
+            assert!(refusal.contains("exited unsuccessfully; the node was not changed"));
+        }
+        assert_eq!(corpus_bytes(&c.root), before);
+    }
+}
+
 #[test]
 fn new_reads_body_from_stdin_and_promote_appends_body_after_capture() {
     let c = Corpus::new();
