@@ -3,15 +3,12 @@
 
 #![allow(unused_imports)]
 
-mod check;
 mod config;
-mod error;
 mod fs;
 mod git;
 mod git_forward;
 mod id;
 mod lock;
-mod migrate;
 mod model;
 mod pending;
 mod stamp;

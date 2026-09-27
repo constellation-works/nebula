@@ -64,16 +64,16 @@ mod lock;
 mod pending;
 mod stamp;
 
-#[path = "check.rs"]
+#[path = "check/mod.rs"]
 mod check_impl;
 #[path = "fs.rs"]
 mod fs_impl;
-#[path = "graph.rs"]
+#[path = "graph/mod.rs"]
 mod graph_impl;
-#[path = "migrate.rs"]
+#[path = "migrate/mod.rs"]
 mod migrate_impl;
 mod model;
-#[path = "ops.rs"]
+#[path = "ops/mod.rs"]
 mod ops_impl;
 mod store;
 #[path = "triage.rs"]
