@@ -19,6 +19,53 @@ fn root() -> tempfile::TempDir {
     tempfile::tempdir().expect("tempdir")
 }
 
+#[cfg(unix)]
+#[test]
+fn machine_settings_refuses_a_hardlinked_lock() {
+    let dir = root();
+    let locations = crate::Locations {
+        home: Some(dir.path().as_os_str().to_owned()),
+        ..Default::default()
+    };
+    drop(crate::Corpus::lock_machine_settings(&locations).expect("initial lock"));
+    let lock = crate::Corpus::machine_settings_dir(&locations)
+        .unwrap()
+        .join(LOCK_FILE);
+    let sentinel = dir.path().join("external-sentinel");
+    scribble_new(&sentinel, b"IRREPLACEABLE");
+    std::fs::remove_file(&lock).unwrap();
+    std::fs::hard_link(&sentinel, &lock).unwrap();
+    let error = crate::Corpus::lock_machine_settings(&locations).expect_err("hard link");
+    assert!(
+        matches!(&error, Error::IoAt { path, .. } if path == &lock),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("hard link"), "{error}");
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"IRREPLACEABLE");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_hardlink_added_while_held_is_not_truncated_on_release() {
+    use std::os::unix::fs::MetadataExt as _;
+    let dir = root();
+    let path = dir.path().join(LOCK_FILE);
+    let outer = CorpusLock::acquire(dir.path()).unwrap();
+    let inode = std::fs::metadata(&path).unwrap().ino();
+    let alias = dir.path().join("alias");
+    std::fs::hard_link(&path, &alias).unwrap();
+    let before = std::fs::read(&alias).unwrap();
+    drop(outer);
+    assert_eq!(std::fs::read(&alias).unwrap(), before);
+    assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
+    CorpusLock::acquire(dir.path()).expect_err("the alias still exists");
+    std::fs::remove_file(&alias).unwrap();
+    let next = CorpusLock::acquire(dir.path()).expect("refusal released the lock");
+    assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
+    drop(next);
+    assert!(std::fs::read(&path).unwrap().is_empty());
+}
+
 #[test]
 fn the_lock_file_is_created_under_the_root_and_outlives_the_guard() {
     let dir = root();

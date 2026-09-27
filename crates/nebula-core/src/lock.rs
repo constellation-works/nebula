@@ -54,6 +54,10 @@
 //! and only as a regular file, so a link, a FIFO or a device planted at
 //! `.lock` is refused as [`Error::NotRegularFile`] rather than written
 //! through or waited on.
+//! The opened inode must also have exactly one hard link before acquisition
+//! and every holder-record mutation. An aliased inode is refused without
+//! unlinking or replacing it. This detects existing aliases, not a hostile
+//! same-user process racing a new link between the check and the write.
 //!
 //! **Who holds it** (STD-03 §R7). Just after `flock` succeeds, the holder
 //! writes one short record into the lock file itself — its PID, when it took
@@ -259,7 +263,9 @@ impl Drop for CorpusLock {
             // Empty the holder record while the lock is still held, so the
             // next waiter does not read this one as its holder. A failure
             // costs only that diagnosis, and a guard never fails a drop.
-            let _ = overwrite_in_place(&inner.file, b"");
+            if check_lock_file(&inner.file).is_ok() {
+                let _ = overwrite_in_place(&inner.file, b"");
+            }
             // Dropping the file closes the description and releases the
             // `flock` with it, which is the whole of the release.
             *held = None;
@@ -336,6 +342,8 @@ fn try_enter(gate: &Arc<Gate>, root: &Path, label: &str) -> Result<Option<Corpus
         // Already inside on this thread: the CLI holding the lock across a
         // verb and its commit, with the op taking it again underneath.
         Some(inner) if inner.thread == me => {
+            check_lock_file(&inner.file)
+                .map_err(|error| Error::io_at("checking lock file", root.join(LOCK_FILE), error))?;
             inner.depth += 1;
             Ok(Some(CorpusLock {
                 gate: Arc::clone(gate),
@@ -364,9 +372,12 @@ fn try_enter(gate: &Arc<Gate>, root: &Path, label: &str) -> Result<Option<Corpus
                 Links::Refuse,
                 "opening",
             )?;
+            check_lock_file(&file)
+                .map_err(|error| Error::io_at("checking lock file", &path, error))?;
             match FileExt::try_lock(&file) {
                 Ok(()) => {
-                    record_holder(&file, label);
+                    record_holder(&file, label)
+                        .map_err(|error| Error::io_at("checking lock file", &path, error))?;
                     *held = Some(Held {
                         thread: me,
                         depth: 1,
@@ -388,19 +399,15 @@ fn try_enter(gate: &Arc<Gate>, root: &Path, label: &str) -> Result<Option<Corpus
 
 /// Write this process into the lock file it has just locked.
 ///
-/// Diagnostic only, so a failure is not the writer's problem: the lock is
-/// held either way, and a waiter that finds no record says the holder is
-/// unidentified. Only a regular file is written, so a FIFO or device planted
-/// at the name is locked but never written to.
-fn record_holder(file: &File, label: &str) {
-    if !file.metadata().is_ok_and(|meta| meta.is_file()) {
-        return;
-    }
+/// Integrity checks fail closed before any mutation. Writing the diagnostic
+/// itself remains best effort: a waiter without a record names no holder.
+fn record_holder(file: &File, label: &str) -> std::io::Result<()> {
+    check_lock_file(file)?;
     let since = OffsetDateTime::now_utc()
         .replace_nanosecond(0)
         .unwrap_or_else(|_| OffsetDateTime::now_utc());
     let Ok(since) = since.format(&Rfc3339) else {
-        return;
+        return Ok(());
     };
     let record = Record {
         pid: std::process::id(),
@@ -408,10 +415,42 @@ fn record_holder(file: &File, label: &str) {
         label: clean_label(label),
     };
     let Ok(mut line) = serde_json::to_vec(&record) else {
-        return;
+        return Ok(());
     };
     line.push(b'\n');
     let _ = overwrite_in_place(file, &line);
+    Ok(())
+}
+
+/// Inspect the descriptor that will be mutated, never a fresh path lookup.
+/// Even an unlinked inode (zero links) is no longer a usable lock anchor.
+#[cfg(unix)]
+fn check_lock_file(file: &File) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "lock descriptor is not a regular file",
+        ));
+    }
+    if metadata.nlink() != 1 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "lock file must have exactly one hard link; stop all writers and restore a private lock file before retrying",
+        ));
+    }
+    Ok(())
+}
+
+/// Without a descriptor link count we cannot establish exclusive ownership
+/// of the bytes. Refuse rather than truncate an unverifiable inode.
+#[cfg(not(unix))]
+fn check_lock_file(_file: &File) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "cannot verify the lock file's hard link count on this platform",
+    ))
 }
 
 /// The holder a waiter reads out of `path`, or `None` when there is no

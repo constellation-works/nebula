@@ -6,6 +6,42 @@ use crate::observatory::with_legacy_observatory_root;
 use crate::supervised_git::pre_commit_hook;
 use std::path::PathBuf;
 
+#[cfg(unix)]
+#[test]
+fn capture_refuses_a_hardlinked_lock_without_changing_files() {
+    use crate::harness::snapshot_corpus_files;
+    use std::os::unix::fs::MetadataExt as _;
+    use std::time::Instant;
+
+    let c = Corpus::new();
+    c.seed("existing thought", "Existing node");
+    let before = snapshot_corpus_files(&c.root);
+    let config = std::fs::read(c.root.join("config.yaml")).unwrap();
+    let sentinel = c.workdir().join("external-sentinel");
+    write(&sentinel, "IRREPLACEABLE");
+    let lock = c.root.join(".lock");
+    std::fs::remove_file(&lock).unwrap();
+    std::fs::hard_link(&sentinel, &lock).unwrap();
+    let inode = std::fs::metadata(&lock).unwrap().ino();
+
+    let started = Instant::now();
+    let refused = c.run(&["--json", "capture", "must not land"]);
+    assert!(
+        started.elapsed() < nebula_core::LOCK_WAIT,
+        "refusal waited for contention"
+    );
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"IRREPLACEABLE");
+    assert_eq!(snapshot_corpus_files(&c.root), before);
+    assert_eq!(std::fs::read(c.root.join("config.yaml")).unwrap(), config);
+    assert_eq!(std::fs::metadata(&lock).unwrap().ino(), inode);
+    let envelope = refused.assert_fails().refusal();
+    let error = envelope["error"].as_str().unwrap();
+    assert!(
+        error.contains("hard link") && error.contains(lock.to_str().unwrap()),
+        "{envelope}"
+    );
+}
+
 /// Two `neb` processes editing one node's tags at the same time. Each is a
 /// load, an edit and a save, so without `<root>/.lock` the second reads the
 /// node as it was before the first saved and the later write wins: one tag
