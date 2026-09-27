@@ -27,7 +27,9 @@ impl Corpus {
                 &path,
             ],
         )?;
-        let fields: Vec<&str> = raw.split('\0').filter(|field| !field.is_empty()).collect();
+        // `-z` adds a trailing NUL per record. Strip only that framing
+        // delimiter; empty subjects are meaningful third fields.
+        let fields: Vec<&str> = raw.split_terminator('\0').collect();
         let (records, remainder) = fields.as_chunks::<3>();
         if !remainder.is_empty() {
             return Err(Error::MalformedHistory {
