@@ -257,8 +257,8 @@ check belongs in the type.
 
 ## The integration suites are split per area, one binary per crate
 
-STD-02@2 §R18 asks that a file be split along its responsibilities before it
-passes about 800 lines. The two integration suites follow it:
+STD-02@3 §R18 treats about 800 lines as a signal to check for multiple
+responsibilities and split along them. The two integration suites follow it:
 `crates/neb/tests/cli/` and `crates/nebula-core/tests/core/`. Each is one test
 target, auto-discovered from its `main.rs`, so each crate still links one test
 binary and the test count is unchanged. `main.rs` declares the shared
