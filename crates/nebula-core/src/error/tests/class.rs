@@ -116,3 +116,21 @@ fn snake_case_is_checked_word_by_word() {
         assert!(!is_snake_case(bad), "{bad}");
     }
 }
+
+/// Protect the agent's refusal lookup against new, undocumented error variants.
+#[test]
+fn agent_docs_cover_every_core_refusal_code() {
+    let docs = concat!(
+        include_str!("../../../../../skills/nebula/references/verbs.md"),
+        include_str!("../../../../../skills/nebula/references/invariants.md"),
+    );
+    let missing: Vec<_> = Error::CODES
+        .iter()
+        .filter(|(_, code, _)| !docs.contains(&format!("`{code}`")))
+        .map(|(_, code, _)| *code)
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "ORB-13302: agent refusal lookup lacks codes and their meanings: {missing:?}"
+    );
+}

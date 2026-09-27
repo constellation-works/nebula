@@ -474,3 +474,65 @@ fn discovery_regression_check_names_the_checked_root() {
         assert_eq!(json.out.status.success(), !broken);
     }
 }
+
+/// Compare the skill's examples with the shipped CLI, including the stream
+/// carrying the tally. Only the fixture-specific root is substituted.
+#[test]
+fn agent_docs_check_examples_match_cli() {
+    let session = include_str!("../../../../skills/nebula/references/session-mode.md");
+    let verbs = include_str!("../../../../skills/nebula/references/verbs.md");
+    let c = Corpus::new();
+    for title in ["First thought", "Second thought", "Third thought"] {
+        c.seed(title, title);
+    }
+    for (doc, marker, example) in [
+        (verbs, "// neb check --json", 1),
+        (session, "$ neb check --json\n", 2),
+    ] {
+        if example == 2 {
+            c.seed("Fourth thought", "Fourth thought");
+        }
+        let tail = session.split("$ neb check\n").nth(example).unwrap();
+        let expected = tail
+            .lines()
+            .take_while(|line| !line.starts_with('$') && *line != "```")
+            .collect::<Vec<_>>()
+            .join("\n");
+        let run = c.run(&["check"]).assert_ok();
+        let actual = format!("{}{}", run.stdout(), run.stderr())
+            .replace(c.root.to_str().unwrap(), "/Users/you/.nebula");
+        assert_eq!(expected.trim(), actual.trim(), "session check transcript");
+        let tail = doc.split(marker).nth(1).unwrap();
+        let line = tail.lines().find(|line| line.starts_with('{')).unwrap();
+        let expected: serde_json::Value = serde_json::from_str(line).unwrap();
+        let run = c.run(&["check", "--json"]).assert_ok();
+        assert!(run.stderr().is_empty());
+        let mut actual: serde_json::Value = serde_json::from_str(&run.stdout()).unwrap();
+        assert_eq!(actual["root"], c.root.to_str().unwrap());
+        actual["root"] = serde_json::json!("/Users/you/.nebula");
+        assert_eq!(expected, actual, "documented check JSON must match neb");
+    }
+
+    let format = session
+        .split("check line (`")
+        .nth(1)
+        .unwrap()
+        .split('`')
+        .next()
+        .unwrap();
+    let expected = format.replace('N', "4").replace(['E', 'W', 'U'], "0");
+    assert_eq!(expected, c.run(&["check"]).assert_ok().stderr().trim());
+}
+
+#[test]
+fn agent_docs_name_the_graph_refusal_for_a_corrupt_node() {
+    let c = Corpus::new();
+    write(&c.node_file("broken"), "no frontmatter\n");
+    let refusal = c.run(&["list", "--json"]).refusal();
+    let code = refusal["code"].as_str().unwrap();
+    let docs = include_str!("../../../../skills/nebula/references/invariants.md");
+    assert!(
+        docs.contains(&format!("`{code}`")),
+        "ORB-13302: agent must be able to look up the real graph refusal: {code}"
+    );
+}
