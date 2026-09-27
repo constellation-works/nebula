@@ -255,24 +255,32 @@ else with authority (a URL, a git ref, a shell argument) outside `store.rs`, or
 if `nebula-core` gains consumers outside this workspace. At that point the
 check belongs in the type.
 
-## The two integration-test files stay whole
+## The integration suites are split per area, one binary per crate
 
-This departs from STD-02@2 §R18, a SHOULD, for `crates/neb/tests/cli.rs` and
-`crates/nebula-core/tests/core.rs` only. Each is a flat list of independent
-end-to-end cases over one shared fixture: the `Corpus` harness and its run
-helpers in `cli.rs`, and `corpus()` and `seed()` in `core.rs`. Size here does
-not hide several responsibilities, which is what the rule's split protects
-against. Splitting the files now would move every test, and it would collide
-with every in-flight task that adds one. The standards wave this decision
-belongs to filed 32 tasks, and 27 of them name one of these two files.
+STD-02@2 §R18 asks that a file be split along its responsibilities before it
+passes about 800 lines. The two integration suites follow it:
+`crates/neb/tests/cli/` and `crates/nebula-core/tests/core/`. Each is one test
+target, auto-discovered from its `main.rs`, so each crate still links one test
+binary and the test count is unchanged. `main.rs` declares the shared
+containment module `support` (`crates/nebula-core/tests/support/mod.rs`, by
+path), a `harness` module and one module per area. `harness` holds the fixture
+every area shares: the `Corpus` harness and its run helpers in `cli`, and
+`corpus()`, `seed()` and their neighbours in `core`. The areas are the verb
+families (`capture`, `promote`, `review`, `migrate`, `commit`, `lock` and so
+on). A helper used by one area stays beside its tests; one another area uses
+is `pub(super)` and imported there.
 
-What is given up: diffs and searches in an 8,500-line file are harder to
-review. What still holds the line: a new test goes beside the related tests,
-not at the end of the file. Source files are still held to about 800 lines,
-and ORB-13174 splits the ones over it. Reverses when the tree is quiet enough
-for a single mechanical move into `tests/cli/main.rs` plus one module per verb
-family. That layout keeps one test binary per crate and leaves the test count
-unchanged.
+The fixture module is `harness`, not `support`: `support` already names the
+containment module both suites, and the desktop shell's, declare by path.
+
+This replaces an earlier deviation that kept the two suites as single files
+of 13,000 and 6,000 lines until the tree was quiet enough for one mechanical
+move. ORB-13261 made that move. A new test goes in its area's module, and a
+new area gets a module of its own. `scripts/check-test-modules.sh` fails
+on a file under `tests/<suite>/` that nothing declares, because it would
+never run. `scripts/check-file-size.sh` fails on any `.rs` file over 800
+lines without a `// size: <reason>` line in its first five. Both run in
+`make ci-fast` and CI.
 
 ## Unknown fields are refused, never dropped
 
