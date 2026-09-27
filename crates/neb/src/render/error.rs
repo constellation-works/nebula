@@ -12,8 +12,13 @@
 //! How a refusal exits is decided here too, once: [`exit`] places every core
 //! variant, and the CLI's own refusals say which they are when they are made.
 
+use crate::cli::shell_word;
 use nebula_core::{EdgeType, Error, ErrorClass, LockHolder, Settlement, Status};
 use std::time::{Duration, SystemTime};
+
+fn shell_path(path: &std::path::Path) -> String {
+    shell_word(&path.to_string_lossy())
+}
 
 /// How a refusal ends `neb` (STD-01 §R20).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -315,12 +320,14 @@ fn hint(e: &Error) -> Option<String> {
         Error::UnknownRevision { .. } => "Pass a hash from the node's history, which \
              `neb log <id>` lists, or a date as YYYY-MM-DD."
             .to_owned(),
-        Error::NoCorpus(root) => format!("Create one with:  neb init {}", root.display()),
-        Error::NotGitWorkTree(root) => format!(
-            "History comes from git. Make the corpus a repository, then have each \
-             write committed:\n  git -C {} init\n  neb config commit on",
-            root.display()
-        ),
+        Error::NoCorpus(root) => format!("Create one with:  neb init {}", shell_path(root)),
+        Error::NotGitWorkTree(root) => {
+            let root = shell_path(root);
+            format!(
+                "History comes from git. Make the corpus a repository, then have each \
+                 write committed:\n  git -C {root} init\n  neb --root {root} config commit on"
+            )
+        }
         Error::DuplicateEdge { from, .. } => format!("See its edges with:  neb show {from}"),
         Error::Locked { holder, .. } => locked_hint(holder.as_ref()),
         Error::EditConflict(id) => format!(
@@ -334,25 +341,29 @@ fn hint(e: &Error) -> Option<String> {
             size(nebula_core::ops::CAPTURE_INPUT_LIMIT),
             size(nebula_core::ops::BODY_INPUT_LIMIT)
         ),
-        Error::GitTimedOut { root, context, .. } if context == "commit" => format!(
-            "A git hook is the likely cause: `git commit` runs the repository's \
-             pre-commit and commit-msg hooks, and one did not finish. Run it by \
-             hand to see where it stops:\n  git -C {0} hook run pre-commit\n\n\
-             The write is in place. Skip the commit next time with --no-commit, \
-             or record it once the hook is fixed:\n  \
-             git -C {0} add nodes inbox config.yaml .gitignore && git -C {0} commit -m \"neb\"",
-            root.display()
-        ),
+        Error::GitTimedOut { root, context, .. } if context == "commit" => {
+            let root = shell_path(root);
+            format!(
+                "A git hook is the likely cause: `git commit` runs the repository's \
+                 pre-commit and commit-msg hooks, and one did not finish. Run it by \
+                 hand to see where it stops:\n  git -C {root} hook run pre-commit\n\n\
+                 The write is in place. Skip the commit next time with --no-commit, \
+                 or record it once the hook is fixed:\n  \
+                 git -C {root} add nodes inbox config.yaml .gitignore && git -C {root} commit -m \"neb\""
+            )
+        }
         Error::GitTimedOut { root, context, .. } => format!(
             "Run it by hand to see what it is waiting on:\n  git -C {} {context}",
-            root.display()
+            shell_path(root)
         ),
-        Error::CorpusIgnored(root) => format!(
-            "Make the corpus its own repository, so the containing one's ignore \
-             rules stop applying:\n  git -C {} init\n\nOr turn the setting off:  \
-             neb config commit off",
-            root.display()
-        ),
+        Error::CorpusIgnored(root) => {
+            let root = shell_path(root);
+            format!(
+                "Make the corpus its own repository, so the containing one's ignore \
+                 rules stop applying:\n  git -C {root} init\n\nOr turn the setting off:  \
+                 neb --root {root} config commit off"
+            )
+        }
         Error::AlreadyClosed {
             id,
             status: Status::Refuted,
@@ -368,7 +379,7 @@ fn hint(e: &Error) -> Option<String> {
         }
         Error::RootAndPathDiffer { path, .. } => format!(
             "Name the corpus once, as the path:  neb init {}",
-            path.display()
+            shell_path(path)
         ),
         Error::ParentAndReopens(id) => {
             format!("`--reopens {id}` already records the descent, so drop `--parent {id}`.")
@@ -458,24 +469,28 @@ fn schema_hint(e: &Error) -> Option<String> {
             "This corpus was written by a newer nebula. Upgrade this build.".to_owned()
         }
         Error::SchemaMismatch { .. } => "Bring the corpus forward with:  neb migrate".to_owned(),
-        Error::MissingConfig { path } => format!(
-            "If the corpus predates config.yaml, bring it forward with:  neb migrate\n\
-             If the file was deleted, restore it instead, which keeps the corpus's \
-             id and settings:  git -C {} checkout -- config.yaml",
-            path.parent().unwrap_or(path).display()
-        ),
+        Error::MissingConfig { path } => {
+            let root = shell_path(path.parent().unwrap_or(path));
+            format!(
+                "If the corpus predates config.yaml, bring it forward with:  neb --root {root} migrate\n\
+                 If the file was deleted, restore it instead, which keeps the corpus's \
+                 id and settings:  git -C {root} checkout -- config.yaml"
+            )
+        }
         Error::CurrentSchemaUnreadable { .. } => {
             "Fix the node by hand (`neb check` names the same problem), then run \
              `neb migrate` again."
                 .to_owned()
         }
-        Error::V1NodeUnderCurrentSchema { path, config, .. } => format!(
-            "If this corpus was never migrated, an older neb stamped its config. Repair it:\n  \
-             set `schema_version: 1` in {} (or delete that file), then run:  neb migrate\n\
-             If the key was added by hand, remove it from {} instead.",
-            config.display(),
-            path.display()
-        ),
+        Error::V1NodeUnderCurrentSchema { path, config, .. } => {
+            format!(
+                "If this corpus was never migrated, an older neb stamped its config. Repair it:\n  \
+                 set `schema_version: 1` in {} (or delete that file), then run:  neb migrate\n\
+                 If the key was added by hand, remove it from {} instead.",
+                shell_path(config),
+                shell_path(path)
+            )
+        }
         _ => return None,
     })
 }
@@ -494,7 +509,7 @@ fn interrupted_write_hint(e: &Error) -> Option<String> {
              cat {0}\n\
              check that the node it names and its inbox line say what you want, \
              then remove it:  rm {0}",
-            path.display()
+            shell_path(path)
         ),
         _ => return None,
     })
@@ -549,7 +564,7 @@ fn entry_hint(e: &Error) -> Option<String> {
         if path.file_name() == Some(std::ffi::OsStr::new(nebula_core::LOCK_FILE)) {
             format!(
                 "The next writer makes a fresh lock file. Remove this one:  rm {}",
-                path.display()
+                shell_path(path)
             )
         } else {
             format!(

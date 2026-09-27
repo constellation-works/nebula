@@ -332,7 +332,10 @@ fn log_outside_git_hints_init() {
         stderr.contains(&format!("git -C {} init", c.root.display())),
         "{stderr}"
     );
-    assert!(stderr.contains("neb config commit on"), "{stderr}");
+    assert!(
+        stderr.contains(&format!("neb --root {} config commit on", c.root.display())),
+        "{stderr}"
+    );
     let refused = c.run(&["--json", "log", &id]).refusal();
     assert_eq!(refused["code"], "not_git_work_tree");
     assert!(
