@@ -16,7 +16,15 @@
 # one subscriber (`run()` in apps/desktop/src-tauri/src/lib.rs) names stderr.
 # Integration tests (`tests/`) are exempt, as is a `//` comment line.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+script_path=${BASH_SOURCE[0]}
+script_dir=${script_path%/*}
+[[ "$script_dir" != "$script_path" ]] || script_dir=.
+cd "$script_dir/.."
+
+if ! command -v grep >/dev/null 2>&1; then
+  echo "terminal-guard: required inspection tool grep is unavailable" >&2
+  exit 1
+fi
 
 # The module, as `output.rs` or split into `output/`.
 OUTPUT=crates/neb/src/output
@@ -24,9 +32,36 @@ STREAMS='io::stdout|io::stderr|println!|eprintln!|print!|eprint!|dbg!'
 TERMINAL='is_terminal|IsTerminal|NO_COLOR|CLICOLOR|"TERM"|COLUMNS|terminal_size'
 PATTERN="$STREAMS|$TERMINAL"
 
-hits=$(grep -rnE --include='*.rs' --exclude-dir=tests "$PATTERN" crates \
-  | grep -vE "^$OUTPUT(\.rs:|/)" \
-  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+grep_capture() {
+  local destination="$1" context="$2" captured status
+  shift 2
+  if captured=$(grep "$@"); then
+    :
+  else
+    status=$?
+    if ((status == 1)); then
+      captured=""
+    else
+      echo "terminal-guard: grep failed while $context (exit $status)" >&2
+      return 2
+    fi
+  fi
+  printf -v "$destination" '%s' "$captured"
+}
+
+if ! grep_capture hits "scanning Rust sources under crates" -rnE --include='*.rs' --exclude-dir=tests "$PATTERN" crates; then
+  exit 1
+fi
+if [[ -n "$hits" ]]; then
+  if ! grep_capture hits "filtering the output module" -vE "^$OUTPUT(\.rs:|/)" <<<"$hits"; then
+    exit 1
+  fi
+fi
+if [[ -n "$hits" ]]; then
+  if ! grep_capture hits "filtering comment lines" -vE '^[^:]+:[0-9]+:[[:space:]]*//' <<<"$hits"; then
+    exit 1
+  fi
+fi
 
 if [[ -n "$hits" ]]; then
   echo "$hits" >&2
