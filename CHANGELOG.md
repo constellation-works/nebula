@@ -436,9 +436,15 @@ habit. This cut keeps what a person actually uses.
 - The corpus is found from the working directory. Resolution is `--root`,
   else `$NEBULA_ROOT`, else the nearest corpus at or above the current
   directory, else `~/.config/nebula/root`, else `~/.nebula`. A corpus is a
-  `nodes/` directory beside a `config.yaml` that names a `corpus_id`, and
-  only an existing one is found, so `capture` never creates a corpus because
-  of where it ran. The innermost of nested corpora wins, and the walk follows
+  `nodes/` directory with positive corpus evidence: a `config.yaml` with a
+  top-level `schema_version` or `corpus_id` key (even invalid), an unparseable
+  or unreadable config, or (when config is absent) a real `inbox/` directory or
+  regular `.lock` file identifying a legacy or damaged corpus. Opening refuses
+  a missing or malformed config at that root instead of falling back, while a
+  lone `nodes/`, `nodes/` with another tool's parsable config, or a config
+  without `nodes/` falls through to the configured or default corpus. Only an
+  existing corpus is found, so `capture` never creates a corpus because of
+  where it ran. The innermost of nested corpora wins, and the walk follows
   `$PWD` as written, without resolving symlinks.
 - `promote` with neither `--title` nor `--id` keeps the captured sentence as
   the title but, for a capture over five words, mints the id from its first

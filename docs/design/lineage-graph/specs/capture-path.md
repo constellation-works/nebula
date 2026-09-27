@@ -30,11 +30,16 @@ told to run a setup command first is exactly the friction that loses the thought
 so `capture` creates the corpus rather than refusing.
 
 Where it is run never decides that. The working directory resolves to a corpus
-when a `nodes/` directory exists at or above it. A missing or malformed
-`config.yaml` refuses at that root; it never redirects capture elsewhere.
-Without that marker, resolution carries on to the configured root. So a corpus
-is only ever created at a root that was named: `--root`,
-`$NEBULA_ROOT`, `~/.config/nebula/root`, or the `~/.nebula` default.
+when a directory at or above it holds `nodes/` plus positive corpus evidence.
+Evidence means `config.yaml` has a top-level `schema_version` or `corpus_id` key
+(even with an invalid value), or cannot be parsed or read; when config is absent,
+a real `inbox/` directory or regular `.lock` file alongside `nodes/` identifies
+a legacy or damaged corpus. A missing or malformed `config.yaml` refuses at that
+root; it never redirects capture elsewhere. A lone `nodes/` without corpus
+evidence, or `nodes/` with another tool's parsable config, falls through to the
+configured or default root. So a corpus is only ever created at a root that was
+named: `--root`, `$NEBULA_ROOT`, `~/.config/nebula/root`, or the `~/.nebula`
+default.
 
 Creating one is never silent. A mistyped `--root` or `$NEBULA_ROOT` looks exactly
 like a corpus that does not exist yet, and a quiet success would split the corpus
