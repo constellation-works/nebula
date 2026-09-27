@@ -168,19 +168,54 @@ bench() {
 
 # compare <base.json> <head.json>: the table, then the verdict.
 compare() {
-  local rows failed
+  local rows failed commands_json
+  commands_json=$(jq -nc '$ARGS.positional' --args "${COMMANDS[@]}")
   rows=$(jq -nr --slurpfile base "$1" --slurpfile head "$2" \
+    --arg base_file "$1" --arg head_file "$2" \
+    --argjson commands "$commands_json" \
     --argjson pct "$MAX_PERCENT" --argjson ms "$MAX_MS" '
-    $base[0] as $b | $head[0] as $h
-    | $h | keys_unsorted[] as $k
-    | ($b[$k]) as $old | $h[$k] as $new
-    | if $old == null then [$k, "-", $new, "-", "-", "new"]
-      else ($new - $old) as $d
-        | (if $old > 0 then $d / $old * 100 else 0 end) as $p
-        | [$k, $old, $new, ($d * 10 | round / 10), ($p * 10 | round / 10),
-           (if $d > $ms and $p > $pct then "REGRESSION" else "ok" end)]
-      end
-    | @tsv')
+    def checked($docs; $file):
+      if ($docs | length) != 1 then
+        error("invalid input \($file): expected exactly one JSON object")
+      elif ($docs[0] | type) != "object" then
+        error("invalid input \($file): expected a JSON object")
+      else $docs[0] end;
+    def invalid_samples($samples):
+      [$commands[] as $k
+       | select($samples | has($k))
+       | select(($samples[$k] | type) != "number" or $samples[$k] < 0
+                or ($samples[$k] | isinfinite) or ($samples[$k] | isnan))
+       | $k];
+    def missing_samples($samples):
+      [$commands[] as $k | select($samples | has($k) | not) | $k];
+
+    checked($base; $base_file) as $b
+    | checked($head; $head_file) as $h
+    | invalid_samples($b) as $bad_base
+    | invalid_samples($h) as $bad_head
+    | if ($bad_base | length) > 0 then
+        error("invalid input \($base_file): nonnumeric, negative or non-finite sample: \($bad_base | join(", "))")
+      elif ($bad_head | length) > 0 then
+        error("invalid input \($head_file): nonnumeric, negative or non-finite sample: \($bad_head | join(", "))")
+      elif ([$commands[] as $k | select(($b | has($k)) and ($h | has($k)))] | length) == 0 then
+        error("invalid inputs \($base_file) and \($head_file): no comparable commands")
+      elif (missing_samples($b) | length) > 0 then
+        error("invalid input \($base_file): missing command samples: \(missing_samples($b) | join(", "))")
+      elif (missing_samples($h) | length) > 0 then
+        error("invalid input \($head_file): missing command samples: \(missing_samples($h) | join(", "))")
+      else
+        $commands[] as $k
+        | $b[$k] as $old | $h[$k] as $new
+        | ($new - $old) as $d
+        | (if $old == 0 then (if $new == 0 then 0 else "inf" end)
+           else $d / $old * 100 end) as $p
+        | [$k, $old, $new, ($d * 10 | round / 10),
+           (if ($p | type) == "number" then ($p * 10 | round / 10) else $p end),
+           (if $d > $ms and
+               (if $old == 0 then $new > 0 else $p > $pct end)
+            then "REGRESSION" else "ok" end)]
+        | @tsv
+      end')
   printf '%-10s %10s %10s %10s %8s  %s\n' command "base ms" "head ms" "delta ms" "delta %" verdict
   while IFS=$'\t' read -r k old new d p verdict; do
     printf '%-10s %10s %10s %10s %8s  %s\n' "$k" "$old" "$new" "$d" "$p" "$verdict"
