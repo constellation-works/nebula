@@ -53,7 +53,7 @@ fn discover_finds_the_nearest_corpus_at_or_above_the_start() {
 }
 
 #[test]
-fn discover_requires_nodes_beside_a_config_that_names_a_corpus() {
+fn discover_stops_at_nodes_regardless_of_config_validity() {
     let dir = tempfile::tempdir().unwrap();
     let cases: [(&str, bool, Option<&str>); 6] = [
         ("nodes-only", true, None),
@@ -85,7 +85,7 @@ fn discover_requires_nodes_beside_a_config_that_names_a_corpus() {
         if let Some(config) = config {
             std::fs::write(root.join("config.yaml"), config).unwrap();
         }
-        let expected = (name == "v1").then(|| root.clone());
+        let expected = nodes.then(|| root.clone());
         assert_eq!(Corpus::discover(&root), expected, "{name}");
     }
 }
@@ -130,12 +130,14 @@ fn discover_finds_a_corpus_whose_nodes_is_a_symlink_so_open_can_refuse_it() {
         "schema_version: 2\ncorpus_id: neb-000001\n",
     )
     .unwrap();
-    std::os::unix::fs::symlink(outer.join("nodes"), root.join("nodes")).unwrap();
-
-    assert_eq!(Corpus::discover(&root), Some(root.clone()));
-    let refused =
-        Corpus::open(&process_locations(), Some(root)).expect_err("a symlinked nodes/ is refused");
-    assert!(refused.to_string().contains("is a symlink"), "{refused}");
+    for target in [outer.join("nodes"), outer.join("missing")] {
+        std::os::unix::fs::symlink(target, root.join("nodes")).unwrap();
+        assert_eq!(Corpus::discover(&root), Some(root.clone()));
+        let refused = Corpus::open(&process_locations(), Some(root.clone()))
+            .expect_err("a symlinked nodes/ is refused");
+        assert!(refused.to_string().contains("is a symlink"), "{refused}");
+        std::fs::remove_file(root.join("nodes")).unwrap();
+    }
 }
 
 #[cfg(unix)]

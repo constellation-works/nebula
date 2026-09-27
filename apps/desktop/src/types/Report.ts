@@ -7,6 +7,10 @@ import type { UnreadableNode } from "./UnreadableNode";
  */
 export type Report = { 
 /**
+ * The corpus root checked, with the spelling used to open it.
+ */
+root: string, 
+/**
  * Files and directory entries that could not be loaded.
  */
 unreadable: Array<UnreadableNode>, 

@@ -4,6 +4,6 @@
     "check"
   ],
   "exit_code": 0,
-  "stdout": "{\n  \"unreadable\": [],\n  \"findings\": [],\n  \"nodes\": 2\n}\n",
+  "stdout": "{\n  \"root\": \"<ROOT>/corpus\",\n  \"unreadable\": [],\n  \"findings\": [],\n  \"nodes\": 2\n}\n",
   "stderr": ""
 }

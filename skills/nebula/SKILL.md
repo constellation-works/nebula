@@ -28,18 +28,20 @@ is the one thing this skill forbids outright. Read
 ## Where the corpus is
 
 `--root <dir>`, else `$NEBULA_ROOT`, else the nearest corpus at or above the
-working directory (a `nodes/` beside a `config.yaml` with a `corpus_id`; the
-innermost wins), else the one-line path in `~/.config/nebula/root`, else
+working directory (a `nodes/` directory marks it; the innermost wins),
+else the one-line path in `~/.config/nebula/root`, else
 `~/.nebula`. So a shell that has `cd`'d into a corpus uses that corpus even when
 another is configured; pass `--root` when the working directory is not the
 corpus you mean. The corpus is private and **never
 inside the nebula repository** (`codebases/nebula`); never commit `nodes/`,
 `inbox/` or `config.yaml` there. Before the first write of a session run `neb
-check` — it confirms the root resolves, the schema is v2, and the corpus is
-clean. If it resolves to `~/.nebula`, stop and ask rather than write unless the
-human has confirmed that is the corpus. A corpus at schema 1 refuses to open
+check` — compare the printed `corpus:` path (the `root` field in `--json`)
+with the intended corpus, then check the findings. A successful check confirms
+the schema is v2 and reports any warnings. If it resolves to `~/.nebula`, stop
+and ask rather than write unless the human has confirmed that is the corpus. A corpus at schema 1 refuses to open
 until `neb migrate`, and so does one with `nodes/` but no `config.yaml`
-(`missing_config`): never create that file yourself; see
+(`missing_config`). A malformed config also refuses at that root; discovery
+never skips it for another corpus. Never create that file yourself; see
 [invariants.md](references/invariants.md).
 
 Plain `neb init` never changes `~/.config/nebula/root`. A human setting up the

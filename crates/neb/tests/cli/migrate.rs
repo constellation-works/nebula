@@ -1,7 +1,7 @@
 //! `neb migrate` from v1: relabelled evidence, tasks and edges, mapped
 //! statuses, and a second run that changes nothing.
 
-use crate::harness::{Corpus, git, snapshot_corpus_files, write};
+use crate::harness::{Corpus, git, run_in, snapshot_corpus_files, write};
 
 /// A corpus in v1 form: declared domains, evidence with verdicts and
 /// strengths, a task link, a weighed reference, the removed edge kinds, and
@@ -407,4 +407,25 @@ fn migrate_refuses_a_future_schema_without_changing_any_corpus_file() {
             .unwrap()
             .contains("future_field: valuable")
     );
+}
+
+#[test]
+fn discovery_regression_migrates_configless_v1_from_inside() {
+    let c = Corpus::new();
+    std::fs::remove_file(c.root.join("config.yaml")).unwrap();
+    write(&c.node_file("gravity-as-scarcity"), V1_GRAVITY);
+    let cwd = c.root.join("nodes");
+    run_in(&cwd, c.workdir(), None, &["migrate"], None)
+        .assert_ok()
+        .says("minted corpus_id");
+    let checked = run_in(&cwd, c.workdir(), None, &["check", "--json"], None).assert_ok();
+    let report: serde_json::Value = serde_json::from_str(&checked.stdout()).unwrap();
+    assert_eq!(report["nodes"], 1);
+    assert_eq!(report["root"], c.root.to_str().unwrap());
+    assert!(
+        std::fs::read_to_string(c.node_file("gravity-as-scarcity"))
+            .unwrap()
+            .contains("status: hypothesis")
+    );
+    assert!(!c.workdir().join(".nebula").exists());
 }

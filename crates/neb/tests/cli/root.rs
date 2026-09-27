@@ -2,7 +2,9 @@
 //! resolution from `--root`, `$NEBULA_ROOT`, the working directory, the
 //! machine setting and the default.
 
-use crate::harness::{Run, neb_command, output, run_from_home, run_in, write};
+use crate::harness::{
+    Run, neb_command, output, run_from_home, run_in, snapshot_corpus_files, write,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -341,17 +343,14 @@ fn the_nearest_of_two_nested_corpora_wins() {
     inbox_reads(between, "mark-outer", &marks);
 }
 
-/// Discovery only ever finds a corpus that exists, so it cannot steer
-/// capture into creating one. A directory with only half the marker, or a
-/// `config.yaml` that names no corpus, is walked past untouched, and capture
-/// creates the corpus it would have created anyway, saying so.
+/// A nodes directory is a boundary even if its config belongs to another
+/// tool: refuse there rather than adopting it or writing to a fallback.
 #[test]
 fn capture_never_adopts_a_directory_that_only_looks_like_a_corpus() {
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     let lookalike = dir.path().join("lookalike");
     let config_only = dir.path().join("config-only");
-    let nodes_only = dir.path().join("nodes-only");
     std::fs::create_dir_all(lookalike.join("nodes")).unwrap();
     write(&lookalike.join("config.yaml"), "name: some other tool\n");
     std::fs::create_dir_all(&config_only).unwrap();
@@ -359,33 +358,40 @@ fn capture_never_adopts_a_directory_that_only_looks_like_a_corpus() {
         &config_only.join("config.yaml"),
         "schema_version: 2\ncorpus_id: neb-000001\n",
     );
-    std::fs::create_dir_all(nodes_only.join("nodes")).unwrap();
 
-    let default = home.join(".nebula");
-    // Distinct texts, so no capture is reported as a duplicate of another.
-    for (i, (cwd, text)) in [
-        (lookalike.join("nodes"), "from the lookalike"),
-        (config_only.clone(), "from the config-only directory"),
-        (nodes_only, "from the nodes-only directory"),
-    ]
-    .iter()
-    .enumerate()
-    {
-        let run = run_in(cwd, &home, None, &["capture", "--quiet", text], None).assert_ok();
-        let expected = if i == 0 {
-            format!("{CREATED_NOTICE}{}\n", default.display())
-        } else {
-            String::new()
-        };
-        assert_eq!(run.stderr(), expected, "only the default is ever created");
-    }
-    assert!(default.join("inbox").is_dir(), "the captures landed there");
-    assert!(!lookalike.join("inbox").exists() && !config_only.join("inbox").exists());
-    assert!(!config_only.join("nodes").exists());
+    let refusal = run_in(
+        &lookalike.join("nodes"),
+        &home,
+        None,
+        &["capture", "--json", "x"],
+        None,
+    )
+    .refusal();
+    assert_eq!(refusal["code"], "schema_mismatch");
+    assert!(!home.join(".nebula").exists());
+    assert!(!lookalike.join("inbox").exists());
     assert_eq!(
         std::fs::read_to_string(lookalike.join("config.yaml")).unwrap(),
         "name: some other tool\n"
     );
+
+    // A config without nodes still is not a discovery marker.
+    let default = home.join(".nebula");
+    let run = run_in(
+        &config_only,
+        &home,
+        None,
+        &["capture", "--quiet", "x"],
+        None,
+    )
+    .assert_ok();
+    assert_eq!(
+        run.stderr(),
+        format!("{CREATED_NOTICE}{}\n", default.display())
+    );
+    assert!(default.join("inbox").is_dir());
+    assert!(!config_only.join("nodes").exists());
+    assert!(!config_only.join("inbox").exists());
 }
 
 /// Paths are used as given. A corpus reached through a symlink resolves to
@@ -592,5 +598,77 @@ fn relative_machine_root_is_refused_naming_the_file() {
             "{envelope}"
         );
         assert!(!cwd.join("relcorpus").exists());
+    }
+}
+
+/// A damaged local corpus must never redirect reads or capture to another root.
+#[test]
+fn discovery_regression_broken_local_config_never_falls_back() {
+    for config in [None, Some("schema_version: [\n")] {
+        for fallback in ["configured", "default", "absent", "ancestor"] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            let other = if fallback == "default" || fallback == "absent" {
+                home.join(".nebula")
+            } else {
+                dir.path().join("other")
+            };
+            if fallback != "absent" {
+                let args = if fallback == "configured" {
+                    vec!["init", "--set-root"]
+                } else {
+                    vec!["init"]
+                };
+                run_from_home(&home, Some(&other), &args, None).assert_ok();
+            }
+            let root = if fallback == "ancestor" {
+                other.join("local")
+            } else {
+                dir.path().join("local")
+            };
+            let cwd = root.join("nodes");
+            std::fs::create_dir_all(&cwd).unwrap();
+            if let Some(config) = config {
+                write(&root.join("config.yaml"), config);
+            }
+            let before = (snapshot_corpus_files(&root), snapshot_corpus_files(&other));
+            for args in [vec!["list"], vec!["check"], vec!["capture", "x"]] {
+                let mut json_args = vec!["--json"];
+                json_args.extend(&args);
+                let explicit = run_in(&cwd, &home, Some(&root), &json_args, None).refusal();
+                let discovered = run_in(&cwd, &home, None, &json_args, None).refusal();
+                assert_eq!(discovered, explicit, "{fallback}: {config:?}");
+                assert_eq!(
+                    discovered["code"],
+                    if config.is_none() {
+                        "missing_config"
+                    } else {
+                        "yaml"
+                    }
+                );
+                assert!(
+                    discovered["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains(&root.display().to_string())
+                );
+                run_in(&cwd, &home, None, &args, None)
+                    .assert_fails()
+                    .says(&root.display().to_string());
+            }
+            assert_eq!(
+                (snapshot_corpus_files(&root), snapshot_corpus_files(&other)),
+                before
+            );
+            assert_eq!(
+                std::fs::read_to_string(root.join("config.yaml"))
+                    .ok()
+                    .as_deref(),
+                config
+            );
+            if fallback == "absent" {
+                assert!(!other.exists());
+            }
+        }
     }
 }

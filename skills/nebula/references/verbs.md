@@ -202,7 +202,7 @@ invocation.
 
 ```json
 // neb check --json          (findings[] carries {rule, level, node, message})
-{ "findings": [], "nodes": 3 }
+{ "root": "/Users/you/.nebula", "unreadable": [], "findings": [], "nodes": 3 }
 ```
 
 ## Inbox
