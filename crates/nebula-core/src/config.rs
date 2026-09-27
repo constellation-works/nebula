@@ -15,7 +15,7 @@
 //! asking about a corpus, and [`crate::store::Corpus`] is what answers that.
 
 use crate::error::{Error, Result};
-use crate::fs::write_private_atomic;
+use crate::fs_impl::write_private_atomic;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -126,7 +126,7 @@ impl ObservatoryRoot {
     pub fn resolve(&self, record: &str) -> crate::Result<Option<PathBuf>> {
         self.root
             .as_deref()
-            .map(|root| crate::check::resolve_observatory(root, record))
+            .map(|root| crate::check_impl::resolve_observatory(root, record))
             .transpose()
             .map(Option::flatten)
     }
@@ -234,7 +234,7 @@ pub(crate) fn declared(root: &Path) -> Result<Declared> {
     // file (STD-02 §R29). Anything there but a regular file is refused before
     // it is read, so a symlink cannot hand the corpus another's settings and
     // a FIFO cannot hang every verb that opens it (STD-05 §R7).
-    let Some(raw) = crate::fs::read_regular_text(&path)? else {
+    let Some(raw) = crate::fs_impl::read_regular_text(&path)? else {
         return Ok(Declared::Missing);
     };
     // Probe the version before the strict parse, so a v1 file with its
@@ -277,52 +277,4 @@ pub(crate) fn names_a_corpus(raw: &str) -> bool {
     }
     serde_yaml_ng::from_str::<Probe>(raw)
         .is_ok_and(|probe| probe.corpus_id.is_some_and(|id| !id.is_empty()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ObservatoryRoot, ObservatorySource};
-    use std::path::PathBuf;
-
-    fn pick(env: Option<&str>, machine: Option<&str>, legacy: Option<&str>) -> ObservatoryRoot {
-        ObservatoryRoot::from_settings(
-            env.map(Into::into),
-            machine.map(PathBuf::from),
-            legacy.map(PathBuf::from),
-        )
-    }
-
-    #[test]
-    fn the_environment_outranks_the_machine_setting_which_outranks_the_legacy_key() {
-        let all = pick(Some("/env"), Some("/machine"), Some("/legacy"));
-        assert_eq!(all.root, Some(PathBuf::from("/env")));
-        assert_eq!(all.source, ObservatorySource::Env);
-        assert_eq!(all.legacy, Some(PathBuf::from("/legacy")));
-
-        let machine = pick(None, Some("/machine"), Some("/legacy"));
-        assert_eq!(machine.root, Some(PathBuf::from("/machine")));
-        assert_eq!(machine.source, ObservatorySource::Machine);
-        assert_eq!(machine.legacy, Some(PathBuf::from("/legacy")));
-
-        let legacy = pick(None, None, Some("/legacy"));
-        assert_eq!(legacy.root, Some(PathBuf::from("/legacy")));
-        assert_eq!(legacy.source, ObservatorySource::Config);
-
-        let unset = pick(None, None, None);
-        assert_eq!(unset.root, None);
-        assert_eq!(unset.source, ObservatorySource::Unset);
-        assert_eq!(unset.legacy, None);
-    }
-
-    #[test]
-    fn an_empty_environment_value_is_no_value() {
-        let setting = pick(Some(""), Some("/machine"), None);
-        assert_eq!(setting.root, Some(PathBuf::from("/machine")));
-        assert_eq!(setting.source, ObservatorySource::Machine);
-    }
-
-    #[test]
-    fn with_no_root_nothing_resolves() {
-        assert_eq!(pick(None, None, None).resolve("Q002").unwrap(), None);
-    }
 }

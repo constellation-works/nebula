@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 /// terminal settings output depends on. A developer with a real Observatory
 /// checkout exported would otherwise resolve records the tests expect to go
 /// missing. Tests that exercise one set it explicitly after the builder.
-pub const CLEARED: &[&str] = &[
+pub(crate) const CLEARED: &[&str] = &[
     "NEBULA_ROOT",
     "OBSERVATORY_ROOT",
     "VISUAL",
@@ -56,7 +56,7 @@ pub const CLEARED: &[&str] = &[
 /// exports them. Listed rather than asked for, so building a command runs no
 /// process; `cli.rs` checks the list against the installed git. Every other
 /// inherited `GIT_*` is removed as well.
-pub const GIT_LOCAL_ENV: &[&str] = &[
+pub(crate) const GIT_LOCAL_ENV: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_CONFIG",
     "GIT_CONFIG_PARAMETERS",
@@ -76,7 +76,7 @@ pub const GIT_LOCAL_ENV: &[&str] = &[
 
 /// How long a test waits for any child it started. Generous, because a
 /// loaded CI machine is slow; the point is that the wait ends.
-pub const DEADLINE: Duration = Duration::from_secs(120);
+pub(crate) const DEADLINE: Duration = Duration::from_secs(120);
 
 /// The global git configuration every test git reads instead of the host's:
 /// an identity, and no signing, so a commit never depends on the machine.
@@ -135,13 +135,13 @@ unsafe fn remove_this_process_home() {
 
 /// This process's isolated home: for children that belong to no fixture,
 /// such as a test's own git.
-pub fn home() -> &'static Path {
+pub(crate) fn home() -> &'static Path {
     HOME.get()
         .expect("the test process is isolated before main")
 }
 
 /// The file `GIT_CONFIG_GLOBAL` names, for this process and every child.
-pub fn gitconfig() -> PathBuf {
+pub(crate) fn gitconfig() -> PathBuf {
     home().join("gitconfig")
 }
 
@@ -175,7 +175,7 @@ fn ceilings(home: &Path) -> OsString {
 /// Isolate `cmd` from the host: `HOME` is `home`; nothing in [`CLEARED`] and
 /// no `GIT_*` is inherited; git reads [`gitconfig`] and no system file, and
 /// does not climb into the parent of `home` or the temporary directory.
-pub fn isolate<'a>(cmd: &'a mut Command, home: &Path) -> &'a mut Command {
+pub(crate) fn isolate<'a>(cmd: &'a mut Command, home: &Path) -> &'a mut Command {
     for name in removed() {
         cmd.env_remove(name);
     }
@@ -187,14 +187,14 @@ pub fn isolate<'a>(cmd: &'a mut Command, home: &Path) -> &'a mut Command {
 
 /// The one place a test creates a child command: `program`, isolated with
 /// `home` as its home.
-pub fn command(program: impl AsRef<OsStr>, home: &Path) -> Command {
+pub(crate) fn command(program: impl AsRef<OsStr>, home: &Path) -> Command {
     let mut cmd = Command::new(program);
     isolate(&mut cmd, home);
     cmd
 }
 
 /// `git -C dir`, isolated with `home` as its home.
-pub fn git_command(dir: &Path, home: &Path) -> Command {
+pub(crate) fn git_command(dir: &Path, home: &Path) -> Command {
     let mut cmd = command("git", home);
     cmd.arg("-C").arg(dir);
     cmd
@@ -202,7 +202,7 @@ pub fn git_command(dir: &Path, home: &Path) -> Command {
 
 /// `cmd` as a person would type it, for messages: the program's file name
 /// and its arguments.
-pub fn describe(cmd: &Command) -> String {
+pub(crate) fn describe(cmd: &Command) -> String {
     let program = Path::new(cmd.get_program());
     let program = program.file_name().unwrap_or(program.as_os_str());
     std::iter::once(program)
@@ -214,7 +214,7 @@ pub fn describe(cmd: &Command) -> String {
 
 /// Run `cmd` to completion the way [`Command::output`] does (no stdin,
 /// stdout and stderr captured), under a guard and within `deadline`.
-pub fn output(cmd: &mut Command, deadline: Duration) -> Result<Output, String> {
+pub(crate) fn output(cmd: &mut Command, deadline: Duration) -> Result<Output, String> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -225,7 +225,7 @@ pub fn output(cmd: &mut Command, deadline: Duration) -> Result<Output, String> {
 /// assertion between spawn and wait leaves no process behind (STD-03 §R18).
 /// Its waits end at a deadline, checking the child's liveness in-process
 /// (STD-03 §R17).
-pub struct ChildGuard {
+pub(crate) struct ChildGuard {
     what: String,
     child: Child,
     reaped: bool,
@@ -233,7 +233,7 @@ pub struct ChildGuard {
 
 impl ChildGuard {
     /// Spawn `cmd` with the stdio it was given.
-    pub fn spawn(cmd: &mut Command) -> Result<Self, String> {
+    pub(crate) fn spawn(cmd: &mut Command) -> Result<Self, String> {
         let what = describe(cmd);
         let child = cmd.spawn().map_err(|e| format!("spawning `{what}`: {e}"))?;
         Ok(Self {
@@ -243,17 +243,17 @@ impl ChildGuard {
         })
     }
 
-    pub fn id(&self) -> u32 {
+    pub(crate) fn id(&self) -> u32 {
         self.child.id()
     }
 
     /// The child's piped stdin, taken; dropping it closes the pipe.
-    pub fn take_stdin(&mut self) -> ChildStdin {
+    pub(crate) fn take_stdin(&mut self) -> ChildStdin {
         self.child.stdin.take().expect("stdin was piped")
     }
 
     /// The child's piped stdout, taken.
-    pub fn take_stdout(&mut self) -> ChildStdout {
+    pub(crate) fn take_stdout(&mut self) -> ChildStdout {
         self.child.stdout.take().expect("stdout was piped")
     }
 
@@ -261,7 +261,7 @@ impl ChildGuard {
     /// runs. For a test that polls its own condition under its own deadline
     /// and needs to know the child is still alive meanwhile. A failed check
     /// reads as still running, and the caller's deadline bounds it.
-    pub fn try_wait(&mut self) -> Option<ExitStatus> {
+    pub(crate) fn try_wait(&mut self) -> Option<ExitStatus> {
         match self.child.try_wait() {
             Ok(Some(status)) => {
                 self.reaped = true;
@@ -273,7 +273,7 @@ impl ChildGuard {
 
     /// Wait up to `deadline` for the child to exit. Past it, the child is
     /// killed and reaped, and the error names the command.
-    pub fn wait(&mut self, deadline: Duration) -> Result<ExitStatus, String> {
+    pub(crate) fn wait(&mut self, deadline: Duration) -> Result<ExitStatus, String> {
         let until = Instant::now() + deadline;
         loop {
             match self.child.try_wait() {
@@ -303,7 +303,7 @@ impl ChildGuard {
     /// The pipes are drained on threads while the child runs, so a child
     /// that writes more than a pipe holds cannot stall, and those reads end
     /// at the same deadline.
-    pub fn wait_with_output(mut self, deadline: Duration) -> Result<Output, String> {
+    pub(crate) fn wait_with_output(mut self, deadline: Duration) -> Result<Output, String> {
         let until = Instant::now() + deadline;
         let stdout = self.child.stdout.take().map(drain);
         let stderr = self.child.stderr.take().map(drain);
@@ -362,7 +362,7 @@ fn drain(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<Vec<u8>> {
 /// functions, as `<line>: in `<fn>`: <text>`: a child that skipped the
 /// isolating builder. A line belongs to the nearest `fn` item above it, so a
 /// closure inside a test is the test's.
-pub fn commands_outside(source: &str, allowed: &[&str]) -> Vec<String> {
+pub(crate) fn commands_outside(source: &str, allowed: &[&str]) -> Vec<String> {
     // Spelled in two halves so this function's own text is not a match.
     let needle = concat!("Command", "::new(");
     let mut within = "";
@@ -379,9 +379,23 @@ pub fn commands_outside(source: &str, allowed: &[&str]) -> Vec<String> {
 }
 
 /// The name of the function `line` declares, if it declares one.
+///
+/// Visibility may be `pub`, `pub(crate)` or `pub(super)`: the orphan-module
+/// and child-process guards read the source after those spellings.
 fn fn_name(line: &str) -> Option<&str> {
     let rest = line.trim_start();
-    let rest = rest.strip_prefix("pub ").unwrap_or(rest);
+    let rest = match rest.strip_prefix("pub") {
+        Some(rest) => {
+            let rest = rest.trim_start();
+            if let Some(rest) = rest.strip_prefix('(') {
+                rest.split_once(')')
+                    .map_or(rest, |(_, after)| after.trim_start())
+            } else {
+                rest
+            }
+        }
+        None => rest,
+    };
     let rest = rest.strip_prefix("unsafe ").unwrap_or(rest);
     let rest = rest.strip_prefix("fn ")?;
     let end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;

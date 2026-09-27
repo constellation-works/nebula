@@ -8,7 +8,7 @@ use std::fmt::Write as _;
 
 /// The entry being decided: where it is in the session, how long it has
 /// waited, what it says, and its candidate parents numbered for the keys.
-pub fn waiting(w: &Waiting) -> String {
+pub(crate) fn waiting(w: &Waiting) -> String {
     let mut out = String::new();
     let age = match w.days {
         Some(0) => " · today".to_string(),
@@ -41,7 +41,7 @@ pub fn waiting(w: &Waiting) -> String {
 }
 
 /// The keys, with the parent range cut to the candidates this entry has.
-pub fn triage_keys(w: &Waiting) -> String {
+pub(crate) fn triage_keys(w: &Waiting) -> String {
     let under = match w.near.len() {
         0 => String::new(),
         1 => "1 promote under it · ".to_string(),
@@ -56,7 +56,7 @@ pub fn triage_keys(w: &Waiting) -> String {
 }
 
 /// What one decision did. Promote and drop read as their single verbs do.
-pub fn step(step: &Step) -> String {
+pub(crate) fn step(step: &Step) -> String {
     match step {
         Step::Promoted { entry, created } => format!(
             "promoted {} -> {} {}\n",
@@ -73,7 +73,7 @@ pub fn step(step: &Step) -> String {
 }
 
 /// The session's closing line, or the empty inbox it found.
-pub fn tally(t: &Tally, total: usize) -> String {
+pub(crate) fn tally(t: &Tally, total: usize) -> String {
     if total == 0 {
         return format!("{}\n", dim("inbox is empty"));
     }

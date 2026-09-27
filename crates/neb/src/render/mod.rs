@@ -10,12 +10,12 @@
 //! A list-shaped result is a [`table`]: aligned under a header on a
 //! terminal, one tab-separated line per record anywhere else.
 
-mod error;
-pub mod json;
-mod report;
-mod table;
-mod tree;
-mod triage;
+pub(crate) mod error;
+pub(crate) mod json;
+pub(crate) mod report;
+pub(crate) mod table;
+pub(crate) mod tree;
+pub(crate) mod triage;
 
 use crate::output::{self, Role, Stream};
 use nebula_core::{EdgeType, Error, GraphExport, HistoryEntry, Node, Status};
@@ -23,46 +23,46 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use table::{Cell, Column, Table};
 
-pub use error::{Refusal, refusal, refusal_about, refusal_for_new};
-pub use report::{
+pub(crate) use error::{Refusal, refusal, refusal_about, refusal_for_new};
+pub(crate) use report::{
     check, check_tally, commit_setting, commit_setting_hint, dropped_legacy, impact, impact_notice,
     inbox, inbox_notice, migration, migration_notice, near, near_notice, node, observatory_root,
     observatory_root_notes, open, open_notice, retag_notes, review, review_notice, suggestions,
     tags, tags_notice, unchanged,
 };
-pub use table::Target;
-pub use tree::{draw as tree, tabbed as trace_lines, trace_notice};
-pub use triage::{step, tally, triage_keys, waiting};
+pub(crate) use table::Target;
+pub(crate) use tree::{draw as tree, tabbed as trace_lines, trace_notice};
+pub(crate) use triage::{step, tally, triage_keys, waiting};
 
 /// Text in `role`'s colour, for stdout.
-pub fn paint(role: Role, s: &str) -> String {
+pub(crate) fn paint(role: Role, s: &str) -> String {
     output::paint(Stream::Stdout, role, s)
 }
 
 /// Dim text, for anything secondary.
-pub fn dim(s: &str) -> String {
+pub(crate) fn dim(s: &str) -> String {
     paint(Role::Muted, s)
 }
 
 /// Bold text, for identifiers.
-pub fn bold(s: &str) -> String {
+pub(crate) fn bold(s: &str) -> String {
     output::bold(Stream::Stdout, s)
 }
 
 /// Muted text, for a line on stderr about the result rather than in it.
-pub fn notice(s: &str) -> String {
+pub(crate) fn notice(s: &str) -> String {
     output::paint(Stream::Stderr, Role::Muted, s)
 }
 
 /// The `error:` that starts a refusal, for stderr.
-pub fn error_label() -> String {
+pub(crate) fn error_label() -> String {
     output::paint(Stream::Stderr, Role::Error, "error:")
 }
 
 /// A line about a result rather than part of it: a count, a cut, or an
 /// empty result. It goes to stderr, never stdout (STD-01 §R12).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Notice {
+pub(crate) struct Notice {
     text: String,
     role: Role,
     /// Written under `--json` too. An empty result (§R16) and a cut list
@@ -95,7 +95,7 @@ impl Notice {
     }
 
     /// The line to write to stderr, or `None` when `--json` leaves it out.
-    pub fn line(&self, json: bool) -> Option<String> {
+    pub(crate) fn line(&self, json: bool) -> Option<String> {
         (self.every_mode || !json).then(|| output::paint(Stream::Stderr, self.role, &self.text))
     }
 }
@@ -116,19 +116,19 @@ where
 /// A status badge, coloured by whether the node still asks anything of you.
 ///
 /// Padded to the longest status, so the ids after it line up in a column.
-pub fn status_badge(s: Status) -> String {
+pub(crate) fn status_badge(s: Status) -> String {
     paint(Role::of("status", &s.to_string()), &format!("{s:<10}"))
 }
 
 /// A status as a table cell, coloured by whether the node still asks
 /// anything of you.
-fn status_cell(s: Status) -> Cell {
+pub(crate) fn status_cell(s: Status) -> Cell {
     Cell::new(Role::of("status", &s.to_string()), s.to_string())
 }
 
 /// A listing of nodes as a table, one record each, and nothing when there
 /// are none. The tags are one cell, comma-joined, and `-` for none.
-pub fn list(nodes: &[Node], to: Target) -> String {
+pub(crate) fn list(nodes: &[Node], to: Target) -> String {
     let mut table = Table::new([
         Column::left("STATUS"),
         Column::left("ID"),
@@ -148,7 +148,7 @@ pub fn list(nodes: &[Node], to: Target) -> String {
 
 /// What a listing is of the corpus. `matched` is how many the filter kept,
 /// which is more than `shown` when `--limit` cut it.
-pub fn list_notice(shown: usize, matched: usize, total: usize) -> Notice {
+pub(crate) fn list_notice(shown: usize, matched: usize, total: usize) -> Notice {
     if matched == 0 {
         Notice::always("no nodes match")
     } else if shown < matched && matched < total {
@@ -167,7 +167,7 @@ pub fn list_notice(shown: usize, matched: usize, total: usize) -> Notice {
 }
 
 /// Commits that changed a node, newest first, as a table.
-pub fn history(entries: &[HistoryEntry], to: Target) -> String {
+pub(crate) fn history(entries: &[HistoryEntry], to: Target) -> String {
     let mut table = Table::new([
         Column::left("HASH"),
         Column::left("DATE"),
@@ -185,7 +185,7 @@ pub fn history(entries: &[HistoryEntry], to: Target) -> String {
 }
 
 /// The notice for a node no commit touched.
-pub fn history_notice(entries: &[HistoryEntry]) -> Option<Notice> {
+pub(crate) fn history_notice(entries: &[HistoryEntry]) -> Option<Notice> {
     entries
         .is_empty()
         .then(|| Notice::always("no commits touched this node"))
@@ -193,7 +193,7 @@ pub fn history_notice(entries: &[HistoryEntry]) -> Option<Notice> {
 
 /// A Mermaid flowchart for the whole export, or one node's ancestry and
 /// descendants. Genealogy points from a child to its parent, hence `BT`.
-pub fn mermaid(graph: &GraphExport, from: Option<&str>) -> Result<String, Error> {
+pub(crate) fn mermaid(graph: &GraphExport, from: Option<&str>) -> Result<String, Error> {
     let included = lineage(graph, from)?;
     let mut out = String::from("graph BT\n");
 
@@ -285,73 +285,4 @@ fn mermaid_label(title: &str) -> String {
         .replace('"', "&quot;")
         .replace('[', "&#91;")
         .replace(']', "&#93;")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The text with every ANSI escape removed, so a test reads what a
-    /// terminal shows whether or not colour happens to be on.
-    pub(super) fn visible(s: &str) -> String {
-        let mut out = String::new();
-        let mut chars = s.chars();
-        while let Some(c) = chars.next() {
-            if c == '\x1b' {
-                chars.by_ref().find(|c| *c == 'm');
-            } else {
-                out.push(c);
-            }
-        }
-        out
-    }
-
-    /// The badge is a column: every status comes out the same width, so the
-    /// id after it starts at the same place on every line.
-    #[test]
-    fn status_badges_are_padded_to_one_width() {
-        for s in [
-            Status::Seed,
-            Status::Hypothesis,
-            Status::Refuted,
-            Status::Abandoned,
-        ] {
-            let badge = visible(&status_badge(s));
-            assert_eq!(badge.chars().count(), 10, "{badge:?}");
-            assert!(badge.starts_with(&s.to_string()), "{badge:?}");
-        }
-        assert_eq!(visible(&status_badge(Status::Seed)), "seed      ");
-    }
-
-    /// A count is for a person, and `--json` leaves it out; an empty or cut
-    /// listing is said in every mode.
-    #[test]
-    fn list_notices_say_in_every_mode_only_what_a_script_needs() {
-        let said = |n: &Notice, json| n.line(json).map(|l| visible(&l));
-        let whole = list_notice(3, 3, 4);
-        assert_eq!(said(&whole, false).as_deref(), Some("3 of 4 nodes"));
-        assert_eq!(said(&whole, true), None);
-        for (notice, text) in [
-            (list_notice(0, 0, 4), "no nodes match"),
-            (
-                list_notice(1, 4, 4),
-                "1 of 4 nodes shown; raise --limit for more",
-            ),
-            (
-                list_notice(1, 3, 4),
-                "1 of 3 matching nodes shown, of 4 in all; raise --limit for more",
-            ),
-        ] {
-            assert_eq!(said(&notice, false).as_deref(), Some(text));
-            assert_eq!(said(&notice, true).as_deref(), Some(text));
-        }
-    }
-
-    #[test]
-    fn counts_agree_with_their_nouns() {
-        assert_eq!(count(0_usize, "warning"), "0 warnings");
-        assert_eq!(count(1_usize, "warning"), "1 warning");
-        assert_eq!(count(2_usize, "warning"), "2 warnings");
-        assert_eq!(count(1_i64, "day"), "1 day");
-    }
 }

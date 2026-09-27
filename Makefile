@@ -1,4 +1,4 @@
-.PHONY: help build release run dev check test goldens doctest hostile-env-test types types-check fmt fmt-check release-check standards-check terminal-guard dependency-direction clippy ci-lint audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
+.PHONY: help build release run dev check test goldens doctest hostile-env-test types types-check fmt fmt-check release-check standards-check terminal-guard dependency-direction test-modules clippy ci-lint audit tree ci ci-fast install uninstall skill-link clean corpus-check watch desktop-deps desktop-dev desktop desktop-check
 
 # ------------------------------------------------------------
 # Config
@@ -65,7 +65,7 @@ help:
 	@echo "  make ci            Full CI pass (ci-fast, tests, doctest, types-check,"
 	@echo "                     audit, desktop-check)"
 	@echo "  make ci-fast       Pre-handoff gate (fmt-check, release-check, standards-check,"
-	@echo "                     terminal-guard, dependency-direction, clippy)"
+	@echo "                     terminal-guard, dependency-direction, test-modules, clippy)"
 	@echo "  make corpus-check  Run the invariant checker over your corpus (ROOT=/path"
 	@echo "                     optional; else as neb resolves it: \$$NEBULA_ROOT, the nearest"
 	@echo "                     corpus at or above the current directory,"
@@ -151,6 +151,11 @@ terminal-guard:
 dependency-direction:
 	./scripts/check-dependency-direction.sh
 
+# Every `src/**/tests/*.rs` file is declared in that directory's `mod.rs`
+# (STD-02 §R19). An undeclared file never runs.
+test-modules:
+	./scripts/check-test-modules.sh
+
 clippy:
 	$(CARGO) clippy $(LOCKED) --workspace --all-targets --all-features -- -D warnings
 
@@ -179,7 +184,7 @@ ci: ci-fast test doctest types-check audit desktop-check
 # `test`, `doctest` and `types-check` each need a full build of their own (the
 # last with nebula-core's `ts` feature), so they stay in `ci` and CI
 # (STD-04@1 §R12).
-ci-fast: fmt-check release-check standards-check terminal-guard dependency-direction clippy
+ci-fast: fmt-check release-check standards-check terminal-guard dependency-direction test-modules clippy
 
 # ------------------------------------------------------------
 # Corpus

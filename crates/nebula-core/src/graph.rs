@@ -7,7 +7,7 @@
 //! `--json` output and the desktop's IPC payload. That is what lets the
 //! desktop hold a graph in memory and rebuild it on a file-watch event.
 
-use crate::check::{OBSERVATORY, resolve_observatory};
+use crate::check_impl::{OBSERVATORY, resolve_observatory};
 use crate::error::{Error, Result};
 use crate::model::{self, Doc, EdgeType, Node, Note, Status};
 use crate::store::{self, Inbox};

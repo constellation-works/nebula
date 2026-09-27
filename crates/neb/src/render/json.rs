@@ -26,7 +26,7 @@ use std::path::PathBuf;
 
 /// One node, every field present. See [`nebula_core::Node`].
 #[derive(Debug, Serialize)]
-pub struct Node {
+pub(crate) struct Node {
     id: String,
     title: String,
     title_by: Option<String>,
@@ -169,7 +169,7 @@ impl From<&nebula_core::Origin> for Origin {
 
 /// A node file: the node and its prose. See [`nebula_core::Doc`].
 #[derive(Debug, Serialize)]
-pub struct Doc {
+pub(crate) struct Doc {
     node: Node,
     body: String,
 }
@@ -186,7 +186,7 @@ impl From<&nebula_core::Doc> for Doc {
 
 /// `new` and `promote`. See [`nebula_core::Created`].
 #[derive(Debug, Serialize)]
-pub struct Created {
+pub(crate) struct Created {
     doc: Doc,
     path: PathBuf,
     near: Vec<Neighbour>,
@@ -205,7 +205,7 @@ impl From<&nebula_core::Created> for Created {
 
 /// `capture`. See [`nebula_core::Captured`].
 #[derive(Debug, Serialize)]
-pub struct Captured {
+pub(crate) struct Captured {
     entry: InboxEntry,
     near: Vec<Neighbour>,
 }
@@ -223,7 +223,7 @@ impl From<&nebula_core::Captured> for Captured {
 /// `cite`, `observatory` null for any kind but `observatory`. See
 /// [`nebula_core::Cited`].
 #[derive(Debug, Serialize)]
-pub struct Cited {
+pub(crate) struct Cited {
     doc: Doc,
     reference: String,
     observatory: Option<ObservatoryLink>,
@@ -246,7 +246,7 @@ impl From<&nebula_core::Cited> for Cited {
 
 /// `status`. See [`nebula_core::StatusChange`].
 #[derive(Debug, Serialize)]
-pub struct StatusChange {
+pub(crate) struct StatusChange {
     doc: Doc,
     from: Status,
 }
@@ -263,7 +263,7 @@ impl From<&nebula_core::StatusChange> for StatusChange {
 
 /// `handoff`. See [`nebula_core::HandedOff`].
 #[derive(Debug, Serialize)]
-pub struct HandedOff {
+pub(crate) struct HandedOff {
     doc: Doc,
     reference: String,
     record: String,
@@ -293,7 +293,7 @@ impl From<&nebula_core::HandedOff> for HandedOff {
 /// `show`, and `edit` and `note`, which answer with the node as `show` would.
 /// See [`nebula_core::NodeView`].
 #[derive(Debug, Serialize)]
-pub struct NodeView {
+pub(crate) struct NodeView {
     node: Node,
     body: String,
     notes: Vec<Note>,
@@ -346,7 +346,7 @@ impl From<&nebula_core::ObservatoryLink> for ObservatoryLink {
 
 /// One node on a `trace` walk. See [`nebula_core::TraceNode`].
 #[derive(Debug, Serialize)]
-pub struct TraceNode {
+pub(crate) struct TraceNode {
     id: String,
     title: String,
     status: Status,
@@ -379,7 +379,7 @@ impl From<&nebula_core::TraceNode> for TraceNode {
 /// A list a limit cut, or could have: the records kept, how many matched
 /// before the cut, and whether it dropped any (STD-01 §R34).
 #[derive(Debug, Serialize)]
-pub struct Capped<T> {
+pub(crate) struct Capped<T> {
     items: Vec<T>,
     total: usize,
     truncated: bool,
@@ -387,7 +387,7 @@ pub struct Capped<T> {
 
 impl<T> Capped<T> {
     /// The `items` a cut kept, and the `(total, truncated)` it reported.
-    pub fn new(items: Vec<T>, (total, truncated): (usize, bool)) -> Self {
+    pub(crate) fn new(items: Vec<T>, (total, truncated): (usize, bool)) -> Self {
         Self {
             items,
             total,
@@ -404,7 +404,7 @@ impl<T> Capped<T> {
 /// `neb list --json | jq '.[]'` has always read.
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
-pub enum List<T> {
+pub(crate) enum List<T> {
     /// No bound was asked for: every match.
     Bare(Vec<T>),
     /// A bound was asked for.
@@ -414,111 +414,10 @@ pub enum List<T> {
 impl<T> List<T> {
     /// `items`, bare when `cut` is `None` (nothing bounded the list), and
     /// otherwise enveloped with the `(total, truncated)` the cut reported.
-    pub fn new(items: Vec<T>, cut: Option<(usize, bool)>) -> Self {
+    pub(crate) fn new(items: Vec<T>, cut: Option<(usize, bool)>) -> Self {
         match cut {
             None => Self::Bare(items),
             Some(cut) => Self::Capped(Capped::new(items, cut)),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A node with nothing optional set: the case where core's own
-    /// serialisation leaves out the most.
-    fn bare() -> nebula_core::Node {
-        serde_json::from_value(serde_json::json!({
-            "id": "a-node",
-            "title": "A node",
-            "status": "seed",
-            "created": "2026-09-01",
-            "updated": "2026-09-01",
-        }))
-        .expect("a minimal node")
-    }
-
-    fn keys(v: &serde_json::Value) -> Vec<&str> {
-        v.as_object()
-            .expect("an object")
-            .keys()
-            .map(String::as_str)
-            .collect()
-    }
-
-    #[test]
-    fn an_absent_field_is_null_and_an_empty_one_is_an_empty_list() {
-        let v = serde_json::to_value(Node::from(&bare())).unwrap();
-        assert_eq!(
-            keys(&v),
-            [
-                "closed",
-                "created",
-                "edges",
-                "id",
-                "kill",
-                "kill_by",
-                "origin",
-                "references",
-                "status",
-                "tags",
-                "title",
-                "title_by",
-                "updated",
-            ]
-        );
-        assert_eq!(v["title_by"], "human");
-        assert!(v["kill"].is_null() && v["kill_by"].is_null(), "{v}");
-        assert!(v["closed"].is_null() && v["origin"].is_null(), "{v}");
-        for list in ["tags", "edges", "references"] {
-            assert_eq!(v[list], serde_json::json!([]), "{v}");
-        }
-    }
-
-    #[test]
-    fn nested_optionals_are_null_and_authors_are_stated() {
-        let mut node = bare();
-        node.edges.push(nebula_core::Edge {
-            kind: EdgeType::DerivesFrom,
-            to: "parent".into(),
-            by: None,
-        });
-        node.origin = Some(nebula_core::Origin {
-            task: Some("ORB-1".into()),
-            ..nebula_core::Origin::default()
-        });
-        let v = serde_json::to_value(Node::from(&node)).unwrap();
-        assert_eq!(
-            v["edges"],
-            serde_json::json!([{"type": "derives-from", "to": "parent", "by": "human"}])
-        );
-        assert_eq!(
-            v["origin"],
-            serde_json::json!({
-                "task": "ORB-1",
-                "workspace": null,
-                "run": null,
-                "artifact": null,
-                "agent": null,
-                "at": null,
-            })
-        );
-    }
-
-    #[test]
-    fn a_list_is_bare_unless_bounded_and_the_envelope_carries_the_cut() {
-        let bare = serde_json::to_value(List::new(vec![1, 2], None)).unwrap();
-        assert_eq!(bare, serde_json::json!([1, 2]));
-        let cut = serde_json::to_value(List::new(vec![1, 2], Some((5, true)))).unwrap();
-        assert_eq!(
-            cut,
-            serde_json::json!({"items": [1, 2], "total": 5, "truncated": true})
-        );
-        let whole = serde_json::to_value(List::new(vec![1, 2], Some((2, false)))).unwrap();
-        assert_eq!(
-            whole,
-            serde_json::json!({"items": [1, 2], "total": 2, "truncated": false})
-        );
     }
 }

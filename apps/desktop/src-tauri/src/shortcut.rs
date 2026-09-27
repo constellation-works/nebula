@@ -8,7 +8,7 @@ use tauri::{AppHandle, Manager, PhysicalPosition, Runtime, WebviewWindow};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 /// The frameless always-on-top window from `tauri.conf.json`.
-pub const CAPTURE_WINDOW: &str = "capture";
+pub(crate) const CAPTURE_WINDOW: &str = "capture";
 
 /// Why a capture shortcut was not put in place. An accelerator that does not
 /// parse is told apart from one the OS refused, so neither the startup
@@ -88,7 +88,7 @@ impl ShortcutError {
 }
 
 /// The plugin, with the one handler every registered shortcut shares.
-pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
+pub(crate) fn plugin<R: Runtime>() -> TauriPlugin<R> {
     tauri_plugin_global_shortcut::Builder::new()
         .with_handler(|app, _shortcut, event| {
             if event.state() == ShortcutState::Pressed {
@@ -99,7 +99,10 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
 }
 
 /// Register `shortcut` (in the plugin's `Alt+Space` syntax) system-wide.
-pub fn register<R: Runtime>(app: &AppHandle<R>, shortcut: &str) -> Result<(), ShortcutError> {
+pub(crate) fn register<R: Runtime>(
+    app: &AppHandle<R>,
+    shortcut: &str,
+) -> Result<(), ShortcutError> {
     let parsed = parse(shortcut)?;
     app.global_shortcut()
         .register(parsed)
@@ -110,7 +113,7 @@ pub fn register<R: Runtime>(app: &AppHandle<R>, shortcut: &str) -> Result<(), Sh
 }
 
 /// Parse an accelerator, refusing one without a modifier.
-pub fn parse(value: &str) -> Result<Shortcut, ShortcutError> {
+pub(crate) fn parse(value: &str) -> Result<Shortcut, ShortcutError> {
     let value = value.trim();
     let parsed: Shortcut = value.parse().map_err(|e| ShortcutError::Unparsable {
         value: value.to_string(),
@@ -124,7 +127,7 @@ pub fn parse(value: &str) -> Result<Shortcut, ShortcutError> {
 
 /// Activate a new shortcut immediately and persist it only after registration
 /// succeeds. The old shortcut remains active if registration or saving fails.
-pub fn change<R: Runtime>(app: &AppHandle<R>, value: &str) -> Result<String, ShortcutError> {
+pub(crate) fn change<R: Runtime>(app: &AppHandle<R>, value: &str) -> Result<String, ShortcutError> {
     let next_text = value.trim();
     let next = parse(next_text)?;
     let state = app.state::<AppState>();
@@ -186,7 +189,7 @@ pub fn change<R: Runtime>(app: &AppHandle<R>, value: &str) -> Result<String, Sho
 ///
 /// Fail open throughout: a key press has no caller to report to, so a window
 /// the OS will not hide, show, focus or place is logged instead.
-pub fn toggle_capture<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn toggle_capture<R: Runtime>(app: &AppHandle<R>) {
     let Some(win) = app.get_webview_window(CAPTURE_WINDOW) else {
         return;
     };
@@ -221,38 +224,4 @@ fn place_on_active_screen<R: Runtime>(win: &WebviewWindow<R>) {
         "placing the capture window",
         win.set_position(PhysicalPosition::new(x, y)),
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ShortcutError, parse};
-
-    #[test]
-    fn invalid_accelerators_are_refused() {
-        for value in ["", "NotAKey", "Space", "Alt+"] {
-            assert!(parse(value).is_err(), "{value}");
-        }
-        assert!(parse("CmdOrCtrl+Shift+N").is_ok());
-    }
-
-    #[test]
-    fn an_unparsable_accelerator_is_a_parse_error_not_a_registration_error() {
-        let refused = parse("Alt+NoSuchKey").unwrap_err();
-        assert!(
-            matches!(&refused, ShortcutError::Unparsable { value, .. } if value == "Alt+NoSuchKey"),
-            "{refused:?}"
-        );
-        assert_eq!(refused.code(), "shortcut_unparsable");
-        assert!(refused.to_string().contains("`Alt+NoSuchKey`"), "{refused}");
-    }
-
-    #[test]
-    fn a_bare_key_is_refused_for_its_missing_modifier() {
-        let refused = parse(" Space ").unwrap_err();
-        assert!(
-            matches!(&refused, ShortcutError::NoModifier(value) if value == "Space"),
-            "{refused:?}"
-        );
-        assert_eq!(refused.code(), "shortcut_no_modifier");
-    }
 }

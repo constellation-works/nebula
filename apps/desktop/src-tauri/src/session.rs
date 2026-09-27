@@ -88,7 +88,7 @@ pub enum CommitReport {
 
 impl<T> Written<T> {
     /// A core write as the webview reads it.
-    fn of(done: verb::Written<T>) -> Self {
+    pub(crate) fn of(done: verb::Written<T>) -> Self {
         Self {
             value: done.value,
             // Always `Some`: the desktop never skips a commit.
@@ -100,7 +100,7 @@ impl<T> Written<T> {
 impl CommitReport {
     /// Report the commit that followed a write. A refusal is logged as well:
     /// the write stands, and the corpus now holds an uncommitted change.
-    fn of(outcome: Result<CommitOutcome>) -> Self {
+    pub(crate) fn of(outcome: Result<CommitOutcome>) -> Self {
         match outcome {
             Ok(CommitOutcome::Committed(commit)) => Self::Committed { commit },
             Ok(CommitOutcome::Disabled) => Self::Disabled,
@@ -167,7 +167,13 @@ pub fn graph_search(corpus: &Corpus, query: &str) -> Result<Vec<String>> {
         .collect())
 }
 
-fn matches_graph_query(id: &str, title: &str, body: &str, status: &str, needle: &str) -> bool {
+pub(crate) fn matches_graph_query(
+    id: &str,
+    title: &str,
+    body: &str,
+    status: &str,
+    needle: &str,
+) -> bool {
     [id, title, body, status]
         .iter()
         .any(|value| value.to_lowercase().contains(needle))
@@ -192,51 +198,4 @@ pub fn node(corpus: &Corpus, id: &str) -> Result<NodeView> {
 pub fn node_file(corpus: &Corpus, id: &str) -> Result<PathBuf> {
     corpus.load(id)?;
     corpus.node_path(id)
-}
-
-#[cfg(test)]
-mod commit_report_tests {
-    use super::CommitReport;
-    use std::path::PathBuf;
-
-    /// Git failing under commit-on is a refusal, never one of the outcomes
-    /// that mean nothing was asked of git.
-    #[test]
-    fn a_failed_git_is_refused_not_skipped() {
-        let failed = nebula_core::Error::Git {
-            root: PathBuf::from("/corpus"),
-            context: "commit".into(),
-            stderr: "fatal: unable to write new index file".into(),
-        };
-        let report = CommitReport::of(Err(failed));
-        assert!(
-            matches!(&report, CommitReport::Refused { error } if error.code == "git"),
-            "{report:?}"
-        );
-    }
-}
-
-#[cfg(test)]
-mod graph_search_tests {
-    use super::matches_graph_query;
-
-    #[test]
-    fn matches_every_requested_field_case_insensitively() {
-        for query in ["n42", "IDEA", "evidence", "REFUTED"] {
-            assert!(matches_graph_query(
-                "n42",
-                "An idea",
-                "new evidence",
-                "refuted",
-                &query.to_lowercase()
-            ));
-        }
-        assert!(!matches_graph_query(
-            "n42",
-            "An idea",
-            "new evidence",
-            "refuted",
-            "absent"
-        ));
-    }
 }

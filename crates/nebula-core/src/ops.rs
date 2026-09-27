@@ -35,14 +35,14 @@
 //! Which invariants live here rather than in `check` is a deliberate choice
 //! per rule. See `docs/design/lineage-graph/specs/invariants.md`.
 
-use crate::check::{
-    self, OBSERVATORY, is_absolute_local, is_local_path, is_observatory_id, is_reference_kind,
-    normalize_reference_kind, resolve_local, resolve_observatory,
+use crate::check_impl::{
+    self as check, OBSERVATORY, is_absolute_local, is_local_path, is_observatory_id,
+    is_reference_kind, normalize_reference_kind, resolve_local, resolve_observatory,
 };
 use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
-use crate::fs::create_private_dir_all;
-use crate::graph::{self, Graph, Neighbour, ObservatoryLink};
+use crate::fs_impl::create_private_dir_all;
+use crate::graph_impl::{self as graph, Graph, Neighbour, ObservatoryLink};
 use crate::locations::Locations;
 use crate::lock::{self, CorpusLock};
 use crate::model::{self, Closed, Doc, Edge, EdgeType, Node, Origin, Reference, Status};
@@ -346,11 +346,13 @@ pub fn read_bounded(input: impl std::io::Read, what: &'static str, limit: usize)
     String::from_utf8(bytes).map_err(|_| Error::StdinNotUtf8 { what })
 }
 
+pub(crate) use capture_locked as capture;
+
 /// The five-second path: append a thought to the inbox.
 ///
 /// No parent, no title, no decisions. A capture step that requires decisions
 /// is a capture step you will skip at the exact moment the idea arrives.
-pub fn capture(corpus: &Corpus, text: &str) -> Result<InboxEntry> {
+pub fn capture_locked(corpus: &Corpus, text: &str) -> Result<InboxEntry> {
     let _lock = corpus.lock()?;
     corpus.capture(text)
 }

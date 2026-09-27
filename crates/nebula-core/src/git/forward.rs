@@ -45,10 +45,10 @@ struct State {
 
 /// Held for as long as one git child may be live. The first one takes the
 /// signals over, the last one gives them back and delivers any that arrived.
-pub(super) struct Forwarding(());
+pub(crate) struct Forwarding(());
 
 impl Forwarding {
-    pub(super) fn hold() -> Self {
+    pub(crate) fn hold() -> Self {
         let mut state = STATE.lock().unwrap_or_else(PoisonError::into_inner);
         if state.live == 0 {
             for (signal, _) in HELD {
@@ -83,7 +83,7 @@ impl Drop for Forwarding {
 }
 
 /// The name of the held signal that has arrived, if one has.
-pub(super) fn pending() -> Option<&'static str> {
+pub(crate) fn pending() -> Option<&'static str> {
     let raw = PENDING.load(Ordering::SeqCst);
     HELD.iter()
         .find(|(signal, _)| signal.as_raw() == raw)
@@ -116,7 +116,7 @@ fn take_over(raw: libc::c_int) -> Option<libc::sigaction> {
 }
 
 /// The handler: remember the signal. The supervisor polls for it.
-extern "C" fn record(raw: libc::c_int) {
+pub(crate) extern "C" fn record(raw: libc::c_int) {
     PENDING.store(raw, Ordering::SeqCst);
 }
 
@@ -128,40 +128,5 @@ fn deliver(raw: libc::c_int) {
         // A thread that blocks it gets it when it unblocks it; until then
         // the supervisor's `Interrupted` is what the caller sees.
         let _ = kill_process(getpid(), signal);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn disposition(raw: libc::c_int) -> libc::sighandler_t {
-        // SAFETY: as in `take_over`: a zeroed struct, then a query.
-        let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
-        assert_eq!(
-            unsafe { libc::sigaction(raw, std::ptr::null(), &raw mut current) },
-            0
-        );
-        current.sa_sigaction
-    }
-
-    /// The signals are ours only while a git child is live, however many
-    /// overlap, and default again once the last one is done.
-    #[test]
-    fn held_signals_are_taken_over_while_git_is_live_and_given_back_after() {
-        let term = Signal::TERM.as_raw();
-        // No other git may be live in this process meanwhile, or the
-        // disposition would legitimately be ours already.
-        let _serial = crate::git::serial();
-        assert_eq!(disposition(term), libc::SIG_DFL);
-        let first = Forwarding::hold();
-        let ours = record as extern "C" fn(libc::c_int) as libc::sighandler_t;
-        assert_eq!(disposition(term), ours);
-        let second = Forwarding::hold();
-        drop(first);
-        assert_eq!(disposition(term), ours, "one git is still live");
-        drop(second);
-        assert_eq!(disposition(term), libc::SIG_DFL);
-        assert_eq!(pending(), None);
     }
 }
