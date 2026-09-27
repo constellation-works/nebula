@@ -116,14 +116,18 @@ class GuardFixtures(unittest.TestCase):
         pinned = re.search(r'^channel\s*=\s*"([^"]+)"', toolchain_file.read_text(), re.MULTILINE)
         if pinned is None:
             self.fail("rust-toolchain.toml has no pinned channel")
-        installed = subprocess.run(
-            ["rustup", "toolchain", "list"], capture_output=True, text=True, check=True
-        ).stdout
-        if not any(
-            line.split()[0] == pinned.group(1) or line.split()[0].startswith(pinned.group(1) + "-")
-            for line in installed.splitlines() if line.split()
-        ):
-            self.fail(f"pinned Rust toolchain {pinned.group(1)} is not installed; fixtures will not download it")
+        pinned_version = pinned.group(1)
+        compiler_env = os.environ.copy()
+        compiler_env.update(RUSTUP_TOOLCHAIN=pinned_version, RUSTUP_AUTO_INSTALL="0")
+        try:
+            compiler = subprocess.run(
+                ["rustc", "--version"], env=compiler_env, capture_output=True, text=True, check=False
+            )
+        except FileNotFoundError:
+            self.fail(f"pinned Rust compiler {pinned_version} is unavailable; fixtures will not download it")
+        version = re.match(r"rustc\s+(\S+)", compiler.stdout)
+        if compiler.returncode or version is None or version.group(1) != pinned_version:
+            self.fail(f"pinned Rust compiler {pinned_version} is unavailable; fixtures will not download it")
         self.temp = tempfile.TemporaryDirectory(prefix="nebula-test-modules-")
         self.addCleanup(self.temp.cleanup)
         self.root = pathlib.Path(self.temp.name)
@@ -144,8 +148,8 @@ class GuardFixtures(unittest.TestCase):
         self.env = {key: value for key, value in os.environ.items() if not key.startswith(("GIT_", "ORBIT_"))}
         for key in ("NEBULA_ROOT", "OBSERVATORY_ROOT", "EDITOR", "VISUAL", "CARGO_TARGET_DIR"):
             self.env.pop(key, None)
-        # HOME belongs to the fixture, but rustup and Cargo must see the
-        # already-installed host toolchain and registry cache.
+        # HOME belongs to the fixture. Keep the caller's Rustup and Cargo
+        # locations when set; a compiler supplied on PATH works without them.
         host_home = pathlib.Path.home()
         rustup_home = os.environ.get("RUSTUP_HOME", str(host_home / ".rustup"))
         cargo_home = os.environ.get("CARGO_HOME", str(host_home / ".cargo"))
@@ -153,6 +157,8 @@ class GuardFixtures(unittest.TestCase):
             HOME=str(self.root),
             CARGO_HOME=cargo_home,
             RUSTUP_HOME=rustup_home,
+            RUSTUP_TOOLCHAIN=pinned_version,
+            RUSTUP_AUTO_INSTALL="0",
             TMPDIR=str(self.root / "tmp"),
         )
         subprocess.run(
