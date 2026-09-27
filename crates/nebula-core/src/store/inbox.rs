@@ -113,10 +113,9 @@ impl Corpus {
         };
         let mut files = Vec::new();
         for entry in listing.into_strict()? {
-            let kind = entry
-                .file_type()
-                .map_err(|error| Error::io_at("checking", entry.path(), error))?;
-            if kind.is_file() && is_inbox_month_filename(&entry.file_name()) {
+            // A month name is a candidate even when it is not a regular
+            // file: the safe reader must report it, never silently omit it.
+            if is_inbox_month_filename(&entry.file_name()) {
                 files.push(entry.path());
             }
         }
@@ -255,8 +254,8 @@ pub(crate) fn validate_capture(text: &str) -> Result<String> {
     Ok(line)
 }
 
-/// One inbox month file's text, or a refusal naming the file. It was listed
-/// as a regular file, and is read only as one.
+/// One inbox month candidate's text, or a refusal naming the entry. It is
+/// read only as a regular file.
 fn read_inbox_file(path: &Path) -> Result<String> {
     read_regular_text(path)?
         .ok_or_else(|| Error::io_at("reading", path, std::io::ErrorKind::NotFound.into()))

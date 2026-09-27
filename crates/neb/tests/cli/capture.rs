@@ -311,6 +311,101 @@ fn unreadable_inbox_file_error_names_the_file() {
     assert_eq!(prose.out.status.code(), Some(1));
 }
 
+/// A corrupt month must never turn into an empty successful listing. The
+/// short child deadline also catches a reader that blocks opening a FIFO.
+fn assert_invalid_inbox_month(c: &Corpus, month: &std::path::Path, kind: &str) {
+    for args in [vec!["inbox", "--json"], vec!["inbox"]] {
+        let out = crate::support::output(&mut c.command(&args), std::time::Duration::from_secs(5))
+            .expect("inbox must refuse an invalid month promptly");
+        let run = Run {
+            args: args.join(" "),
+            out,
+        };
+        assert_eq!(run.out.status.code(), Some(1), "{}", run.stderr());
+        assert!(run.stdout().is_empty(), "{}", run.stdout());
+        assert!(!run.stderr().contains("inbox is empty"));
+        let message = format!(
+            "{} is {kind}, not a regular file; nothing was read or written through it",
+            month.display()
+        );
+        if args.contains(&"--json") {
+            let refused = run.refusal();
+            assert_eq!(refused["code"], "not_regular_file");
+            assert_eq!(refused["error"], message);
+        } else {
+            run.says(&message);
+        }
+    }
+}
+
+#[test]
+fn inbox_listing_refuses_a_directory_month() {
+    let c = Corpus::new();
+    let month = c.root.join("inbox/2000-01.md");
+    std::fs::create_dir(&month).unwrap();
+    assert_invalid_inbox_month(&c, &month, "a directory");
+}
+
+#[cfg(unix)]
+#[test]
+fn inbox_listing_refuses_a_symlink_month() {
+    let c = Corpus::new();
+    let outside = c.workdir().join("outside.md");
+    let contents = "- [abcd] 2000-01-01T00:00 hidden thought\n";
+    write(&outside, contents);
+    let month = c.root.join("inbox/2000-01.md");
+    std::os::unix::fs::symlink(&outside, &month).unwrap();
+    assert_invalid_inbox_month(&c, &month, "a symlink");
+    assert_eq!(std::fs::read_to_string(outside).unwrap(), contents);
+}
+
+#[cfg(unix)]
+#[test]
+fn inbox_listing_refuses_a_fifo_month() {
+    let c = Corpus::new();
+    let month = c.root.join("inbox/2000-01.md");
+    let out = crate::harness::output(crate::support::command("mkfifo", c.workdir()).arg(&month));
+    assert!(out.status.success(), "could not create fixture FIFO");
+    assert_invalid_inbox_month(&c, &month, "a FIFO");
+}
+
+#[cfg(unix)]
+#[test]
+fn inbox_listing_orders_months_and_ignores_non_month_debris() {
+    let c = Corpus::new();
+    let inbox = c.root.join("inbox");
+    for (month, id) in [
+        ("2001-01", "cdef"),
+        ("2000-12", "bcde"),
+        ("2000-01", "abcd"),
+    ] {
+        write(
+            &inbox.join(format!("{month}.md")),
+            &format!("- [{id}] {month}-01T00:00 thought\n"),
+        );
+    }
+    write(
+        &inbox.join("2000-13.md"),
+        "- [ffff] 2000-01-01T00:00 debris\n",
+    );
+    std::fs::create_dir(inbox.join("notes.md")).unwrap();
+    std::os::unix::fs::symlink(inbox.join("missing"), inbox.join("2000-00.md")).unwrap();
+    let out = crate::harness::output(
+        crate::support::command("mkfifo", c.workdir()).arg(inbox.join("2000-01.md.tmp")),
+    );
+    assert!(out.status.success(), "could not create fixture FIFO");
+
+    let run = c.run(&["inbox", "--json"]).assert_ok();
+    let entries: serde_json::Value = serde_json::from_str(&run.stdout()).unwrap();
+    let ids: Vec<_> = entries
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| &e["id"])
+        .collect();
+    assert_eq!(ids, ["abcd", "bcde", "cdef"]);
+}
+
 /// Whether `at` is RFC 3339, which says its offset by construction.
 fn is_rfc3339(at: &serde_json::Value) -> bool {
     at.as_str().is_some_and(|at| {
