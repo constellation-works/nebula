@@ -25,7 +25,7 @@ use super::{Report, Rule, Severity};
 /// A pending record is a warning while it can be read, since the next write
 /// settles it, and an error when it cannot, since every write refuses until
 /// someone deals with it.
-pub(super) fn interrupted_writes(corpus: &Corpus, r: &mut Report) -> Result<()> {
+pub(super) fn interrupted_writes(corpus: &Corpus, r: &mut Report) {
     let root = corpus.root();
     // Relative to the root, in the order they are reported.
     let mut debris: Vec<PathBuf> = Vec::new();
@@ -82,6 +82,23 @@ pub(super) fn interrupted_writes(corpus: &Corpus, r: &mut Report) -> Result<()> 
         );
     }
 
+    // This is a diagnostic scan, not recovery: isolate every failure of
+    // this record so unrelated findings survive (STD-02 §R32).
+    if let Err(error) = pending_write(corpus, r) {
+        r.push(
+            Severity::Error,
+            Rule::InterruptedWrite,
+            None,
+            format!(
+                "could not inspect unfinished write recorded in {}: {error}",
+                pending::pending_path(root).display()
+            ),
+        );
+    }
+}
+
+fn pending_write(corpus: &Corpus, r: &mut Report) -> Result<()> {
+    let root = corpus.root();
     let record = pending::pending_path(root);
     match pending::read(root) {
         Ok(None) => {}

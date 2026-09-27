@@ -5,6 +5,127 @@ use crate::harness::{Corpus, date_days_ago, set_created, set_updated, write};
 use crate::lock::plant_debris;
 use crate::observatory::observatory;
 
+/// A bad recovery record must not hide an unrelated node error or cause
+/// recovery writes while the real CLI produces its check report.
+fn check_pending_error(plant: impl FnOnce(&Corpus), cause: &str) {
+    let c = Corpus::new();
+    let id = c.seed("bad hypothesis", "Bad hypothesis");
+    let path = c.node_file(&id);
+    let raw = std::fs::read_to_string(&path).unwrap();
+    write(&path, &raw.replace("status: seed", "status: hypothesis"));
+    c.run(&["capture", "leave this capture waiting"])
+        .assert_ok();
+    let before = crate::harness::snapshot_corpus_files(&c.root);
+    plant(&c);
+    let record = c.root.join(".pending");
+    let metadata = std::fs::symlink_metadata(&record).unwrap();
+    let bytes = metadata.is_file().then(|| std::fs::read(&record).ok());
+    let link = std::fs::read_link(&record).ok();
+
+    let run = c.run(&["--json", "check"]);
+    assert_eq!(run.out.status.code(), Some(1), "{}", run.stderr());
+    assert!(run.stderr().is_empty(), "{}", run.stderr());
+    let report: serde_json::Value = serde_json::from_str(&run.stdout()).unwrap();
+    let findings = report["findings"].as_array().unwrap();
+    assert_eq!(
+        findings.iter().filter(|f| f["level"] == "error").count(),
+        2,
+        "{report}"
+    );
+    assert!(findings.iter().any(|f| f["rule"] == 2 && f["node"] == id));
+    let pending = findings.iter().find(|f| f["rule"] == 17).unwrap();
+    assert_eq!(pending["level"], "error");
+    let message = pending["message"].as_str().unwrap();
+    assert!(
+        message.contains(".pending") && message.contains(cause),
+        "{message}"
+    );
+    assert_eq!(crate::harness::snapshot_corpus_files(&c.root), before);
+    let after = std::fs::symlink_metadata(&record).unwrap();
+    assert_eq!(after.file_type(), metadata.file_type());
+    assert_eq!(after.modified().unwrap(), metadata.modified().unwrap());
+    assert_eq!(after.permissions(), metadata.permissions());
+    assert_eq!(after.is_file().then(|| std::fs::read(&record).ok()), bytes);
+    assert_eq!(std::fs::read_link(&record).ok(), link);
+}
+
+#[test]
+fn check_isolates_unsafe_pending_node_ids() {
+    check_pending_error(
+        |c| {
+            write(
+                &c.root.join(".pending"),
+                r#"{"op":"promote","entry":"abcd","stamp":"2026-09-27T00:00:00Z","node":"../escape"}"#,
+            );
+        },
+        "../escape",
+    );
+}
+
+#[test]
+fn check_isolates_malformed_pending_records() {
+    check_pending_error(|c| write(&c.root.join(".pending"), "{"), "cannot read");
+}
+
+#[test]
+fn check_isolates_a_pending_directory() {
+    check_pending_error(
+        |c| std::fs::create_dir(c.root.join(".pending")).unwrap(),
+        "regular file",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn check_isolates_pending_symlinks() {
+    for dangling in [false, true] {
+        check_pending_error(
+            |c| {
+                let target = c.dir.path().join("pending-target");
+                if !dangling {
+                    write(&target, "private record");
+                }
+                std::os::unix::fs::symlink(target, c.root.join(".pending")).unwrap();
+            },
+            "regular file",
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn check_isolates_a_pending_fifo_without_waiting_for_a_peer() {
+    check_pending_error(
+        |c| {
+            assert!(
+                crate::harness::output(
+                    crate::support::command("mkfifo", c.workdir())
+                        .args(["-m", "600"])
+                        .arg(c.root.join(".pending"))
+                )
+                .status
+                .success()
+            );
+        },
+        "regular file",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn check_isolates_an_unreadable_pending_record() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    check_pending_error(
+        |c| {
+            let path = c.root.join(".pending");
+            write(&path, "{}");
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        },
+        "Permission denied",
+    );
+}
+
 /// Rule 17: a temporary file an interrupted write left behind is named, with
 /// the command that removes it, and left exactly where it is.
 #[test]
