@@ -514,6 +514,39 @@ fn json_goldens_match_the_binary() {
     );
 }
 
+#[test]
+fn show_indents_every_reference_note_line() {
+    let fixture = Fixture::new(Setup::Base);
+    let note = "First line\nSecond line\n\nFourth line";
+    let cited = fixture.run(&["cite", "first-idea", "--kind", "discussion", "--note", note]);
+    assert!(cited.status.success(), "{cited:?}");
+    let out = fixture.run(&["show", "first-idea"]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stderr.is_empty(), "{out:?}");
+    let shown = fixture.redacted(std::str::from_utf8(&out.stdout).unwrap());
+    assert!(
+        shown.contains("     First line\n     Second line\n     \n     Fourth line\n"),
+        "{shown}"
+    );
+    assert_golden(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/human/show-multiline-note.txt"),
+        &format!(
+            "{}\n",
+            serde_json::to_string_pretty(&Recorded {
+                argv: vec!["show".into(), "first-idea".into()],
+                exit_code: 0,
+                stdout: shown,
+                stderr: String::new(),
+            })
+            .unwrap()
+        ),
+    );
+    let json = fixture.run(&["show", "first-idea", "--json"]);
+    assert!(json.status.success(), "{json:?}");
+    let value: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(value["node"]["references"][0]["note"], note);
+}
+
 // A small scanner keeps the boundary explicit without a regex dependency.
 fn has_forbidden_id(text: &str) -> bool {
     fn word(ch: char) -> bool {

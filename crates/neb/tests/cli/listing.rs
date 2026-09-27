@@ -7,6 +7,25 @@ use crate::harness::{
 };
 use crate::json::{NODE_KEYS, keys};
 
+#[test]
+fn list_orders_prefix_ids_before_their_extensions() {
+    let c = Corpus::new();
+    for id in ["no-git-node-two", "no-git-node"] {
+        c.run(&["new", id, "--id", id]).assert_ok();
+    }
+    let out = c.run(&["list"]).assert_ok().stdout();
+    let ids: Vec<_> = out
+        .lines()
+        .map(|line| line.split('\t').nth(1).unwrap())
+        .collect();
+    assert_eq!(ids, ["no-git-node", "no-git-node-two"]);
+    let json = json_of(&c, &["list", "--json"]);
+    assert_eq!(json[0]["id"], "no-git-node");
+    assert_eq!(json[1]["id"], "no-git-node-two");
+    let limited = json_of(&c, &["list", "--json", "--limit", "1"]);
+    assert_eq!(limited["items"][0]["id"], "no-git-node");
+}
+
 /// Piped, a listing is one tab-separated line per node with no header, and
 /// every line has every field: an untagged node's tags are `-`, so `cut -f`
 /// never shifts (STD-01 §R9).

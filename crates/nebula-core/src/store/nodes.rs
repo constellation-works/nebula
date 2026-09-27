@@ -152,6 +152,9 @@ impl Corpus {
                 Err(error) => unreadable.push(UnreadableNode::from_error(p, &error)),
             }
         }
+        // The extension changes prefix ordering: `idea-two.md` sorts before
+        // `idea.md`, but callers need `idea` before `idea-two`.
+        docs.sort_by(|a, b| a.node.id.cmp(&b.node.id));
         Ok(Scan { docs, unreadable })
     }
 

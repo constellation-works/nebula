@@ -102,7 +102,9 @@ pub(crate) fn node(view: &NodeView) -> String {
                 let _ = writeln!(out, "     {located}");
             }
             let text = r.note.as_deref().map_or("(no note)", str::trim);
-            let _ = writeln!(out, "     {}", dim(text));
+            for line in text.split('\n') {
+                let _ = writeln!(out, "     {}", dim(line));
+            }
         }
         out.push('\n');
     }
