@@ -16,10 +16,39 @@
 # ("Layering, enforced"); change it and this script in the same commit
 # (STD-02 §R6).
 set -euo pipefail
-cd "$(dirname "$0")/.."
+script_path=${BASH_SOURCE[0]}
+script_dir=${script_path%/*}
+[[ "$script_dir" != "$script_path" ]] || script_dir=.
+cd "$script_dir/.."
 
 fail=0
 err() { echo "dependency-direction: $*" >&2; fail=1; }
+
+for tool in awk grep; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    err "required inspection tool $tool is unavailable"
+  fi
+done
+if [[ "$fail" -ne 0 ]]; then
+  exit "$fail"
+fi
+
+grep_capture() {
+  local destination="$1" context="$2" captured status
+  shift 2
+  if captured=$(grep "$@"); then
+    :
+  else
+    status=$?
+    if ((status == 1)); then
+      captured=""
+    else
+      err "grep failed while $context (exit $status)"
+      return 2
+    fi
+  fi
+  printf -v "$destination" '%s' "$captured"
+}
 
 # --- 1. crate policies -------------------------------------------------------
 # policy <crate> sets ALLOWED (workspace crates) and BANNED (external crates,
@@ -193,27 +222,50 @@ matches() {
 
 members=""
 internal=""
+if workspace_list=$(workspace_members); then
+  :
+else
+  err "failed to enumerate workspace members from Cargo.toml with awk"
+  exit "$fail"
+fi
 while IFS= read -r member; do
+  [[ -n "$member" ]] || continue
   manifest="$member/Cargo.toml"
   if [[ ! -f "$manifest" ]]; then
     err "workspace member '$member' has no $manifest"
     continue
   fi
   members="$members $manifest"
-  internal="$internal $(package_name "$manifest")"
-done < <(workspace_members)
+  if crate_name=$(package_name "$manifest"); then
+    internal="$internal $crate_name"
+  else
+    err "failed to read the package name from $manifest with awk"
+  fi
+done <<<"$workspace_list"
 
 if [[ -z "$members" ]]; then
   err "found no workspace members in Cargo.toml"
 fi
 
 for manifest in $members; do
-  crate=$(package_name "$manifest")
+  if crate=$(package_name "$manifest"); then
+    :
+  else
+    err "failed to read the package name from $manifest with awk"
+    continue
+  fi
   if ! policy "$crate"; then
     err "crate '$crate' ($manifest) has no policy; add one to scripts/check-dependency-direction.sh and to the layering in docs/design/v0.2/2_architecture.md"
     continue
   fi
+  if dependency_list=$(declared_deps "$manifest"); then
+    :
+  else
+    err "failed to inspect dependencies in $manifest with awk"
+    continue
+  fi
   while IFS= read -r dep; do
+    [[ -n "$dep" ]] || continue
     if [[ "$dep" == !unresolved-workspace-dependency:* ]]; then
       err "$crate inherits an undeclared workspace dependency ${dep#*:} ($manifest)"
     elif matches "$dep" "$internal"; then
@@ -221,7 +273,7 @@ for manifest in $members; do
     elif matches "$dep" "$BANNED"; then
       err "$crate must not depend on $dep ($manifest): a surface crate in the core"
     fi
-  done < <(declared_deps "$manifest")
+  done <<<"$dependency_list"
 done
 
 # --- 2. grep bans ------------------------------------------------------------
@@ -242,10 +294,18 @@ ban() {
   done
   shift
   if [[ "$everywhere" -eq 1 ]]; then
-    hits=$(grep -rnHE --include='*.rs' "$1" "${paths[@]}" 2>/dev/null || true)
+    if ! grep_capture hits "scanning ${paths[*]}" -rnHE --include='*.rs' "$1" "${paths[@]}"; then
+      return
+    fi
   else
-    hits=$(grep -rnHE --include='*.rs' --exclude-dir=tests "$1" "${paths[@]}" 2>/dev/null \
-      | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+    if ! grep_capture hits "scanning ${paths[*]}" -rnHE --include='*.rs' --exclude-dir=tests "$1" "${paths[@]}"; then
+      return
+    fi
+    if [[ -n "$hits" ]]; then
+      if ! grep_capture hits "filtering comments in ${paths[*]}" -vE '^[^:]+:[0-9]+:[[:space:]]*//' <<<"$hits"; then
+        return
+      fi
+    fi
   fi
   if [[ -n "$hits" ]]; then
     echo "$hits" >&2

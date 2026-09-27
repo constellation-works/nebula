@@ -50,6 +50,8 @@ jobs:
       # silently rewritten.
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-targets
+      # Structural checker regressions are exercised through their entry points.
+      - run: bash scripts/test-structural-checks.sh
       # `--all-targets` leaves doctests out.
       - run: cargo test --locked --workspace --doc
       # The desktop's types are generated from nebula-core and committed. The
