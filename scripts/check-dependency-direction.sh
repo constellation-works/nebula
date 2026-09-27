@@ -71,29 +71,114 @@ package_name() {
 
 # The dependency names declared in a Cargo.toml's non-dev tables:
 # [dependencies], [build-dependencies] and their target-specific forms, plus
-# the [dependencies.<name>] table form. A `package = "…"` rename reports the
-# real package.
+# the [dependencies.<name>] table form. Resolve package renames, including
+# inherited workspace dependencies, before checking the crate policy.
 declared_deps() {
   awk '
+    function without_comment(value, i, char, quoted, escaped) {
+      for (i = 1; i <= length(value); i++) {
+        char = substr(value, i, 1)
+        if (escaped) { escaped = 0; continue }
+        if (char == "\\" && quoted) { escaped = 1; continue }
+        if (char == "\"") quoted = !quoted
+        if (char == "#" && !quoted) return substr(value, 1, i - 1)
+      }
+      return value
+    }
+    function package_from(value, name) {
+      if (!match(value, /(^|[,[:space:]])package[[:space:]]*=[[:space:]]*"[^"]+"/)) return ""
+      name = substr(value, RSTART, RLENGTH)
+      sub(/^[^"]*"/, "", name)
+      sub(/"$/, "", name)
+      return name
+    }
+    function inherited(value) {
+      return value ~ /(^|[,{[:space:]])workspace[[:space:]]*=[[:space:]]*true/
+    }
+    function add_entry(alias, value, name) {
+      name = package_from(value)
+      if (source == "workspace") {
+        workspace_package[alias] = name == "" ? alias : name
+      } else {
+        deps[++dep_count] = alias
+        dep_package[dep_count] = name
+        dep_inherited[dep_count] = inherited(value)
+      }
+    }
+    function finish_table() {
+      if (table_alias != "") add_entry(table_alias, table_value)
+      table_alias = ""
+      table_value = ""
+    }
+    FNR == 1 {
+      finish_table()
+      source = FILENAME == ARGV[1] ? "workspace" : "crate"
+      section = ""
+    }
     /^\[/ {
-      in_deps = ($0 ~ /^\[(target\..*\.)?(build-)?dependencies\][[:space:]]*$/)
-      if (match($0, /^\[(target\..*\.)?(build-)?dependencies\.[A-Za-z0-9_-]+\]/)) {
-        name = substr($0, RSTART, RLENGTH - 1)
-        sub(/.*\./, "", name)
-        print name
+      finish_table()
+      header = $0
+      sub(/[[:space:]]*#.*/, "", header)
+      section = ""
+      if (source == "workspace") {
+        if (header ~ /^\[workspace\.dependencies\][[:space:]]*$/) section = "deps"
+        if (header ~ /^\[workspace\.dependencies\.[A-Za-z0-9_-]+\][[:space:]]*$/) {
+          table_alias = header
+          sub(/.*\./, "", table_alias)
+          sub(/\].*/, "", table_alias)
+        }
+      } else {
+        if (header ~ /^\[(target\..*\.)?(build-)?dependencies\][[:space:]]*$/) section = "deps"
+        if (header ~ /^\[(target\..*\.)?(build-)?dependencies\.[A-Za-z0-9_-]+\][[:space:]]*$/) {
+          table_alias = header
+          sub(/.*\./, "", table_alias)
+          sub(/\].*/, "", table_alias)
+        }
       }
       next
     }
-    in_deps && /^[A-Za-z0-9_-]+[[:space:]]*(\.workspace)?[[:space:]]*=/ {
-      name = $1; sub(/\.workspace$/, "", name); sub(/=.*/, "", name)
-      gsub(/[[:space:]]/, "", name)
-      if (match($0, /package[[:space:]]*=[[:space:]]*"[^"]+"/)) {
-        name = substr($0, RSTART, RLENGTH)
-        sub(/^[^"]*"/, "", name); sub(/"$/, "", name)
+    table_alias != "" { table_value = table_value " " without_comment($0); next }
+    inline_alias != "" {
+      inline_value = inline_value " " without_comment($0)
+      if ($0 ~ /}/) {
+        add_entry(inline_alias, inline_value)
+        inline_alias = ""
+        inline_value = ""
       }
-      print name
+      next
     }
-  ' "$1"
+    section == "deps" && /^[[:space:]]*[A-Za-z0-9_-]+(\.workspace)?[[:space:]]*=/ {
+      alias = $0
+      sub(/^[[:space:]]*/, "", alias)
+      sub(/[[:space:]]*=.*/, "", alias)
+      value = without_comment($0)
+      sub(/^[^=]*=/, "", value)
+      if (alias ~ /\.workspace$/) {
+        sub(/\.workspace$/, "", alias)
+        value = "workspace = true " value
+      }
+      if (value ~ /\{/ && value !~ /}/) {
+        inline_alias = alias
+        inline_value = value
+      } else {
+        add_entry(alias, value)
+      }
+    }
+    END {
+      finish_table()
+      for (i = 1; i <= dep_count; i++) {
+        alias = deps[i]
+        if (dep_inherited[i]) {
+          if (alias in workspace_package) print workspace_package[alias]
+          else print "!unresolved-workspace-dependency:" alias
+        } else if (dep_package[i] != "") {
+          print dep_package[i]
+        } else {
+          print alias
+        }
+      }
+    }
+  ' Cargo.toml "$1"
 }
 
 # matches <word> <space-separated patterns>
@@ -129,7 +214,9 @@ for manifest in $members; do
     continue
   fi
   while IFS= read -r dep; do
-    if matches "$dep" "$internal"; then
+    if [[ "$dep" == !unresolved-workspace-dependency:* ]]; then
+      err "$crate inherits an undeclared workspace dependency ${dep#*:} ($manifest)"
+    elif matches "$dep" "$internal"; then
       matches "$dep" "$ALLOWED" || err "$crate must not depend on workspace crate $dep ($manifest)"
     elif matches "$dep" "$BANNED"; then
       err "$crate must not depend on $dep ($manifest): a surface crate in the core"
