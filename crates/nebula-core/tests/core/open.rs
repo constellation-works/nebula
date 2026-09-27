@@ -53,10 +53,13 @@ fn discover_finds_the_nearest_corpus_at_or_above_the_start() {
 }
 
 #[test]
-fn discover_stops_at_nodes_regardless_of_config_validity() {
+fn discover_requires_nodes_and_positive_corpus_evidence() {
     let dir = tempfile::tempdir().unwrap();
-    let cases: [(&str, bool, Option<&str>); 6] = [
+    let cases = [
         ("nodes-only", true, None),
+        ("foreign-config", true, Some("name: some other tool\n")),
+        ("scalar-config", true, Some("some other tool\n")),
+        ("corpus-id-only", true, Some("corpus_id: null\n")),
         (
             "config-only",
             false,
@@ -85,8 +88,29 @@ fn discover_stops_at_nodes_regardless_of_config_validity() {
         if let Some(config) = config {
             std::fs::write(root.join("config.yaml"), config).unwrap();
         }
-        let expected = nodes.then(|| root.clone());
+        let expected = (nodes
+            && !matches!(name, "nodes-only" | "foreign-config" | "scalar-config"))
+        .then(|| root.clone());
         assert_eq!(Corpus::discover(&root), expected, "{name}");
+    }
+}
+
+#[test]
+fn discover_finds_configless_corpora_by_inbox_or_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    for marker in ["inbox", ".lock"] {
+        let root = dir.path().join(marker);
+        std::fs::create_dir_all(root.join("nodes")).unwrap();
+        if marker == "inbox" {
+            std::fs::create_dir(root.join(marker)).unwrap();
+        } else {
+            std::fs::write(root.join(marker), "").unwrap();
+        }
+        assert_eq!(Corpus::discover(&root.join("nodes")), Some(root.clone()));
+        assert!(matches!(
+            Corpus::open(&process_locations(), Some(root)),
+            Err(Error::MissingConfig { .. })
+        ));
     }
 }
 
