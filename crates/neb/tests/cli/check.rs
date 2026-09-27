@@ -455,3 +455,22 @@ fn an_unparsable_reference_added_date_is_a_rule_14_error() {
         .says("reference `r1` has an added date `not-a-date` that does not parse")
         .says("1 error,");
 }
+
+#[test]
+fn discovery_regression_check_names_the_checked_root() {
+    let c = Corpus::new();
+    for broken in [false, true] {
+        if broken {
+            write(&c.node_file("broken"), "no frontmatter\n");
+        }
+        let text = c.run(&["check"]);
+        assert!(
+            text.stdout()
+                .contains(&format!("corpus: {}", c.root.display()))
+        );
+        let json = c.run(&["check", "--json"]);
+        let report: serde_json::Value = serde_json::from_str(&json.stdout()).unwrap();
+        assert_eq!(report["root"], c.root.to_str().unwrap());
+        assert_eq!(json.out.status.success(), !broken);
+    }
+}

@@ -419,7 +419,7 @@ fn reports_count_in_the_singular_for_one() {
     let c = Corpus::new();
     c.run(&["new", "Alone"]).assert_ok();
     let checked = c.run(&["check"]).assert_ok();
-    assert_eq!(checked.stdout(), "", "no findings, so no payload");
+    assert_eq!(checked.stdout(), format!("corpus: {}\n", c.root.display()));
     assert_eq!(
         checked.stderr(),
         "1 node, 0 errors, 0 warnings, 0 unreadable files\n"

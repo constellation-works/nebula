@@ -37,10 +37,11 @@ resolved against the working directory, and `--set-root` replaces it without
 The resolver checks `--root`, `$NEBULA_ROOT`, the current directory, that
 config file, then `~/.nebula` in that order. The current directory counts when
 it is a corpus or anywhere under one: the nearest directory at or above it that
-holds `nodes/` beside a `config.yaml` naming a `corpus_id` is used, the way git
-finds a repository, and the innermost of two nested corpora wins. The walk
-follows the directory as the shell spells it (`$PWD`) and never resolves a
-symlink. Only an existing corpus is found this way, so `neb capture` never
+holds a `nodes/` directory is used, and the innermost of two nested corpora
+wins. A missing or malformed `config.yaml` refuses there instead of falling
+back to a different corpus. `neb check` names the checked root in text and
+in its JSON `root` field. The walk follows the directory as the shell spells it
+(`$PWD`) and never resolves a symlink. Only an existing corpus is found this way, so `neb capture` never
 creates one because of where it was run.
 
 An exported-but-empty `$NEBULA_ROOT` is treated as unset, not as the current

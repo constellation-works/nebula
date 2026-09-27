@@ -422,7 +422,7 @@ pub(crate) fn tags_notice(counts: &TagCounts) -> Option<Notice> {
 
 /// The invariant report's findings, one line each.
 pub(crate) fn check(report: &Report) -> String {
-    let mut out = String::new();
+    let mut out = format!("corpus: {}\n", report.root.display());
     for file in &report.unreadable {
         let _ = writeln!(
             out,

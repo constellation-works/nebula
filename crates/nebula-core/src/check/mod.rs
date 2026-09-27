@@ -39,7 +39,7 @@ use crate::model::{Doc, EdgeType};
 use crate::store::{Corpus, Scan, UnreadableNode};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Stable IDs for corpus invariants. Some rules are enforced before a graph
 /// reaches `check`, at parsing or at the point of action.
@@ -114,6 +114,8 @@ pub struct Finding {
 #[derive(Debug, Default, Clone, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Report {
+    /// The corpus root checked, with the spelling used to open it.
+    pub root: PathBuf,
     /// Files and directory entries that could not be loaded.
     pub unreadable: Vec<UnreadableNode>,
     /// Everything found, errors first.
@@ -167,6 +169,7 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
     let docs = graph.docs();
     let ids: HashSet<&str> = docs.iter().map(|d| d.node.id.as_str()).collect();
     let mut r = Report {
+        root: corpus.root().to_path_buf(),
         nodes: docs.len(),
         ..Report::default()
     };

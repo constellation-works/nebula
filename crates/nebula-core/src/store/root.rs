@@ -11,9 +11,7 @@ use super::inbox::is_inbox_month_filename;
 use super::links::is_node_file_name;
 use crate::config::{self, CommitSetting, Config, Declared, ObservatoryRoot};
 use crate::error::{Error, Result};
-use crate::fs_impl::{
-    create_private_dir_all, create_private_new, read_regular_text, write_private_atomic,
-};
+use crate::fs_impl::{create_private_dir_all, create_private_new, write_private_atomic};
 use crate::id::is_path_safe_id;
 use crate::locations::Locations;
 use crate::lock::CorpusLock;
@@ -51,24 +49,18 @@ impl Corpus {
         Self::default_root(locations)
     }
 
-    /// The nearest directory at or above `start` that already holds a corpus:
-    /// a `nodes/` directory beside a `config.yaml` that names a `corpus_id`.
+    /// The nearest directory at or above `start` with a `nodes/` directory.
     /// `None` when no ancestor does.
     ///
-    /// Only a corpus that exists is ever found, so discovery can never lead
-    /// `capture`, the one verb that creates a corpus, to create one: inside a
-    /// corpus it writes there, and anywhere else resolution carries on to the
-    /// configured root exactly as if discovery did not exist. Both halves of
-    /// the marker are required, so neither a half-initialized directory nor a
-    /// project that happens to have a `nodes/` folder and a `config.yaml` is
-    /// mistaken for one.
+    /// Discovery identifies the target, not whether its config is healthy.
+    /// Opening validates the config and refuses a missing or malformed one
+    /// at this root instead of silently falling through to another corpus.
+    /// Migration can therefore find a legacy corpus from before config.yaml.
     ///
-    /// The nearest corpus wins, so from inside a corpus nested in another the
-    /// inner one is found. The walk is lexical, parent by parent as `cd ..`
-    /// goes, and never resolves a symlink: the root comes back spelled the
-    /// way `start` spelled it. A `nodes/` that is itself a symlink still
-    /// counts, so that [`Self::open`] refuses it by name instead of the walk
-    /// quietly passing it by for some other corpus.
+    /// The nearest corpus wins. The walk is lexical and never resolves a
+    /// symlink: the root keeps the spelling of `start`. A `nodes` symlink
+    /// (even a dangling one) also stops the walk so opening refuses it by
+    /// name instead of selecting another corpus.
     pub fn discover(start: &Path) -> Option<PathBuf> {
         start
             .ancestors()
@@ -496,15 +488,8 @@ fn holds_content(root: &Path) -> Result<bool> {
     Ok(false)
 }
 
-/// Whether `dir` is a corpus root: [`Corpus::discover`]'s marker.
-///
-/// A `config.yaml` that is not a regular file is not read, and it marks the
-/// corpus rather than letting the walk pass it by: opening it then refuses it
-/// by name, where walking on would quietly open some other corpus.
+/// Whether `dir` marks a corpus, independently of config validity.
 fn holds_corpus(dir: &Path) -> bool {
-    dir.join("nodes").is_dir()
-        && match read_regular_text(&dir.join(config::FILE)) {
-            Ok(raw) => raw.is_some_and(|raw| config::names_a_corpus(&raw)),
-            Err(error) => matches!(error, Error::NotRegularFile { .. }),
-        }
+    std::fs::symlink_metadata(dir.join("nodes"))
+        .is_ok_and(|metadata| metadata.is_dir() || metadata.file_type().is_symlink())
 }
