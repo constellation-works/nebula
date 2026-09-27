@@ -19,10 +19,15 @@ pub(super) fn body_value(value: Option<String>) -> std::result::Result<String, F
 /// Only that exact spelling reads stdin, as with `--body -`: a dash among
 /// other words is part of the thought. The text is passed on as it came;
 /// the core joins its lines, so a pipe and a paste store the same line.
+/// Arguments and stdin share the same byte limit before any corpus write.
 pub(super) fn capture_text(words: &[String]) -> std::result::Result<String, Failure> {
     match words {
         [dash] if dash == "-" => read_stdin("a capture", ops::CAPTURE_INPUT_LIMIT),
-        _ => Ok(words.join(" ")),
+        _ => Ok(ops::read_bounded(
+            words.join(" ").as_bytes(),
+            "a capture",
+            ops::CAPTURE_INPUT_LIMIT,
+        )?),
     }
 }
 

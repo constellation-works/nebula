@@ -163,6 +163,25 @@ fn review_short_refuses_the_full_reports_since_and_out_and_tag_needs_it() {
         .says("--short");
 }
 
+/// Both clap spellings must reach the same day-threshold validator.
+#[test]
+fn review_since_negative_spellings_have_identical_validation() {
+    let c = Corpus::new();
+    for value in ["-1", "-9223372036854775808"] {
+        let joined = c.run(&["review", &format!("--since={value}")]);
+        let separate = c.run(&["review", "--since", value]);
+        assert_eq!(joined.out.status.code(), Some(2));
+        assert_eq!(separate.out.status.code(), Some(2));
+        assert!(
+            joined
+                .stderr()
+                .contains("must be a whole number, at least 0")
+        );
+        assert_eq!(separate.stderr(), joined.stderr());
+        assert_eq!(separate.stdout(), "");
+    }
+}
+
 /// A negative `--since` would call a seed made today untouched for -1 days
 /// and propose abandoning it. It is a usage error; zero days is a threshold.
 #[test]

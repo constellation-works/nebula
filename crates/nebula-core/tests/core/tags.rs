@@ -130,7 +130,7 @@ fn cite_lowercases_the_kind_and_still_refuses_one_outside_the_vocabulary() {
     );
     assert!(matches!(
         ops::cite(&corpus, &id, &citation("OBSERVATORY", "not-an-id")),
-        Err(Error::InvalidObservatoryId(record)) if record == "NOT-AN-ID"
+        Err(Error::InvalidObservatoryId(record)) if record == "not-an-id"
     ));
     ops::cite(
         &corpus,
