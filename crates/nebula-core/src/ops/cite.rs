@@ -136,9 +136,12 @@ fn attach(corpus: &Corpus, node: &mut Node, args: &Citation, by: Option<String>)
 /// An Observatory record id as it is stored: trimmed and upper-cased, or
 /// [`Error::InvalidObservatoryId`] when it is not one.
 fn observatory_record(raw: &str) -> Result<String> {
-    let record = raw.trim().to_ascii_uppercase();
+    let raw = raw.trim();
+    let record = raw.to_ascii_uppercase();
     if !is_observatory_id(&record) {
-        return Err(Error::InvalidObservatoryId(record));
+        // Only a record id is case-insensitive. Preserve a rejected path
+        // or URI exactly as supplied in the diagnostic.
+        return Err(Error::InvalidObservatoryId(raw.to_string()));
     }
     Ok(record)
 }

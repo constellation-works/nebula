@@ -95,6 +95,40 @@ fn oversized_stdin_capture_is_refused_before_locking() {
     assert_eq!(inbox_lines(&c), before, "nothing was captured");
 }
 
+/// Count UTF-8 bytes and joining spaces, refusing before any lock.
+#[test]
+fn capture_argument_limit_matches_stdin_before_locking() {
+    let c = Corpus::new();
+    c.run(&["capture", "-q", "already waiting"]).assert_ok();
+    let before = inbox_lines(&c);
+    let held = nebula_core::CorpusLock::acquire(&c.root).unwrap();
+    let half = "é".repeat(nebula_core::ops::CAPTURE_INPUT_LIMIT / 4);
+    let over = format!("{half} {half}");
+    let expected = c
+        .run_with_stdin(&["--json", "capture", "-"], &over)
+        .refusal();
+    assert_eq!(expected["code"], "input_too_large");
+    for words in [vec![over.as_str()], vec![half.as_str(), half.as_str()]] {
+        let mut args = vec!["--json", "capture"];
+        args.extend(words);
+        let actual = c.run(&args).refusal();
+        assert_eq!(
+            actual, expected,
+            "arguments and stdin have the same refusal"
+        );
+    }
+    drop(held);
+    assert_eq!(inbox_lines(&c), before, "nothing was captured");
+}
+
+#[test]
+fn capture_argument_at_byte_limit_is_accepted() {
+    let c = Corpus::new();
+    let text = "é".repeat(nebula_core::ops::CAPTURE_INPUT_LIMIT / 2);
+    c.run(&["capture", "-q", &text]).assert_ok();
+    assert!(inbox_lines(&c)[0].ends_with(&text));
+}
+
 /// `--body -` reads at most 1 MiB, refused the same way before any lock.
 #[test]
 fn oversized_stdin_body_is_refused_before_locking() {

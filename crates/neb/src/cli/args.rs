@@ -657,7 +657,7 @@ pub(crate) enum Command {
         /// Override the day thresholds for stale hypotheses (default 30) and
         /// untouched seeds (default 90), in days, at least 0. The inbox's
         /// fourteen-day rule is unaffected.
-        #[arg(long, value_parser = days)]
+        #[arg(long, value_parser = days, allow_negative_numbers = true)]
         since: Option<i64>,
         /// Write the report here instead of stdout.
         #[arg(long)]

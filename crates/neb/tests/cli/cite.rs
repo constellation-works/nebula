@@ -4,6 +4,52 @@
 use crate::harness::{Corpus, write};
 
 #[test]
+fn cite_observatory_refusal_preserves_path_and_uri_case() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    let before = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    for uri in [
+        "/abs/Q1",
+        "../Mixed/q002.md",
+        "https://example.org/Mixed/Q1",
+        "file:///abs/Q1",
+    ] {
+        let refusal = c
+            .run(&[
+                "--json",
+                "cite",
+                &id,
+                "--kind",
+                "observatory",
+                "--uri",
+                uri,
+                "--note",
+                "context",
+            ])
+            .usage_refusal();
+        assert_eq!(refusal["code"], "invalid_observatory_id");
+        assert!(
+            refusal["error"].as_str().unwrap().contains(uri),
+            "{refusal}"
+        );
+        assert_eq!(std::fs::read_to_string(c.node_file(&id)).unwrap(), before);
+    }
+    c.run(&[
+        "cite",
+        &id,
+        "--kind",
+        "observatory",
+        "--uri",
+        "q002",
+        "--note",
+        "context",
+    ])
+    .assert_ok();
+    let raw = std::fs::read_to_string(c.node_file(&id)).unwrap();
+    assert!(raw.contains("  uri: Q002\n"), "{raw}");
+}
+
+#[test]
 fn a_reference_cannot_smuggle_in_a_verdict() {
     let c = Corpus::new();
     let id = c.seed("an idea", "An idea");
