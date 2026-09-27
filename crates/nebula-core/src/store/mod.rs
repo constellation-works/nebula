@@ -38,7 +38,7 @@ mod root;
 mod tests;
 
 pub use commit::{CommitOutcome, Committed};
-pub(crate) use commit::{GITIGNORE_FILE, git, inside_work_tree};
+pub(crate) use commit::{GITIGNORE_FILE, ensure_lock_ignored, git, inside_work_tree};
 pub use history::HistoryEntry;
 pub(crate) use inbox::validate_capture;
 pub use inbox::{Inbox, InboxEntry, Settlement};
@@ -52,7 +52,6 @@ use crate::id::corpus_id;
 use crate::locations::Locations;
 use crate::lock::CorpusLock;
 use crate::model::Doc;
-use commit::ensure_lock_ignored;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 

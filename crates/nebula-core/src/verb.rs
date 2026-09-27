@@ -263,7 +263,7 @@ pub fn migrate(
             ),
         }
     })?;
-    Ok(Written::new(Migrated { root, report }, commit))
+    Ok(Written::new(Migrated { root, report }, commit.flatten()))
 }
 
 // ---------------------------------------------------------------- config --

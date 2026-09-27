@@ -499,3 +499,74 @@ fn migrate_refuses_when_git_cannot_report_status() {
         config
     );
 }
+
+#[test]
+fn migrate_rerun_is_exact_no_op_in_a_dirty_git_tree() {
+    for commit in [false, true] {
+        let c = v1_corpus();
+        if commit {
+            write(
+                &c.root.join("config.yaml"),
+                &format!("{V1_CONFIG}commit: true\n"),
+            );
+        }
+        git_init(&c.root);
+        git(&c.root, &["add", "-A"]);
+        git_commit_at(&c.root, "2020-01-01", "v1 corpus");
+        c.run(&["migrate"]).assert_ok();
+        let immediate = c.run(&["migrate"]).assert_ok();
+        assert_eq!(immediate.stderr(), "already at schema 2; nothing changed\n");
+        assert_eq!(immediate.stdout(), "");
+        // Both staged and unstaged user work must survive a no-op, even
+        // when automatic commits are enabled.
+        let node = c.node_file("wake-retardation");
+        let raw = std::fs::read_to_string(&node).unwrap();
+        write(&node, &format!("{raw}\nA later thought.\n"));
+        git(&c.root, &["add", "nodes"]);
+        write(&c.root.join("untracked.txt"), "unrelated work");
+        let before = snapshot_corpus_files(&c.root);
+        let status = git(&c.root, &["status", "--porcelain"]);
+        let head = git(&c.root, &["rev-parse", "HEAD"]);
+        let run = c.run(&["migrate"]).assert_ok();
+        assert_eq!(run.stderr(), "already at schema 2; nothing changed\n");
+        assert_eq!(run.stdout(), "");
+        assert_eq!(before, snapshot_corpus_files(&c.root));
+        assert_eq!(status, git(&c.root, &["status", "--porcelain"]));
+        assert_eq!(head, git(&c.root, &["rev-parse", "HEAD"]));
+    }
+}
+
+#[test]
+fn migrate_installs_the_init_ignore_rules() {
+    let initialized = Corpus::new();
+    let expected = std::fs::read(initialized.root.join(".gitignore")).unwrap();
+    let c = v1_corpus();
+    git_init(&c.root);
+    git(&c.root, &["add", "-A"]);
+    git_commit_at(&c.root, "2020-01-01", "v1 corpus");
+    c.run(&["migrate"]).assert_ok();
+    assert_eq!(std::fs::read(c.root.join(".gitignore")).unwrap(), expected);
+    assert_eq!(git(&c.root, &["check-ignore", ".lock"]), ".lock\n");
+    assert!(!git(&c.root, &["status", "--porcelain"]).contains(".lock"));
+}
+
+#[test]
+fn migrate_preserves_existing_ignore_entries() {
+    let c = v1_corpus();
+    write(&c.root.join(".gitignore"), "# personal rules\nprivate/");
+    c.run(&["migrate"]).assert_ok();
+    assert_eq!(
+        std::fs::read_to_string(c.root.join(".gitignore")).unwrap(),
+        "# personal rules\nprivate/\n/.lock\n/.pending\n*.tmp\n"
+    );
+}
+
+#[test]
+fn migrate_refuses_an_invalid_ignore_file_before_rewriting_nodes() {
+    let c = v1_corpus();
+    std::fs::create_dir(c.root.join(".gitignore")).unwrap();
+    let before = every_file_but_lock(&c.root);
+    let refused = c.run(&["--json", "migrate"]).refusal();
+    assert_eq!(refused["code"], "not_regular_file", "{refused}");
+    assert_eq!(before, every_file_but_lock(&c.root));
+}
