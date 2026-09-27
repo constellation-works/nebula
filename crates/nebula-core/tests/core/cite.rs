@@ -230,6 +230,59 @@ fn a_handoff_with_no_observatory_root_accepts_the_record_id() {
     );
 }
 
+/// A matching name is not enough to close a node: the Observatory target
+/// must exist. The same missing target is visible to rule 9 on a citation.
+#[cfg(unix)]
+#[test]
+fn a_dangling_observatory_record_refuses_handoff_and_is_reported_by_check() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("observatory");
+    std::fs::create_dir_all(root.join("hypotheses")).unwrap();
+    symlink(
+        "does-not-exist.md",
+        root.join("hypotheses").join("H012-missing.md"),
+    )
+    .unwrap();
+    let locations = nebula_core::Locations {
+        observatory_root: Some(root.as_os_str().to_owned()),
+        ..crate::harness::process_locations()
+    };
+    let corpus = nebula_core::Corpus::init(&locations, &dir.path().join("corpus")).unwrap();
+
+    let id = seed(&corpus, "Unfinished idea", &[]);
+    let path = corpus.node_path(&id).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let refused = ops::handoff(&corpus, &id, &handing("H012"), Some(&root));
+    assert!(
+        matches!(&refused, Err(Error::UnresolvedObservatoryRecord { record, root: at })
+            if record == "H012" && at == &root),
+        "{refused:?}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+
+    ops::cite(
+        &corpus,
+        &id,
+        &Citation {
+            kind: "observatory".into(),
+            uri: Some("H012".into()),
+            note: Some("possible destination".into()),
+            ..Citation::default()
+        },
+    )
+    .unwrap();
+    let docs = corpus.load_all().unwrap();
+    let report = nebula_core::check::run(&Graph::build(&docs).unwrap(), &corpus).unwrap();
+    assert!(
+        report.findings.iter().any(|finding| finding.rule == 9
+            && finding.node.as_deref() == Some(&id)
+            && finding.message.contains("H012")),
+        "{report:?}"
+    );
+}
+
 /// A citation of an Observatory record says where the record is once the
 /// caller asks with a root, as `show` does; other kinds carry no link.
 #[test]

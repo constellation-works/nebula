@@ -54,13 +54,14 @@ fn observatory_dir(letter: char) -> Option<&'static str> {
 /// directory whose name is the id, or the id followed by `-` or `.`, so
 /// `Q002` finds `questions/Q002-is-proper-time-a-count.md` without the
 /// reference having to know the slug. `Ok(None)` when the id has the wrong
-/// shape, the directory is absent, or nothing there starts with it; an
-/// unreadable directory or entry is an I/O error naming the directory.
+/// shape, the directory is absent, or no matching entry is an accessible
+/// record of the expected type. An unreadable directory or target is an I/O
+/// error naming the path. A dangling symlink is not a record.
 ///
-/// Matched by prefix in a listing rather than by resolving a path, and used
-/// as given: nothing is canonicalized. Ties (two records claiming one id)
-/// go to the first in name order, which `check` in Observatory is the place
-/// to catch.
+/// Matched by prefix in a listing, then probed using the same lexical path:
+/// nothing is canonicalized. Ties (two records claiming one id) go to the
+/// first accessible record in name order, which `check` in Observatory is
+/// the place to catch.
 pub(crate) fn resolve_observatory(root: &Path, id: &str) -> Result<Option<PathBuf>> {
     if !is_observatory_id(id) {
         return Ok(None);
@@ -84,7 +85,30 @@ pub(crate) fn resolve_observatory(root: &Path, id: &str) -> Result<Option<PathBu
         })
         .collect();
     names.sort();
-    Ok(names.into_iter().next().map(|name| dir.join(name)))
+    for name in names {
+        let path = dir.join(name);
+        let metadata = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(Error::io_at("inspecting", &path, error)),
+        };
+        // A record's existence and accessibility are part of the integrity
+        // check used by handoff. `metadata` follows symlinks, but cannot by
+        // itself establish that a file or directory can be opened.
+        let accessible = if record_dir == "research" && metadata.is_dir() {
+            std::fs::read_dir(&path).map(|_| ())
+        } else if record_dir != "research" && metadata.is_file() {
+            std::fs::File::open(&path).map(|_| ())
+        } else {
+            continue;
+        };
+        match accessible {
+            Ok(()) => return Ok(Some(path)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(Error::io_at("opening", &path, error)),
+        }
+    }
+    Ok(None)
 }
 
 pub(super) fn check_observatory_reference(
@@ -122,12 +146,21 @@ pub(super) fn check_observatory_reference(
                 format!("reference `{id}` names Observatory record `{record}`, which does not resolve under {}", root.display()),
             ),
             Ok(Some(_)) => {},
-            Err(error) => r.push(
-                Severity::Error,
-                Rule::ObservatoryReference,
-                node,
-                format!("reference `{id}` names Observatory record `{record}`, but could not read its directory: {error}"),
-            ),
+            Err(error) => {
+                let directory_error =
+                    matches!(&error, Error::IoAt { path, .. } if path.parent() == Some(root));
+                let cause = if directory_error {
+                    "could not read its directory"
+                } else {
+                    "could not inspect its record target"
+                };
+                r.push(
+                    Severity::Error,
+                    Rule::ObservatoryReference,
+                    node,
+                    format!("reference `{id}` names Observatory record `{record}`, but {cause}: {error}"),
+                );
+            }
         },
     }
 }
