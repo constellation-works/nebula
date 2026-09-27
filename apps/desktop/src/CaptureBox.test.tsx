@@ -78,7 +78,10 @@ describe("CaptureBox", () => {
   });
 
   it("reports a capture that landed outside a git repository", async () => {
-    mocked.capture.mockResolvedValue(landedWithoutRepository("saved"));
+    let resolveCapture!: (written: Written<InboxEntry>) => void;
+    mocked.capture.mockReturnValue(new Promise((resolve) => {
+      resolveCapture = resolve;
+    }));
     const onCaptured = vi.fn();
     render(<CaptureBox onCaptured={onCaptured} />);
     const input = screen.getByLabelText("Capture");
@@ -86,8 +89,15 @@ describe("CaptureBox", () => {
     fireEvent.change(input, { target: { value: "saved" } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    const status = await screen.findByRole("status");
-    expect(status).toHaveTextContent("captured (not committed: not a git repository)");
+    expect(screen.getByRole("status")).toHaveTextContent("saving…");
+    expect(input).toHaveValue("saved");
+    expect(onCaptured).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveCapture(landedWithoutRepository("saved"));
+    });
+
+    const status = await screen.findByText("captured (not committed: not a git repository)");
     expect(status).toHaveClass("capture__status--warning");
     expect(input).toHaveValue("");
     expect(onCaptured).toHaveBeenCalledTimes(1);
