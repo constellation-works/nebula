@@ -1,0 +1,9 @@
+{
+  "argv": [
+    "show",
+    "first-idea"
+  ],
+  "exit_code": 0,
+  "stdout": "seed       first-idea\nFirst idea\ncreated: <TODAY>  updated: <TODAY>\n\nA stable body\n\nreferences\n  r1 discussion\n     First line\n     Second line\n     \n     Fourth line\n\n",
+  "stderr": ""
+}
