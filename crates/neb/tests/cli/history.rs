@@ -2,10 +2,12 @@
 //! work tree or over a broken repository.
 
 use crate::harness::{
-    Corpus, break_head, corpus_repo, git, git_command, git_commit_at, git_init, output,
+    Corpus, break_head, corpus_repo, git, git_command, git_commit_at, git_init, output, write,
 };
 use crate::support;
 use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 
 /// Commit everything with `stamp`, a full ISO 8601 date and time with its
 /// offset, as both author and committer date.
@@ -23,6 +25,140 @@ pub(super) fn git_commit_stamped(dir: &Path, stamp: &str, message: &str) {
         dir.display(),
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+fn git_commit_with_empty_subject(dir: &Path, stamp: &str) {
+    git(dir, &["add", "-A"]);
+    let out = output(
+        git_command(dir, support::home())
+            .args(["commit", "-q", "--allow-empty-message", "-m", ""])
+            .env("GIT_AUTHOR_DATE", stamp)
+            .env("GIT_COMMITTER_DATE", stamp),
+    );
+    assert!(
+        out.status.success(),
+        "git commit failed in {}:\n{}",
+        dir.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn log_json_preserves_a_single_empty_subject() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "An empty commit subject", "--id", "empty-subject"])
+        .assert_ok()
+        .stdout_trim();
+    git_init(&c.root);
+    git_commit_with_empty_subject(&c.root, "2020-01-01T12:00:00Z");
+    let hash = git(&c.root, &["rev-parse", "HEAD"]).trim().to_string();
+
+    let json = c.run(&["--json", "log", &id]).assert_ok().stdout();
+    let entries: Vec<serde_json::Value> = serde_json::from_str(&json).expect("log --json");
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0]["hash"], hash);
+    assert_eq!(entries[0]["date"], "2020-01-01");
+    assert_eq!(entries[0]["message"], "");
+}
+
+#[test]
+fn log_json_keeps_mixed_subjects_ordered_and_aligned() {
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "Mixed commit subjects", "--id", "mixed-subjects"])
+        .assert_ok()
+        .stdout_trim();
+    git_init(&c.root);
+
+    git_commit_stamped(&c.root, "2020-01-01T12:00:00Z", "oldest nonempty subject");
+    let oldest = git(&c.root, &["rev-parse", "HEAD"]).trim().to_string();
+
+    c.run(&["sharpen", &id, "--kill", "the middle commit has no subject"])
+        .assert_ok();
+    git_commit_with_empty_subject(&c.root, "2020-01-02T12:00:00Z");
+    let empty = git(&c.root, &["rev-parse", "HEAD"]).trim().to_string();
+
+    c.run(&["note", &id, "a newer committed note"]).assert_ok();
+    git_commit_stamped(&c.root, "2020-01-03T12:00:00Z", "newest nonempty subject");
+    let newest = git(&c.root, &["rev-parse", "HEAD"]).trim().to_string();
+
+    let json = c.run(&["--json", "log", &id]).assert_ok().stdout();
+    let entries: Vec<serde_json::Value> = serde_json::from_str(&json).expect("log --json");
+    assert_eq!(entries.len(), 3, "{entries:?}");
+    for (entry, (hash, date, message)) in entries.iter().zip([
+        (&newest, "2020-01-03", "newest nonempty subject"),
+        (&empty, "2020-01-02", ""),
+        (&oldest, "2020-01-01", "oldest nonempty subject"),
+    ]) {
+        assert_eq!(entry["hash"], hash.as_str());
+        assert_eq!(entry["date"], date);
+        assert_eq!(entry["message"], message);
+    }
+}
+
+#[cfg(unix)]
+fn real_git() -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::env::split_paths(&std::env::var_os("PATH").expect("PATH is set"))
+        .map(|dir| dir.join("git"))
+        .find(|git| {
+            std::fs::metadata(git)
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        })
+        .expect("git is on PATH")
+}
+
+/// A malformed `git log` record is surfaced with its distinct typed code.
+#[cfg(unix)]
+#[test]
+fn log_reports_malformed_history_as_a_typed_error() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let c = Corpus::new();
+    let id = c
+        .run(&["new", "Malformed history", "--id", "malformed-history"])
+        .assert_ok()
+        .stdout_trim();
+    git_init(&c.root);
+    git_commit_at(&c.root, "2020-01-01", "initial commit");
+
+    let shims = c.workdir().join("shims");
+    std::fs::create_dir(&shims).expect("shim directory");
+    let shim = shims.join("git");
+    write(
+        &shim,
+        &format!(
+            "#!/bin/sh\n\
+             real='{real}'\n\
+             for arg do\n\
+             if [ \"$arg\" = log ]; then\n\
+             printf 'hash\\000date\\000subject\\000extra\\000'\n\
+             exit 0\n\
+             fi\n\
+             done\n\
+             exec \"$real\" \"$@\"\n",
+            real = real_git().display()
+        ),
+    );
+    let mut permissions = std::fs::metadata(&shim)
+        .expect("shim metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&shim, permissions).expect("executable shim");
+    let path = std::env::join_paths(
+        std::iter::once(shims).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .expect("shim PATH");
+
+    let refused = c
+        .run_with_env(
+            &["--json", "log", &id],
+            &[("PATH", path.to_str().expect("PATH is UTF-8"))],
+        )
+        .refusal();
+    assert_eq!(refused["code"], "malformed_history", "{refused}");
 }
 
 #[test]
