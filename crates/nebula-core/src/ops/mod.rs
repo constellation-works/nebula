@@ -57,7 +57,7 @@ mod settings;
 mod status;
 
 pub use body::{body_unchanged, note, refuse_rewritten_notes, set_body, set_body_if};
-pub(crate) use capture::capture;
+pub(crate) use capture::{capture, init_with_effect};
 pub use capture::{
     capture_locked, capture_near, drop, init, init_target, promote, promote_with, promotion_near,
     suggest,

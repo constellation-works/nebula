@@ -29,7 +29,7 @@
 //!
 //! A failure other than a closed pipe latches too, for the same reason, and
 //! [`finish`] hands it back so `main` refuses with it once the verb is done.
-//! Record writes use [`finish_written`] after rendering and reporting the
+//! Write handlers use [`finish_written`] after rendering and reporting any
 //! commit, so a failed report names the write that already landed.
 //! Writes to stderr are best effort: when stderr is gone there is nowhere to
 //! say so, and a warning must never cost the command.

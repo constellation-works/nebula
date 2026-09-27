@@ -193,7 +193,7 @@ pub(crate) fn ignore_rules() -> [String; 3] {
 /// below the root that follows a symlink, and it follows it only to a regular
 /// file: a FIFO or a device at `.gitignore`, or at the end of its link, is
 /// [`Error::NotRegularFile`] rather than read.
-pub(crate) fn ensure_lock_ignored(root: &Path) -> Result<()> {
+pub(crate) fn ensure_lock_ignored(root: &Path) -> Result<bool> {
     let path = root.join(GITIGNORE_FILE);
     let is_symlink = match std::fs::symlink_metadata(&path) {
         Ok(metadata) => metadata.file_type().is_symlink(),
@@ -202,10 +202,11 @@ pub(crate) fn ensure_lock_ignored(root: &Path) -> Result<()> {
     };
     let original = read_regular_bytes(&path, Links::Follow)?.unwrap_or_default();
     let contents = with_runtime_ignores(original.clone());
-    if contents != original || is_symlink {
+    let changed = contents != original || is_symlink;
+    if changed {
         write_private_atomic(&path, contents)?;
     }
-    Ok(())
+    Ok(changed)
 }
 
 /// The exact bytes installed by `ensure_lock_ignored`, also used to prove

@@ -48,6 +48,19 @@ pub(in crate::cli) fn init(
     for warning in &done.warnings {
         warn_root(locations, warning, target);
     }
+    let mut writes = Vec::new();
+    if done.wrote_corpus {
+        writes.push(format!("corpus initialization at {}", target.display()));
+    }
+    if set_root {
+        writes.push(format!(
+            "machine root setting at {}",
+            done.setting.display()
+        ));
+    }
+    if !writes.is_empty() {
+        output::finish_written(writes.join("; "))?;
+    }
     Ok(ok)
 }
 
@@ -96,6 +109,9 @@ pub(in crate::cli) fn migrate(cx: Invocation<'_>) -> Outcome {
     }
     notify(json, Some(render::migration_notice(report)));
     report_commit(&done.value.root, commits, done.commit)?;
+    if report.config_rewritten || !report.rewritten.is_empty() {
+        output::finish_written(format!("migration at {}", done.value.root.display()))?;
+    }
     Ok(ok)
 }
 
@@ -132,6 +148,26 @@ pub(in crate::cli) fn config_observatory_root(
         notify(json, Some(render::dropped_legacy(dropped, &config)));
     }
     report_commit(corpus.root(), commits, done.commit)?;
+    let mut writes = Vec::new();
+    if dir.is_some() {
+        let setting = Corpus::machine_settings_dir(locations)?.join("observatory-root");
+        writes.push(format!("observatory root setting at {}", setting.display()));
+    }
+    if done
+        .value
+        .dropped
+        .as_ref()
+        .is_some_and(|d| d.removed.is_some())
+    {
+        let config = corpus.root().join("config.yaml");
+        writes.push(format!(
+            "legacy observatory root removal at {}",
+            config.display()
+        ));
+    }
+    if !writes.is_empty() {
+        output::finish_written(writes.join("; "))?;
+    }
     Ok(ok)
 }
 
@@ -145,6 +181,7 @@ pub(in crate::cli) fn config_commit(cx: Invocation<'_>, state: Option<OnOff>) ->
     } = cx;
     let ok = ExitCode::SUCCESS;
     let mut corpus = Corpus::open(locations, root)?;
+    let writes = state.is_some();
     // Reading the setting is a read, so it takes no lock.
     let (setting, commit) = match state {
         Some(state) => {
@@ -162,6 +199,12 @@ pub(in crate::cli) fn config_commit(cx: Invocation<'_>, state: Option<OnOff>) ->
     // Turning it on records itself; turning it off leaves the file
     // for the next commit you make by hand, because off means off.
     report_commit(corpus.root(), commits, commit)?;
+    if writes {
+        output::finish_written(format!(
+            "commit setting at {}",
+            corpus.root().join("config.yaml").display()
+        ))?;
+    }
     Ok(ok)
 }
 

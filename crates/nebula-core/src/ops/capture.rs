@@ -59,6 +59,17 @@ pub fn init(
     set_root: bool,
     force: bool,
 ) -> Result<Initialized> {
+    init_with_effect(locations, root, path, set_root, force).map(|(initialized, _)| initialized)
+}
+
+/// Initialize and report whether corpus content was installed or repaired.
+pub(crate) fn init_with_effect(
+    locations: &Locations,
+    root: Option<PathBuf>,
+    path: Option<PathBuf>,
+    set_root: bool,
+    force: bool,
+) -> Result<(Initialized, bool)> {
     locations.write_gate(crate::locations::WriteIntent::Ordinary)?;
     let target = init_target(locations, root, path)?;
     let _settings = set_root
@@ -71,11 +82,11 @@ pub fn init(
     // be taken. `Corpus::init` would create it a moment later anyway.
     create_private_dir_all(&target)?;
     let _lock = CorpusLock::acquire(&target)?;
-    Corpus::init(locations, &target)?;
+    let (_, changed) = Corpus::init_with_effect(locations, &target)?;
     if set_root {
         Corpus::write_root_config(locations, &target, force)?;
     }
-    Ok(Initialized { root: target })
+    Ok((Initialized { root: target }, changed))
 }
 
 pub(crate) use capture_locked as capture;

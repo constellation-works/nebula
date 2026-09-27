@@ -211,6 +211,12 @@ impl Corpus {
     /// no two initializers write `config.yaml` at once and every path that
     /// creates one holds the lock (STD-03 §R6).
     pub fn init(locations: &Locations, root: &Path) -> Result<Self> {
+        Self::init_with_effect(locations, root).map(|(corpus, _)| corpus)
+    }
+
+    /// Initialize and say whether this call installed corpus content. A
+    /// repeated init with every file already present is a true no-op.
+    pub(crate) fn init_with_effect(locations: &Locations, root: &Path) -> Result<(Self, bool)> {
         locations.write_gate(crate::locations::WriteIntent::Ordinary)?;
         refuse_nodes_symlink(root)?;
         // Decided before anything is created, not even the lock file, so a
@@ -224,7 +230,9 @@ impl Corpus {
         // Decided again under the lock: another initializer may have written
         // the config in between, and its identity is the one to keep.
         let config = Self::config_to_keep(root)?;
+        let mut changed = config.is_none();
         for dir in [root.join("nodes"), root.join("inbox")] {
+            changed |= !dir.is_dir();
             create_private_dir_all(&dir)?;
         }
         let config = if let Some(config) = config {
@@ -235,12 +243,15 @@ impl Corpus {
             config
         };
         // The one setup repair re-running init makes on an existing corpus.
-        ensure_lock_ignored(root)?;
-        Ok(Self {
-            root: root.to_path_buf(),
-            config,
-            locations: locations.clone(),
-        })
+        changed |= ensure_lock_ignored(root)?;
+        Ok((
+            Self {
+                root: root.to_path_buf(),
+                config,
+                locations: locations.clone(),
+            },
+            changed,
+        ))
     }
 
     /// Open the corpus, creating it when there is none, and say whether this
