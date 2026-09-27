@@ -110,3 +110,164 @@ fn an_unreadable_settings_file_keeps_the_default_shortcut_and_reports_it() {
     assert!(warn.contains(&settings_file.display().to_string()));
     assert!(warn.contains(DEFAULT_CAPTURE_SHORTCUT));
 }
+
+#[path = "../../../../../crates/nebula-core/tests/support/mod.rs"]
+mod support;
+
+#[cfg(unix)]
+fn aliased_lock_is_refused(hard_link: bool, first_launch: bool) {
+    use std::os::unix::fs::{MetadataExt, symlink};
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("config");
+    std::fs::create_dir(&dir).unwrap();
+    let sentinel = root.path().join("sentinel");
+    std::fs::write(&sentinel, "KEEP ME").unwrap();
+    let lock = dir.join("settings.lock");
+    if hard_link {
+        std::fs::hard_link(&sentinel, &lock).unwrap();
+    } else {
+        symlink(&sentinel, &lock).unwrap();
+    }
+    let inode = std::fs::symlink_metadata(&lock).unwrap().ino();
+    let error = if first_launch {
+        let (settings, warning) = load(&dir);
+        assert_eq!(settings, Settings::default());
+        warning
+    } else {
+        save(&dir, &Settings::default())
+            .err()
+            .map(|e| e.to_string())
+    };
+    assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "KEEP ME");
+    let error = error.expect("an aliased settings lock must be refused");
+    assert!(error.contains(&lock.display().to_string()), "{error}");
+    assert!(!dir.join(FILE_NAME).exists());
+    assert_eq!(std::fs::symlink_metadata(&lock).unwrap().ino(), inode);
+}
+
+#[cfg(unix)]
+#[test]
+fn save_refuses_symlinked_lock() {
+    aliased_lock_is_refused(false, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn first_launch_refuses_symlinked_lock() {
+    aliased_lock_is_refused(false, true);
+}
+
+#[cfg(unix)]
+#[test]
+fn save_refuses_hardlinked_lock() {
+    aliased_lock_is_refused(true, false);
+}
+
+#[cfg(unix)]
+#[test]
+fn first_launch_refuses_hardlinked_lock() {
+    aliased_lock_is_refused(true, true);
+}
+
+#[cfg(unix)]
+#[test]
+fn non_regular_locks_are_refused_promptly() {
+    for kind in ["directory", "fifo"] {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = dir.path().join("settings.lock");
+        match kind {
+            "directory" => {
+                std::fs::create_dir(&lock).unwrap();
+            }
+            "fifo" => {
+                let output = support::output(
+                    support::command("mkfifo", support::home()).arg(&lock),
+                    support::DEADLINE,
+                )
+                .unwrap();
+                assert!(output.status.success());
+            }
+            _ => unreachable!(),
+        }
+        let start = Instant::now();
+        let error = save(dir.path(), &Settings::default()).unwrap_err();
+        assert!(error.to_string().contains(&lock.display().to_string()));
+        let (_, warning) = load(dir.path());
+        assert!(warning.unwrap().contains(&lock.display().to_string()));
+        assert!(start.elapsed() < Duration::from_secs(2), "{kind}");
+        assert!(!dir.path().join(FILE_NAME).exists());
+    }
+}
+
+/// Explicit test substitute, before libtest: hold a real settings lock until
+/// the parent closes stdin. No production self-reexec path is involved.
+#[ctor::ctor]
+unsafe fn settings_lock_holder_child() {
+    let Some(dir) = std::env::var_os("NEBULA_TEST_SETTINGS_LOCK") else {
+        return;
+    };
+    let dir = Path::new(&dir);
+    save(dir, &Settings::default()).unwrap();
+    let file = private_open_options()
+        .read(true)
+        .write(true)
+        .open(dir.join("settings.lock"))
+        .unwrap();
+    FileExt::try_lock(&file).unwrap();
+    write_private_atomic(&dir.join("ready"), b"held").unwrap();
+    // A bounded channel makes stdin closure observable with a deadline even
+    // if a broken parent never closes it. Process exit closes the descriptor.
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let result = std::io::stdin().read(&mut [0]);
+        let _ = send.send(result);
+    });
+    let result = receive.recv_timeout(Duration::from_secs(30));
+    drop(file);
+    std::process::exit(i32::from(!matches!(result, Ok(Ok(0)))));
+}
+
+#[test]
+fn settings_lock_excludes_another_process_and_recovers_after_release() {
+    use std::process::Stdio;
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = support::ChildGuard::spawn(
+        support::command(std::env::current_exe().unwrap(), support::home())
+            .env("NEBULA_TEST_SETTINGS_LOCK", dir.path())
+            .stdin(Stdio::piped()),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !dir.path().join("ready").exists() {
+        assert!(child.try_wait().is_none(), "holder exited before readiness");
+        assert!(Instant::now() < deadline, "holder never became ready");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let lock = dir.path().join("settings.lock");
+    let holder = std::fs::read(&lock).unwrap();
+    let prior = std::fs::read(dir.path().join(FILE_NAME)).unwrap();
+    let changed = Settings {
+        capture_shortcut: "CmdOrCtrl+Shift+N".into(),
+    };
+    let error = save(dir.path(), &changed).unwrap_err();
+    assert!(matches!(error, SettingsError::Busy { .. }), "{error}");
+    assert!(
+        error.to_string().contains(&child.id().to_string()),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&lock).unwrap(), holder);
+    assert_eq!(std::fs::read(dir.path().join(FILE_NAME)).unwrap(), prior);
+    drop(child.take_stdin());
+    assert!(child.wait(Duration::from_secs(10)).unwrap().success());
+    save(dir.path(), &changed).unwrap();
+    assert_eq!(load(dir.path()), (changed, None));
+}
+
+#[test]
+fn settings_test_children_use_the_isolating_builder() {
+    let strays = support::commands_outside(include_str!("settings.rs"), &[]);
+    assert!(
+        strays.is_empty(),
+        "settings tests must contain every child: {strays:?}"
+    );
+}

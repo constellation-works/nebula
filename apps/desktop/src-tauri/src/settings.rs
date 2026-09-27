@@ -9,7 +9,9 @@
 
 use crate::fail_open;
 use fs4::{FileExt, TryLockError};
-use nebula_core::fs::{create_private_dir_all, private_open_options, write_private_atomic};
+use nebula_core::fs::{
+    create_private_dir_all, open_private_lock, validate_private_lock, write_private_atomic,
+};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, SeekFrom, Write};
 #[cfg(unix)]
@@ -26,7 +28,7 @@ pub(crate) const FILE_NAME: &str = "settings.json";
 /// Why the settings file could not be written.
 #[derive(Debug, thiserror::Error)]
 pub enum SettingsError {
-    /// nebula-core's durable write or directory helper failed; its error
+    /// nebula-core's filesystem helper failed; its error
     /// already names the action and the path.
     #[error(transparent)]
     Write(#[from] nebula_core::Error),
@@ -160,13 +162,7 @@ fn with_lock<T>(
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
         .map_err(io("restrict", dir))?;
     let lock_path = dir.join("settings.lock");
-    let mut file = private_open_options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-        .map_err(io("open", &lock_path))?;
+    let mut file = open_private_lock(&lock_path)?;
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match FileExt::try_lock(&file) {
@@ -191,6 +187,8 @@ fn with_lock<T>(
             Err(TryLockError::Error(e)) => return Err(io("lock", &lock_path)(e)),
         }
     }
+    // Recheck the descriptor after waiting, before mutating holder bytes.
+    validate_private_lock(&file, &lock_path)?;
     file.set_len(0)
         .and_then(|()| file.seek(SeekFrom::Start(0)).map(drop))
         .map_err(io("reset", &lock_path))?;

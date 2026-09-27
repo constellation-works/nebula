@@ -298,6 +298,65 @@ pub(crate) fn open_regular(
     Ok(file)
 }
 
+/// Open or create a private, regular, singly linked advisory-lock file.
+///
+/// Does not acquire the advisory lock or change existing contents. The guarded
+/// open refuses symlinks and special files before any blocking I/O. Call
+/// [`validate_private_lock`] again after acquiring the lock and before changing
+/// its holder record, since waiting may have allowed another link to appear.
+pub fn open_private_lock(path: &Path) -> Result<File> {
+    let file = open_regular(
+        path,
+        private_open_options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false),
+        Links::Refuse,
+        "opening lock",
+    )?;
+    validate_private_lock(&file, path)?;
+    Ok(file)
+}
+
+/// Refuse to mutate an advisory-lock descriptor with an unsafe file type or
+/// link count. `path` labels errors; all checks use the already open descriptor.
+///
+/// This detects existing aliases, not a hostile same-user process racing a
+/// new hard link between this check and the write. No lock inode is replaced
+/// or unlinked: doing so could split contenders across different inodes.
+/// Platforms without a verifiable link count fail closed.
+pub fn validate_private_lock(file: &File, path: &Path) -> Result<()> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| Error::io_at("inspecting lock", path, error))?;
+    require_regular(path, metadata.file_type())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.nlink() != 1 {
+            return Err(Error::io_at(
+                "validating lock",
+                path,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "lock must have exactly one hard link; preserve its contents and remove extra aliases before retrying",
+                ),
+            ));
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    Err(Error::io_at(
+        "validating lock",
+        path,
+        std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "cannot verify the lock file's hard-link count on this platform",
+        ),
+    ))
+}
+
 /// The regular file at `path`, opened to read, or `None` when there is none.
 fn open_to_read(path: &Path, links: Links) -> Result<Option<File>> {
     match open_regular(path, OpenOptions::new().read(true), links, "reading") {
