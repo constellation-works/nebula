@@ -49,6 +49,31 @@ afterEach(() => {
 });
 
 describe("CaptureBox", () => {
+  it("keeps composing Enter in the draft and captures the final text once", async () => {
+    mocked.capture.mockResolvedValue(landedWithoutRepository("日本語"));
+    render(<CaptureBox />);
+    const input = screen.getByLabelText("Capture");
+
+    fireEvent.change(input, { target: { value: "にほんご" } });
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true, keyCode: 13 });
+    expect(mocked.capture).not.toHaveBeenCalled();
+    expect(input).toHaveValue("にほんご");
+
+    // WebKit can dispatch compositionend before the Enter keydown. In that
+    // ordering isComposing is false, and keyCode 229 identifies the IME key.
+    fireEvent.compositionEnd(input, { data: "日本語" });
+    fireEvent.change(input, { target: { value: "日本語" } });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: false, keyCode: 229 });
+    expect(mocked.capture).not.toHaveBeenCalled();
+    expect(input).toHaveValue("日本語");
+
+    fireEvent.keyDown(input, { key: "Enter", isComposing: false, keyCode: 13 });
+    await waitFor(() => expect(mocked.capture).toHaveBeenCalledTimes(1));
+    expect(mocked.capture).toHaveBeenCalledWith("日本語");
+    expect(input).toHaveValue("");
+  });
+
   it("clears the box and warns when the capture landed but was not committed", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     mocked.capture.mockResolvedValue(landedUncommitted("landed once"));
@@ -124,6 +149,22 @@ describe("CaptureBox", () => {
 });
 
 describe("CaptureWindow", () => {
+  it("keeps the window open when Escape cancels IME composition", () => {
+    render(<CaptureWindow />);
+    const input = screen.getByLabelText("Capture");
+
+    fireEvent.change(input, { target: { value: "draft" } });
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: "Escape", isComposing: true, keyCode: 27 });
+    expect(windowMock.hide).not.toHaveBeenCalled();
+    expect(input).toHaveValue("draft");
+
+    fireEvent.compositionEnd(input, { data: "" });
+    fireEvent.keyDown(input, { key: "Escape", isComposing: false, keyCode: 27 });
+    expect(windowMock.hide).toHaveBeenCalledTimes(1);
+    expect(input).toHaveValue("draft");
+  });
+
   it("stays up while a capture's commit warning shows, and Escape dismisses it", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     mocked.capture.mockResolvedValue(landedUncommitted("saved"));

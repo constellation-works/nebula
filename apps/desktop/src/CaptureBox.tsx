@@ -117,6 +117,10 @@ export function CaptureBox({ ref, autoFocus, placeholder, onCaptured, onEscape, 
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if ((e.key === "Enter" || e.key === "Escape") && (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229)) {
+      return;
+    }
+
     if (e.key === "Enter") {
       e.preventDefault();
       void submit();
