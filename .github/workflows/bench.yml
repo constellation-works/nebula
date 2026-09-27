@@ -1,0 +1,130 @@
+name: speed trend
+# Weekly: is `neb` slower than agent-main was seven days ago? Both binaries
+# are built in one job and timed interleaved on one generated corpus, so the
+# comparison shares a machine and a cache, and no baseline is stored in the
+# repository. A failed scheduled run is picked up by the ci-failure sweep,
+# which files a task naming the failed step.
+on:
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+# Pinned as in ci.yml (STD-05 §R23): actions by full commit SHA with the tag
+# in the comment, the toolchain by the version rust-toolchain.toml names.
+defaults:
+  run:
+    # `bash` named outright runs with `-o pipefail`, so a failure piped into
+    # `tee` still fails its step.
+    shell: bash
+jobs:
+  compare:
+    name: speed trend (fails when a command is >25% and >50 ms slower than 7 days ago)
+    runs-on: ubuntu-latest
+    # A wall clock on the job (STD-03 §R22): two release builds, a corpus and
+    # the timings take about a quarter of this.
+    timeout-minutes: 60
+    steps:
+      - name: name the working paths
+        run: |
+          {
+            echo "CORPUS=$RUNNER_TEMP/corpus"
+            echo "BASE_TREE=$RUNNER_TEMP/base"
+            echo "RESULTS=$RUNNER_TEMP/bench"
+          } >>"$GITHUB_ENV"
+      # The whole history, to find agent-main as it stood seven days ago.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
+        with: { toolchain: "1.98.1" }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: shellcheck scripts/bench.sh
+        run: shellcheck scripts/bench.sh
+      - name: find the agent-main commit from 7 days ago
+        id: base
+        run: |
+          since=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          sha=$(git rev-list -1 --before="$since" origin/agent-main)
+          if [[ -z "$sha" ]]; then
+            echo "::error::no agent-main commit before $since to compare with"
+            exit 1
+          fi
+          echo "sha=$sha" >>"$GITHUB_OUTPUT"
+          echo "head: $(git rev-parse HEAD)"
+          echo "base: $sha (agent-main as of $since)"
+      - name: build neb and the corpus generator at HEAD
+        run: |
+          cargo build --locked --release -p neb
+          cargo build --locked --release -p nebula-core --example synthetic_corpus
+      # Its own worktree and target directory, and whatever toolchain its own
+      # rust-toolchain.toml names.
+      - name: build neb at the 7-day-old agent-main commit
+        env:
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          git worktree add --detach "$BASE_TREE" "$BASE_SHA"
+          cd "$BASE_TREE"
+          cargo build --locked --release -p neb
+      - name: generate a 5,000-node corpus, twice, and require identical bytes
+        run: |
+          target/release/examples/synthetic_corpus --out "$CORPUS" --seed 1 --nodes 5000
+          target/release/examples/synthetic_corpus --out "$CORPUS-again" --seed 1 --nodes 5000
+          diff -r "$CORPUS" "$CORPUS-again"
+          cat "$CORPUS/synthetic.json"
+      - name: neb check reports nothing on the corpus
+        run: |
+          mkdir -p "$RESULTS"
+          cp "$CORPUS/synthetic.json" "$RESULTS/corpus.json"
+          target/release/neb --root "$CORPUS" check
+      # A corpus from HEAD's generator carries HEAD's schema. When the schema
+      # grew this week, the old binary refuses it, and there is nothing to
+      # compare: that is a warning on the run, not a speed regression, and
+      # HEAD is still timed so the week has a result.
+      - name: the 7-day-old neb reads the corpus (else warn and time HEAD alone)
+        id: comparable
+        env:
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          if "$BASE_TREE/target/release/neb" --root "$CORPUS" check >"$RESULTS/base-check.txt" 2>&1; then
+            echo "ok=true" >>"$GITHUB_OUTPUT"
+          else
+            cat "$RESULTS/base-check.txt"
+            echo "::warning title=speed trend not compared::neb at agent-main $BASE_SHA cannot read a corpus from HEAD's generator (the schema changed since); HEAD is timed alone"
+            echo "ok=false" >>"$GITHUB_OUTPUT"
+          fi
+      - name: time both binaries, interleaved
+        if: ${{ steps.comparable.outputs.ok == 'true' }}
+        timeout-minutes: 20
+        run: |
+          scripts/bench.sh --runs 7 --pair "$BASE_TREE/target/release/neb" target/release/neb \
+            "$CORPUS" "$RESULTS/base.json" "$RESULTS/head.json"
+          echo "base:"; cat "$RESULTS/base.json"
+          echo "head:"; cat "$RESULTS/head.json"
+      - name: time HEAD alone
+        if: ${{ steps.comparable.outputs.ok == 'false' }}
+        timeout-minutes: 20
+        run: |
+          scripts/bench.sh --runs 7 target/release/neb "$CORPUS" >"$RESULTS/head.json"
+          cat "$RESULTS/head.json"
+      - name: upload the results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: speed-trend
+          path: ${{ runner.temp }}/bench
+          if-no-files-found: warn
+      - name: fail when any command is >25% and >50 ms slower at HEAD than 7 days ago
+        if: ${{ steps.comparable.outputs.ok == 'true' }}
+        run: |
+          status=0
+          scripts/bench.sh --compare "$RESULTS/base.json" "$RESULTS/head.json" \
+            >"$RESULTS/compare.txt" 2>&1 || status=$?
+          cat "$RESULTS/compare.txt"
+          {
+            echo '```'
+            cat "$RESULTS/compare.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+          exit "$status"
