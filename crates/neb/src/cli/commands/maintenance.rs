@@ -56,7 +56,7 @@ pub(in crate::cli) fn review(
             &omitted,
         )
     };
-    write_report(out.as_deref(), &text)?;
+    write_report(locations, corpus.root(), out.as_deref(), &text)?;
     notify(json, render::review_notice(&omitted));
     Ok(ok)
 }

@@ -227,6 +227,17 @@ Every file `neb` writes is created `0600` and every directory it creates
 thinking. A directory that already existed, such as a corpus root you made
 yourself, keeps the mode you gave it.
 
+`neb review --out <FILE>` writes only outside the resolved corpus root,
+including when the corpus or destination parent is reached through a symlink
+or `..`. An inside destination is refused as `report_in_corpus` (exit 1),
+without changing the corpus. The parent directory must already exist. Reports
+are written atomically (temporary sibling, fsync, rename, directory fsync) with
+mode `0600`; a final symlink is refused, never followed.
+`NEBULA_READ_ONLY=1` refuses every `review --out` destination as `read_only`
+(exit 1), including external files. Plain `neb review` and `neb review --json`
+remain available on stdout. These path and environment checks prevent accidents;
+they are not isolation from another process running as the same OS user.
+
 Work and personal ideas belong in separate corpora, each with its own
 `NEBULA_ROOT`; topics inside one owner's thinking are tags, not separate
 corpora.

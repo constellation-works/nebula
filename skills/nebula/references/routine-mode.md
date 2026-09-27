@@ -6,11 +6,13 @@ you are not sure. The rule is absolute: **read the corpus, then propose; never
 mutate the corpus.**
 
 Set `NEBULA_READ_ONLY=1` for the routine. The core enforces the rule with
-`read_only` on every write, and rejects invalid values of that variable.
+`read_only` on every write, including `review --out` to an external file,
+and rejects invalid values of that variable.
 
 Allowed read-only corpus commands: `check`, `inbox`, `show`, `log`, `list`,
 `near`, `trace`, `impact`, `graph`, `open`, `review` (with or without
-`--short`), and `tag list`. Do not use corpus-mutating commands, including
+`--short`, but without `--out`), and `tag list`. Do not use corpus-mutating
+commands, including
 `capture`, `promote`, `drop`, `new`, `edit`, `sharpen`, `status`, `link`,
 `tag`, `note`, `cite`, `migrate`, `config`, or `init`. `completions` only
 generates shell scripts and is not part of a routine corpus review.
@@ -27,8 +29,11 @@ Proposals go in `nebula-review.md`, attached to the current Orbit task with
 then attach it; this run scratch directory is outside the corpus. Without an
 Orbit task, write proposals to `$HOME/.local/state/nebula/nebula-review.md`
 (create its parent directory first, and overwrite it each run). `neb review
---out` writes the diagnostic report, not the proposals; if used, give it a
-path outside the corpus. Never put proposals or reports under the corpus root.
+--out` writes the diagnostic report, not the proposals, and is refused while
+`NEBULA_READ_ONLY=1`; routines use stdout review. Outside routine mode, `--out`
+requires an external destination (physical paths inside the corpus are refused,
+including symlink and `..` aliases). It atomically writes mode `0600` and never
+follows a final symlink. Never put proposals or reports under the corpus root.
 A human or session-mode agent reads the proposal and runs only the lines they
 agree with.
 

@@ -38,6 +38,25 @@ impl EditorError {
     }
 }
 
+/// A report destination that would mutate the corpus being reviewed.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ReportError {
+    #[error("report destination {} resolves inside corpus {}; choose a file outside the corpus", path.display(), root.display())]
+    InCorpus {
+        path: std::path::PathBuf,
+        root: std::path::PathBuf,
+    },
+}
+
+impl From<ReportError> for Failure {
+    fn from(e: ReportError) -> Self {
+        let code = match &e {
+            ReportError::InCorpus { .. } => "report_in_corpus",
+        };
+        Self::of(code, e.to_string())
+    }
+}
+
 impl From<Error> for Failure {
     fn from(e: Error) -> Self {
         Self(render::refusal(&e))

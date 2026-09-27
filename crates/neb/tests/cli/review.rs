@@ -435,3 +435,143 @@ fn report_out_write_failure_names_the_path() {
     );
     assert!(!out_path.exists());
 }
+
+/// The real entry point must never turn a diagnostic report into corpus data.
+#[test]
+fn review_out_refuses_corpus_targets_without_writing() {
+    let c = Corpus::new();
+    let id = c.seed("keep this idea", "Keep this idea");
+    let node = c.node_file(&id);
+    let config = c.root.join("config.yaml");
+    let before_node = std::fs::read(&node).unwrap();
+    let before_config = std::fs::read(&config).unwrap();
+    for target in [
+        node.clone(),
+        config.clone(),
+        c.root.join("nodes/review.md"),
+        c.root.join("nodes/../review.md"),
+        c.root.clone(),
+    ] {
+        let run = c.run(&["review", "--json", "--out", target.to_str().unwrap()]);
+        assert_eq!(run.refusal()["code"], "report_in_corpus");
+        assert_eq!(run.stdout(), "");
+    }
+    // Match the original relative-path repro with root discovery from cwd.
+    for target in ["config.yaml", "nodes/review.md", "nodes/../review.md"] {
+        let mut cmd = crate::harness::neb_command(c.workdir());
+        cmd.current_dir(&c.root)
+            .env("PWD", &c.root)
+            .args(["review", "--json", "--out", target]);
+        let run = crate::harness::run_command(&mut cmd, format!("review --out {target}"));
+        assert_eq!(run.refusal()["code"], "report_in_corpus");
+        assert_eq!(run.stdout(), "");
+    }
+    assert_eq!(std::fs::read(node).unwrap(), before_node);
+    assert_eq!(std::fs::read(config).unwrap(), before_config);
+    assert!(!c.root.join("nodes/review.md").exists());
+    assert!(!c.root.join("review.md").exists());
+    c.run(&["check"]).assert_ok();
+}
+
+#[test]
+fn review_out_read_only_refuses_inside_and_outside_but_allows_stdout() {
+    let c = Corpus::new();
+    for target in [c.root.join("config.yaml"), c.workdir().join("review.md")] {
+        let before = std::fs::read(&target).ok();
+        let run = c.run_with_env(
+            &["review", "--json", "--out", target.to_str().unwrap()],
+            &[("NEBULA_READ_ONLY", "1")],
+        );
+        assert_eq!(run.refusal()["code"], "read_only");
+        assert_eq!(run.stdout(), "");
+        assert_eq!(std::fs::read(&target).ok(), before);
+    }
+    c.run_with_env(&["review", "--json"], &[("NEBULA_READ_ONLY", "1")])
+        .assert_ok();
+}
+
+#[cfg(unix)]
+#[test]
+fn review_out_refuses_corpus_aliases_and_final_symlinks() {
+    use std::os::unix::fs::symlink;
+    let mut c = Corpus::new();
+    let real_root = c.root.clone();
+    let config = real_root.join("config.yaml");
+    let before = std::fs::read(&config).unwrap();
+    let alias = c.workdir().join("alias");
+    symlink(&real_root, &alias).unwrap();
+    c.root = alias.clone(); // Corpus discovery itself may go through a symlink.
+    for target in [
+        alias.join("nodes/review.md"),
+        real_root.join("review.md"),
+        alias.join("nodes/../config.yaml"),
+    ] {
+        let run = c.run(&["review", "--json", "--out", target.to_str().unwrap()]);
+        assert_eq!(run.refusal()["code"], "report_in_corpus");
+    }
+    let link = c.workdir().join("report-link");
+    symlink(&config, &link).unwrap();
+    let run = c.run(&["review", "--json", "--out", link.to_str().unwrap()]);
+    assert_eq!(run.refusal()["code"], "report_in_corpus");
+    assert!(std::fs::symlink_metadata(&link).unwrap().is_symlink());
+    assert_eq!(std::fs::read(&config).unwrap(), before);
+    assert!(!real_root.join("review.md").exists());
+    assert!(!real_root.join("nodes/review.md").exists());
+
+    let outside = c.workdir().join("outside.md");
+    crate::harness::write(&outside, "keep outside");
+    let inside_link = real_root.join("report-link");
+    symlink(&outside, &inside_link).unwrap();
+    let run = c.run(&["review", "--json", "--out", inside_link.to_str().unwrap()]);
+    assert_eq!(run.refusal()["code"], "report_in_corpus");
+    assert!(
+        std::fs::symlink_metadata(&inside_link)
+            .unwrap()
+            .is_symlink()
+    );
+    let outside_link = c.workdir().join("outside-link");
+    symlink(&outside, &outside_link).unwrap();
+    let dangling = c.workdir().join("dangling");
+    symlink(c.workdir().join("missing.md"), &dangling).unwrap();
+    for target in [&outside_link, &dangling] {
+        let run = c.run(&["review", "--json", "--out", target.to_str().unwrap()]);
+        assert_eq!(run.refusal()["code"], "not_regular_file");
+        assert!(std::fs::symlink_metadata(target).unwrap().is_symlink());
+    }
+    assert_eq!(std::fs::read_to_string(outside).unwrap(), "keep outside");
+    assert!(!c.workdir().join("missing.md").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn review_out_replaces_atomically_with_private_mode() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let c = Corpus::new();
+    // A prefix sibling is outside, and a symlinked parent outside is allowed.
+    let dir = c.workdir().join("corpus-reports");
+    std::fs::create_dir(&dir).unwrap();
+    let alias = c.workdir().join("reports");
+    symlink(&dir, &alias).unwrap();
+    let target = dir.join("review.md");
+    let hardlink = dir.join("old-report.md");
+    crate::harness::write(&target, "old report");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::hard_link(&target, &hardlink).unwrap();
+    let expected = c.run(&["review"]).assert_ok().stdout();
+    c.run(&["review", "--out", alias.join("review.md").to_str().unwrap()])
+        .assert_ok();
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), expected);
+    assert_eq!(std::fs::read_to_string(&hardlink).unwrap(), "old report");
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+    let fresh = dir.join("fresh.json");
+    c.run(&["review", "--json", "--out", fresh.to_str().unwrap()])
+        .assert_ok();
+    assert_eq!(
+        std::fs::metadata(fresh).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}

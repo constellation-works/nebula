@@ -2,7 +2,7 @@
 //! notices and warnings on stderr, and the report of the commit after a write.
 //! Everything goes out through [`crate::output`].
 
-use super::failure::{Failure, shell_word};
+use super::failure::{Failure, ReportError, shell_word};
 use crate::output::{self, errln, outln};
 use crate::render::{self, json};
 use nebula_core::verb::{CommitPolicy, RootWarning, WriteOptions};
@@ -11,7 +11,7 @@ use nebula_core::{
     ObservatoryRoot, ObservatorySource,
 };
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// After a write that added tags, say on stderr which of them read as a
 /// variant of a tag already in use, in every output mode.
@@ -218,22 +218,79 @@ pub(super) fn out_node_view(
     out_json(&json::NodeView::from(&view?))
 }
 
-/// Send a rendered report to a file, or print it, per `--out`.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "`--out` names a report file of the user's choosing, not nebula state, so it is \
-              written where and how they asked rather than through the private durable helper"
-)]
-pub(super) fn write_report(out: Option<&Path>, text: &str) -> std::result::Result<(), Failure> {
+/// Send a rendered report to an external file, or print it, per `--out`.
+pub(super) fn write_report(
+    locations: &Locations,
+    root: &Path,
+    out: Option<&Path>,
+    text: &str,
+) -> std::result::Result<(), Failure> {
     match out {
         Some(path) => {
-            std::fs::write(path, format!("{text}\n"))
-                .map_err(|e| Error::io_at("writing", path, e))?;
-            // stdout stays empty, so the file is named on stderr, in every
-            // mode: a write says what it wrote (STD-01 §R30).
+            locations.write_gate(nebula_core::WriteIntent::Ordinary)?;
+            let destination = report_destination(locations, root, path)?;
+            nebula_core::fs::write_private_atomic(&destination, format!("{text}\n"))?;
+            // Keep the caller's spelling in the notice, as before. Only the
+            // validated physical destination is used for the write.
             errln!("{}", render::notice(&format!("wrote {}", path.display())));
         }
         None => outln!("{text}"),
     }
     Ok(())
+}
+
+/// Resolve only the report's write destination; corpus reads keep their
+/// original paths. Fail closed if resolution fails. The parent must exist:
+/// `--out` never creates directories. Resolve symlinks before judging `..`,
+/// and write through this same resolved parent rather than the original alias.
+fn report_destination(
+    locations: &Locations,
+    root: &Path,
+    path: &Path,
+) -> std::result::Result<PathBuf, Failure> {
+    let root = std::fs::canonicalize(root).map_err(|e| Error::io_at("resolving", root, e))?;
+    let absolute = locations.absolute(path);
+    let refuse_inside = |resolved: &Path| -> std::result::Result<(), Failure> {
+        if resolved.starts_with(&root) {
+            return Err(ReportError::InCorpus {
+                path: resolved.to_path_buf(),
+                root: root.clone(),
+            }
+            .into());
+        }
+        Ok(())
+    };
+    // Existing targets include symlinks into the corpus and the root itself.
+    // A dangling link is judged below, without following it for the write.
+    match std::fs::canonicalize(&absolute) {
+        Ok(resolved) => refuse_inside(&resolved)?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(Error::io_at("resolving", path, e).into()),
+    }
+    let Some(name) = absolute.file_name() else {
+        return Err(Error::NotRegularFile {
+            path: absolute,
+            found: nebula_core::fs::EntryKind::Directory,
+        }
+        .into());
+    };
+    let parent = absolute.parent().unwrap_or(Path::new("."));
+    let parent =
+        std::fs::canonicalize(parent).map_err(|e| Error::io_at("resolving parent of", path, e))?;
+    let destination = parent.join(name);
+    // Also protects a link *inside* the corpus pointing out, and new files.
+    refuse_inside(&destination)?;
+    match std::fs::symlink_metadata(&destination) {
+        Ok(meta) if meta.is_symlink() => {
+            return Err(Error::NotRegularFile {
+                path: destination,
+                found: nebula_core::fs::EntryKind::Symlink,
+            }
+            .into());
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(Error::io_at("inspecting", &destination, e).into()),
+    }
+    Ok(destination)
 }
