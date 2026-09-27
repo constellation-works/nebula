@@ -75,7 +75,8 @@ Nothing is stored in this repository; the corpus is private and lives outside.
 `inbox/YYYY-MM.md`, exactly as `neb capture` does; Escape closes it. The
 shortcut is read from `settings.json` under the app's config directory
 (`~/Library/Application Support/works.constellation.nebula/` on macOS), which
-is written with the default on first launch.
+is written with the default on first launch. Open **Settings** from the tray
+menu or the window tab to change the shortcut or launch-at-login setting.
 
 With commits on (`neb config commit on`), each capture, drop and promote is
 committed as `neb` commits it. When git refuses that commit (for example the
@@ -104,18 +105,21 @@ a few hundred nodes do not freeze the window, and rendered as plain SVG.
   is solid with the arrowhead at the parent. `contradicts` is dashed, has no
   arrowhead, and does not shape the layout: it is drawn afterwards between
   the two cards.
-- **Pan and zoom.** Drag the canvas to pan, wheel to zoom about the cursor.
+- **Pan and zoom.** Drag or scroll the canvas to pan; Ctrl+scroll zooms about the cursor.
   **Fit** brings the whole drawing back into view. The viewport is yours
   until you press Fit: a change on disk redraws in place.
 - **Select.** Click a card to open it in the panel and light its lineage:
   ancestors in amber, descendants in teal, everything else dimmed. Click
   empty canvas or press Escape to clear. Double-click a card, or press
   **Open file** in the panel, to open the node's file in whatever the OS
-  opens `.md` with.
-- **Filter.** The search box matches title substrings; the tag chips narrow
-  to nodes carrying every selected tag, as `neb list --tag` does. Filters
-  apply before layout, so what is left is redrawn compactly; edges to hidden
-  nodes disappear with them. **Clear** resets both.
+  opens `.md` with. Tab focuses cards; arrow keys follow connected cards in
+  their direction, and Enter or Space selects one. In the window tabs, Left
+  and Right switch views, while Home and End go to the first and last view.
+- **Filter.** The search box matches id, title, body or status after typing
+  pauses; the tag chips require every selected tag, as `neb list --tag` does.
+  Nonmatches dim in place, preserving the full layout and its lineage edges.
+  The arrows step between matches; **Clear** resets both filters. With a node
+  selected, **Lineage only** shows just it, its ancestors and descendants.
 - **Panel.** Title, status, dates, tags, kill condition, `closed.why` when
   the node is closed, the body as rendered markdown (GFM; raw HTML is shown
   as text, never rendered), the node's edges as two lists you can click

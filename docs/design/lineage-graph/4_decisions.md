@@ -240,7 +240,7 @@ gains authority:
   file path, and it refuses an unsafe id before joining it. `history` and
   `load_at` also build a git pathspec from the id, and each asks `node_path`
   first. Those two are the validate-then-use shape the rule warns about; both
-  are in `store.rs`, so the check is one screen away from the use.
+  are in `store/nodes.rs` and `store/history.rs`, so the check stays beside the use.
 - **Observatory record ids.** `is_observatory_id` is checked when `cite` or
   `handoff` stores the id, and again by `resolve_observatory` before it is
   joined under the root.
@@ -251,7 +251,7 @@ types. It would change no refusal. What is given up is a compiler proof: a new
 function that turns an `&str` into a path without `node_path` would compile.
 Scope: node ids and Observatory record ids. Reference ids are node-local
 counters that never become paths. Reverses if an id starts to reach anything
-else with authority (a URL, a git ref, a shell argument) outside `store.rs`, or
+else with authority (a URL, a git ref, a shell argument) outside `store/`, or
 if `nebula-core` gains consumers outside this workspace. At that point the
 check belongs in the type.
 
@@ -317,7 +317,7 @@ extra keys, which would call for a separate `*Document` type that carries them.
 
 ## The invariant-table guard stays a Rust test
 
-`check.rs`'s `published_invariant_tables_match_checker_rules` departs from
+`check/tests/`'s `published_invariant_tables_match_checker_rules` departs from
 STD-02@2 §R21. It reads three documents with `include_str!`: the v0.2 spec,
 the skill's `invariants.md`, and the lineage-graph invariants spec. For each
 `| # |` table, it compares the number and label columns with the `Rule` enum's
@@ -544,7 +544,7 @@ its own, and from STD-03@2 §R12 and §R22, which give every wait on a child a
 deadline ended by SIGTERM, a grace period and SIGKILL of the group. Every git
 child goes through the supervised runner in `crates/nebula-core/src/git.rs`,
 which meets them. The one other child is the `$VISUAL`/`$EDITOR` that
-`neb edit` opens on a node's body (`edit_body` in `crates/neb/src/cli.rs`), and
+`neb edit` opens on a node's body (`edit_body` in `crates/neb/src/cli/editor.rs`), and
 it stays in `neb`'s own process group, the terminal's foreground group.
 
 An editor is a terminal program. In a group of its own it would be a
@@ -617,7 +617,7 @@ which point `--force` is renamed to match, with a hidden alias for one release.
 
 This departs from STD-01@2 §R25, which declares each help string in one
 place. `neb --help` groups the verbs by lifecycle stage, and clap's derive has
-no per-subcommand heading, so `HELP_TEMPLATE` in `crates/neb/src/cli.rs`
+no per-subcommand heading, so `HELP_TEMPLATE` in `crates/neb/src/cli/help.rs`
 writes each row out by hand, copying the subcommand's one-liner. The copy is
 guarded rather than derived: `help_rows_match_the_variants` fails when a row
 and the variant's doc comment disagree or a visible subcommand has no row, and
@@ -694,7 +694,7 @@ fail the build when a variant is added without one (STD-02@2 §R27, STD-01@2
 makes any match on it outside `nebula-core` need a wildcard, so a per-variant
 `match` in `neb` would quietly send a new variant to whatever the wildcard
 says. The classification therefore lives where the enum is defined: each
-`codes!` line in `crates/nebula-core/src/error.rs` names a variant's code and
+`codes!` line in `crates/nebula-core/src/error/class.rs` names a variant's code and
 its `ErrorClass`, `Argument` (an argument no corpus could accept, whatever it
 holds) or `State` (anything that turns on what the corpus, the machine or git
 holds), and `Error::class()` is generated as an exhaustive match with no
