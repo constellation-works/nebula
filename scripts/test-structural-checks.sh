@@ -20,7 +20,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-tools=(dirname awk basename find sort wc head sed grep)
+tools=(dirname awk basename find sort wc head sed grep python3 cargo)
 
 make_tool_path() {
   local path="$1" tool source
@@ -124,6 +124,16 @@ unlink "$missing_sort/sort"
 run_failure "file-size guard with missing sort" "$missing_sort" check-file-size.sh "required inspection tool sort"
 run_failure "test-modules guard with missing sort" "$missing_sort" check-test-modules.sh "required inspection tool sort"
 
+missing_python="$work/missing-python"
+make_tool_path "$missing_python"
+unlink "$missing_python/python3"
+run_failure "test-modules guard with missing Python" "$missing_python" check-test-modules.sh "required inspection tool python3"
+
+missing_cargo="$work/missing-cargo"
+make_tool_path "$missing_cargo"
+unlink "$missing_cargo/cargo"
+run_failure "test-modules guard with missing Cargo" "$missing_cargo" check-test-modules.sh "cargo is required"
+
 find_error="$work/find-error"
 make_tool_path "$find_error"
 unlink "$find_error/find"
@@ -136,19 +146,15 @@ chmod +x "$find_error/find"
 run_failure "file-size guard with traversal error" "$find_error" check-file-size.sh "failed to enumerate Rust source files"
 run_failure "test-modules guard with traversal error" "$find_error" check-test-modules.sh "failed to enumerate source test modules"
 
-integration_find_error="$work/integration-find-error"
-make_tool_path "$integration_find_error"
-unlink "$integration_find_error/find"
-real_find=$(command -v find)
-cat >"$integration_find_error/find" <<EOF
+cargo_error="$work/cargo-error"
+make_tool_path "$cargo_error"
+unlink "$cargo_error/cargo"
+cat >"$cargo_error/cargo" <<'EOF'
 #!/bin/sh
-if [ "\$1" = "crates" ]; then
-  exec "$real_find" "\$@"
-fi
-echo "find: cannot read directory \$1" >&2
+echo "cargo: simulated metadata failure" >&2
 exit 1
 EOF
-chmod +x "$integration_find_error/find"
-run_failure "test-modules guard with integration traversal error" "$integration_find_error" check-test-modules.sh "failed to enumerate integration suite"
+chmod +x "$cargo_error/cargo"
+run_failure "test-modules guard with Cargo metadata error" "$cargo_error" check-test-modules.sh "cargo metadata failed"
 
 echo "structural-checks: ok"
