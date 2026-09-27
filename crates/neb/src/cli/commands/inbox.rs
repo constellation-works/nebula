@@ -23,14 +23,14 @@ pub(in crate::cli) fn capture(cx: Invocation<'_>, quiet: bool, text: Vec<String>
     let done = verb::capture_at(locations, root, &text, k, &commits.options())?;
     let captured = done.value;
     if let Some(warning) = &captured.warning {
-        warn_root(warning, &captured.root);
+        warn_root(locations, warning, &captured.root);
     }
     // Never silent, never a question: a mistyped `--root` or
     // `$NEBULA_ROOT` would otherwise start a second corpus unnoticed.
     // Absolute so a relative typo shows where it landed; made so
     // lexically, because paths are used as given, never resolved.
     if captured.created {
-        let shown = std::path::absolute(&captured.root).unwrap_or_else(|_| captured.root.clone());
+        let shown = locations.absolute(&captured.root);
         errln!("note: created a new corpus at {}", shown.display());
     }
     // The id goes out before the advice: the capture never depended

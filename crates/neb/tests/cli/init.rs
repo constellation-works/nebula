@@ -300,6 +300,41 @@ fn init_warns_when_a_third_directory_would_orphan_the_configured_root() {
     );
 }
 
+/// The warning and its runnable remedy use the shell's path through a
+/// symlinked working directory, including when the init target is relative.
+#[cfg(unix)]
+#[test]
+fn init_shadowing_warning_keeps_symlinked_working_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    let configured = dir.path().join("configured");
+    let config_path = home.join(".config/nebula/root");
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(&config_path, format!("{}\n", configured.display())).unwrap();
+
+    let real = dir.path().join("real");
+    let alias = dir.path().join("alias");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+
+    let run = run_in(&alias, &home, None, &["init", "new-corpus"], None).assert_ok();
+    let expected = alias.join("new-corpus");
+    assert!(
+        run.stderr()
+            .contains(&format!("not {}", expected.display())),
+        "{}",
+        run.stderr()
+    );
+    assert!(
+        run.stderr().contains(&format!(
+            "run `neb init {} --set-root --force`",
+            expected.display()
+        )),
+        "{}",
+        run.stderr()
+    );
+}
+
 /// The shadowing warning's remedy is the documented command, with the target
 /// absolute and quoted as a shell word, never a hand edit of the setting file
 /// and never the relative spelling that would resolve per directory.
