@@ -7,6 +7,7 @@ use crate::harness::{
     snapshot_corpus_files, write,
 };
 use crate::support;
+use std::path::PathBuf;
 
 #[test]
 fn repeated_init_and_set_root_preserve_the_existing_corpus_byte_for_byte() {
@@ -275,7 +276,10 @@ fn init_warns_when_a_third_directory_would_orphan_the_configured_root() {
     std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
     std::fs::write(&config_path, format!("{}\n", configured.display())).unwrap();
 
+    // Locations::absolute collapses repeated separators when it displays the
+    // new absolute corpus path, while configured settings keep their spelling.
     let other = dir.path().join("corpus2");
+    let normalized_other: PathBuf = other.components().collect();
     let out = run_from_home(&home, Some(&other), &["init"], None).assert_ok();
     assert!(
         out.stderr().contains(&config_path.display().to_string()),
@@ -289,7 +293,8 @@ fn init_warns_when_a_third_directory_would_orphan_the_configured_root() {
         out.stderr()
     );
     assert!(
-        out.stderr().contains(&other.display().to_string()),
+        out.stderr()
+            .contains(&normalized_other.display().to_string()),
         "expected warning naming the new corpus in:\n{}",
         out.stderr()
     );
@@ -318,7 +323,7 @@ fn init_shadowing_warning_keeps_symlinked_working_directory() {
     std::os::unix::fs::symlink(&real, &alias).unwrap();
 
     let run = run_in(&alias, &home, None, &["init", "new-corpus"], None).assert_ok();
-    let expected = alias.join("new-corpus");
+    let expected: PathBuf = alias.join("new-corpus").components().collect();
     assert!(
         run.stderr()
             .contains(&format!("not {}", expected.display())),

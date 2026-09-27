@@ -203,9 +203,9 @@ impl Locations {
     }
 
     /// `path` made absolute against the shell's working directory when it is
-    /// valid, lexically: `.` components go, `..` stays, and symlinks are not
-    /// resolved. An already absolute path keeps its spelling. The CLI uses
-    /// this for paths it shows to the person who invoked it.
+    /// valid, then lexically normalized through its components: repeated
+    /// separators and `.` components collapse, `..` stays, and symlinks are
+    /// not resolved. The CLI uses this spelling when it names a corpus.
     pub fn absolute(&self, path: &Path) -> PathBuf {
         let joined = match self.working_dir() {
             Some(cwd) if !path.is_absolute() => cwd.join(path),
