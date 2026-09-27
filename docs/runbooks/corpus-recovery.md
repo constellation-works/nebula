@@ -5,7 +5,7 @@ tags: [operations, recovery, debugging]
 paths: ["crates/nebula-core/src/model.rs", "crates/nebula-core/src/check/", "crates/nebula-core/src/store/", "crates/nebula-core/src/pending.rs"]
 related_features: [lineage-graph, v0.2]
 related_artifacts: []
-last_validated: 2026-09-26
+last_validated: 2026-09-27
 ---
 
 # Recover a Corpus
@@ -166,16 +166,30 @@ either run any verb (its commit sweeps up the earlier write) or catch up by
 hand:
 
 ```sh
-git -C "$NEBULA_ROOT" add -A -- nodes inbox config.yaml .gitignore
-git -C "$NEBULA_ROOT" diff --cached --name-only --relative -z -- nodes/ inbox/ config.yaml .gitignore \
-  | git -C "$NEBULA_ROOT" commit -m "neb" --pathspec-from-file=- --pathspec-file-nul
+(
+  set -e
+  pathspec_file=$(mktemp)
+  trap 'rm -f "$pathspec_file"' EXIT
+  git -C "$NEBULA_ROOT" add -A -- nodes inbox config.yaml .gitignore
+  if ! git -C "$NEBULA_ROOT" diff --cached --name-only --relative -z -- nodes/ inbox/ config.yaml .gitignore > "$pathspec_file"; then
+    printf 'Could not list staged corpus paths; nothing was committed.\n' >&2
+    exit 1
+  fi
+  if [ -s "$pathspec_file" ]; then
+    git -C "$NEBULA_ROOT" commit -m "neb" --pathspec-from-file="$pathspec_file" --pathspec-file-nul
+  else
+    printf 'No staged corpus changes to commit.\n'
+  fi
+)
 ```
 
 The commit gets its path list from the staged corpus files, so an empty
 `nodes/` or `inbox/` is not passed as an unmatched pathspec. The add and diff
 are rooted at the corpus even when it sits inside a larger worktree; other
 staged paths stay staged. The explicit add also leaves runtime files such as
-`.pending/` records and `*.tmp` debris out of this recovery commit.
+`.pending/` records and `*.tmp` debris out of this recovery commit. If no
+corpus paths are staged, the recipe leaves HEAD unchanged; if listing those
+paths fails, it reports the error and stops before committing.
 
 `--no-commit` on a verb skips its commit once, if you need to keep working
 before sorting the repository out.
@@ -198,13 +212,27 @@ safely:
    (its commit sweeps up earlier uncommitted writes) or commit manually:
 
 ```sh
-git -C "$NEBULA_ROOT" add -A -- nodes inbox config.yaml .gitignore
-git -C "$NEBULA_ROOT" diff --cached --name-only --relative -z -- nodes/ inbox/ config.yaml .gitignore \
-  | git -C "$NEBULA_ROOT" commit -m "neb" --pathspec-from-file=- --pathspec-file-nul
+(
+  set -e
+  pathspec_file=$(mktemp)
+  trap 'rm -f "$pathspec_file"' EXIT
+  git -C "$NEBULA_ROOT" add -A -- nodes inbox config.yaml .gitignore
+  if ! git -C "$NEBULA_ROOT" diff --cached --name-only --relative -z -- nodes/ inbox/ config.yaml .gitignore > "$pathspec_file"; then
+    printf 'Could not list staged corpus paths; nothing was committed.\n' >&2
+    exit 1
+  fi
+  if [ -s "$pathspec_file" ]; then
+    git -C "$NEBULA_ROOT" commit -m "neb" --pathspec-from-file="$pathspec_file" --pathspec-file-nul
+  else
+    printf 'No staged corpus changes to commit.\n'
+  fi
+)
 ```
 
 This uses only staged corpus paths as commit pathspecs, so empty `nodes/` or
-`inbox/` directories are harmless. Since both commands run from
+`inbox/` directories are harmless. With no staged corpus paths, HEAD and
+unrelated staged work are unchanged; a path-list error stops the recipe before
+the commit. Since the git commands run from
 `$NEBULA_ROOT`, the recipe also works when the corpus is nested in a larger
 worktree. Other staged paths remain staged, and the path-limited add excludes
 runtime `.pending/` records and `*.tmp` debris.
