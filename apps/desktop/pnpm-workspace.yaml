@@ -6,7 +6,7 @@ allowBuilds:
   geckodriver: false
 
 # CI runs `pnpm audit --audit-level moderate` (STD-05 §R24). A fix goes here
-# as an override; an advisory with no fix goes in auditConfig with a date.
+# as an override; an advisory with no fix goes in audit.ignore with a date.
 overrides:
   # GHSA-5c6j-r48x-rmvq (high) and GHSA-qj8w-gfj5-8c6v (moderate), both fixed
   # in 7.0.5. mocha 10, pinned by @wdio/mocha-framework 9, still asks for ^6.
@@ -14,3 +14,10 @@ overrides:
   # @wdio/utils 9 asks for browsers 2.x, which pulls vulnerable extract-zip.
   # browsers 3 replaces it and retains the browser-download API WDIO uses.
   "@wdio/utils>@puppeteer/browsers": 3.2.3
+
+audit:
+  ignore:
+    # braces <=3.0.3 has no patched release (GHSA-vfj7-8cjw-p6xm). It is
+    # dev-only via @wdio/mocha-framework > mocha > chokidar and is not shipped.
+    # Re-review 2027-04-03.
+    - GHSA-vfj7-8cjw-p6xm
