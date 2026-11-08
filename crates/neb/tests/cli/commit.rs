@@ -131,6 +131,178 @@ fn pre_verb_no_commit_is_refused_before_a_verb_that_does_not_commit() {
     );
 }
 
+/// Read-only shapes of the mixed verbs refuse `--no-commit` in both
+/// positions before any corpus operation, exit 2 with empty stdout and an
+/// actionable usage refusal (`usage` under `--json`); without the flag the
+/// reads still work (STD-01 §R28).
+#[test]
+fn read_only_tag_list_and_config_getters_refuse_no_commit() {
+    let c = Corpus::new();
+    let id = c.seed("an idea", "An idea");
+    c.run(&["tag", &id, "--add", "physics"]).assert_ok();
+
+    // Without the flag the reads still work, in both modes.
+    c.run(&["tag", "list"]).assert_ok();
+    c.run(&["--json", "tag", "list"]).assert_ok();
+    c.run(&["tag", "list", "--json"]).assert_ok();
+    c.run(&["config", "commit"]).assert_ok().says("off");
+    c.run(&["--json", "config", "commit"]).assert_ok();
+    c.run(&["config", "observatory-root"]).assert_ok();
+    c.run(&["config", "observatory-root", "--json"]).assert_ok();
+
+    let before = snapshot_corpus_files(&c.root);
+    for (args, subject) in [
+        (vec!["tag", "list", "--no-commit"], "`tag list`"),
+        (vec!["--no-commit", "tag", "list"], "`tag list`"),
+        (
+            vec!["config", "commit", "--no-commit"],
+            "`config commit` without `on` or `off`",
+        ),
+        (
+            vec!["--no-commit", "config", "commit"],
+            "`config commit` without `on` or `off`",
+        ),
+        (
+            vec!["config", "observatory-root", "--no-commit"],
+            "`config observatory-root` without `DIR` or `--drop-legacy`",
+        ),
+        (
+            vec!["--no-commit", "config", "observatory-root"],
+            "`config observatory-root` without `DIR` or `--drop-legacy`",
+        ),
+    ] {
+        let refused = assert_usage_error(&c, &args, "usage");
+        let error = refused["error"].as_str().unwrap();
+        assert!(
+            error.contains(subject) && error.contains("never commits"),
+            "neb {}: {error}",
+            args.join(" ")
+        );
+        assert!(error.contains("drop it"), "neb {}: {error}", args.join(" "));
+        // The `--json` suffix form refuses the same way, with empty stdout
+        // and code `usage`.
+        let mut suffixed: Vec<&str> = args.clone();
+        suffixed.push("--json");
+        let run = c.run(&suffixed);
+        assert_eq!(run.out.status.code(), Some(2), "neb {}", run.args);
+        assert_eq!(run.stdout(), "", "neb {}", run.args);
+        let envelope = run.usage_refusal();
+        assert_eq!(envelope["code"], "usage", "neb {}", run.args);
+        assert!(
+            envelope["error"].as_str().unwrap().contains(subject),
+            "neb {}: {envelope}",
+            run.args
+        );
+    }
+    assert_eq!(
+        before,
+        snapshot_corpus_files(&c.root),
+        "a refused read wrote nothing"
+    );
+}
+
+/// Tag edits and configuration setters still honor `--no-commit`, and the
+/// supported pre-verb spelling still warns and skips the commit.
+#[test]
+fn tag_edits_and_config_setters_still_honor_no_commit() {
+    let (c, _remote) = corpus_repo();
+    c.run(&["config", "commit", "on"]).assert_ok();
+    let id = c.seed("an idea", "An idea");
+
+    // A tag edit after the verb skips the commit silently; before it warns
+    // and skips all the same.
+    let commits = log(&c.root).len();
+    c.run(&["tag", &id, "--add", "physics", "--no-commit"])
+        .assert_ok();
+    assert_eq!(log(&c.root).len(), commits, "post-verb --no-commit skips");
+    assert!(!dirt(&c.root).is_empty(), "the write landed, uncommitted");
+    let run = c
+        .run(&["--no-commit", "tag", &id, "--add", "bio", "--json"])
+        .assert_ok();
+    assert!(
+        run.stderr().contains(PRE_VERB_WARNING),
+        "pre-verb mutation warns: {}",
+        run.stderr()
+    );
+    assert_eq!(log(&c.root).len(), commits, "pre-verb --no-commit skips");
+
+    // `tag` on the `list` node is a write again, so it keeps the flag and
+    // fails as a missing node rather than as a read-only refusal.
+    let refused = c
+        .run(&["--json", "tag", "list", "--add", "physics", "--no-commit"])
+        .refusal();
+    assert_ne!(refused["code"], "usage", "{refused}");
+    assert_eq!(refused["code"], "no_such_node", "{refused}");
+    let n = log(&c.root).len();
+    c.run(&["tag", &id, "--add", "chem"]).assert_ok();
+    assert_eq!(log(&c.root).len(), n + 1, "without the flag it commits");
+
+    // Configuration setters keep the flag in both positions.
+    let n = log(&c.root).len();
+    c.run(&[
+        "config",
+        "observatory-root",
+        "/tmp/observatory",
+        "--no-commit",
+    ])
+    .assert_ok();
+    assert_eq!(
+        log(&c.root).len(),
+        n,
+        "machine setting commits nothing either way"
+    );
+    let run = c
+        .run(&[
+            "--no-commit",
+            "config",
+            "observatory-root",
+            "/tmp/other-observatory",
+            "--json",
+        ])
+        .assert_ok();
+    assert!(
+        run.stderr().contains(PRE_VERB_WARNING),
+        "pre-verb setter warns: {}",
+        run.stderr()
+    );
+
+    // Dropping the legacy key is a corpus write, committed unless skipped.
+    with_legacy_observatory_root(&c);
+    git(&c.root, &["commit", "-qam", "an older neb"]);
+    let n = log(&c.root).len();
+    c.run(&["config", "observatory-root", "--drop-legacy", "--no-commit"])
+        .assert_ok()
+        .says("removed");
+    assert_eq!(log(&c.root).len(), n, "--drop-legacy --no-commit skips");
+    assert!(
+        git(&c.root, &["status", "--porcelain"]).contains(" M config.yaml"),
+        "the removal landed, uncommitted"
+    );
+    git(&c.root, &["checkout", "--", "config.yaml"]);
+    c.run(&["config", "observatory-root", "--drop-legacy"])
+        .assert_ok();
+    assert_eq!(
+        log(&c.root)[0],
+        "neb config observatory-root",
+        "without the flag it commits"
+    );
+
+    // `config commit` setters keep the flag too.
+    let n = log(&c.root).len();
+    c.run(&["config", "commit", "off", "--no-commit"])
+        .assert_ok();
+    assert_eq!(log(&c.root).len(), n, "setter --no-commit skips");
+    let run = c
+        .run(&["--no-commit", "config", "commit", "on", "--json"])
+        .assert_ok();
+    assert!(
+        run.stderr().contains(PRE_VERB_WARNING),
+        "pre-verb setter warns: {}",
+        run.stderr()
+    );
+    assert_eq!(log(&c.root).len(), n, "pre-verb setter --no-commit skips");
+}
+
 #[test]
 fn commit_is_off_by_default_and_the_setting_reads_and_writes() {
     let (c, _remote) = corpus_repo();

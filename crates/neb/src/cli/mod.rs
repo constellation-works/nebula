@@ -222,7 +222,31 @@ fn run(cli: Cli, locations: &Locations) -> Outcome {
     let root = cli.root.clone();
     let json = cli.json;
     let offered = cli.command.commit_arg();
-    if cli.no_commit {
+    if let Some(label) = cli.command.read_only_label() {
+        // A read-only shape of a mixed verb never commits, so either
+        // spelling of the flag has nothing to skip and is refused before any
+        // corpus operation (STD-01 §R28). Clap still parses the post-verb
+        // spelling because the verb flattens `CommitArg` for its writes.
+        // The subject names the read form, so a setter that does take the
+        // flag is never described as never committing.
+        let subject = match label {
+            "config commit" => "`config commit` without `on` or `off`",
+            "config observatory-root" => {
+                "`config observatory-root` without `DIR` or `--drop-legacy`"
+            }
+            _ => "`tag list`",
+        };
+        if cli.no_commit {
+            return Err(Failure::say(format!(
+                "{subject} never commits, so `--no-commit` before it has nothing to skip; drop it"
+            )));
+        }
+        if cli.command.read_only_no_commit() {
+            return Err(Failure::say(format!(
+                "{subject} never commits, so `--no-commit` has nothing to skip; drop it"
+            )));
+        }
+    } else if cli.no_commit {
         // The spelling from when the flag was global (STD-01 §R35): still a
         // skip before a verb that commits, and refused before any work
         // elsewhere, where it would be accepted and do nothing (§R28).
