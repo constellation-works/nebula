@@ -1,12 +1,12 @@
-//! Unit tests for `check/observatory.rs`.
+//! Unit tests for `reference.rs` (STD-02 §R19).
 
 #![allow(
     clippy::disallowed_methods,
     reason = "fixtures plant an Observatory tree directly"
 )]
 
-use crate::check_impl::{is_observatory_id, resolve_observatory};
 use crate::error::Error;
+use crate::reference::{is_absolute_local, is_local_path, is_observatory_id, resolve_observatory};
 
 #[test]
 fn an_observatory_id_is_one_letter_of_four_then_digits() {
@@ -93,4 +93,54 @@ fn an_inaccessible_matching_target_is_an_io_error() {
         matches!(resolve_observatory(root, "H012"), Err(Error::IoAt { path, .. })
             if path == loop_path)
     );
+}
+
+#[test]
+fn schemes_and_urls_are_not_local_paths() {
+    for uri in [
+        "https://example.org",
+        "doi:10.1000/x",
+        "orbit:DANI-10345",
+        "neb:some-node",
+        "[[almanac/page]]",
+    ] {
+        assert!(!is_local_path(uri), "{uri}");
+    }
+    for uri in ["./notes/x.md", "notes/x.md", "C:/x.md", "x"] {
+        assert!(is_local_path(uri), "{uri}");
+    }
+}
+
+/// Absolute on any platform is absolute on all of them, and nothing a
+/// scheme, a URL or a path under `nodes/` looks like is caught with it.
+#[test]
+fn absolute_paths_and_file_uris_are_absolute_on_every_platform() {
+    for uri in [
+        "/etc/hostname",
+        "\\\\server\\share\\x.md",
+        "C:/x.md",
+        "c:\\x.md",
+        "C:x.md",
+        "file:///etc/hostname",
+        "FILE://host/x.md",
+        "file:/etc/hostname",
+    ] {
+        assert!(is_absolute_local(uri), "{uri}");
+    }
+    for uri in [
+        "./notes/x.md",
+        "notes/x.md",
+        "../../studies/x.md",
+        "x",
+        "https://example.org",
+        "http://example.org/file:///x",
+        "mailto:someone@example.org",
+        "orbit:DANI-10345",
+        "neb:some-node",
+        "doi:10.1000/x",
+        "[[almanac/page]]",
+        "files/x.md",
+    ] {
+        assert!(!is_absolute_local(uri), "{uri}");
+    }
 }

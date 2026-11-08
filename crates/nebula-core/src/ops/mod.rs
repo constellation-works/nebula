@@ -68,11 +68,11 @@ pub use node::{confirm_kill, new_node, sharpen};
 pub use settings::{commit, drop_legacy_observatory_root, set_commit, set_observatory_root};
 pub use status::{close_tags, retag, set_status, tag_add, tag_remove};
 
-use crate::check_impl::resolve_observatory;
 use crate::config::ObservatoryRoot;
 use crate::error::{Error, Result};
 use crate::graph_impl::{Neighbour, ObservatoryLink};
 use crate::model::{Doc, Origin, Status};
+use crate::reference::resolve_observatory;
 use crate::store::InboxEntry;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

@@ -11,6 +11,7 @@ mod id;
 mod lock;
 mod model;
 mod pending;
+mod reference;
 mod stamp;
 mod triage;
 #[cfg(feature = "ts")]

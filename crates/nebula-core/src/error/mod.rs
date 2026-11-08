@@ -25,9 +25,9 @@ pub use class::ErrorClass;
 use phrase::{holder_phrase, shown_candidates};
 
 use crate::fs_impl::EntryKind;
-use crate::lock::LockHolder;
+use crate::lock_holder::LockHolder;
 use crate::model::{EdgeType, FrontmatterProblem, Status};
-use crate::store::Settlement;
+use crate::settlement::Settlement;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -395,7 +395,7 @@ pub enum Error {
     Interactive(String),
 
     /// A capture that is nothing but whitespace. Refused before a corpus is
-    /// opened or created; see [`crate::store::validate_capture`].
+    /// opened or created, by the store's capture validation.
     #[error("nothing to capture")]
     EmptyCapture,
 
@@ -526,13 +526,13 @@ pub enum Error {
     #[error("title `{0}` does not reduce to a usable id")]
     UnusableTitle(String),
 
-    /// A new reference's `kind` is not in [`crate::check::REFERENCE_KINDS`],
+    /// A new reference's `kind` is not in [`crate::reference::REFERENCE_KINDS`],
     /// even lowercased. Carries the kind as it was given. Only new writes
     /// are held to the vocabulary; `check` reports an unexpected kind already
     /// on disk as a warning instead.
     #[error(
         "`{0}` is not an accepted reference kind; accepted kinds: {accepted}",
-        accepted = crate::check_impl::REFERENCE_KINDS.join(", ")
+        accepted = crate::reference::REFERENCE_KINDS.join(", ")
     )]
     UnknownReferenceKind(String),
 

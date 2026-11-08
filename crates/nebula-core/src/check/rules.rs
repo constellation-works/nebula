@@ -6,9 +6,10 @@ use crate::store::Corpus;
 use std::collections::HashSet;
 
 use super::observatory::check_observatory_reference;
-use super::{
-    OBSERVATORY, ObservatoryState, REFERENCE_KINDS, Report, Rule, Severity, is_absolute_local,
-    is_local_path, is_reference_kind, resolve_local,
+use super::{ObservatoryState, Report, Rule, Severity};
+use crate::reference::{
+    OBSERVATORY, REFERENCE_KINDS, is_absolute_local, is_local_path, is_reference_kind,
+    resolve_local,
 };
 
 /// Rules about where a node sits in its lifecycle and what that costs.
@@ -234,7 +235,7 @@ pub(super) fn reference_rules(
             .uri
             .as_deref()
             .filter(|uri| !uri.trim().is_empty())
-            .filter(|uri| is_local_path(uri) && !resolve_local(corpus, uri).exists())
+            .filter(|uri| is_local_path(uri) && !resolve_local(corpus.root(), uri).exists())
         {
             r.push(
                 Severity::Error,

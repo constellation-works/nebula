@@ -43,7 +43,7 @@ pub(crate) use commit::{
 };
 pub use history::HistoryEntry;
 pub(crate) use inbox::validate_capture;
-pub use inbox::{Inbox, InboxEntry, Settlement};
+pub use inbox::{Inbox, InboxEntry};
 pub(crate) use root::refuse_nodes_symlink;
 
 use crate::config::Config;

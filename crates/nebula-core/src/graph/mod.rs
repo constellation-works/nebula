@@ -36,9 +36,9 @@ pub use trace::{
     Direction, Impact, Touched, Trace, TraceHop, TraceNode, Via, impact, trace, trace_within,
 };
 
-use crate::check_impl::{OBSERVATORY, resolve_observatory};
 use crate::error::{Error, Result};
 use crate::model::{self, Doc, EdgeType, Node, Note, Status};
+use crate::reference::{OBSERVATORY, resolve_observatory};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -258,6 +258,38 @@ pub struct TagCount {
     pub tag: String,
     /// How many nodes carry it.
     pub count: usize,
+}
+
+/// Every tag in the corpus, as written, with the ids of the nodes carrying
+/// it in id order.
+pub(crate) fn tag_carriers(docs: &[Doc]) -> BTreeMap<&str, Vec<&str>> {
+    let mut carriers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for d in docs {
+        for t in &d.node.tags {
+            carriers
+                .entry(t.as_str())
+                .or_default()
+                .push(d.node.id.as_str());
+        }
+    }
+    for ids in carriers.values_mut() {
+        ids.sort_unstable();
+        ids.dedup();
+    }
+    carriers
+}
+
+/// How two distinct tags collide, if they do.
+pub(crate) fn tag_drift(a: &str, b: &str) -> Option<&'static str> {
+    let (a, b) = (a.to_ascii_lowercase(), b.to_ascii_lowercase());
+    if a == b {
+        return Some("case");
+    }
+    let plural = |x: &str, y: &str| x.strip_suffix('s') == Some(y);
+    if plural(&a, &b) || plural(&b, &a) {
+        return Some("a trailing `s`");
+    }
+    None
 }
 
 /// Every tag with the number of nodes carrying it, alphabetically.

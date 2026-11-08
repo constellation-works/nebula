@@ -24,7 +24,6 @@
 //! The ops in [`crate::ops`] stay public, one write each, for a caller that
 //! composes its own; every surface in this repository goes through here.
 
-use crate::check_impl::{self as check, OBSERVATORY, Report};
 use crate::config::{CommitSetting, ObservatoryRoot};
 use crate::error::{Error, Result};
 use crate::graph_impl::{self as graph, Graph, Neighbour, NodeView};
@@ -35,6 +34,7 @@ use crate::ops_impl::{
     self as ops, Citation, Cited, CloseTag, Created, DroppedLegacy, HandedOff, Handoff,
     Initialized, NewNode, Promotion, Retagged, StatusChange,
 };
+use crate::reference::{self as reference, OBSERVATORY};
 use crate::store::{self, CommitOutcome, Corpus, InboxEntry};
 use crate::{migrate, migrate::MigrationReport};
 use std::path::{Path, PathBuf};
@@ -650,7 +650,7 @@ pub fn cite(
     options: &WriteOptions,
 ) -> Result<Written<CiteReport>> {
     let _lock = options.lock_for(corpus, WriteIntent::Authored(citation.by.as_deref()))?;
-    let setting = (check::normalize_reference_kind(&citation.kind) == OBSERVATORY)
+    let setting = (reference::normalize_reference_kind(&citation.kind) == OBSERVATORY)
         .then(|| corpus.observatory_root())
         .transpose()?;
     let root = setting.as_ref().and_then(|s| s.root.as_deref());
@@ -711,12 +711,6 @@ pub fn show(corpus: &Corpus, id: &str, at: Option<&str>) -> Result<Shown> {
     let setting = corpus.observatory_root()?;
     let view = graph::node(&Graph::build(&docs)?, id)?.with_observatory(setting.root.as_deref())?;
     Ok(Shown { view, setting })
-}
-
-/// Every invariant over the whole corpus: an unreadable node file is a
-/// finding, not a refusal.
-pub fn check(corpus: &Corpus) -> Result<Report> {
-    check::run_scanned(&corpus.scan()?, corpus)
 }
 
 /// The node as `show --json` prints it, without locating observatory
