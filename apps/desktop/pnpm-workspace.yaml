@@ -16,6 +16,10 @@ overrides:
   # @wdio/utils 9 asks for browsers 2.x, which pulls vulnerable extract-zip.
   # browsers 3 replaces it and retains the browser-download API WDIO uses.
   "@wdio/utils>@puppeteer/browsers": 3.2.3
+  # GHSA-xjj6-f33q-929c (CVE-2026-109869): patch all affected undici lines.
+  "undici@<6.29.1": 6.29.1
+  "undici@>=7.0.0 <7.30.1": 7.30.1
+  "undici@>=8.0.0 <8.12.2": 8.12.2
 
 audit:
   ignore:
