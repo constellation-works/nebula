@@ -15,6 +15,9 @@ impl Corpus {
         self.node_path(id)?;
         self.require_git()?;
         self.load(id)?;
+        if self.has_unborn_head()? {
+            return Ok(Vec::new());
+        }
         let path = format!("nodes/{id}.md");
         // The path is the node's identity. Following Git's similarity-based
         // rename/copy detection can cross into a different node's commits.
@@ -132,6 +135,9 @@ impl Corpus {
     /// The commit's own day is fixed when it is written, so every reader gets
     /// the revision that `log` shows for the date.
     fn last_commit_on_or_before(&self, path: &str, date: &str) -> Result<Option<String>> {
+        if self.has_unborn_head()? {
+            return Ok(None);
+        }
         let listed = git_ok(
             self.git_at(),
             &[
@@ -157,6 +163,35 @@ impl Corpus {
             }
         }
         Ok(None)
+    }
+
+    /// Whether `HEAD` is unborn: a symbolic ref whose target does not
+    /// exist yet, so the repository has no commit on this branch.
+    /// Classified from exit codes alone (STD-02 §R10), never stderr text:
+    /// a detached `HEAD` is not unborn, an existing target ref is not
+    /// unborn even when its object is unreadable, and any other git
+    /// failure is [`Error::Git`] so corrupt repositories stay failures.
+    fn has_unborn_head(&self) -> Result<bool> {
+        let at = self.git_at();
+        let head = git(at, &["symbolic-ref", "-q", "HEAD"])?;
+        let refname = match head.status.code() {
+            Some(0) => String::from_utf8_lossy(head.stdout_whole(&self.root, "symbolic-ref")?)
+                .trim()
+                .to_string(),
+            Some(1) => return Ok(false),
+            _ => {
+                return Err(git_failed(&self.root, "symbolic-ref", &head.stderr.text()));
+            }
+        };
+        if refname.is_empty() {
+            return Err(git_failed(&self.root, "symbolic-ref", &head.stderr.text()));
+        }
+        let shown = git(at, &["show-ref", "--verify", "--quiet", &refname])?;
+        match shown.status.code() {
+            Some(0) => Ok(false),
+            Some(1) => Ok(true),
+            _ => Err(git_failed(&self.root, "show-ref", &shown.stderr.text())),
+        }
     }
 
     fn require_git(&self) -> Result<()> {
