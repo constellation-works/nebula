@@ -1,14 +1,14 @@
 ---
 id: STD-04-testing-and-verification
 title: Testing and verification — test design, hermetic tests, honest gates, docs as contracts, and evidence-based verification conduct
-summary: Normative rules for how a change is tested and verified — regression tests that drive the real entry point and fail before the fix, no weakened guards, behaviour-only and hermetic tests, visible skips, root-caused flakes, gates that cannot pass vacuously, regenerated artifacts, docs claims and examples as contracts, and the evidence whoever makes the change (human or agent) must produce before calling it done; follow it in any project with tests, CI or docs.
+summary: Normative rules for how a change is tested and verified — boundary-first tests with unit tests only by admission, regression tests that drive the real entry point and fail before the fix, no weakened guards, behaviour-only and hermetic tests, visible skips, root-caused flakes, gates that cannot pass vacuously, regenerated artifacts, docs claims and examples as contracts, and the evidence whoever makes the change (human or agent) must produce before calling it done; follow it in any project with tests, CI or docs.
 status: active
 tags: [standard, testing, verification, ci, docs, agents]
-version: 1
+version: 2
 created: 2026-09-26
-updated: 2026-09-26
-last_validated: 2026-09-26
-related: [STD-01-cli-surface, STD-02-rust-architecture-and-errors, STD-03-concurrency-and-process-safety, STD-05-security-boundaries]
+updated: 2026-10-03
+last_validated: 2026-10-03
+related: [STD-01-cli-surface, STD-02-rust-architecture-and-errors, STD-03-concurrency-and-process-safety, STD-05-security-boundaries, STD-06-design-docs-and-feature-tracking]
 ---
 
 # Testing and verification
@@ -32,7 +32,8 @@ Orbit is the worked example, not the audience. Orbit paths are relative to
 Other standards own the neighbouring rules, and this one does not repeat them:
 - **Test layout and behaviour-only assertions in Rust** are
   [STD-02](../STD-02-rust-architecture-and-errors/STD-02.md) §R19 to §R21. §R5 below extends the
-  behaviour-only rule to every language.
+  behaviour-only rule to every language. STD-02 says *where* a Rust unit test lives; §R23 below
+  decides *whether* one should exist.
 - **Test waits, fixture process guards, the self-re-exec ban and host-state isolation** are
   [STD-03](../STD-03-concurrency-and-process-safety/STD-03.md) §R17 to §R20. Runtime containment and
   wall-clock limits for test runs are STD-03 §R21 and §R22.
@@ -72,6 +73,35 @@ examples in Orbit, and [`CHANGELOG.md`](CHANGELOG.md) what changed in each versi
   - A test that pins operational policy owned by config or prompts (agent crew or model,
     schedule, prompt or UI wording) is allowed only if its assertion message cites the
     incident it guards.
+- **R23.** Behaviour MUST be tested at a stable boundary by default:
+  - an integration test through the project's public API or built binary;
+  - a golden for an output contract (help, machine-readable output, schemas, generated
+    policy, parser output over captured input);
+  - an end-to-end test for a critical flow.
+
+  A unit test, meaning one that reaches below that boundary, is admitted only when the boundary
+  cannot prove the same guarantee economically and the test guards one of:
+  - combinatorial pure logic (a transition table, a parser's edge cases, policy or selector
+    matching, scheduling arithmetic), written as one table-driven test per invariant;
+  - an interleaving or fault that needs a test seam: a race, a crash mid-write, a lost reply,
+    a TOCTOU swap;
+  - a security or safety invariant the boundary cannot reach cheaply;
+  - platform or kernel behaviour that no integration test runs.
+
+  An admitted unit test's name or assertion message names the invariant it guards. The
+  following are not admitted as unit tests:
+  - serialization round-trips, defaults, getters and builders;
+  - mock-wiring assertions;
+  - a second test of an invariant that already has one;
+  - behaviour that a boundary test already covers.
+- **R24.** Every golden or snapshot diff in a change MUST be explained by that change.
+  Regenerating goldens to turn a gate green without reviewing and explaining the diff is
+  relaxing a guard (§R3).
+- **R25.** A unit test MAY be retired when a boundary test or golden now covers its behaviour,
+  or when it fails §R23's admission criteria. It MUST NOT be retired while it is the only guard
+  of a security invariant or a cited incident: either that guard moves to the boundary in the
+  same change, or the test stays. A kept test keeps the support code it depends on, including
+  test seams and child-process entry points.
 
 ### Hermeticity and isolation
 
@@ -144,7 +174,7 @@ examples in Orbit, and [`CHANGELOG.md`](CHANGELOG.md) what changed in each versi
 
 ## Applies to
 
-- `universal`: R1 to R22. Any project with tests, CI or documentation, of any size or
+- `universal`: R1 to R25. Any project with tests, CI or documentation, of any size or
   language, and any author of a change, human or agent.
 - `rust`: the nextest, `#[ignore]`, `cargo test --doc` and `--include-ignored` gates in
   [`checks.md`](checks.md). Rust projects also follow STD-02 §R19 to §R21 for test layout.
@@ -167,6 +197,9 @@ Some deviations are expected, and the decision still needs to be recorded:
   decision names it.
 
 Known deviations in the exemplar itself, so adopters do not copy them:
+- At `e40faaf3e` (2026-10-03), Orbit had about 7,675 unit tests, and most of them are not admitted under
+  §R23. A per-crate review kept 180. Adding the replacement boundary coverage and retiring the
+  rest is tracked by ORB-13812 to ORB-13836.
 - `crates/orbit-cli/tests/mcp_roundtrip.rs#readonly_state_mount_keeps_cli_and_mcp_reads_observational`
   returns early, printing nothing, when bubblewrap mount namespaces are unavailable. No CI mode
   fails that skip (against R8).

@@ -1,12 +1,12 @@
 ---
 id: STD-02-rust-architecture-and-errors
-title: Rust architecture and errors — layering, visibility, typed errors, failure semantics, logging, and test layout for constellation Rust projects
-summary: Normative structure and failure rules for any constellation Rust repo (workspace or single-crate CLI) — dependency direction, crate splits, visibility, one definition per rule, typed thiserror errors translated at the boundary, errors that name verified causes, exhaustive matches, load-time config validation, unknown-never-reads-as-success, fail-closed vs fail-open, batch isolation, preconditions before side effects, lossless persisted shapes, tracing, dead code, test layout — plus the copyable lint, dependency-direction and cargo-deny gates. Read before creating or restructuring a Rust project or designing how it fails.
+title: Rust architecture and errors — layering, visibility, typed errors, failure semantics, idiom and naming, logging, and test layout for constellation Rust projects
+summary: Normative structure and failure rules for any constellation Rust repo (workspace or single-crate CLI) — dependency direction, crate splits, visibility, one definition per rule, typed thiserror errors translated at the boundary, errors that name verified causes, exhaustive matches, load-time config validation, unknown-never-reads-as-success, fail-closed vs fail-open, batch isolation, preconditions before side effects, no boolean mode parameters, Rust API naming, borrow-general signatures, reasoned and expiring lint suppressions, lossless persisted shapes, tracing, dead code, test layout — plus the copyable lint, dependency-direction and cargo-deny gates. Read before creating or restructuring a Rust project or designing how it fails.
 status: active
-tags: [standard, rust, architecture, errors, failure-semantics, testing, lints]
-version: 3
+tags: [standard, rust, architecture, errors, failure-semantics, idioms, naming, testing, lints]
+version: 4
 created: 2026-09-26
-updated: 2026-09-26
+updated: 2026-10-28
 last_validated: 2026-09-26
 related: [STD-01-cli-surface, STD-03-concurrency-and-process-safety, STD-04-testing-and-verification, STD-05-security-boundaries]
 ---
@@ -92,6 +92,39 @@ same.
   referenced as `dep.workspace = true` (package `version`, `edition`, `rust-version` and
   `license` inherited the same way); a single crate pins `rust-version` in `[package]`.
 
+### Idiom and naming
+
+These rules bind new and changed code. An existing signature or name is brought into line
+when the change touches it for another reason, not in a sweep of its own.
+
+- **R36.** *No boolean mode parameters.* A function or method callable outside its own
+  module MUST NOT take a `bool` that selects between behaviours (`render(true)`,
+  `sync(path, false)`). It takes a two-variant enum named for the choice
+  (`Verbosity::Summary | Verbosity::Full`), or the operation becomes two functions. A `bool`
+  that is plain data — a setter's value, a field of an options struct, a value carried into
+  a persisted or wire shape — is not a mode and is allowed. A private helper whose callers
+  sit beside it MAY take a mode `bool`.
+- **R37.** *Rust API naming.* Names SHOULD follow the Rust API Guidelines naming rules.
+  Getters drop `get_` (`fn name(&self)`, `fn name_mut(&mut self)`). Conversion prefixes
+  match the real cost and ownership: `as_` is a free borrow-to-borrow view, `to_` is costly
+  or borrow-to-owned, and `into_` consumes `self`. Constructors are `new` and `with_*`; a
+  fallible one is `try_new`, `TryFrom` or `FromStr`. A type that has `len()` has
+  `is_empty()`. A type is named for what it is, not with a `Manager`, `Service`, `Helper`
+  or `Util` suffix, and an abbreviation an outside reader would not know is spelled out.
+- **R38.** *Signatures borrow the most general type and own only what they keep.* A
+  parameter that is only read SHOULD take the most general borrowed form (`&str`, `&[T]`,
+  `&Path`, `&T`, `Option<&T>`), never `&String`, `&Vec<T>`, `&PathBuf`, `&Box<T>` or
+  `&Option<T>`. A function that stores or consumes an argument takes it by value rather
+  than borrowing it and cloning inside. `Rc`, `Arc`, `RefCell` and `Mutex` stay out of
+  signatures shared across modules unless shared ownership is the contract. A `clone()`
+  whose only purpose is to end a borrow is replaced by restructuring (a narrower borrow,
+  `mem::take`, `Option::take`, splitting a struct so disjoint fields borrow separately); a
+  deliberate clone of non-trivial data on a hot path says so in a comment. Conversions
+  implement `From`, `TryFrom` or `FromStr`, never `Into` directly or an inherent
+  `from_str`. `Deref` is implemented only by smart pointers and owning collections, never
+  to imitate inheritance. Absence is `Option`, never a sentinel such as `""`, `-1` or `0`
+  (R29).
+
 ### Errors and domain types
 
 - **R10.** *Typed errors per unit; classify from structure.* Each crate (single crate: each
@@ -117,8 +150,8 @@ same.
   the surface type, in the surface crate.
 - **R13.** *No panics on fallible paths.* Production code MUST propagate failures with `?`
   instead of `unwrap()`, `expect()`, `panic!`, `todo!` or `unreachable!`; tests are exempt,
-  and a genuine invariant `expect` carries a scoped `#[allow]` with a comment stating the
-  invariant.
+  and a genuine invariant `expect` carries
+  `#[expect(clippy::expect_used, reason = "<the invariant>")]` on the narrowest item (R35).
 - **R14.** *Newtypes with validating constructors.* A primitive that carries a protocol
   contract (IDs, refs, versions, hashes, selectors) that crosses a function boundary SHOULD
   be a newtype with a private inner value and a fallible constructor (`new`/`FromStr`/
@@ -225,12 +258,22 @@ same.
 - **R23.** *Supply-chain gate.* CI MUST run `cargo deny check` against a checked-in
   `deny.toml` that denies yanked crates, open advisories and unknown sources and allow-lists
   licenses, with every exception carrying a reason and a re-review date.
+- **R35.** *Lint suppressions state a reason and expire.* A suppression MUST be
+  `#[expect(<lint>, reason = "…")]` on the narrowest item that needs it, so the reason is
+  reviewable and the compiler reports the suppression once the lint stops firing. `#[allow]`
+  is reserved for generated code, macro output and a lint that fires on only some targets
+  or `cfg`s (where an `expect` would go unfulfilled on the others), and it still carries
+  `reason = "…"`. Test-only relaxations of R13 go in `clippy.toml`
+  (`allow-unwrap-in-tests`, `allow-expect-in-tests`) or a reasoned
+  `cfg_attr(test, allow(…, reason = "…"))`. Source never contains `#![deny(warnings)]`;
+  warnings fail the build only in CI (R22). A suppression without a reason is fixed when
+  its item changes. Needs `rust-version` 1.81 or later.
 
 ## Applies to
 
 - `rust`: every rule, in every constellation Rust project, whether a multi-crate workspace
   or a single-crate CLI; all gates in [Machine checks](checks.md).
-- `universal`: R24–R26 and R29–R34, the classification clause of R10 and the lossless
+- `universal`: R24–R26, R29–R34 and R36, the classification clause of R10 and the lossless
   clause of R16 are language-neutral and bind any project; R27 and R28 wherever the
   language offers exhaustiveness checking and checked conversions.
 - `cli`: R7's two-crate default, R11 and R12's downstream-surface form, and R15's stream
@@ -259,4 +302,7 @@ it is in `[workspace.dependencies]` (R9); `missing_docs` is allowed at most crat
 match (R27); Orbit gates none of the [adoptable lints](checks.md#adoptable-additions-beyond-orbits-baseline);
 and Orbit has no stream grep guard (R15): besides its logging subscriber, `orbit-exec`
 writes stderr from a signal handler and a debug tee, and `orbit-common` probes stderr for a
-terminal.
+terminal. As of v4 (measured 2026-10-28 at `7af1c6e74`), Orbit has 459 `#[allow]`
+attributes, none with a reason, and no `#[expect]` (R35); about 58 `pub`/`pub(crate)`
+functions take a `bool` parameter, not yet sorted into modes and data (R36); and 20 public
+`get_` getters (R37). All are grandfathered until touched.

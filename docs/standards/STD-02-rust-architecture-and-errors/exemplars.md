@@ -40,3 +40,4 @@ Paths are relative to `codebases/orbit/`.
 - R21 — `AGENTS.md#rules` (text-matching ban); `docs/design-patterns/test_layout.md#what-tests-assert-invariants-vs-policy`
 - R22 — `Cargo.toml#workspace.lints.clippy`; `Makefile#ci-lint`; `scripts/ci-guardrails.sh` (`cargo clippy --workspace --all-targets -- -D warnings`)
 - R23 — `deny.toml`; `scripts/cargo-deny.sh`; `Makefile#audit`
+- R35–R38 — none yet: Orbit predates them and is listed under *Deviations* in [`STD-02.md`](STD-02.md#deviations).
