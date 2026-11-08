@@ -48,6 +48,10 @@ pub(super) fn run_command(cmd: &mut Command, args: String) -> Run {
     }
 }
 
+/// A POSIX zone two hours ahead of UTC, with no daylight saving, so a stamp's
+/// offset is known whatever zone the suite runs in.
+pub(super) const PLUS_TWO: (&str, &str) = ("TZ", "XYZ-2");
+
 pub(super) struct Corpus {
     pub(super) dir: tempfile::TempDir,
     pub(super) root: PathBuf,

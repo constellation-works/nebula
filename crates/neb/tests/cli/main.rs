@@ -54,6 +54,7 @@ mod refusals;
 mod review;
 mod root;
 mod set_root;
+mod stamp;
 mod stdout;
 mod supervised_git;
 mod tags;
