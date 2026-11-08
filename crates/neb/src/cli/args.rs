@@ -719,8 +719,15 @@ impl Command {
     ///
     /// No wildcard arm, so a new verb has to say here whether it writes: one
     /// that does flattens a [`CommitArg`] and returns it here, one that does
-    /// not is listed as `None`.
+    /// not is listed as `None`. The mixed verbs `tag` and `config` offer the
+    /// flag for their writes but never for their reads: `tag list`, a bare
+    /// `config commit` read, and a bare `config observatory-root` read take
+    /// no lock and commit nothing, so the flag there has nothing to skip
+    /// (STD-01 §R28).
     pub(crate) fn commit_arg(&self) -> Option<CommitArg> {
+        if self.read_only_label().is_some() {
+            return None;
+        }
         match self {
             Self::Migrate { commit }
             | Self::Config {
@@ -753,6 +760,118 @@ impl Command {
             | Self::Graph { .. }
             | Self::Review { .. }
             | Self::Open { .. } => None,
+        }
+    }
+
+    /// The read-only shape's label when this invocation reads and never
+    /// commits: `tag list`, a bare `config commit`, or a bare
+    /// `config observatory-root`. `None` for every write and for the verbs
+    /// that never offer `--no-commit`.
+    ///
+    /// No wildcard arm, so a new mixed shape has to say here whether it
+    /// reads: the dispatch in [`super::run`] refuses `--no-commit` on these
+    /// shapes before any corpus operation.
+    pub(crate) fn read_only_label(&self) -> Option<&'static str> {
+        match self {
+            Self::Tag {
+                target,
+                add,
+                remove,
+                ..
+            } if target == "list" && add.is_empty() && remove.is_empty() => Some("tag list"),
+            Self::Config {
+                setting: ConfigSetting::Commit { state: None, .. },
+            } => Some("config commit"),
+            Self::Config {
+                setting:
+                    ConfigSetting::ObservatoryRoot {
+                        dir: None,
+                        drop_legacy: false,
+                        ..
+                    },
+            } => Some("config observatory-root"),
+            Self::Migrate { .. }
+            | Self::Config { .. }
+            | Self::Capture { .. }
+            | Self::Promote { .. }
+            | Self::Drop { .. }
+            | Self::Triage { .. }
+            | Self::New { .. }
+            | Self::Edit { .. }
+            | Self::Sharpen { .. }
+            | Self::Status { .. }
+            | Self::Link { .. }
+            | Self::Tag { .. }
+            | Self::Note { .. }
+            | Self::Cite { .. }
+            | Self::Handoff { .. }
+            | Self::Init { .. }
+            | Self::Check
+            | Self::Completions { .. }
+            | Self::Inbox { .. }
+            | Self::Show { .. }
+            | Self::Log { .. }
+            | Self::List { .. }
+            | Self::Near { .. }
+            | Self::Trace { .. }
+            | Self::Impact { .. }
+            | Self::Graph { .. }
+            | Self::Review { .. }
+            | Self::Open { .. } => None,
+        }
+    }
+
+    /// Whether `--no-commit` was written after a read-only shape, where clap
+    /// still parses it because the mixed verb flattens [`CommitArg`] for its
+    /// writes. The dispatch refuses it before any corpus operation (STD-01
+    /// §R28); a verb without the flag never reaches that refusal.
+    pub(crate) fn read_only_no_commit(&self) -> bool {
+        match self {
+            Self::Tag {
+                target,
+                add,
+                remove,
+                commit,
+            } => target == "list" && add.is_empty() && remove.is_empty() && commit.no_commit,
+            Self::Config {
+                setting:
+                    ConfigSetting::Commit {
+                        state: None,
+                        commit,
+                    }
+                    | ConfigSetting::ObservatoryRoot {
+                        dir: None,
+                        drop_legacy: false,
+                        commit,
+                    },
+            } => commit.no_commit,
+            Self::Migrate { .. }
+            | Self::Config { .. }
+            | Self::Capture { .. }
+            | Self::Promote { .. }
+            | Self::Drop { .. }
+            | Self::Triage { .. }
+            | Self::New { .. }
+            | Self::Edit { .. }
+            | Self::Sharpen { .. }
+            | Self::Status { .. }
+            | Self::Link { .. }
+            | Self::Note { .. }
+            | Self::Cite { .. }
+            | Self::Handoff { .. }
+            | Self::Init { .. }
+            | Self::Check
+            | Self::Completions { .. }
+            | Self::Inbox { .. }
+            | Self::Show { .. }
+            | Self::Log { .. }
+            | Self::List { .. }
+            | Self::Near { .. }
+            | Self::Trace { .. }
+            | Self::Impact { .. }
+            | Self::Graph { .. }
+            | Self::Review { .. }
+            | Self::Open { .. } => false,
         }
     }
 
