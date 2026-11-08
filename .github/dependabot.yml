@@ -17,6 +17,13 @@ updates:
       cargo-minor-patch:
         update-types: [minor, patch]
     ignore:
+      # Tauri's webview build requires these Rust crates to stay on the same
+      # major/minor versions as the npm runtime packages. Coordinate those
+      # updates across ecosystems instead of accepting one side independently.
+      - dependency-name: tauri
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: tauri-plugin-opener
+        update-types: [version-update:semver-major, version-update:semver-minor]
       # Deferred (ORB-13223): ctor 1.0 moves `#[dtor]` into a separate `dtor`
       # crate, and Tauri (tauri-utils) still depends on ctor 0.8. Adopting it
       # would add a second ctor plus link-section, linktime-proc-macro and
@@ -32,6 +39,14 @@ updates:
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
+    ignore:
+      # Paired with the Cargo ignores above (ORB-13798): keep the runtime
+      # package and Rust crate on the same major/minor versions. Coordinate
+      # their upgrades in one change; patch updates remain grouped here.
+      - dependency-name: '@tauri-apps/api'
+        update-types: [version-update:semver-major, version-update:semver-minor]
+      - dependency-name: '@tauri-apps/plugin-opener'
+        update-types: [version-update:semver-major, version-update:semver-minor]
   - package-ecosystem: github-actions
     directory: /
     target-branch: agent-main

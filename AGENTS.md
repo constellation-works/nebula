@@ -86,8 +86,14 @@ match it. CI actions are pinned by commit SHA, and pnpm by version and sha512
 in `apps/desktop/package.json`. Dependabot (`.github/dependabot.yml`) watches
 cargo, npm and the actions: one grouped PR per ecosystem for minor and patch
 updates, one PR per major. Adopt a major with the changes it needs, or defer it
-with an `ignore` entry there that gives the reason. `make audit` runs cargo-deny, the pnpm pin check
-and `pnpm audit`. Fix an npm advisory with an override in
+with an `ignore` entry there that gives the reason. Tauri runtime versions are
+an exception: Cargo `tauri` and `tauri-plugin-opener` must stay on the same
+major/minor versions as npm `@tauri-apps/api` and
+`@tauri-apps/plugin-opener`. Their major and minor updates are deferred in both
+ecosystems and adopted together; patch updates remain in the ecosystem groups.
+Keep the corresponding Dependabot ignores while coordinating each upgrade.
+`make audit` runs cargo-deny, the pnpm pin check and `pnpm audit`. Fix an npm
+advisory with an override in
 `apps/desktop/pnpm-workspace.yaml`; one with no fix gets an ignore there with
 its reason and a re-review date.
 
