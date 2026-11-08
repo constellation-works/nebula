@@ -162,3 +162,38 @@ and a full `git status --short` inventory before any write, for this reason.
 into the wrong tree. See also F2026-07-160. Shared repositories, trackers and hosts have
 other actors, and an operation that is not scoped to one's own changes eventually lands on
 theirs.
+
+**R23.** At `e40faaf3e` (2026-10-03), Orbit's unit tests under `crates/*/src/**` came to
+about 295k non-blank lines and 7,675 test functions. That was more than the 274k lines of
+production code they covered. Crate-root integration tests were 37k lines.
+
+Most of those unit tests pinned internals:
+- A refactor that kept behaviour unchanged still broke dozens of them.
+- Agents spent their budget repairing tests rather than finding defects.
+- The suite only grew. ORB-12965 measured the ten largest test files and found hundreds of
+  tests with zero unique line coverage.
+
+A per-crate review kept 180 unit tests (2.3%). Every one of them fell into one of R23's four
+admission classes.
+
+Two reasons stop the rule from going further and banning unit tests outright:
+- **Edge cases.** Edge-case tables and seam-driven races are far cheaper below the boundary.
+- **Failure localisation.** A failing e2e test localises a fault poorly, which costs the
+  debugging budget the deletion saved.
+
+R1 already puts regression tests at the production entry point. R23 extends the same reasoning
+to all new tests.
+
+**R24.** A golden is only as strong as the review of its diff. With R23 moving more
+guarantees into goldens, re-blessing becomes the cheapest way for an author, human or agent,
+to turn a gate green. An unexplained regenerate is the golden form of the loosened assertion
+R3 forbids.
+
+**R25.** The 2026-10-03 review found two hazards in retiring tests:
+- **Sole guards.** Several tests were the only guard of a security or incident invariant.
+  Examples are symlink-escape refusal in destructive cleanup, and redaction across chunk
+  boundaries.
+- **Hidden dependencies.** Some kept tests depend on support code that looks dead: `#[cfg(test)]`
+  seams in production code, and an `#[ignore]`d test that a kept test re-execs as a crashing
+  child (`orbit-store` `fs/lock/tests/file_lock.rs`). Deleting it silently breaks the kept test.
+

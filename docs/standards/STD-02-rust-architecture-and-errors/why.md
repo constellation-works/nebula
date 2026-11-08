@@ -8,6 +8,12 @@ Decision citations of the form `area:n` point at
 `codebases/orbit/docs/design/<area>/4_decisions.md` line *n*. Frictions are Orbit's unless
 marked *(polaris)*.
 
+R36–R38 and R35 were adopted in v4 from the BeautifulRust agent skills
+(github.com/morganlinton/BeautifulRust, MIT, reviewed 2026-10-28), which distil the Rust API
+Guidelines, Effective Rust, the Google Rust Style Guide, Rust Design Patterns and
+Microsoft's Pragmatic Rust Guidelines. Only rules that STD-02 lacked and that do not
+contradict it were taken; its advice to use `anyhow` in application code was not (R10).
+
 - **R1.** A declared order turns "where does this go?" into a lookup. Orbit's 17 crates stay
   navigable because every crate sits on one named tier and "lower layers never depend on
   higher ones" is the whole rule; agents new to a repo follow a written order and violate a
@@ -54,6 +60,23 @@ marked *(polaris)*.
   often, and every run that skipped it wedged at commit" (activity-job:1479), so Orbit now
   derives it from the change. SHOULD rather than MUST: many projects have no instruction
   layer, and some obligations cannot be computed.
+- **R36.** `report(true)` cannot be read at the call site and cannot grow a third mode
+  without breaking every caller; a two-variant enum names the choice and extends cleanly.
+  Clippy's `fn_params_excessive_bools` cannot tell a mode from data, so the rule is mostly
+  review-only. Data `bool`s are
+  exempt because an enum there adds a type without adding meaning.
+- **R37.** Shared naming conventions let a reader predict an API without opening it: `as_`,
+  `to_` and `into_` tell the caller what a conversion costs and whether it consumes the
+  value, and a getter without `get_` matches the standard library (API Guidelines C-CONV,
+  C-GETTER, C-CTOR). `Manager`/`Service`/`Util` names say nothing about what a type does and
+  attract unrelated code, the type-level form of R7's taxonomy crates. SHOULD, because
+  renaming an established name is a churn cost a reviewer may reasonably decline.
+- **R38.** `&String` and `&Vec<T>` force callers to own exactly that container; the general
+  borrow accepts literals, slices and borrows alike. A clone added to quiet the borrow
+  checker silently splits one value into two, so a later write lands on the copy. `Rc` or
+  `RefCell` in a shared signature moves borrow checking to run time for every caller. A
+  sentinel `""` or `-1` is R29's "unknown reads as a value" in miniature. SHOULD, because
+  each item has legitimate exceptions a reviewer can see.
 - **R8.** Every `pub` item is surface someone else can couple to. Private-by-default keeps
   refactors local; ORB-10016 trimmed `orbit-core`'s root re-exports to the consumer-justified
   set for this reason.
@@ -78,7 +101,10 @@ marked *(polaris)*.
   cannot depend on the surface crate.
 - **R13.** A panic at a boundary turns a recoverable condition (bad input, missing file,
   lost race) into a crash with no error path for the caller or the surface. Orbit keeps
-  `unwrap_used`/`expect_used` on for production and exempts tests with `cfg_attr(test)`.
+  `unwrap_used`/`expect_used` on for production and exempts tests with `cfg_attr(test)`. Since v4
+  an invariant `expect` is marked with `#[expect(clippy::expect_used, reason = …)]` rather
+  than a scoped `#[allow]` and a comment, so the invariant travels with the suppression
+  (R35).
 - **R14.** Validate-then-use leaves every callsite to remember the check and admits
   time-of-check/time-of-use bugs; a validated type carries the proof. Orbit's own
   `docs/design-patterns/newtype.md` records that it has no production private-inner
@@ -192,3 +218,10 @@ marked *(polaris)*.
 - **R23.** Advisory, license and source drift enters through `Cargo.lock` without anyone
   editing code. Orbit gates it in CI (ORB-00416, ORB-11983) with time-boxed, justified
   exceptions.
+- **R35.** A reasonless `#[allow]` outlives the code that needed it and hides new
+  instances of the same lint in that item. `#[expect]` with a reason states the exception
+  where a reviewer reads it and turns into a warning once the lint no longer fires, so
+  stale suppressions clean themselves up. `#![deny(warnings)]` in source breaks the build on
+  every toolchain that adds a warning; CI's `-D warnings` (R22) gives the same strictness
+  without that. Orbit carried 459 reasonless `#[allow]`s at v4, which is why existing ones
+  are fixed on touch rather than all at once.

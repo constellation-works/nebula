@@ -26,6 +26,14 @@ Paths are relative to `codebases/orbit/`.
 - R5 — `AGENTS.md#Rules` (the text-matching ban and its structural-guard exception) and
   `#Code` (invariants, not policy);
   `docs/design-patterns/test_layout.md#What tests assert (invariants vs. policy)`.
+- R23 — `docs/design-patterns/test_strategy.md` (the layers and the admission criteria; from
+  constellation-works/orbit#3015); `crates/orbit-policy/src/tests/matrix.rs#precedence_matrix`
+  (an admitted table-driven unit test); `crates/orbit-cli/tests/output_goldens/` (goldens for
+  output contracts).
+- R24 — `docs/design-patterns/test_strategy.md#Goldens`; `scripts/check-goldens.sh`.
+- R25 — `docs/design-patterns/test_strategy.md#Retiring a unit test`;
+  `crates/orbit-store/src/fs/lock/tests/file_lock.rs#sigkilled_holder_releases_lock`, which depends on the
+  `#[ignore]`d `crash_holder_child` entry point that it re-execs.
 - R6 — `crates/orbit-engine/src/activity_job/tests/workspace.rs#GitShim` (`install`
   re-runs the test in a child with `PATH` set on the child command);
   `crates/orbit-common/src/test_env.rs#ScopedEnv`; `.config/nextest.toml` (the

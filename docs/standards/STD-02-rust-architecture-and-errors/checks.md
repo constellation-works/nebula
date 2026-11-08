@@ -21,6 +21,9 @@ with the gate its rule names, or say it is review-only.
 | R12 | Error-translation check (registry of boundary errors → translator in owning unit; no `FooError::X => SurfaceError::Y` at call sites) — adopt once there are two or more translators |
 | R13 | `clippy::unwrap_used`, `clippy::expect_used` (+ `-D warnings`) |
 | R14 | review-only |
+| R36 | Adoptable lint `clippy::fn_params_excessive_bools` with `max-fn-params-bools = 1` catches two or more `bool`s on one function; a single mode `bool` is review-only (at `0` the lint also fires on setters and other data `bool`s) |
+| R37 | Default-on `clippy::wrong_self_convention`, `clippy::len_without_is_empty` and `clippy::should_implement_trait` (+ `-D warnings`) catch part of it; the rest is review-only |
+| R38 | Default-on `clippy::ptr_arg` and `clippy::from_over_into`; adoptable `clippy::clone_on_ref_ptr`, `clippy::rc_buffer`, `clippy::needless_pass_by_value`; clones that only end a borrow are review-only |
 | R26 | review-only; a unit test per error constructor can assert that the resolved inputs appear in the message |
 | R27 | Adoptable lints `clippy::wildcard_enum_match_arm` and `clippy::match_wildcard_for_single_variants` (see [Adoptable additions](#adoptable-additions-beyond-orbits-baseline)); not in Orbit's baseline |
 | R28 | A load-time test per bounded key (an out-of-range value is refused at load, naming the key); adoptable lints `clippy::cast_possible_truncation`, `clippy::cast_sign_loss`, `clippy::cast_possible_wrap` for the `as` ban; not in Orbit's baseline |
@@ -39,6 +42,7 @@ with the gate its rule names, or say it is review-only.
 | R21 | review-only |
 | R22 | `cargo clippy --all-targets -- -D warnings` in CI and in the pre-handoff gate |
 | R23 | `cargo deny check` in CI |
+| R35 | Adoptable lints `clippy::allow_attributes_without_reason` and `clippy::allow_attributes`; a grep ban on `deny(warnings)` in `*.rs` |
 
 ## Lint baseline (R13, R15, R22)
 
@@ -92,6 +96,11 @@ is enforced only in `orbit-config` and `orbit-web`. A new repo keeps `missing_do
 the start. Crate-root integration tests (`tests/*.rs`) need their own
 `#![allow(clippy::expect_used, clippy::unwrap_used)]`.
 
+These attributes are Orbit's as written. Since v4, R35 wants a reason on each: write
+`#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used, reason = "…"))]`, or
+drop the attributes and set `allow-unwrap-in-tests = true` and `allow-expect-in-tests = true`
+in `clippy.toml`.
+
 CI and the pre-handoff gate run:
 
 ```sh
@@ -115,7 +124,35 @@ match_wildcard_for_single_variants = "warn"
 cast_possible_truncation = "warn"
 cast_sign_loss = "warn"
 cast_possible_wrap = "warn"
+# STD-02 §R35 — every suppression is #[expect(..., reason = "...")]; #[allow] only with a
+# reason (restriction group; needs rust-version 1.81+). A repo with many reasonless
+# #[allow]s can start with allow_attributes_without_reason alone.
+allow_attributes_without_reason = "warn"
+allow_attributes = "warn"
+# STD-02 §R36 — two or more bools on one function (pedantic group); threshold in clippy.toml.
+fn_params_excessive_bools = "warn"
+# STD-02 §R38 — visible Rc/Arc clones, no Rc<String>, no by-value params that are only read.
+clone_on_ref_ptr = "warn"
+rc_buffer = "warn"
+needless_pass_by_value = "warn"
 ```
+
+with, in `clippy.toml`:
+
+```toml
+max-fn-params-bools = 1
+```
+
+And a grep ban for R35's "no `deny(warnings)` in source":
+
+```sh
+if grep -rnE --include='*.rs' 'deny\(warnings\)' crates; then  # single crate: src
+  echo "#![deny(warnings)] in source (STD-02 §R35)" >&2; exit 1
+fi
+```
+
+These were checked with `cargo clippy` 0.1.98 on 2026-10-28 (`max-fn-params-bools = 0`
+fired on a `set_on(&mut self, on: bool)` setter, hence `1`).
 
 And a grep ban for R16's "no fabricated timestamps", suitable for the same CI job:
 
@@ -124,6 +161,37 @@ if grep -rnE --include='*.rs' 'serde\(default = "(chrono::)?Utc::now"' crates; t
   echo "fabricated timestamp default (STD-02 §R16)" >&2; exit 1
 fi
 ```
+
+## Review checklist (rules no lint can check)
+
+Use this when reviewing a Rust diff against STD-02, after the gates above are green. Check
+only the changed lines and what they break.
+
+- **Failure paths.** A new error path names verified causes and resolved inputs (R26); a
+  `map_err(|_| …)` that drops the source, or a `String` error in library code (R10); a
+  panic reachable from input (R13); unknown read as 0, empty or success (R29); one bad item
+  aborting a batch (R32); a side effect before validation (R34).
+- **Types and shapes.** A wildcard arm on a domain enum (R27); a bare `String` id that
+  crosses a function boundary (R14); a persisted shape changed incompatibly or a fabricated
+  default (R16); a `pub` that only a test needed (R8, R19).
+- **Signatures and names.** A mode `bool` on a shared function (R36); `get_`, a mismatched
+  `as_`/`to_`/`into_`, or a `Manager`/`Util` name (R37); `&String`/`&Vec<T>`, a clone that
+  only ends a borrow, `Rc`/`RefCell` in a shared signature, or a sentinel for absence
+  (R38).
+- **Suppressions.** A new `#[allow]`, or an `#[expect]` without a reason (R35).
+- **Structure.** A new edge against the layer order (R1–R6); logic in a surface (R2, R24).
+
+Report each finding as `STD-02 §Rn — <what is wrong> — <path>:<line>` with the smallest
+code change that fixes it, grouped by severity:
+
+- **Must fix:** a bug, a reachable panic, a broken persisted or public contract, or a MUST
+  rule broken by new code.
+- **Should fix:** a SHOULD rule or a MUST rule's cost that is real but not yet a bug (a
+  worse error message, a harder test).
+- **Consider:** naming and polish, and anything that looks deliberate; say the trade-off.
+
+Group repeats into one finding with every location. Keep the list proportionate, and name
+what the change already does well so the author knows what to keep.
 
 ## Stream grep guard (R15)
 

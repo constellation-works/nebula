@@ -4,6 +4,22 @@ Version history of [STD-02](STD-02.md). Adopting repos pin the `version:` in its
 frontmatter as `STD-02@<version>`; a version changes only when a rule is added,
 removed or changed in meaning.
 
+- **4** (2026-10-28, Daniel; adopted from the BeautifulRust agent skills, reviewed
+  2026-10-28).
+  - Normative, new cluster "Idiom and naming", binding new and changed code: R36 no boolean
+    mode parameters on functions callable outside their module (MUST; data `bool`s and
+    private helpers exempt); R37 Rust API naming (SHOULD); R38 signatures borrow the most
+    general type and own only what they keep, no borrow-ending clones, no sentinels
+    (SHOULD).
+  - Normative, new rule in Gates: R35 lint suppressions are `#[expect(…, reason = …)]` on
+    the narrowest item, `#[allow]` only for generated, macro or target-dependent cases and
+    still with a reason, and no `#![deny(warnings)]` in source.
+  - Normative, changed rule: R13's invariant `expect` uses `#[expect(clippy::expect_used,
+    reason = …)]` instead of a scoped `#[allow]` with a comment.
+  - Machine checks gained the R35, R36 and R38 adoptable lints, a `deny(warnings)` grep ban
+    and a review checklist with severity tiers. The lint baseline block is unchanged.
+  - Not adopted from the source: `anyhow` in application code (contradicts R10), clippy's
+    `pedantic` group and `missing_docs` everywhere (R22 keeps the baseline short).
 - **3** (2026-09-26, Daniel).
   - Normative, changed rule: R18 treats file size as a heuristic. Past about 800 lines a
     file SHOULD be checked for multiple responsibilities and split along them; closely
