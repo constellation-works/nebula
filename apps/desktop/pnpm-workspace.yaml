@@ -20,6 +20,16 @@ overrides:
   "undici@<6.29.1": 6.29.1
   "undici@>=7.0.0 <7.30.1": 7.30.1
   "undici@>=8.0.0 <8.12.2": 8.12.2
+  # GHSA-g3hv-75wg-m249 (CVE-2026-118764, moderate): minimatch denial of
+  # service via globparts amplification, fixed in 11.0.1. Scoped to the
+  # vulnerable range so pre-7 lines keep resolving as dependents expect.
+  "minimatch@>=7.0.0 <11.0.1": 11.0.1
+  # Companion: glob 10 reads minimatch's internal `.set` shape, which the
+  # minimatch 10 rewrite removed, so glob 10 silently matches nothing under
+  # 11. @wdio/config 9 (the only glob 10 consumer, for wdio spec discovery)
+  # only needs `sync(pattern, {cwd, matchBase})`, which glob 13 keeps.
+  # Pin it to the 13.0.6 already resolved via mocha 12.
+  "@wdio/config>glob": 13.0.6
 
 audit:
   ignore:
