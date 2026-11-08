@@ -102,7 +102,7 @@ pub enum Severity {
 pub struct Finding {
     /// Error or warning.
     pub level: Severity,
-    /// Which invariant, by its number in `docs/design/v0.2/1_spec.md`.
+    /// Which invariant, by its number in `docs/design/_archived/v0.2/1_spec.md`.
     pub rule: u8,
     /// The node it belongs to, where there is one.
     pub node: Option<String>,

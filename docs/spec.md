@@ -14,11 +14,11 @@ related: ["[[principia]]", "[[orbit-research]]"]
 > system is shaped this way. It described a v0.1 model built around `domain`,
 > `evidence`, `weigh` and `graduate`; the 2026-09-12 reduction removed all four
 > in favour of tags, references, and hand-off by citation rather than by verb
-> (see [docs/design/v0.2/1_spec.md](design/v0.2/1_spec.md), "What is
+> (see [docs/design/_archived/v0.2/1_spec.md](design/_archived/v0.2/1_spec.md), "What is
 > removed"). A later `handoff` verb writes that citation for an Observatory
 > record and closes the node in one step, without a status of its own (same
 > document, "Hand-off"). The maintained documentation is
-> [docs/design/v0.2/1_spec.md](design/v0.2/1_spec.md) for the current model,
+> [docs/design/_archived/v0.2/1_spec.md](design/_archived/v0.2/1_spec.md) for the current model,
 > [docs/design/lineage-graph/](design/lineage-graph/1_overview.md) for the
 > design reasoning that survived the reduction, and
 > [docs/runbooks/](runbooks/corpus-setup.md) for operation. Where they
@@ -132,9 +132,9 @@ spec are v0.1 and no longer accurate: they described `domain`, `evidence`,
 2026-09-12 reduction. The current model — four statuses, five edge kinds,
 tag-normalised labels, references with notes, and the invariants enforced by
 `neb check` — is specified in full in
-[docs/design/v0.2/1_spec.md](design/v0.2/1_spec.md); the architecture that
+[docs/design/_archived/v0.2/1_spec.md](design/_archived/v0.2/1_spec.md); the architecture that
 carries it across a core library, the CLI, a desktop app and an agent skill is
-in [docs/design/v0.2/2_architecture.md](design/v0.2/2_architecture.md).
+in [docs/design/_archived/v0.2/2_architecture.md](design/_archived/v0.2/2_architecture.md).
 
 ## Not in v0.1
 
@@ -149,7 +149,7 @@ markdown, never the source of truth.
 plus `--json` on every read command.
 
 v0.1 lived for five days and eight nodes before the reduction specified in
-[docs/design/v0.2/1_spec.md](design/v0.2/1_spec.md): the machinery had grown
+[docs/design/_archived/v0.2/1_spec.md](design/_archived/v0.2/1_spec.md): the machinery had grown
 heavier than the habit it was meant to serve, and a terminal is not where a
 thought arrives. That document is now authoritative.
 

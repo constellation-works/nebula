@@ -10,7 +10,7 @@ export type Finding = {
  */
 level: Severity, 
 /**
- * Which invariant, by its number in `docs/design/v0.2/1_spec.md`.
+ * Which invariant, by its number in `docs/design/_archived/v0.2/1_spec.md`.
  */
 rule: number, 
 /**

@@ -2,7 +2,7 @@
 //!
 //! One markdown file per node, YAML frontmatter plus prose. Everything about a
 //! node lives in that one file: edges, references, provenance and the
-//! argument itself. See `docs/design/v0.2/1_spec.md`, "Node".
+//! argument itself. See `docs/design/_archived/v0.2/1_spec.md`, "Node".
 //!
 //! Nothing here knows about clap. [`Status`] and [`EdgeType`] carry `FromStr`
 //! and `Display`, which is all a command-line wrapper needs to parse and print

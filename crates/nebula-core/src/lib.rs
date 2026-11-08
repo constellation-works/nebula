@@ -5,7 +5,7 @@
 //!
 //! Three consumers sit on one corpus: a CLI a human types at, an agent that
 //! runs the CLI, and a desktop app that draws the graph. This crate is what
-//! they agree on. See `docs/design/v0.2/2_architecture.md`.
+//! they agree on. See `docs/design/_archived/v0.2/2_architecture.md`.
 //!
 //! The rule: **core is pure with respect to the outside world's presentation.**
 //! It reads and writes corpus files and nothing else. No terminal, no colour,

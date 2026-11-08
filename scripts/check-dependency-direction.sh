@@ -12,7 +12,7 @@
 #      fails the check, so a new member forces a decision.
 #   2. Grep bans over non-test Rust sources.
 #
-# The layering is written down in docs/design/v0.2/2_architecture.md
+# The layering is written down in docs/design/_archived/v0.2/2_architecture.md
 # ("Layering, enforced"); change it and this script in the same commit
 # (STD-02 §R6).
 set -euo pipefail
@@ -255,7 +255,7 @@ for manifest in $members; do
     continue
   fi
   if ! policy "$crate"; then
-    err "crate '$crate' ($manifest) has no policy; add one to scripts/check-dependency-direction.sh and to the layering in docs/design/v0.2/2_architecture.md"
+    err "crate '$crate' ($manifest) has no policy; add one to scripts/check-dependency-direction.sh and to the layering in docs/design/_archived/v0.2/2_architecture.md"
     continue
   fi
   if dependency_list=$(declared_deps "$manifest"); then

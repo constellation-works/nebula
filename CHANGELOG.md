@@ -2,7 +2,7 @@
 
 ## 0.2.0 — unreleased
 
-The reduced model of `docs/design/v0.2/1_spec.md`. Five days after v0.1 the
+The reduced model of `docs/design/_archived/v0.2/1_spec.md`. Five days after v0.1 the
 corpus held eight nodes and an empty inbox: the machinery was heavier than the
 habit. This cut keeps what a person actually uses.
 
@@ -25,7 +25,7 @@ habit. This cut keeps what a person actually uses.
   `derives-from`, `refines`, `generalizes`, `reopens`, `contradicts`.
 - `check --online`, the Orbit resolver, and invariants 3, 9, 10, 12, 13 of the
   v0.1 numbering. The v0.2 rules are listed in
-  [the spec](docs/design/v0.2/1_spec.md#invariants); local reference URIs now
+  [the spec](docs/design/_archived/v0.2/1_spec.md#invariants); local reference URIs now
   resolve as an **error** and are refused at `cite`.
 - `new --status`. `new --kill "..."` starts a hypothesis; without it, a seed.
 - The quick glance (`open` in v0.1, now `review --short`) no longer reports

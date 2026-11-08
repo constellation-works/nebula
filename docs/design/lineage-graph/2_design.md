@@ -96,7 +96,7 @@ the graph exists to surface. `neb tag list`, the note a write prints when it
 introduces a near variant of a tag in use, and `check`'s drift warning (two
 tags differing only by case or a trailing `s`) are what keep free-form tags
 from rotting the way a closed list was meant to prevent. See
-[docs/design/v0.2/1_spec.md](../v0.2/1_spec.md) ("What is removed") for why the
+[docs/design/_archived/v0.2/1_spec.md](../_archived/v0.2/1_spec.md) ("What is removed") for why the
 declared list was cut rather than kept alongside tags.
 
 The boundary that still needs separate storage is trust, not topic. Work and
@@ -128,7 +128,7 @@ desktop app's IPC are one schema (`neb` states absent fields as `null`, in
 `render::json`); with the `ts` feature,
 `apps/desktop/src/types/*.ts` is generated from those types (`make types`).
 The reasoning is in
-[docs/design/v0.2/2_architecture.md](../v0.2/2_architecture.md).
+[docs/design/_archived/v0.2/2_architecture.md](../_archived/v0.2/2_architecture.md).
 
 ## Traversal
 

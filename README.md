@@ -9,7 +9,7 @@ records how it descended into whatever it became. Ideas branch, merge and die,
 so the structure is a directed acyclic graph rather than a tree, and dead
 branches are kept forever because they are what stops you re-treading ground.
 
-The v0.2 model is in [docs/design/v0.2/1_spec.md](docs/design/v0.2/1_spec.md);
+The v0.2 model is in [docs/design/_archived/v0.2/1_spec.md](docs/design/_archived/v0.2/1_spec.md);
 [docs/spec.md](docs/spec.md) is the original design record, kept as history.
 
 ## Repository boundary
@@ -112,7 +112,7 @@ unattended agent the verbs, their `--json` shapes, the invariants and the two
 operating modes — `make skill-link` symlinks it into `~/.claude/skills`. A
 desktop app draws the whole corpus as a graph and captures from a global
 shortcut on the same `nebula-core`, as documented in
-[docs/design/v0.2/](docs/design/v0.2/2_architecture.md). All three read and write the same `nodes/` and
+[docs/design/_archived/v0.2/](docs/design/_archived/v0.2/2_architecture.md). All three read and write the same `nodes/` and
 `inbox/` — there is one corpus underneath, never three.
 
 ## Headless Linux tests
