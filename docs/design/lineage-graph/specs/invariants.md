@@ -21,7 +21,7 @@ schema is a suggestion until something refuses a corpus that violates it.
 The original v0.2 rules were later extended to catch hand edits that leave a
 node's lifecycle fields or dates inconsistent, and to stop an edited `id`
 from turning an ordinary verb into a write outside the corpus. See
-[docs/design/v0.2/1_spec.md](../../v0.2/1_spec.md) for the model they apply to
+[docs/design/_archived/v0.2/1_spec.md](../../_archived/v0.2/1_spec.md) for the model they apply to
 and its "What is removed" table for the rules this replaced.
 
 | # | rule | level | enforced at |
@@ -90,7 +90,7 @@ A reference of kind `observatory` carries a bare record id (`Q002`, `H007`,
 `T003`, `R012`) rather than a location, and where that record is comes from
 the machine: `$OBSERVATORY_ROOT`, else `~/.config/nebula/observatory-root`,
 else a legacy `observatory_root` key in `config.yaml` (see "Machine settings"
-in `docs/design/v0.2/1_spec.md`). The split
+in `docs/design/_archived/v0.2/1_spec.md`). The split
 follows from what each half means. The id's *shape* is the corpus's business,
 so `cite` refuses anything that is not one of the four letters followed by
 digits — a path stored there would never resolve, and the mistake is obvious

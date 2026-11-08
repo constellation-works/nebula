@@ -1,9 +1,9 @@
 ---
 title: v0.2 — Architecture
 owner: claude
-last_updated: 2026-09-26
-last_validated: 2026-09-26
-status: Accepted
+last_updated: 2026-11-08
+last_validated: 2026-11-08
+status: Deprecated
 feature: v0.2
 doc_role: design
 type: design
@@ -15,6 +15,8 @@ related_artifacts: []
 ---
 
 # v0.2 — Architecture
+
+> Archived: v0.2 shipped (DANI-10345..10350); the maintained design is [lineage-graph](../../lineage-graph/1_overview.md).
 
 Three consumers now sit on one corpus: a CLI a human types at, an agent that
 runs the CLI, and a desktop app that draws the graph. The v0.1 layering promise

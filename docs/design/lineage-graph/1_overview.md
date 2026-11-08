@@ -1,9 +1,11 @@
 ---
 title: Lineage Graph — Overview
 owner: claude
-last_updated: 2026-09-12
-last_validated: 2026-09-25
+last_updated: 2026-11-08
+last_validated: 2026-11-08
 status: Accepted
+stage: shipped
+next: "—"
 feature: lineage-graph
 doc_role: overview
 type: design
@@ -42,7 +44,7 @@ interest simply stops — kept distinct on purpose, since one is wrong and the
 other is untouched. Sharpening a further idea out of one that already exists
 is not a status transition at all: it creates a new node with a `refines` edge
 back, and nothing is ever deleted. The full state machine is in
-[docs/design/v0.2/1_spec.md](../v0.2/1_spec.md).
+[docs/design/_archived/v0.2/1_spec.md](../_archived/v0.2/1_spec.md).
 
 ## The shape is a DAG
 
@@ -61,7 +63,7 @@ symmetric statement that two ideas cannot both be true, written symmetrically
 on both nodes by `link`. The relation is excluded from `trace`; `neb impact`
 reports contradictions separately, and `neb graph` exports them as edges. A
 second, cycle-tolerant relation lived here in v0.1 and was cut in
-the 2026-09-12 reduction; see [docs/design/v0.2/1_spec.md](../v0.2/1_spec.md)
+the 2026-09-12 reduction; see [docs/design/_archived/v0.2/1_spec.md](../_archived/v0.2/1_spec.md)
 ("What is removed") for why.
 
 ## Boundaries
@@ -81,4 +83,4 @@ downstream still reaches the observation that began it.
 - [4_decisions.md](4_decisions.md) — the choices and their reasoning
 - [specs/capture-path.md](specs/capture-path.md) — the five-second budget
 - [specs/invariants.md](specs/invariants.md) — what `neb check` enforces
-- [../v0.2/1_spec.md](../v0.2/1_spec.md) — the current node model and verbs
+- [../_archived/v0.2/1_spec.md](../_archived/v0.2/1_spec.md) — the current node model and verbs

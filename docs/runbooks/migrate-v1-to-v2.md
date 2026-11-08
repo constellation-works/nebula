@@ -12,7 +12,7 @@ last_validated: 2026-09-26
 
 `neb migrate` brings a corpus written by v0.1 forward to the reduced v0.2
 schema in place: one shot, idempotent, and lossless. Read
-[docs/design/v0.2/1_spec.md](../design/v0.2/1_spec.md) ("Migration") for the
+[docs/design/_archived/v0.2/1_spec.md](../design/_archived/v0.2/1_spec.md) ("Migration") for the
 full mapping this runbook operationalizes.
 
 ## Before you run it: the dirty-tree refusal

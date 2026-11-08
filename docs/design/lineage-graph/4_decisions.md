@@ -70,7 +70,7 @@ completely different signals when you return years later.
 
 **Reversed 2026-09-12:** one more decision per node; tags do the job and keep
 everything in one place (the exact reasoning is in
-[docs/design/v0.2/1_spec.md](../v0.2/1_spec.md), "What is removed"). See "Tags
+[docs/design/_archived/v0.2/1_spec.md](../_archived/v0.2/1_spec.md), "What is removed"). See "Tags
 over domains" below for what replaced it.
 
 Tags were the only thing distinguishing physics from ranking signals, and tags
@@ -95,7 +95,7 @@ is recorded as a reference on the receiving node rather than an edge.
 
 **Reversed 2026-09-12:** the verdict/strength ladder was precision the corpus
 never earned; a reference with a good note carries the same information (see
-[docs/design/v0.2/1_spec.md](../v0.2/1_spec.md), "What is removed"). See
+[docs/design/_archived/v0.2/1_spec.md](../_archived/v0.2/1_spec.md), "What is removed"). See
 "References over evidence" below.
 
 The separation was enforced by `deny_unknown_fields`, so a reference carrying a
@@ -145,7 +145,7 @@ is not currently scarce. Revisit when a scan is measurably slow.
 
 **Reversed 2026-09-12:** downstream hand-off happens by the downstream artifact
 referencing the node, not by a status here (see
-[docs/design/v0.2/1_spec.md](../v0.2/1_spec.md), "What is removed"). The
+[docs/design/_archived/v0.2/1_spec.md](../_archived/v0.2/1_spec.md), "What is removed"). The
 `handoff` verb (ORB-13077) records the nebula side for an Observatory record
 as an existing reference plus `abandoned`, not a status of its own, and asks
 for no falsifier (same document, "Hand-off").
@@ -206,7 +206,7 @@ directing and the agent runs verbs directly (running `neb check` after every
 write), and **routine mode**, unattended, where the agent only reads and
 writes proposals to `review.md`. Naming both modes explicitly, rather than
 leaving "an agent runs this sometimes" implicit, is what lets a skill
-([docs/design/v0.2/2_architecture.md](../v0.2/2_architecture.md),
+([docs/design/_archived/v0.2/2_architecture.md](../_archived/v0.2/2_architecture.md),
 "skills/nebula") state which one it is in before it acts, instead of every
 verb having to guess whether a human is watching.
 

@@ -50,7 +50,7 @@ only by case or a trailing `s` notes it on stderr, and `check` warns on every
 such pair, naming the nodes carrying each. `tag list` shows every tag in the corpus with its node count.
 
 **Graph.** The whole corpus as one `{nodes, edges}` export: what
-[docs/design/v0.2/1_spec.md](../../v0.2/1_spec.md) specifies as `neb graph
+[docs/design/_archived/v0.2/1_spec.md](../../_archived/v0.2/1_spec.md) specifies as `neb graph
 --json`, which the CLI exports for tools and the desktop app's graph view. The
 `trace` and `impact` queries use this graph: `trace` walks genealogy, while
 `impact` also reports direct contradictions.
@@ -58,7 +58,7 @@ such pair, naming the nodes carrying each. `tag list` shows every tag in the cor
 **Migrate.** `neb migrate`: a one-shot, idempotent pass that brings a v1
 corpus forward to the current schema, re-labelling everything the reduction
 removed into references so nothing is lost. See
-[docs/design/v0.2/1_spec.md](../../v0.2/1_spec.md) ("Migration").
+[docs/design/_archived/v0.2/1_spec.md](../../_archived/v0.2/1_spec.md) ("Migration").
 
 **Corpus.** The nodes, inbox and `config.yaml`, living outside this
 repository. One corpus per owner: work and personal are separate corpora,

@@ -91,7 +91,7 @@ fn published_invariant_tables_match_checker_rules() {
     for (name, markdown) in [
         (
             "v0.2 spec",
-            include_str!("../../../../../docs/design/v0.2/1_spec.md"),
+            include_str!("../../../../../docs/design/_archived/v0.2/1_spec.md"),
         ),
         (
             "skill",

@@ -1,9 +1,9 @@
 ---
 title: v0.2 — Delivery plan
 owner: claude
-last_updated: 2026-09-12
-last_validated: 2026-09-12
-status: Accepted
+last_updated: 2026-11-08
+last_validated: 2026-11-08
+status: Deprecated
 feature: v0.2
 doc_role: plan
 type: design
@@ -15,6 +15,8 @@ related_artifacts: []
 ---
 
 # v0.2 — Delivery plan
+
+> Archived: v0.2 shipped (DANI-10345..10350); the maintained design is [lineage-graph](../../lineage-graph/1_overview.md).
 
 Serial where files collide, parallel where they do not. Each task is an Orbit
 task in `ws_nebula` tagged `v0.2`; ids are recorded here once filed.

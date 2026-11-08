@@ -1,9 +1,9 @@
 ---
 title: v0.2 — Reduced model
 owner: claude
-last_updated: 2026-09-22
-last_validated: 2026-09-22
-status: Accepted
+last_updated: 2026-11-08
+last_validated: 2026-11-08
+status: Deprecated
 feature: v0.2
 doc_role: spec
 type: design
@@ -15,6 +15,8 @@ related_artifacts: []
 ---
 
 # v0.2 — Reduced model
+
+> Archived: v0.2 shipped (DANI-10345..10350); the maintained design is [lineage-graph](../../lineage-graph/1_overview.md).
 
 Five days after v0.1 the corpus held eight nodes and an empty inbox. The
 diagnosis: the machinery was heavier than the habit it was meant to serve, and

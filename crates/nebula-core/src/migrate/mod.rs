@@ -9,7 +9,7 @@
 //! tolerated, because the point is to read whatever an old corpus holds and
 //! re-label it losslessly into the v2 shape. Evidence, task links and the
 //! removed edge kinds all become references, since a reference with a good
-//! note carries the same information. See `docs/design/v0.2/1_spec.md`,
+//! note carries the same information. See `docs/design/_archived/v0.2/1_spec.md`,
 //! "Migration".
 //!
 //! That leniency is scoped to old content. A corpus whose `config.yaml`

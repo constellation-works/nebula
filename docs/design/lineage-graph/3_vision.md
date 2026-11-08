@@ -30,7 +30,7 @@ triage the inbox, sharpen, link, cite, move status — and runs `neb check`
 after every write. **Routine mode**, unattended, run as an Orbit routine: `neb
 review` and an inbox read produce proposals only, written to `review.md`, and
 never a write to `nodes/`. The full split, including the review-file format,
-is in [docs/design/v0.2/2_architecture.md](../v0.2/2_architecture.md)
+is in [docs/design/_archived/v0.2/2_architecture.md](../_archived/v0.2/2_architecture.md)
 ("skills/nebula").
 
 **The hard rule, unchanged since v0.1: unattended running proposes and never
@@ -52,8 +52,8 @@ repository:
   usable rather than merely specified.
 
 Their design is documented in
-[docs/design/v0.2/2_architecture.md](../v0.2/2_architecture.md), and the
-delivery sequence is recorded in [docs/design/v0.2/3_plan.md](../v0.2/3_plan.md).
+[docs/design/_archived/v0.2/2_architecture.md](../_archived/v0.2/2_architecture.md), and the
+delivery sequence is recorded in [docs/design/_archived/v0.2/3_plan.md](../_archived/v0.2/3_plan.md).
 `neb near` now ranks candidate nodes by word overlap for text or an existing
 node. It returns suggestions only; creating links remains a human-directed
 action.
