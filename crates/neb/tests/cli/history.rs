@@ -364,6 +364,36 @@ fn show_at_a_date_is_timezone_independent() {
 }
 
 #[test]
+fn log_on_an_unborn_repository_is_empty_history() {
+    let c = Corpus::new();
+    git_init(&c.root);
+    let id = c
+        .run(&["new", "History fixture", "--id", "history-fixture"])
+        .assert_ok()
+        .stdout_trim();
+
+    assert_eq!(c.run(&["--json", "log", &id]).assert_ok().stdout(), "[]\n");
+    c.run(&["log", &id])
+        .assert_ok()
+        .says("no commits touched this node");
+}
+
+#[test]
+fn show_at_a_date_on_an_unborn_repository_is_no_node_at_revision() {
+    let c = Corpus::new();
+    git_init(&c.root);
+    let id = c
+        .run(&["new", "History fixture", "--id", "history-fixture"])
+        .assert_ok()
+        .stdout_trim();
+
+    let refused = c
+        .run(&["--json", "show", &id, "--at", "2026-11-06"])
+        .refusal();
+    assert_eq!(refused["code"], "no_node_at_revision", "{refused}");
+}
+
+#[test]
 fn log_reports_when_an_uncommitted_node_has_no_history() {
     let c = Corpus::new();
     git_init(&c.root);
