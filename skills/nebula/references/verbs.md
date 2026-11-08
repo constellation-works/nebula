@@ -7,11 +7,13 @@
 
 Every corpus verb below takes `--root <DIR>` and `--json`, and those flags may
 appear anywhere on the line — before the verb, after it, or after the free
-text of `capture`, `note` and `near`. Every verb that writes also takes
-`--no-commit`, after the verb; a read-only verb such as `show`, `list` or
-`trace` refuses it there as an unknown argument. The older spelling before the
-verb is deprecated: before a verb that writes it still skips the commit and
-warns on stderr, and before any other verb it is refused (`usage`, exit 2).
+text of `capture`, `note` and `near`. Every verb that can commit also takes
+`--no-commit`, after the verb. `init` creates a corpus but never commits, so
+like a read-only verb such as `show`, `list` or `trace` it refuses
+`--no-commit` there as an unknown argument. The older spelling before the
+verb is deprecated: before a verb that can commit it still skips the commit and
+warns on stderr, and before any other verb — including `init` — it is refused
+(`usage`, exit 2).
 Under `--json`, each emits
 one JSON value on stdout. Two commands are the exceptions: `completions`
 always emits a shell script, and refuses `--json` and `--root` rather than
