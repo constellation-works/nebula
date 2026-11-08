@@ -1,6 +1,6 @@
 //! Phrases the [`Error`](super::Error) messages share.
 
-use crate::lock::LockHolder;
+use crate::lock_holder::LockHolder;
 
 /// Who holds a lock, as [`Error::Locked`](super::Error::Locked) names it.
 pub(super) fn holder_phrase(holder: Option<&LockHolder>) -> String {

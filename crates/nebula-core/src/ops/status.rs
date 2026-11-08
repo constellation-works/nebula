@@ -2,8 +2,8 @@
 //! after a write.
 
 use super::{CloseTag, Retagged, StatusChange};
-use crate::check_impl as check;
 use crate::error::{Error, Result};
+use crate::graph_impl as graph;
 use crate::lock;
 use crate::model::{self, Closed, Doc, Status};
 use crate::stamp;
@@ -149,7 +149,7 @@ pub fn close_tags(corpus: &Corpus, id: &str, tags: &[String]) -> Result<Vec<Clos
         "close_tags scans nodes/ for advice and must not run under the corpus lock"
     );
     let docs = corpus.load_all()?;
-    let carriers = check::tag_carriers(&docs);
+    let carriers = graph::tag_carriers(&docs);
     let mut close = Vec::new();
     for tag in &tags {
         let introduced = carriers
@@ -159,7 +159,7 @@ pub fn close_tags(corpus: &Corpus, id: &str, tags: &[String]) -> Result<Vec<Clos
             continue;
         }
         for (existing, ids) in &carriers {
-            if *existing != tag.as_str() && check::tag_drift(tag, existing).is_some() {
+            if *existing != tag.as_str() && graph::tag_drift(tag, existing).is_some() {
                 close.push(CloseTag {
                     tag: tag.clone(),
                     near: (*existing).to_string(),

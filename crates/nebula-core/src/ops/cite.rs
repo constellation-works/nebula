@@ -2,13 +2,13 @@
 //! closes the node in one write.
 
 use super::{Citation, Cited, HandedOff, Handoff};
-use crate::check_impl::{
-    OBSERVATORY, is_absolute_local, is_local_path, is_observatory_id, is_reference_kind,
-    normalize_reference_kind, resolve_local, resolve_observatory,
-};
 use crate::error::{Error, Result};
 use crate::graph_impl::ObservatoryLink;
 use crate::model::{self, Closed, Node, Reference, Status};
+use crate::reference::{
+    OBSERVATORY, is_absolute_local, is_local_path, is_observatory_id, is_reference_kind,
+    normalize_reference_kind, resolve_local, resolve_observatory,
+};
 use crate::stamp;
 use crate::store::Corpus;
 use std::path::Path;
@@ -112,7 +112,7 @@ fn attach(corpus: &Corpus, node: &mut Node, args: &Citation, by: Option<String>)
     if let Some(uri) = uri
         .as_deref()
         .filter(|_| kind != OBSERVATORY)
-        .filter(|uri| is_local_path(uri) && !resolve_local(corpus, uri).exists())
+        .filter(|uri| is_local_path(uri) && !resolve_local(corpus.root(), uri).exists())
     {
         return Err(Error::UnresolvedUri {
             uri: uri.to_string(),

@@ -23,6 +23,7 @@
 //!
 //! Module map:
 //!
+//! - `reference` the reference kind vocabulary and Observatory resolution, a leaf every layer shares
 //! - [`model`]  the file format: [`Node`], [`Status`], [`Edge`], [`Reference`], [`Note`]
 //! - `locations` [`Locations`]: the resolved environment every surface builds once and hands down
 //! - [`store`]  [`Corpus`]: where it lives, loading, saving, the inbox
@@ -34,7 +35,7 @@
 //! - `stamp`   today's date and inbox stamps, written and read back
 //! - [`graph`]  [`Graph`] and the pure queries over it, `near` included
 //! - [`ops`]    the mutations, each enforcing its point-of-action invariants
-//! - [`check`]  the invariant checker, and where an `observatory` record resolves
+//! - [`check`]  the invariant checker, consuming the `reference` vocabulary
 //! - [`triage`] [`Triage`]: the inbox one entry at a time, through the ops above
 //! - [`verb`]   one call per command: the lock, the write, the commit, then the advice
 //! - [`migrate`] v1 → v2, with its own lenient v1 model kept private
@@ -61,7 +62,10 @@ mod git;
 mod id;
 mod locations;
 mod lock;
+mod lock_holder;
 mod pending;
+mod reference;
+mod settlement;
 mod stamp;
 
 #[path = "check/mod.rs"]
@@ -114,6 +118,7 @@ pub mod triage {
 
 /// One call per command: the lock, the write, the commit, then the advice.
 pub mod verb {
+    pub use crate::check_impl::run_corpus as check;
     pub use crate::verb_impl::capture_locked as capture;
     pub use crate::verb_impl::*;
 }
@@ -121,7 +126,7 @@ pub mod verb {
 #[cfg(test)]
 mod tests;
 
-pub use check::{Finding, OBSERVATORY, Report, Severity};
+pub use check::{Finding, Report, Severity};
 pub use config::{
     CommitSetting, OBSERVATORY_ROOT_ENV, ObservatoryRoot, ObservatorySource, SCHEMA_VERSION,
 };
@@ -137,12 +142,15 @@ pub use graph::{
     TraceNode, Via,
 };
 pub use locations::{Locations, WriteIntent};
-pub use lock::{CorpusLock, LOCK_FILE, LOCK_WAIT, LockHolder};
+pub use lock::{CorpusLock, LOCK_FILE, LOCK_WAIT};
+pub use lock_holder::LockHolder;
 pub use migrate::{MigrationReport, NodeMigration};
 pub use model::{Closed, Doc, Edge, EdgeType, HUMAN, Node, Note, Origin, Reference, Status};
 pub use ops::{
     Captured, Citation, Cited, CloseTag, Created, DroppedLegacy, HandedOff, Handoff, Initialized,
     NewNode, Promotion, Retagged, StatusChange,
 };
-pub use store::{CommitOutcome, Committed, Corpus, HistoryEntry, Inbox, InboxEntry, Settlement};
+pub use reference::OBSERVATORY;
+pub use settlement::Settlement;
+pub use store::{CommitOutcome, Committed, Corpus, HistoryEntry, Inbox, InboxEntry};
 pub use triage::Triage;

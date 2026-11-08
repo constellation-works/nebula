@@ -23,7 +23,6 @@ mod v1;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use v1::v1_node_under_current_schema;
 use v1::v1_to_v2;
 
 use crate::config::{self, Config, Declared};
@@ -340,13 +339,13 @@ fn preflight_nodes(root: &Path, staged: &Staged, version: u32) -> Result<()> {
     for node in &staged.nodes {
         if let Err(source) = model::read(&node.path) {
             return Err(
-                v1_node_under_current_schema(root, &node.path, version).unwrap_or_else(|| {
-                    Error::CurrentSchemaUnreadable {
+                model::v1_node_under_current_schema(root, &node.path, version).unwrap_or_else(
+                    || Error::CurrentSchemaUnreadable {
                         path: node.path.clone(),
                         version,
                         source: Box::new(source),
-                    }
-                }),
+                    },
+                ),
             );
         }
     }

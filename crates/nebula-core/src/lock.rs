@@ -89,6 +89,7 @@
 
 use crate::error::{Error, Result};
 use crate::fs_impl::{Links, open_regular, overwrite_in_place, private_open_options, read_capped};
+use crate::lock_holder::LockHolder;
 use fs4::{FileExt, TryLockError};
 use std::collections::HashMap;
 use std::fs::File;
@@ -96,7 +97,7 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::ThreadId;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -133,33 +134,6 @@ pub(crate) const RECORD_CAP: usize = 4096;
 /// the id it names; a longer one is cut rather than refused, because the
 /// label only explains a wait.
 pub(crate) const LABEL_CAP: usize = 160;
-
-/// Who holds a lock, as the holder recorded it in the lock file.
-///
-/// **Diagnostic only** (STD-03 §R7, §R14): it names who to wait for in an
-/// [`Error::Locked`] and nothing more. Whether the lock is held is decided by
-/// `flock` alone, never by this record; the PID is never signalled and never
-/// probed for liveness. It can be stale — a holder that crashed leaves its
-/// record behind until the next holder overwrites it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LockHolder {
-    /// The holding process's id.
-    pub pid: u32,
-    /// When it took the lock, to the second.
-    pub since: SystemTime,
-    /// Which writer it is: `neb edit a-node`, `desktop capture`, or
-    /// `nebula` when the writer did not say.
-    pub label: String,
-}
-
-impl LockHolder {
-    /// [`Self::since`] as RFC 3339 in UTC, as the record stores it.
-    pub fn since_rfc3339(&self) -> String {
-        OffsetDateTime::from(self.since)
-            .format(&Rfc3339)
-            .unwrap_or_else(|_| "an unreadable time".to_owned())
-    }
-}
 
 /// The holder record as it sits in the lock file: one line of JSON.
 #[derive(serde::Serialize, serde::Deserialize)]

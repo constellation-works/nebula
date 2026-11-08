@@ -10,26 +10,26 @@
 //! the caller — an exit code, a red badge — is the caller's business.
 //!
 //! - `rules`       the rules judged one node at a time
-//! - `references`  the reference kind vocabulary, and what a local URI is
-//! - `observatory` where an Observatory record resolves, and rule 9
+//! - `observatory` rule 9: Observatory records that do not resolve
 //! - `recovery`    rule 17: writes that did not finish
+//!
+//! The reference kind vocabulary and Observatory resolution live in the
+//! `reference` leaf, which this checker consumes like every other layer.
 //!
 //! This file holds the rule ids, the report, and the rules judged across
 //! the whole corpus.
 
 mod observatory;
 mod recovery;
-mod references;
 mod rules;
 
 #[cfg(test)]
 mod tests;
 
+pub(crate) use crate::graph_impl::{tag_carriers, tag_drift};
+pub use crate::reference::{OBSERVATORY, REFERENCE_KINDS, normalize_reference_kind};
 use observatory::checked_observatory_setting;
-pub(crate) use observatory::{is_observatory_id, resolve_observatory};
 use recovery::interrupted_writes;
-pub use references::{OBSERVATORY, REFERENCE_KINDS, normalize_reference_kind};
-pub(crate) use references::{is_absolute_local, is_local_path, is_reference_kind, resolve_local};
 use rules::{date_rules, edge_rules, lifecycle_rules, reference_rules, status_rules};
 
 use crate::config::{OBSERVATORY_ROOT_ENV, ObservatorySource};
@@ -38,7 +38,7 @@ use crate::graph_impl::Graph;
 use crate::model::{Doc, EdgeType};
 use crate::store::{Corpus, Scan, UnreadableNode};
 use serde::Serialize;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Stable IDs for corpus invariants. Some rules are enforced before a graph
@@ -154,6 +154,13 @@ pub fn run_scanned(scan: &Scan, corpus: &Corpus) -> Result<Report> {
     let mut report = run(&graph, corpus)?;
     report.unreadable.clone_from(&scan.unreadable);
     Ok(report)
+}
+
+/// Every invariant over the whole corpus: an unreadable node file is a
+/// finding, not a refusal. This is the `verb` layer's one call into the
+/// checker, re-exported as `verb::check` from the crate root.
+pub fn run_corpus(corpus: &Corpus) -> Result<Report> {
+    run_scanned(&corpus.scan()?, corpus)
 }
 
 #[derive(Clone, Copy)]
@@ -281,38 +288,6 @@ pub fn run(graph: &Graph<'_>, corpus: &Corpus) -> Result<Report> {
     r.findings
         .sort_by_key(|f| (f.level != Severity::Error, f.rule));
     Ok(r)
-}
-
-/// Every tag in the corpus, as written, with the ids of the nodes carrying
-/// it in id order.
-pub(crate) fn tag_carriers(docs: &[Doc]) -> BTreeMap<&str, Vec<&str>> {
-    let mut carriers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for d in docs {
-        for t in &d.node.tags {
-            carriers
-                .entry(t.as_str())
-                .or_default()
-                .push(d.node.id.as_str());
-        }
-    }
-    for ids in carriers.values_mut() {
-        ids.sort_unstable();
-        ids.dedup();
-    }
-    carriers
-}
-
-/// How two distinct tags collide, if they do.
-pub(crate) fn tag_drift(a: &str, b: &str) -> Option<&'static str> {
-    let (a, b) = (a.to_ascii_lowercase(), b.to_ascii_lowercase());
-    if a == b {
-        return Some("case");
-    }
-    let plural = |x: &str, y: &str| x.strip_suffix('s') == Some(y);
-    if plural(&a, &b) || plural(&b, &a) {
-        return Some("a trailing `s`");
-    }
-    None
 }
 
 /// Every invariant that can be judged from a single node plus the id set.

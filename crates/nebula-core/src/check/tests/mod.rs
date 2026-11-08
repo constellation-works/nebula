@@ -1,10 +1,8 @@
 //! Unit tests for `check`, one file per source file (STD-02 §R19). This
 //! file holds the tests for `check/mod.rs`.
 
-mod observatory;
-mod references;
-
-use crate::check_impl::{Rule, tag_drift};
+use crate::check_impl::Rule;
+use crate::graph_impl::tag_drift;
 
 // The canonical labels and IDs for the published invariant tables. Keep
 // this beside the code that emits findings, so documentation drift fails

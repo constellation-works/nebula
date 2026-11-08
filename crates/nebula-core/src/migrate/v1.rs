@@ -129,38 +129,6 @@ fn open() -> String {
     "open".into()
 }
 
-/// The keys only a v1 node carries. A node holding one of them is old
-/// content, not a typo or a newer build's field.
-const V1_ONLY_KEYS: [&str; 4] = ["domain", "evidence", "tasks", "graduated_to"];
-
-/// [`Error::V1NodeUnderCurrentSchema`] for the node at `path`, when it reads
-/// under the v1 model and carries a key only v1 had; `None` otherwise, and
-/// when it cannot be read at all.
-///
-/// Asked only about a node the current model has already refused, in a
-/// corpus whose config declares `version`, this build's schema.
-pub(crate) fn v1_node_under_current_schema(
-    root: &Path,
-    path: &Path,
-    version: u32,
-) -> Option<Error> {
-    let raw = crate::fs_impl::read_regular_text(path).ok()??;
-    let (front, _) = model::split_frontmatter(&raw, path).ok()?;
-    serde_yaml_ng::from_str::<V1Node>(front).ok()?;
-    let fields: serde_yaml_ng::Mapping = serde_yaml_ng::from_str(front).ok()?;
-    let keys: Vec<String> = V1_ONLY_KEYS
-        .iter()
-        .filter(|key| fields.contains_key(**key))
-        .map(ToString::to_string)
-        .collect();
-    (!keys.is_empty()).then(|| Error::V1NodeUnderCurrentSchema {
-        path: path.to_path_buf(),
-        config: root.join(config::FILE),
-        version,
-        keys,
-    })
-}
-
 // ---------------------------------------------------------------- v1 -> v2 --
 
 /// The keys of a v1 `config.yaml` that v2 keeps. The v1 keys it drops are

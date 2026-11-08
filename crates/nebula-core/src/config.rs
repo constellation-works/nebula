@@ -126,7 +126,7 @@ impl ObservatoryRoot {
     pub fn resolve(&self, record: &str) -> crate::Result<Option<PathBuf>> {
         self.root
             .as_deref()
-            .map(|root| crate::check_impl::resolve_observatory(root, record))
+            .map(|root| crate::reference::resolve_observatory(root, record))
             .transpose()
             .map(Option::flatten)
     }

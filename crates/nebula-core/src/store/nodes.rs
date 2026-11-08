@@ -203,12 +203,10 @@ impl Corpus {
     )]
     fn read_node(&self, path: &Path) -> Result<Doc> {
         model::read(path).map_err(|error| match error {
-            Error::Yaml { .. } => crate::migrate_impl::v1_node_under_current_schema(
-                &self.root,
-                path,
-                self.config.schema_version,
-            )
-            .unwrap_or(error),
+            Error::Yaml { .. } => {
+                model::v1_node_under_current_schema(&self.root, path, self.config.schema_version)
+                    .unwrap_or(error)
+            }
             other => other,
         })
     }
