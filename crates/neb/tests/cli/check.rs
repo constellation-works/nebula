@@ -601,7 +601,7 @@ fn discovery_regression_check_names_the_checked_root() {
 #[test]
 fn agent_docs_check_examples_match_cli() {
     let session = include_str!("../../../../skills/nebula/references/session-mode.md");
-    let verbs = include_str!("../../../../skills/nebula/references/verbs.md");
+    let verbs = include_str!("../../../../skills/nebula/references/verbs-corpus.md");
     let c = Corpus::new();
     for title in ["First thought", "Second thought", "Third thought"] {
         c.seed(title, title);
@@ -651,7 +651,7 @@ fn agent_docs_name_the_graph_refusal_for_a_corrupt_node() {
     write(&c.node_file("broken"), "no frontmatter\n");
     let refusal = c.run(&["list", "--json"]).refusal();
     let code = refusal["code"].as_str().unwrap();
-    let docs = include_str!("../../../../skills/nebula/references/invariants.md");
+    let docs = include_str!("../../../../skills/nebula/references/invariants-refusals-corpus.md");
     assert!(
         docs.contains(&format!("`{code}`")),
         "ORB-13302: agent must be able to look up the real graph refusal: {code}"

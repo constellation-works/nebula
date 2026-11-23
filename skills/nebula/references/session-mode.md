@@ -1,5 +1,15 @@
 # Session mode
 
+Contents:
+
+- [Start of session](#start-of-session)
+- [Triage](#triage)
+- [Capture](#capture)
+- [Linking, citing, closing](#linking-citing-closing)
+- [Body work](#body-work)
+- [End of session](#end-of-session)
+- [Worked transcript](#worked-transcript)
+
 A human is present and directing. You run the verbs; they decide. The loop
 for every write is the same:
 
@@ -33,11 +43,15 @@ For each inbox entry, in order:
 - Run `neb near --json "<the entry's text>"`. It ranks the existing nodes by
   shared vocabulary, best first, each with a `band` (`strong`, `some`,
   `weak`) beside its raw `score`; `capture` already printed the same three
-  lines when the thought went in. The score is not a percentage: a
+  lines when the thought went in.
+
+  The score is not a percentage: a
   word-for-word duplicate scores about `0.5`, and reads `strong`. Read the
   top candidates — `neb show <id>` for the title, body and `kill`, `neb trace
   <id>` for where each sits — rather than trusting the band: it is word
-  overlap, and a shared word is not a shared idea. `neb near <id>` on a node
+  overlap, and a shared word is not a shared idea.
+
+  `neb near <id>` on a node
   marks each neighbour already linked to it (`linked`, with the edges), so a
   parent in the answer is not a link still to make.
 - Pick a parent only if one is defensible: you can say in one line why the
@@ -60,14 +74,15 @@ For each inbox entry, in order:
 ## Capture
 
 "Capture that" / "that's a seed" → `neb capture "<their sentence>"`. Their
-words. If they said three things, ask which one. If they did not flag it,
-ask before capturing. `capture` works even when nothing else does; it is the
-five-second path and must stay one. If it prints `note: created a new corpus
-at <path>`, there was no corpus where it looked: tell the human the path, since
-a mistyped root is the usual cause and later captures would keep landing there.
-If it prints `note: same as <id>, still waiting`, the thought is already in the
-inbox, bar case and spacing. Both entries are kept; at triage, drop the newer
-one as a duplicate of `<id>`.
+words. If they said three things, ask which one. If they did not flag it, ask
+before capturing. `capture` works even when nothing else does; it is the
+five-second path and must stay one.
+
+If it prints `note: created a new corpus at <path>`, there was no corpus where
+it looked: tell the human the path, since a mistyped root is the usual cause and
+later captures would keep landing there. If it prints `note: same as <id>, still
+waiting`, the thought is already in the inbox, bar case and spacing. Both
+entries are kept; at triage, drop the newer one as a duplicate of `<id>`.
 
 ## Linking, citing, closing
 
@@ -130,12 +145,17 @@ $ neb list --json | jq -c '.[] | {id, status, tags}'
 ```
 
 > **agent:** One entry. `near` finds nothing: no node shares a word with
-> "nebula review as a weekly orbit routine". Reading the three, it is about
+> "nebula review as a weekly orbit routine".
+>
+> Reading the three, it is about
 > operating the corpus, and `tags-beat-domains` is the only one about how
 > the tool is used (tag `design`) — a defensible parent, though a thin one.
+>
 > It reads as an action item more than an idea, so I'd **drop** it — unless
 > you mean the claim that unattended review is safe as long as it only
-> proposes. Promote as that (parent `tags-beat-domains`, or as a root), or
+> proposes.
+>
+> Promote as that (parent `tags-beat-domains`, or as a root), or
 > drop?
 
 > **human:** promote it as the claim, parent tags-beat-domains
