@@ -1,7 +1,32 @@
 # nebula — agent guide
 
-nebula captures half-formed ideas and traces their lineage. It is a Rust CLI
-(`neb`) over a corpus of markdown files.
+This repository contains `neb`, a Rust CLI for capturing ideas and tracing their lineage in a Markdown corpus.
+
+## Rules
+
+- The corpus may contain personal and work material. Never commit node or inbox content in this repository.
+- Before changing node shape or capture behavior, read [design decisions](docs/design/lineage-graph/4_decisions.md) and the [invariants spec](docs/design/lineage-graph/specs/invariants.md#where-a-rule-lives-matters); they state schema constraints, reversal conditions and where each invariant is enforced. The [vision](docs/design/lineage-graph/3_vision.md#deliberately-out-of-scope) says when to expand beyond capture.
+- Resolve corpus location once at each surface boundary and pass it through. See [corpus setup](docs/runbooks/corpus-setup.md) for resolution order and setup.
+
+## Gates
+
+- Run `make ci-fast` before handoff. Run `make test` for corpus or CLI behavior changes, `make hostile-env-test` for process or environment boundary changes, and `make types` plus `make types-check` when changing core types exported to the desktop.
+- After dependency changes, run `make audit` and follow [STD-05 §R23](docs/standards/STD-05-security-boundaries/STD-05.md#supply-chain-and-consent) for pinned inputs. Group minor and patch updates by ecosystem; ship major updates with their required changes or a reasoned ignore. For an npm advisory without a fix, record an ignore reason and review date in `apps/desktop/pnpm-workspace.yaml`.
+
+## Code
+
+- Keep corpus reads and writes in `nebula-core`; each surface builds `Locations` at startup, and core never reads the environment or working directory. The [crate design](docs/design/lineage-graph/2_design.md#crates) defines the dependency boundary; [location handling](crates/nebula-core/src/locations.rs) defines the resolver.
+- Product writes go through [the core filesystem helpers](crates/nebula-core/src/fs.rs), and entries below the corpus root use their regular-file readers. A root may be symlinked, but entries below it may not; keep paths as supplied. See [filesystem boundaries](docs/design/lineage-graph/4_decisions.md#the-root-as-spelled-every-entry-below-it-judged-physically).
+- Take the machine-settings lock before any corpus lock; [lock.rs](crates/nebula-core/src/lock.rs) documents the order.
+
+## Tests
+
+- Tests use temporary corpora and isolate host state. Create children only through fixture command helpers, which isolate the environment and own each child through a bounded guard; set test-specific environment on the built command. See [core test support](crates/nebula-core/tests/support/mod.rs) and the [CLI harness](crates/neb/tests/cli/harness.rs).
+
+## Orbit integration
+
+- `origin` records what produced a node; represent work it spawns as a reference. Follow the skill's [provenance and authorship rules](skills/nebula/SKILL.md#provenance-and-authorship), including its rule against hardcoding an agent family.
+- `orbit.task.add` ignores `dependencies`; wire task dependencies with a follow-up `orbit.task.update`.
 
 <!-- constellation-standards:begin -->
 <!-- Managed by the constellation's operations/scripts/sync-standards.sh; edits inside this block are overwritten. -->
@@ -18,106 +43,3 @@ This repository adopts these constellation standards, vendored read-only in `doc
 Follow them; they are normative. To deviate from a rule, record a decision in `docs/design/<feature>/4_decisions.md` citing `STD-nn@<version> §Rn`; never edit `docs/standards/` (`sh docs/standards/check.sh` enforces this).
 Reviewers check every change against the adopted standards and report violations as `STD-nn §Rn` with file:line evidence.
 <!-- constellation-standards:end -->
-
-## The one rule that matters
-
-**This repository holds the tool. It never holds the corpus.**
-
-The corpus mixes work and personal thinking, and this repository is public.
-Never commit node or inbox content here. The corpus is found at runtime through
-`--root`, else `$NEBULA_ROOT`, else the nearest corpus at or above the working
-directory, else `~/.config/nebula/root`, else `~/.nebula`, and `/corpus` is
-gitignored as a backstop. Fixtures for tests belong in a
-temporary directory, which is what
-`crates/neb/tests/cli/` and `crates/nebula-core/tests/core/` do.
-
-Tests never touch the host either. `crates/nebula-core/tests/support` gives
-each test process a temporary `HOME` and git environment before any test
-thread starts, and is the one place a test creates a child: through the
-fixture helpers, `neb_command`/`git_command` in `cli/harness.rs`, or
-`support::command`. They clear `NEBULA_ROOT`, `OBSERVATORY_ROOT`, the editor,
-the Orbit run context, the terminal settings and every `GIT_*`, and stop git
-discovery at the fixture's temporary root; a test that needs one of those
-sets it on its command after the builder. Each suite fails if a `Command` is
-created anywhere else, and every child is owned by a guard that kills it on
-drop and waits only up to a deadline. `make hostile-env-test` proves it.
-
-## Working here
-
-```sh
-make ci-fast          # pre-handoff gate: fmt, release/standards/terminal/dependency checks, clippy
-make test             # every crate: core unit tests + end-to-end CLI tests
-make hostile-env-test # the suites under a hostile HOME, TMPDIR and GIT_DIR
-make clippy           # --workspace --all-targets --all-features -D warnings
-make fmt-check
-make types            # regenerate apps/desktop/src/types from nebula-core
-```
-
-The workspace is `crates/nebula-core` (the corpus as a library: no terminal,
-no clap, typed errors, `Serialize` returns) and `crates/neb` (the CLI: one
-core operation per verb, plus rendering). A write is one call into
-`nebula_core::verb`, which holds the lock across the write and its commit; a
-read is `Corpus::open` plus one query. Anything that reads or writes the corpus
-goes in core; the desktop app and the agent skill must see what the CLI sees.
-Core never reads the environment or the working directory: each surface
-builds one `nebula_core::Locations` at start and hands it down
-(`scripts/check-dependency-direction.sh` bans the reads in core).
-CI runs all of these on Linux and macOS, and fails if the generated TypeScript
-is stale (`make types-check`). Both matter: the checker walks paths, and
-macOS temporary directories sit under a symlink, so path handling that resolves
-or canonicalizes will pass on one platform and fail on the other. Use paths as
-given.
-
-Every file nebula writes goes through `nebula_core::fs`: `write_private_atomic`
-(temp file, fsync, rename, directory fsync, `0600`) and `create_private_dir_all`
-(`0700`). `clippy.toml` refuses `std::fs::write` and `std::fs::create_dir_all`
-elsewhere; test fixtures opt out with an `#[allow]` that gives a reason. A
-file below the corpus root is opened by name only through `fs::open_regular`
-or the readers built on it (`read_regular_text`, `read_regular_bytes`), which
-refuse a symlink, a FIFO, a device or a directory as `NotRegularFile` before
-reading or writing anything; the root itself may be reached through a
-symlink, the entries beneath it may not. Take
-the machine-setting lock (`Corpus::lock_machine_settings`) before any corpus
-lock, never after one.
-
-Build inputs are pinned (STD-05 §R23). `rust-toolchain.toml` names the exact
-toolchain; rustup installs it on first use, and CI's `toolchain:` inputs must
-match it. CI actions are pinned by commit SHA, and pnpm by version and sha512
-in `apps/desktop/package.json`. Dependabot (`.github/dependabot.yml`) watches
-cargo, npm and the actions: one grouped PR per ecosystem for minor and patch
-updates, one PR per major. Adopt a major with the changes it needs, or defer it
-with an `ignore` entry there that gives the reason. `make audit` runs cargo-deny, the pnpm pin check
-and `pnpm audit`. Fix an npm advisory with an override in
-`apps/desktop/pnpm-workspace.yaml`; one with no fix gets an ignore there with
-its reason and a re-review date.
-
-In `crates/nebula-core/src/{model,ops,check}.rs`, invariants live in three
-places by design: deserialization, the point of action, and the checker.
-Moving a rule between them changes its strength. See
-[docs/design/lineage-graph/specs/invariants.md](docs/design/lineage-graph/specs/invariants.md).
-
-## Before changing the schema
-
-Read [docs/design/lineage-graph/4_decisions.md](docs/design/lineage-graph/4_decisions.md)
-first. Most of the schema's shape is a deliberate choice with a stated condition
-that would reverse it. In particular:
-
-- Genealogy is a DAG. Diamonds are legal and expected. Do not add a `parent`
-  field or nest nodes in directories.
-- Nothing is ever deleted. Refuted, abandoned and dropped things persist.
-- References may not carry a verdict. This is enforced by `deny_unknown_fields`,
-  not by a check, and that is deliberate.
-- Capture must stay under five seconds and require no decisions.
-
-v0.2 is intentionally minimal — it *removed* schema. Do not add any until
-roughly fifty real nodes exist to justify it.
-
-## Orbit integration
-
-`origin` records what produced a node; work it spawned is a reference. Two
-hazards, both learned elsewhere in the constellation:
-
-- Never hardcode an agent family. orbit-research pinned `codex` into its task
-  lookup and the crew names changed underneath it.
-- `orbit.task.add` silently ignores a `dependencies` field. Wire dependencies
-  with a follow-up `task.update`.
