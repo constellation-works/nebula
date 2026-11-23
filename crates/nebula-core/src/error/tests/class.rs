@@ -121,8 +121,17 @@ fn snake_case_is_checked_word_by_word() {
 #[test]
 fn agent_docs_cover_every_core_refusal_code() {
     let docs = concat!(
-        include_str!("../../../../../skills/nebula/references/verbs.md"),
-        include_str!("../../../../../skills/nebula/references/invariants.md"),
+        include_str!("../../../../../skills/nebula/references/verbs-common.md"),
+        include_str!("../../../../../skills/nebula/references/verbs-corpus.md"),
+        include_str!("../../../../../skills/nebula/references/verbs-inbox.md"),
+        include_str!("../../../../../skills/nebula/references/verbs-nodes.md"),
+        include_str!("../../../../../skills/nebula/references/verbs-references.md"),
+        include_str!("../../../../../skills/nebula/references/verbs-query.md"),
+        include_str!("../../../../../skills/nebula/references/invariants-rules.md"),
+        include_str!("../../../../../skills/nebula/references/invariants-refusals-nodes.md"),
+        include_str!("../../../../../skills/nebula/references/invariants-refusals-corpus.md"),
+        include_str!("../../../../../skills/nebula/references/invariants-refusals-inbox.md"),
+        include_str!("../../../../../skills/nebula/references/invariants-refusals-writes.md"),
     );
     let missing: Vec<_> = Error::CODES
         .iter()

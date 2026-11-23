@@ -1,0 +1,43 @@
+# Refusals: nodes, edges, statuses and references
+
+Refusals are typed. The message is what the CLI prints; the variant is what
+`nebula-core` returns to the desktop app, and its name in `snake_case` is the
+`code` that `--json` reports: `NeedsKill` is `needs_kill`, `IoAt` is `io_at`
+(the envelope is in [verbs-common.md](verbs-common.md#refusals-under---json)).
+**Do not retry the same command.**
+
+Read this for a refusal from `new`, `link`, `sharpen`, `status`, `cite` or
+`handoff`.
+
+| Message | Variant | Rule | Do instead |
+|---|---|---|---|
+| `that edge would make \`X\` its own ancestor` | `Cycle {from, to}` | 1 | The edge is backwards, or the relation is really `contradicts`. Run `neb trace X` and `neb trace Y --down` to see the existing line; propose the reverse edge or none. |
+| `a node cannot link to itself` | `SelfLoop` | 3 | You passed the same id twice. Check the ids with `neb list --json`. |
+| `no node \`X\`` | `NoSuchNode` | 3 | The id is wrong. Ids are title slugs; `neb list --json \| jq '.[].id'`. Never `neb new` a node to satisfy a link you meant for an existing one. |
+| `the edge \`X\` <kind> \`Y\` already exists` | `DuplicateEdge { from, kind, to }` (`duplicate_edge`) | — | From `link`, nothing to do; it is already recorded (`neb show X` lists it). A `contradicts` link that `check` reports as one-sided is not a duplicate: re-running it writes the missing half. From `new`, a flag named the same node twice and nothing was written: name it once. |
+| `\`X\` is named as both a parent and the node this reopens` | `ParentAndReopens(X)` | 1 | `reopens` is already genealogy, so drop `--parent X` and keep `--reopens X`. Nothing was written. |
+| `\`hypothesis\` needs a kill condition first` | `NeedsKill(hypothesis)` | 2 | `neb sharpen <id> --kill "..."` — it moves the status for you. Ask the human for the falsifier if you do not have one; do not invent it. |
+| `a kill condition cannot be empty` | `EmptyKill` | 2 | Same: write the falsifier. |
+| `kill condition is already \`X\`; it was not replaced` | `KillAlreadySet(X)` (`kill_already_set`) | 2 | An open node's falsifier is content, including after `sharpen --confirm`; `sharpen --kill` never overwrites it, regardless of `--by`. A materially different falsifier is a different idea, so create a new node and link the relationship. |
+| `refuted needs --why: say how the kill condition fired` | `RefutedNeedsWhy` | 5 | `neb status <id> refuted --why "..."`. The reason is the human's; quote them. |
+| `\`X\` is refuted and cannot simply reopen` | `RefutedCannotReopen` | 6 | Refuted is final, including its kill condition: `sharpen --kill` and `sharpen --confirm` refuse too, because rewriting the falsifier would orphan `closed.why`. A verdict is part of the record, so `status <id> refuted --why ...` on an already-refuted node is refused too, even with a new `--why`: that would silently replace `closed.why` and its date rather than leaving the recorded verdict alone. `neb new "..." --reopens X` so the fact that it once died stays visible. Only with the human's say-so. Abandoned is not a verdict and is revivable: `sharpen` on an abandoned node is allowed, and `status <id> abandoned --why ...` on an already-abandoned node is allowed too, replacing the reason. |
+| `\`X\` is already refuted, so it cannot be closed again` / `... already abandoned ...` | `AlreadyClosed { id, status }` (`already_closed`) | 6 | From `handoff`: only an open node can be handed off. Refuted is a verdict: if the human wants the idea to go on downstream, `neb new "..." --reopens X` and hand that node off. Abandoned (including an earlier hand-off) already has a reason; `neb show X` and report it rather than closing it again. Nothing was written. |
+| `\`X\` names a kill condition, so it cannot go back to seed` | `SeedWithKill` | 13 | The kill is content and stays: moving the node to `seed` would leave a seed carrying a falsifier, which `check` reads as a hand edit. A node that names what would kill it reopens as a hypothesis: `neb status X hypothesis`, from `abandoned` too. Never delete or blank the kill to make `seed` succeed. |
+| `\`X\` cannot become \`Y\`` | `InvalidTransition` (`invalid_transition`) | — | A guard you have not seen. Report it verbatim; do not work around it. |
+| `duplicate node id \`X\`` | `DuplicateId` (`duplicate_id`) | — | The corpus has two documents claiming one id, so a verb cannot safely choose one. Report both paths; do not overwrite either document or retry the verb. |
+| `parent \`X\` does not exist` | `MissingParent` (`missing_parent`) | — | The parent id is wrong or has not been created. Check `neb list --json`; use an existing parent, or create the intended parent only with the human's approval. |
+| `title \`X\` does not reduce to a usable id` | `UnusableTitle` | — | Give `neb new` or `neb promote` a title containing letters or numbers, or provide a valid `--id`. Do not retry the same unusable title. |
+| `\`X\` is not a valid id: ids are lowercase words joined by single dashes, 60 characters or fewer` | `InvalidId` | — | Use a lowercase slug of single-dash-separated words, at most 60 characters, for `neb new` or `neb promote --id`. Do not retry the invalid id. |
+| `\`../x.md\` does not resolve from .../nodes` | `UnresolvedUri` | 8 | Local URIs are relative to `nodes/`. Fix the path (`../../studies/x.md`) or use a URL/wikilink. |
+| `\`X\` is an absolute local path; local references are relative to nodes/` | `AbsoluteUri` | 8 | An absolute path or `file:` URI names nothing on any other machine the corpus is synced to, so it is refused even when it exists here. Rewrite it relative to `nodes/` (`../../studies/x.md`), cite an Observatory record by its id with `--kind observatory`, or use a URL. |
+| `\`X\` is not an Observatory record id` | `InvalidObservatoryId` | 9 | `--kind observatory` takes the bare id (`Q<nnn>`, `H<nnn>`, `T<nnn>`, `R<nnn>`), never a path or a slug. Never fall back to `--uri <absolute path>`: it breaks on every other machine. |
+| `Observatory record \`X\` does not resolve under <root>` | `UnresolvedObservatoryRecord { record, root }` (`unresolved_observatory_record`) | 9 | From `handoff`, with an observatory root set: closing a node for a record this checkout does not carry would point its lineage at nothing. Check the id with the human; if it is right, the checkout is behind, so tell the human rather than work around it with `cite` and `status`. Nothing was written. |
+| `\`X\` is not an accepted reference kind; accepted kinds: ...` | `UnknownReferenceKind` | 16 | `--kind` takes one of the listed kinds, in any case. Pick the closest (`other` when none fits); never invent a kind. |
+| `the observatory root must be an absolute path, not \`X\`` | `RelativeObservatoryRoot { root, setting }` | 9 | The setting is per machine and read from any directory. With `(in <file>)`, this machine's setting file is empty or relative: tell the human, who sets it again with an absolute `neb config observatory-root <DIR>`. Otherwise pass the checkout's absolute path. Never write the path into `config.yaml` instead. |
+| `node \`X\` already exists` | `NodeExists` | — | A node with that slug exists. Show it; the human decides whether this is a duplicate (drop) or a refinement (`new` with a different title + `refines`). |
+| `a reason only applies to refuted or abandoned, not \`X\`` | `ReasonOnOpenStatus(X)` (`reason_on_open_status`) | — | Drop `--why` when moving to an open status. Nothing was written. |
+| `a note cannot be empty` | `EmptyNote` (`empty_note`) | — | The note was only whitespace; nothing was written. Pass the note's text. |
+| `\`X\` has no kill condition to confirm` | `NoKillToConfirm(X)` (`no_kill_to_confirm`) | 2 | `sharpen --confirm` adopts a falsifier somebody proposed, and `X` has none. Ask the human for one and `neb sharpen X --kill "..."`; do not invent it. |
+| `a reference of kind \`K\` needs a URI; only a discussion may have none` | `UriRequired { kind }` (`uri_required`) | — | Pass where the reference lives with `--uri`; only `--kind discussion` may go without. Never invent a URI to get past this. |
+| `\`X\` cannot be an author label: no parentheses, newlines or \`: \`` | `InvalidAuthorLabel(X)` (`invalid_author_label`) | — | Pass a `--by` label without those characters, such as your session id or crew name. Nothing was written. |
+| `\`X\` is not a status` / `\`X\` is not an edge type` | `NotAStatus(X)` / `NotAnEdgeType(X)` (`not_a_status`, `not_an_edge_type`) | — | Use one of the listed values: `seed`, `hypothesis`, `refuted`, `abandoned`; `derives-from`, `refines`, `generalizes`, `reopens`, `contradicts`. |

@@ -1,5 +1,23 @@
 # Routine mode
 
+Contents:
+
+- [The run](#the-run)
+- [`nebula-review.md` format](#nebula-reviewmd-format)
+- [promote](#promote)
+- [drop](#drop)
+- [sharpen](#sharpen)
+- [confirm](#confirm)
+- [link](#link)
+- [cite](#cite)
+- [abandon](#abandon)
+- [Provenance](#provenance)
+- [Worked transcript](#worked-transcript)
+- [promote](#promote)
+- [drop](#drop)
+- [sharpen](#sharpen)
+- [cite](#cite)
+
 Nobody is watching. An Orbit routine, a cron entry, a sweep — anything that
 runs without a human in the loop is routine mode, and so is any session where
 you are not sure. The rule is absolute: **read the corpus, then propose; never
@@ -28,12 +46,15 @@ Proposals go in `nebula-review.md`, attached to the current Orbit task with
 `orbit.task.artifact.put`. Draft it at `$ORBIT_SCRATCH_DIR/nebula-review.md`,
 then attach it; this run scratch directory is outside the corpus. Without an
 Orbit task, write proposals to `$HOME/.local/state/nebula/nebula-review.md`
-(create its parent directory first, and overwrite it each run). `neb review
---out` writes the diagnostic report, not the proposals, and is refused while
-`NEBULA_READ_ONLY=1`; routines use stdout review. Outside routine mode, `--out`
-requires an external destination (physical paths inside the corpus are refused,
-including symlink and `..` aliases). It atomically writes mode `0600` and never
-follows a final symlink. Never put proposals or reports under the corpus root.
+(create its parent directory first, and overwrite it each run).
+
+`neb review --out` writes the diagnostic report, not the proposals, and is
+refused while `NEBULA_READ_ONLY=1`; routines use stdout review. Outside routine
+mode, `--out` requires an external destination (physical paths inside the corpus
+are refused, including symlink and `..` aliases). It atomically writes mode
+`0600` and never follows a final symlink. Never put proposals or reports under
+the corpus root.
+
 A human or session-mode agent reads the proposal and runs only the lines they
 agree with.
 

@@ -93,7 +93,7 @@ fn published_invariant_tables_match_checker_rules() {
         ),
         (
             "skill",
-            include_str!("../../../../../skills/nebula/references/invariants.md"),
+            include_str!("../../../../../skills/nebula/references/invariants-rules.md"),
         ),
         (
             "lineage spec",

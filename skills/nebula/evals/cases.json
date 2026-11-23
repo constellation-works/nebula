@@ -1,0 +1,60 @@
+{
+  "skill": "nebula",
+  "cases": [
+    {
+      "id": "load-capture-flag",
+      "kind": "should_load",
+      "user_input": "That's a nebula seed: orbits might be a scarcity gradient. Capture it.",
+      "expected": {
+        "loads": "nebula",
+        "behaviour": "Runs `neb capture` once with the human's own sentence, with no parent or decision, and does not rewrite it as a summary."
+      }
+    },
+    {
+      "id": "load-routine-review",
+      "kind": "should_load",
+      "user_input": "This Orbit routine run reads the nebula corpus unattended. Review it and tell me what needs attention.",
+      "expected": {
+        "loads": "nebula",
+        "behaviour": "Treats the run as routine mode: sets `NEBULA_READ_ONLY=1`, runs only read verbs (`check`, `review`, `inbox`, `list`), runs no mutating verb, and attaches proposals as `nebula-review.md` to the Orbit task."
+      }
+    },
+    {
+      "id": "not-load-orbit-task",
+      "kind": "should_not_load",
+      "user_input": "Show me the acceptance criteria of task ORB-27136 and mark it ready for review.",
+      "expected": {
+        "loads": "orbit",
+        "behaviour": "Does not load nebula: the request is Orbit task lifecycle work, which the `orbit` skill covers."
+      }
+    },
+    {
+      "id": "task-handoff-to-observatory",
+      "kind": "task",
+      "user_input": "The idea `scarcity-wake` became Observatory hypothesis H012. Close it out in the nebula corpus. A human is directing this session.",
+      "expected": {
+        "loads": "nebula",
+        "result": [
+          "Runs `neb check` first and compares the printed `corpus:` path with the intended corpus.",
+          "Runs one `neb handoff scarcity-wake H012 --note \"<why>\" --by agent:<session-or-crew>`, not `cite` plus `status`.",
+          "Cites the record by its id, never by a path.",
+          "Runs `neb check` after the write and reports the changed node id and the check line."
+        ]
+      }
+    },
+    {
+      "id": "task-refuted-node-revival",
+      "kind": "task",
+      "user_input": "In a directed session: `a-single-taxonomy` is refuted but the human wants to try the idea again with a different kill condition.",
+      "expected": {
+        "loads": "nebula",
+        "result": [
+          "Does not run `status`, `sharpen --kill` or `sharpen --confirm` on the refuted node.",
+          "Runs `neb new \"<title>\" --reopens a-single-taxonomy` with `--by agent:<session-or-crew>` and without `--parent a-single-taxonomy`.",
+          "Asks the human for the falsifier rather than inventing it.",
+          "Runs `neb check` and reports the result."
+        ]
+      }
+    }
+  ]
+}
