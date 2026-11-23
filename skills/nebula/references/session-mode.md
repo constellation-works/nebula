@@ -146,7 +146,7 @@ $ neb list --json | jq -c '.[] | {id, status, tags}'
 
 > **agent:** One entry. `near` finds nothing: no node shares a word with
 > "nebula review as a weekly orbit routine".
->
+
 > Reading the three, it is about
 > operating the corpus, and `tags-beat-domains` is the only one about how
 > the tool is used (tag `design`) — a defensible parent, though a thin one.
