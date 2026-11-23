@@ -16,6 +16,7 @@ This repository contains `neb`, a Rust CLI for capturing ideas and tracing their
 ## Code
 
 - Keep corpus reads and writes in `nebula-core`; each surface builds `Locations` at startup, and core never reads the environment or working directory. The [crate design](docs/design/lineage-graph/2_design.md#crates) defines the dependency boundary; [location handling](crates/nebula-core/src/locations.rs) defines the resolver.
+- Every write is one call into [the verbs](crates/nebula-core/src/verb.rs), which hold the corpus lock across the write and its commit; every surface goes through them.
 - Product writes go through [the core filesystem helpers](crates/nebula-core/src/fs.rs), and entries below the corpus root use their regular-file readers. A root may be symlinked, but entries below it may not; keep paths as supplied. See [filesystem boundaries](docs/design/lineage-graph/4_decisions.md#the-root-as-spelled-every-entry-below-it-judged-physically).
 - Take the machine-settings lock before any corpus lock; [lock.rs](crates/nebula-core/src/lock.rs) documents the order.
 
