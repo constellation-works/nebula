@@ -89,8 +89,8 @@ Unsafe node or inbox IDs such as `../x` are `unsafe_id` argument refusals
 (exit 2), on both reads and writes. `near` accepts arbitrary search text as
 well as existing IDs; text that is not an existing ID remains a search query.
 `not_regular_file`, `locked`, `io_at` and `unknown_revision` are state
-refusals. The [skill's verb reference](skills/nebula/references/verbs.md)
-lists command flags, JSON shapes and error codes.
+refusals. The [skill's verb references](skills/nebula/SKILL.md#references)
+(`verbs-*.md`) list command flags, JSON shapes and error codes.
 
 With `neb config commit on`, a changed corpus write commits only corpus
 paths, leaving unrelated staged work alone. If no git work tree contains the

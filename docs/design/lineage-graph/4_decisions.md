@@ -341,7 +341,7 @@ extra keys, which would call for a separate `*Document` type that carries them.
 
 `check/tests/`'s `published_invariant_tables_match_checker_rules` departs from
 STD-02@2 §R21. It reads three documents with `include_str!`: the v0.2 spec,
-the skill's `invariants.md`, and the lineage-graph invariants spec. For each
+the skill's `invariants-rules.md`, and the lineage-graph invariants spec. For each
 `| # |` table, it compares the number and label columns with the `Rule` enum's
 discriminants and with the label list kept beside them. The rule bans tests
 that read text rather than run code. STD-04@1 §R5 allows a narrow structural
