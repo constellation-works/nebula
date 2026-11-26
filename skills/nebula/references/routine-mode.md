@@ -50,11 +50,18 @@ agree with.
 ## The run
 
 ```sh
-neb check --json                 # if any error finding: report it as the whole review and stop
+neb check --json                 # if check exits non-zero (any unreadable file, any error finding, or a failed open): report the check diagnostics as the whole review and stop, even when findings is empty
 neb review --json                # review findings; covers everything `review --short` would
 neb inbox --json                 # what is waiting
 neb list --json                  # for finding parents and duplicates
 ```
+
+Check the exit status before anything else: a non-zero `neb check` — any entry
+in `unreadable`, any error-level finding, or a failed open that prints no
+report — ends the routine. Report the check diagnostics (the JSON report, or
+the open failure on stderr) as the whole review and run nothing after it, even
+when `findings` is empty. A clean check is the only way forward to the graph
+reads below.
 
 Then, for each item, decide which proposal type it is and write one line.
 If you cannot say why in one line, do not propose it.
@@ -71,7 +78,7 @@ with the check line and the date.
 Orbit task: <task-id>
 Orbit run: <run-id>
 
-`neb check`: 4 nodes, 0 errors, 0 warnings.
+`neb check`: 4 nodes, 0 errors, 0 warnings, 0 unreadable files.
 
 ## promote
 - `neb promote a6e8 --title "Review as a weekly Orbit routine" --parent tags-beat-domains --tag design --by agent:nebula-routine` — reads as a claim about unattended review; nearest node by topic and tag
@@ -106,7 +113,8 @@ Rules for the lines:
   Under an Orbit run the core refuses it with `human_only`.
 - Never propose a new tag without saying `(new tag)` after the reason.
 - Never propose `migrate`, `init`, `config` or anything else touching
-  `config.yaml`; if `check` fails to open the corpus, that failure is the
+  `config.yaml`; if `check` exits non-zero with unreadable files or error
+  findings, or fails to open the corpus, that diagnostic output is the
   entire review. An observatory-root warning is the one exception worth
   reporting: say which records did not resolve and leave the setting to the
   human.
@@ -124,7 +132,7 @@ a proposed line supplies their own `--task` and `--run` when those apply.
 
 ```sh
 $ neb check --json
-{ "findings": [], "nodes": 3 }
+{ "root": "/Users/you/.nebula", "unreadable": [], "findings": [], "nodes": 3 }
 $ neb review --json
 [ { "rule": "no-references", "id": "tags-beat-domains",
     "title": "Tags beat domains", "reason": "no references attached" } ]
@@ -149,7 +157,7 @@ Orbit task as `nebula-review.md`:
 Orbit task: <task-id>
 Orbit run: <run-id>
 
-`neb check`: 3 nodes, 0 errors, 0 warnings.
+`neb check`: 3 nodes, 0 errors, 0 warnings, 0 unreadable files.
 
 ## promote
 - `neb promote a6e8 --title "Review as a weekly Orbit routine" --parent tags-beat-domains --tag design --by agent:nebula-routine` — a claim about how the corpus is operated; nearest node by topic, same tag
