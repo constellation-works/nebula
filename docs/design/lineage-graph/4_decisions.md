@@ -818,3 +818,88 @@ root (a local reference it reads, an attachment directory, a path argument to
 a verb). Such a path can hold several components, any of which can be a
 symlink, and has to be canonicalized, or its nearest existing ancestor with
 the missing names appended, and checked against the root, as §R6 says.
+
+## Internal module cycles with no declared in-layer order
+
+This departs from STD-02@5 §R39, which requires the import graph between
+units to be acyclic at every level — including between the top-level modules
+of a crate — and requires a layer with more than about ten units to declare
+an order inside itself. Measured at `dab0c4b`, `crates/nebula-core/src/` has
+20 top-level modules (`config`, `error`, `git`, `id`, `locations`, `lock`,
+`lock_holder`, `pending`, `reference`, `settlement`, `stamp`, `check`, `fs`,
+`graph`, `migrate`, `model`, `ops`, `store`, `triage`, `verb`) with no
+declared in-layer order: [2_design.md](2_design.md)'s "Crates" table names
+only seven of them. Import cycles exist between units at that level, for
+example `error` ↔ `model` (`error/mod.rs` uses `model::{EdgeType, …}` and
+`model.rs` uses `error::{Error, Result}`), `error` ↔ `fs` (`error/mod.rs`
+uses `fs_impl::EntryKind` and `fs.rs` uses `error::{Error, Result}`),
+`store` ↔ `locations` (`store/mod.rs` uses `locations::Locations` and
+`locations.rs` uses `store::Corpus`), and `store` ↔ `pending` (`pending.rs`
+uses `store::{Corpus, InboxEntry}` and `store/commit.rs` uses
+`pending::PENDING_FILE`). `crates/neb/src/` cycles between `cli`, `output`
+and `render` (`cli/mod.rs` uses both, `output.rs` uses `render::Refusal`,
+and `render/error.rs` uses `cli::shell_word` beside `render/table.rs` and
+`render/report.rs` using `output`), and `apps/desktop/src-tauri/src/` cycles
+between `error`, `shortcut` and `state` (`error.rs` uses
+`shortcut::ShortcutError` and `shortcut.rs` uses `state::AppState`, which
+uses `error::DesktopError`), with `commands` reaching `session` both
+directly and through `state`.
+
+The cycles are kept because each edge above is the cheapest true place for
+the item: the shared `Error` is named wherever a fallible function returns
+it, and the store is named wherever corpus state is opened. What is given up
+is machine checking below the crate edge: `scripts/check-dependency-direction.sh`
+enforces the `neb` → `nebula-core` direction and never the reverse, but no
+gate enforces an order inside `nebula-core` until one is declared, so a new
+module can extend a cycle without failing a check. Scope: the three areas
+above only. Reverses when `nebula-core` is restructured (the point
+"Adopting v5" binds an existing repo): the restructure declares the in-layer
+order R39 asks for and breaks the cycles toward it, and this decision is
+replaced by that order.
+
+## `nebula-core` keeps twenty top-level modules in one directory
+
+This departs from the directory clause of STD-02@5 §R18, which treats more
+than about twelve sibling modules with no grouping as a signal to check for
+several responsibilities sharing one name. Measured at `dab0c4b`,
+`crates/nebula-core/src/` holds the same 20 top-level modules named above in
+one directory. The check the rule asks for was done the other way round from
+the usual: the modules do not share one responsibility, they are twenty
+small ones (`lock` is the lock file, `stamp` is the inbox stamp, `id` is id
+validation), and grouping them now would only scatter one layer across
+folders before the R39 in-layer order above is decided. What is given up is
+scanability of the directory listing, which is what the heuristic protects.
+Reverses with the same restructure that settles the R39 order: if the order
+groups these modules (for example the persistence cluster `store`, `lock`,
+`pending`, `git`, `fs` under one unit), the directories follow the order,
+and this decision goes with it.
+
+## The CLI crate reads the environment and spawns the editor
+
+This departs from the v6 form of STD-02@6 §R7, which keeps composition,
+adapters, process spawning and every read of the environment out of the CLI
+crate. Measured at `dab0c4b`, three files in `neb` do exactly that:
+`crates/neb/src/cli/mod.rs` reads `std::env::args_os`, resolves `Locations`
+from `std::env::var_os` and `std::env::current_dir`, and (debug builds only)
+reads `NEBULA_TEST_GIT_DEADLINE_MS`; `crates/neb/src/cli/editor.rs` reads
+`$VISUAL`/`$EDITOR`, creates its temporary file under `std::env::temp_dir`,
+and spawns the editor as a child process; and
+`crates/neb/src/output/terminal.rs` reads `NO_COLOR` and `TERM` through
+`std::env::var_os`. The desktop shell follows the same pattern at its own
+surface: `AppState::new` reads the environment once and resolves the root
+the way the CLI does.
+
+The line is drawn one edge lower instead: `nebula-core` never reads the
+environment or the working directory. Every value above is resolved in `neb`
+and passed down as `Locations` (`Locations::from_reader` takes the reader,
+so core takes values, not access), which is the posture [AGENTS.md](../../../AGENTS.md)
+states — "Core never reads the environment or working directory". The
+process-group and deadline mechanics of the editor child are recorded
+separately above ("The editor stays in the terminal's process group, with no
+deadline", against STD-03@2). What is given up is a composition unit that a
+second surface could share: today the CLI crate is that unit, and a second
+surface needing the same resolution would copy the three reads rather than
+import them. Scope: the three `neb` files and `AppState::new` only. Reverses
+if a composition unit is ever split out of `neb`, or a second surface needs
+the same resolution: the reads move down with it, and core keeps taking
+values.
