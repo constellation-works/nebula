@@ -7,6 +7,11 @@
 //! durable write helper: replaced whole, flushed with its directory, and
 //! owner-only, exactly as the CLI writes the corpus.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the settings adapter checks for an existing entry and restricts its app configuration directory"
+)]
+
 use crate::fail_open;
 use fs4::{FileExt, TryLockError};
 use nebula_core::fs::{

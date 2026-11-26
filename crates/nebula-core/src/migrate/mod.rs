@@ -151,8 +151,7 @@ impl Staged {
         store::refuse_nodes_symlink(root)?;
         let dir = root.join("nodes");
         let mut paths = Vec::new();
-        for entry in store::list_directory(&dir)?.into_strict()? {
-            let path = entry.path();
+        for path in store::list_directory(&dir)?.into_strict()? {
             if path.extension().is_some_and(|e| e == "md") {
                 paths.push(path);
             }
@@ -448,7 +447,7 @@ fn verify_interrupted(
         {
             use std::os::unix::fs::PermissionsExt;
             let file = at.root.join(path);
-            let metadata = std::fs::symlink_metadata(&file)
+            let metadata = crate::fs_impl::metadata(&file, crate::fs_impl::Links::Refuse)
                 .map_err(|error| Error::io_at("inspecting", &file, error))?;
             if metadata.permissions().mode() & 0o111 != 0 {
                 return Err(refuse());

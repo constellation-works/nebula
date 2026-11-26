@@ -7,7 +7,7 @@
 use super::links::{hard_links_beside, is_node_file_name, is_same_entry, node_behind};
 use super::{Corpus, Scan, UnreadableNode, list_directory, refuse_nodes_symlink};
 use crate::error::{Error, Result};
-use crate::fs_impl::{EntryKind, regular_file_at};
+use crate::fs_impl::{EntryKind, Links, metadata, regular_file_at};
 use crate::id::is_path_safe_id;
 use crate::model::{self, Doc};
 use crate::stamp::today;
@@ -50,7 +50,7 @@ impl Corpus {
     /// a byte is read through it (see [`Self::read_node_file`]).
     pub fn load(&self, id: &str) -> Result<Doc> {
         let path = self.node_path(id)?;
-        match std::fs::symlink_metadata(&path) {
+        match metadata(&path, Links::Refuse) {
             Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Err(Error::NoSuchNode(id.to_string()));
@@ -145,7 +145,6 @@ impl Corpus {
         let mut paths: Vec<PathBuf> = listing
             .entries
             .into_iter()
-            .map(|entry| entry.path())
             .filter(|p| is_node_file_name(p))
             .collect();
         paths.sort();
@@ -173,7 +172,7 @@ impl Corpus {
     /// or a directory is refused by the read itself, before it can block or
     /// feed it without end.
     fn read_node_file(&self, path: &Path) -> Result<Doc> {
-        if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        if metadata(path, Links::Refuse).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
             return Err(match node_behind(path)? {
                 Some(id) => Error::IdMismatch {
                     path: path.to_path_buf(),

@@ -1,5 +1,10 @@
 //! Unit tests for `cli/help.rs`: the template and the clap tree agree.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the help fixture lists the checked-in help files directly"
+)]
+
 use super::parse_cli;
 use crate::cli::args::{Cli, Command};
 use clap::CommandFactory;

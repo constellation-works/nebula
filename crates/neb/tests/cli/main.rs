@@ -15,8 +15,9 @@
 //! the run helpers every area shares, and each other module is one area's
 //! tests with the helpers only it uses.
 
-#![allow(
+#![expect(
     clippy::disallowed_methods,
+    clippy::disallowed_types,
     reason = "fixtures plant and corrupt corpus files directly; only the binary under test goes \
               through nebula_core's durable write helper"
 )]

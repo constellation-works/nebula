@@ -87,6 +87,11 @@
 //! holding a corpus lock. Re-entry on one thread takes nothing new, so it
 //! cannot break the order.
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "the lock adapter holds the file descriptor that owns the advisory lock"
+)]
+
 use crate::error::{Error, Result};
 use crate::fs_impl::{Links, open_regular, overwrite_in_place, private_open_options, read_capped};
 use crate::lock_holder::LockHolder;

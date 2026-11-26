@@ -14,6 +14,11 @@
 //! There is no width here: `neb` never truncates or wraps to fit a terminal,
 //! so it has no use for one (§R15).
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the terminal adapter resolves the process colour settings alongside its stream probes"
+)]
+
 use nebula_core::EnvVar;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal};

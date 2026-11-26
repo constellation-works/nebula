@@ -5,7 +5,7 @@
 //! The corpus and Observatory records used here exist only under each test's
 //! temporary directory. `NEB_UPDATE_GOLDENS=1` is the sole update switch.
 
-#![allow(
+#![expect(
     clippy::disallowed_methods,
     reason = "golden fixtures and isolated temporary test data are written directly"
 )]

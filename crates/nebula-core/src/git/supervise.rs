@@ -13,6 +13,11 @@
 //! has exited and nothing holds its output open any more. That only ends the
 //! politeness early; the SIGKILL sweep that follows is unconditional.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "this adapter spawns Git in its own process group and supervises it until reap"
+)]
+
 use super::forward::{self, Forwarding};
 use super::{
     CEILING_ENV, Captured, GIT_TERMINATION_GRACE, GitAt, GitOutput, REPOSITORY_ENV, RunError,

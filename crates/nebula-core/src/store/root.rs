@@ -11,7 +11,10 @@ use super::inbox::is_inbox_month_filename;
 use super::links::is_node_file_name;
 use crate::config::{self, CommitSetting, Config, Declared, ObservatoryRoot};
 use crate::error::{Error, Result};
-use crate::fs_impl::{create_private_dir_all, create_private_new, write_private_atomic};
+use crate::fs_impl::{
+    Links, create_private_dir_all, create_private_new, metadata, read_directory,
+    write_private_atomic,
+};
 use crate::id::is_path_safe_id;
 use crate::locations::Locations;
 use crate::lock::CorpusLock;
@@ -481,7 +484,7 @@ fn read_machine_setting(path: &Path) -> Result<Option<String>> {
 /// directory entry so node paths cannot reach a different tree.
 pub(crate) fn refuse_nodes_symlink(root: &Path) -> Result<()> {
     let path = root.join("nodes");
-    match std::fs::symlink_metadata(&path) {
+    match metadata(&path, Links::Refuse) {
         Ok(metadata) if metadata.file_type().is_symlink() => Err(Error::NodesSymlink(path)),
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -501,7 +504,7 @@ fn holds_content(root: &Path) -> Result<bool> {
         }),
     ] {
         let dir = root.join(dir);
-        let entries = match std::fs::read_dir(&dir) {
+        let entries = match read_directory(&dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(Error::io_at("reading", &dir, error)),
@@ -518,7 +521,7 @@ fn holds_content(root: &Path) -> Result<bool> {
 
 /// Whether `dir` has both halves of the discovery marker; see `discover`.
 fn holds_corpus(dir: &Path) -> bool {
-    if !std::fs::symlink_metadata(dir.join("nodes"))
+    if !metadata(&dir.join("nodes"), Links::Refuse)
         .is_ok_and(|metadata| metadata.is_dir() || metadata.file_type().is_symlink())
     {
         return false;
@@ -530,8 +533,8 @@ fn holds_corpus(dir: &Path) -> bool {
             Err(_) => true,
         },
         Ok(None) => {
-            std::fs::symlink_metadata(dir.join("inbox")).is_ok_and(|metadata| metadata.is_dir())
-                || std::fs::symlink_metadata(dir.join(".lock"))
+            metadata(&dir.join("inbox"), Links::Refuse).is_ok_and(|metadata| metadata.is_dir())
+                || metadata(&dir.join(".lock"), Links::Refuse)
                     .is_ok_and(|metadata| metadata.is_file())
         }
         // Keep unsafe/unreadable entries at this root for opening to refuse.

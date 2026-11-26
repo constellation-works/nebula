@@ -277,15 +277,10 @@ for manifest in $members; do
 done
 
 # --- 2. grep bans ------------------------------------------------------------
-# ban [--everywhere] <path…> -- <extended-regex> <message>: fail if the
-# pattern appears in a non-test, non-comment line of the Rust sources under
-# the paths. With --everywhere, test modules and comments count too.
+# ban <path…> -- <extended-regex> <message>: fail if the pattern appears
+# in a non-test, non-comment line of the Rust sources under the paths.
 ban() {
-  local paths=() hits everywhere=0
-  if [[ "$1" == "--everywhere" ]]; then
-    everywhere=1
-    shift
-  fi
+  local paths=() hits
   while [[ "$1" != "--" ]]; do
     # A missing path would make grep find nothing and the ban pass silently.
     [[ -e "$1" ]] || err "ban path $1 does not exist"
@@ -293,18 +288,12 @@ ban() {
     shift
   done
   shift
-  if [[ "$everywhere" -eq 1 ]]; then
-    if ! grep_capture hits "scanning ${paths[*]}" -rnHE --include='*.rs' "$1" "${paths[@]}"; then
+  if ! grep_capture hits "scanning ${paths[*]}" -rnHE --include='*.rs' --exclude-dir=tests "$1" "${paths[@]}"; then
+    return
+  fi
+  if [[ -n "$hits" ]]; then
+    if ! grep_capture hits "filtering comments in ${paths[*]}" -vE '^[^:]+:[0-9]+:[[:space:]]*//' <<<"$hits"; then
       return
-    fi
-  else
-    if ! grep_capture hits "scanning ${paths[*]}" -rnHE --include='*.rs' --exclude-dir=tests "$1" "${paths[@]}"; then
-      return
-    fi
-    if [[ -n "$hits" ]]; then
-      if ! grep_capture hits "filtering comments in ${paths[*]}" -vE '^[^:]+:[0-9]+:[[:space:]]*//' <<<"$hits"; then
-        return
-      fi
     fi
   fi
   if [[ -n "$hits" ]]; then
@@ -316,12 +305,6 @@ ban() {
 # Persisted shapes never fabricate a timestamp on read (STD-02 §R16).
 ban crates apps/desktop/src-tauri/src -- 'serde\(default *= *"[A-Za-z_:]*(now|now_utc)"' \
   "a persisted timestamp must not default to the current time"
-
-# Core reads no environment (STD-02 §R3): each surface reads its own once,
-# into `Locations`, and hands it down. No exemption, not even a unit test or
-# a comment, so the spelling never creeps back as an example.
-ban --everywhere crates/nebula-core/src -- 'std::env::|env::var|current_dir|home_dir' \
-  "nebula-core must not read the environment or the working directory; take them from Locations"
 
 # Retired paths stay retired (STD-02 §R17). List a path here when you delete a
 # module, a script or a crate.

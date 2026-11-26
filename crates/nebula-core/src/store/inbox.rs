@@ -5,7 +5,8 @@
 use super::{Corpus, list_directory};
 use crate::error::{Error, Result};
 use crate::fs_impl::{
-    append_private, create_private_dir_all, read_regular_text, write_private_atomic,
+    Links, append_private, create_private_dir_all, metadata, read_regular_text,
+    write_private_atomic,
 };
 use crate::id::fnv;
 use crate::settlement::Settlement;
@@ -113,11 +114,11 @@ impl Corpus {
             Err(error) => return Err(error),
         };
         let mut files = Vec::new();
-        for entry in listing.into_strict()? {
+        for path in listing.into_strict()? {
             // A month name is a candidate even when it is not a regular
             // file: the safe reader must report it, never silently omit it.
-            if is_inbox_month_filename(&entry.file_name()) {
-                files.push(entry.path());
+            if path.file_name().is_some_and(is_inbox_month_filename) {
+                files.push(path);
             }
         }
         files.sort();
@@ -266,7 +267,7 @@ fn read_inbox_file(path: &Path) -> Result<String> {
 /// symlinked root is a supported way to reach a corpus, but a symlink planted
 /// at `inbox/` or a month file must not redirect an inbox write.
 fn refuse_inbox_symlink(path: &Path) -> Result<()> {
-    match std::fs::symlink_metadata(path) {
+    match metadata(path, Links::Refuse) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             Err(Error::InboxSymlink(path.to_path_buf()))
         }

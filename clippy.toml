@@ -1,10 +1,51 @@
-# Methods that bypass a shared helper. Each entry names the helper to use.
+# STD-02 §R3, §R5, §R6: filesystem, environment and process boundaries.
+disallowed-types = [
+    { path = "std::fs::File", reason = "read named files through nebula_core::fs::read_regular_text or write through nebula_core::fs::write_private_atomic" },
+    { path = "std::fs::OpenOptions", reason = "use nebula_core::fs::read_regular_text, write_private_atomic or open_private_lock as appropriate" },
+    { path = "std::fs::ReadDir", reason = "list directories through crate::fs_impl::read_directory" },
+    { path = "std::fs::DirEntry", reason = "list directories through crate::fs_impl::read_directory" },
+]
+
 disallowed-methods = [
-    # STD-03 §R5 and STD-05 §R8: every durable file goes through one helper
-    # that fsyncs the file and its directory and creates it owner-only.
+    { path = "std::fs::read", reason = "read through crate::fs_impl::read_regular_bytes" },
+    { path = "std::fs::read_to_string", reason = "read through nebula_core::fs::read_regular_text" },
+    # STD-03 §R5 and STD-05 §R8: durable writes and owner-only creation.
     { path = "std::fs::write", reason = "use nebula_core::fs::write_private_atomic, the durable write helper" },
-    # STD-05 §R8: every directory nebula creates is 0700, never the umask's.
+    { path = "std::fs::remove_file", reason = "remove through crate::fs_impl::remove_private" },
+    { path = "std::fs::remove_dir", reason = "put directory removal in the core filesystem adapter (crate::fs_impl) and call its helper" },
+    { path = "std::fs::remove_dir_all", reason = "put recursive removal in the core filesystem adapter (crate::fs_impl) and call its helper" },
+    { path = "std::fs::create_dir", reason = "use nebula_core::fs::create_private_dir_all, which creates directories 0700" },
     { path = "std::fs::create_dir_all", reason = "use nebula_core::fs::create_private_dir_all, which creates directories 0700" },
+    { path = "std::fs::rename", reason = "use nebula_core::fs::write_private_atomic for durable replacement" },
+    { path = "std::fs::copy", reason = "read through crate::fs_impl::read_regular_bytes and write through nebula_core::fs::write_private_atomic" },
+    { path = "std::fs::hard_link", reason = "put hard-link creation in the core filesystem adapter (crate::fs_impl) and call its helper" },
+    { path = "std::fs::soft_link", reason = "put symlink creation in the core filesystem adapter (crate::fs_impl) and call its helper" },
+    { path = "std::fs::metadata", reason = "inspect through crate::fs_impl::metadata with Links::Follow" },
+    { path = "std::fs::symlink_metadata", reason = "inspect through crate::fs_impl::metadata with Links::Refuse" },
+    { path = "std::fs::set_permissions", reason = "create files with nebula_core::fs::write_private_atomic and directories with nebula_core::fs::create_private_dir_all" },
+    { path = "std::fs::read_dir", reason = "list through crate::fs_impl::read_directory" },
+    { path = "std::fs::read_link", reason = "put link target reads in the core filesystem adapter (crate::fs_impl) and call its helper" },
+    { path = "std::fs::canonicalize", reason = "pass the path as supplied through nebula_core::Locations and leave physical comparisons to the adapter that owns the path" },
+    { path = "std::fs::exists", reason = "inspect through crate::fs_impl::metadata and handle NotFound explicitly" },
+
+    { path = "std::env::var", reason = "read in surface composition and pass resolved inputs to nebula_core::Locations::from_reader" },
+    { path = "std::env::var_os", reason = "read in surface composition and pass resolved inputs to nebula_core::Locations::from_reader" },
+    { path = "std::env::vars", reason = "resolve named inputs in surface composition with nebula_core::Locations::from_reader" },
+    { path = "std::env::vars_os", reason = "resolve named inputs in surface composition with nebula_core::Locations::from_reader" },
+    { path = "std::env::current_dir", reason = "resolve the working directory in surface composition and pass it to nebula_core::Locations::from_reader" },
+    { path = "std::env::home_dir", reason = "resolve the home directory through nebula_core::Locations::from_reader at surface composition" },
+    { path = "std::env::temp_dir", reason = "resolve the temporary directory in the adapter that owns the scratch path and pass it in" },
+    { path = "std::env::current_exe", reason = "resolve the executable path at surface composition and pass it in" },
+    { path = "std::env::args", reason = "parse arguments at the CLI entry point and pass the parsed values down" },
+    { path = "std::env::args_os", reason = "parse arguments through neb's cli::parse_from at the entry point" },
+    { path = "std::env::set_current_dir", reason = "pass a resolved root through nebula_core::Locations or set the child directory with Command::current_dir" },
+    { path = "std::env::set_var", reason = "pass resolved inputs through nebula_core::Locations or configure a child with Command::env" },
+    { path = "std::env::remove_var", reason = "pass resolved inputs through nebula_core::Locations or configure a child with Command::env_remove" },
+
+    { path = "std::process::Command::output", reason = "use crate::git::run_git for Git or use a supervised adapter with a deadline, process group and capped output" },
+    { path = "std::process::Command::status", reason = "use crate::git::run_git for Git or use a supervised adapter with a deadline, process group and capped output" },
+    { path = "std::process::Command::spawn", reason = "use crate::git::run_git for Git or use a supervised adapter with a deadline, process group and capped output" },
+
     # STD-03 §R2: every queue between threads is bounded, and its construction
     # site says what a producer does when it is full.
     { path = "std::sync::mpsc::channel", reason = "unbounded (STD-03 §R2): use std::sync::mpsc::sync_channel and state the full-queue policy" },

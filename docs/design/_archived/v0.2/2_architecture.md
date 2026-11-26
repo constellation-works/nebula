@@ -313,13 +313,14 @@ workspace member, and no surface crate: no `clap`, `clap_complete`, `shlex`,
 `tauri*`, `notify`, terminal or log-subscriber crate. `neb` and
 `nebula-desktop` may depend on `nebula-core` and on no other member.
 
-`scripts/check-dependency-direction.sh` is the enforcement. It reads each
-member's `Cargo.toml` (no build) and fails on an edge not in that crate's
-allowlist, on a banned crate in core, and on a workspace member with no policy.
-It also greps core for reads of the environment or the working directory
-(`std::env::`, `env::var`, `current_dir`, `home_dir`), with no exemption for
-tests or comments.
-CI and `make ci-fast` run it. Change this layering and the script's policies
+`scripts/check-dependency-direction.sh` checks each member's `Cargo.toml`
+and fails on an edge outside its allowlist, a banned dependency in core,
+or a workspace member with no policy. `clippy.toml` enforces the filesystem,
+process and environment boundaries. Core takes environment and working
+directory inputs from `Locations`, which each surface builds. The shared
+filesystem adapter handles corpus I/O, and the Git supervisor manages Git
+children. Direct adapter access carries a reasoned lint expectation.
+CI and `make ci-fast` run both checks. Change this layering and its checks
 in the same commit (STD-02 §R6).
 
 ## Why this shape

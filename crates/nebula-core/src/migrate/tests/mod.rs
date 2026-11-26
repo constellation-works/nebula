@@ -1,6 +1,11 @@
 //! The migration registry, run in memory: no step here touches a disk or
 //! starts a process.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the migration fixture reads the resulting config directly to verify its on-disk shape"
+)]
+
 use crate::config::{Config, SCHEMA_VERSION};
 use crate::migrate_impl::{MIGRATIONS, Staged, StagedNode};
 use std::collections::BTreeSet;

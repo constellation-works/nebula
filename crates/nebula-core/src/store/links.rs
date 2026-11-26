@@ -5,6 +5,8 @@
 
 use super::list_directory;
 use crate::error::{Error, Result};
+#[cfg(unix)]
+use crate::fs_impl::{Links, metadata, read_directory};
 use std::path::{Path, PathBuf};
 
 /// The node a symlink in `nodes/` is an alias of: the id of the regular node
@@ -18,7 +20,7 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 pub(super) fn node_behind(link: &Path) -> Result<Option<String>> {
     use std::os::unix::fs::MetadataExt;
-    let Some(target) = std::fs::metadata(link)
+    let Some(target) = metadata(link, Links::Follow)
         .ok()
         .filter(std::fs::Metadata::is_file)
     else {
@@ -30,10 +32,9 @@ pub(super) fn node_behind(link: &Path) -> Result<Option<String>> {
     let found = list_directory(dir)?
         .into_strict()?
         .into_iter()
-        .map(|entry| entry.path())
         .filter(|path| path != link && is_node_file_name(path))
         .find(|path| {
-            std::fs::symlink_metadata(path).is_ok_and(|metadata| {
+            metadata(path, Links::Refuse).is_ok_and(|metadata| {
                 metadata.is_file()
                     && metadata.dev() == target.dev()
                     && metadata.ino() == target.ino()
@@ -75,7 +76,7 @@ pub(super) fn is_node_file_name(path: &Path) -> bool {
 #[cfg(unix)]
 pub(super) fn is_same_entry(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
-    match (std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)) {
+    match (metadata(a, Links::Refuse), metadata(b, Links::Refuse)) {
         (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
         _ => false,
     }
@@ -102,7 +103,7 @@ pub(super) fn is_same_entry(_a: &Path, _b: &Path) -> bool {
 #[cfg(unix)]
 pub(super) fn hard_links_beside(path: &Path) -> Result<Vec<PathBuf>> {
     use std::os::unix::fs::MetadataExt;
-    let Ok(file) = std::fs::symlink_metadata(path) else {
+    let Ok(file) = metadata(path, Links::Refuse) else {
         return Ok(Vec::new());
     };
     if file.nlink() <= 1 {
@@ -111,7 +112,7 @@ pub(super) fn hard_links_beside(path: &Path) -> Result<Vec<PathBuf>> {
     let Some(dir) = path.parent() else {
         return Ok(Vec::new());
     };
-    let entries = std::fs::read_dir(dir).map_err(|error| Error::io_at("reading", dir, error))?;
+    let entries = read_directory(dir).map_err(|error| Error::io_at("reading", dir, error))?;
     let mut links = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| Error::io_at("reading", dir, error))?;
@@ -119,7 +120,7 @@ pub(super) fn hard_links_beside(path: &Path) -> Result<Vec<PathBuf>> {
         if !is_node_file_name(&link) {
             continue;
         }
-        if let Ok(metadata) = std::fs::symlink_metadata(&link)
+        if let Ok(metadata) = metadata(&link, Links::Refuse)
             && metadata.dev() == file.dev()
             && metadata.ino() == file.ino()
         {

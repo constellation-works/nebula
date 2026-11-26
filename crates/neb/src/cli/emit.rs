@@ -2,6 +2,11 @@
 //! notices and warnings on stderr, and the report of the commit after a write.
 //! Everything goes out through [`crate::output`].
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the report output adapter resolves the physical destination to keep report writes outside the corpus"
+)]
+
 use super::failure::{Failure, ReportError, shell_word};
 use crate::output::{self, errln, outln};
 use crate::render::{self, json};

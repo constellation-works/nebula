@@ -373,8 +373,9 @@ impl Locations {
 /// spelling.
 #[cfg(unix)]
 fn same_dir(a: &Path, b: &Path) -> bool {
+    use crate::fs_impl::{Links, metadata};
     use std::os::unix::fs::MetadataExt;
-    match (std::fs::metadata(a), std::fs::metadata(b)) {
+    match (metadata(a, Links::Follow), metadata(b, Links::Follow)) {
         (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
         _ => false,
     }

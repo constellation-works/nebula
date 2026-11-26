@@ -7,7 +7,13 @@
 //! module knows no corpus and no graph; `resolve_local` takes a root and
 //! `resolve_observatory` an Observatory root, both as plain paths.
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "the Observatory adapter probes whether an external record file can be opened without reading it"
+)]
+
 use crate::error::{Error, Result};
+use crate::fs_impl::{Links, metadata, read_directory};
 use std::path::{Path, PathBuf};
 
 /// Whether a URI is a path to resolve against `nodes/`, as opposed to a URL,
@@ -135,7 +141,7 @@ pub(crate) fn resolve_observatory(root: &Path, id: &str) -> Result<Option<PathBu
         return Ok(None);
     };
     let dir = root.join(record_dir);
-    let entries = match std::fs::read_dir(&dir) {
+    let entries = match read_directory(&dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(Error::io_at("reading", &dir, error)),
@@ -153,7 +159,7 @@ pub(crate) fn resolve_observatory(root: &Path, id: &str) -> Result<Option<PathBu
     names.sort();
     for name in names {
         let path = dir.join(name);
-        let metadata = match std::fs::metadata(&path) {
+        let metadata = match metadata(&path, Links::Follow) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(Error::io_at("inspecting", &path, error)),
@@ -162,7 +168,7 @@ pub(crate) fn resolve_observatory(root: &Path, id: &str) -> Result<Option<PathBu
         // check used by handoff. `metadata` follows symlinks, but cannot by
         // itself establish that a file or directory can be opened.
         let accessible = if record_dir == "research" && metadata.is_dir() {
-            std::fs::read_dir(&path).map(|_| ())
+            read_directory(&path).map(|_| ())
         } else if record_dir != "research" && metadata.is_file() {
             std::fs::File::open(&path).map(|_| ())
         } else {

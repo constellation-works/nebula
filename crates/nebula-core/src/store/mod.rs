@@ -48,7 +48,7 @@ pub(crate) use root::refuse_nodes_symlink;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::fs_impl::create_private_dir_all;
+use crate::fs_impl::{create_private_dir_all, read_directory};
 use crate::git::GitAt;
 use crate::id::corpus_id;
 use crate::locations::Locations;
@@ -139,12 +139,12 @@ impl UnreadableNode {
 /// A directory listing keeps entry errors beside entries, so a tolerant scan
 /// can continue and a strict consumer can refuse before using a partial list.
 pub(crate) struct DirectoryEntries {
-    pub(crate) entries: Vec<std::fs::DirEntry>,
+    pub(crate) entries: Vec<PathBuf>,
     pub(crate) errors: Vec<Error>,
 }
 
 impl DirectoryEntries {
-    pub(crate) fn into_strict(self) -> Result<Vec<std::fs::DirEntry>> {
+    pub(crate) fn into_strict(self) -> Result<Vec<PathBuf>> {
         if let Some(error) = self.errors.into_iter().next() {
             return Err(error);
         }
@@ -154,7 +154,7 @@ impl DirectoryEntries {
 
 pub(crate) fn collect_directory_entries(
     dir: &Path,
-    entries: impl IntoIterator<Item = std::io::Result<std::fs::DirEntry>>,
+    entries: impl IntoIterator<Item = std::io::Result<PathBuf>>,
 ) -> DirectoryEntries {
     let mut found = DirectoryEntries {
         entries: Vec::new(),
@@ -172,8 +172,11 @@ pub(crate) fn collect_directory_entries(
 }
 
 pub(crate) fn list_directory(dir: &Path) -> Result<DirectoryEntries> {
-    let entries = std::fs::read_dir(dir).map_err(|error| Error::io_at("listing", dir, error))?;
-    Ok(collect_directory_entries(dir, entries))
+    let entries = read_directory(dir).map_err(|error| Error::io_at("listing", dir, error))?;
+    Ok(collect_directory_entries(
+        dir,
+        entries.map(|entry| entry.map(|entry| entry.path())),
+    ))
 }
 
 impl Corpus {
