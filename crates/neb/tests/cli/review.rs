@@ -1,4 +1,4 @@
-//! `neb review` and its short form: the four rules and their thresholds, the
+//! `neb review` and its short form: the five rules and their thresholds, the
 //! deprecated `open`, `--out`, and the report's JSON.
 
 use crate::harness::{

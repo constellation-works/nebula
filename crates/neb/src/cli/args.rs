@@ -659,7 +659,12 @@ pub(crate) enum Command {
     },
 
     /// The weekly maintenance report: stale hypotheses, untouched seeds,
-    /// nodes with no references, and inbox entries waiting too long.
+    /// nodes with no references, unconfirmed agent-authored kills, and inbox
+    /// entries waiting too long.
+    ///
+    /// An unconfirmed agent-authored kill is a kill condition an agent wrote
+    /// that no human has confirmed. `neb sharpen <ID> --confirm` adopts it as
+    /// the human's own and takes the node off the list.
     ///
     /// Read-only, by the spec's hard rule: this proposes and never mutates a
     /// node, an inbox entry, or the manifest. `--short` is the quick glance:
@@ -667,7 +672,8 @@ pub(crate) enum Command {
     Review {
         /// Only what needs attention now, one line each: hypotheses fourteen
         /// days old with no references, seeds untouched for ninety days, and
-        /// inbox captures waiting fourteen days or more.
+        /// inbox captures waiting fourteen days or more. It leaves out the
+        /// full report's stale-hypothesis and unconfirmed-kill findings.
         #[arg(long, conflicts_with_all = ["since", "out"])]
         short: bool,
         /// With `--short`, only nodes carrying this tag. Repeat to require
