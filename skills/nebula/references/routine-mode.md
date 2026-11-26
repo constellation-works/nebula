@@ -24,9 +24,12 @@ commands, including
 `tag`, `note`, `cite`, `migrate`, `config`, or `init`. `completions` only
 generates shell scripts and is not part of a routine corpus review.
 
-`open` is a deprecated alias for `review --short`. Both raise hypotheses
-created at least fourteen days ago with no references, seeds untouched for at
-least ninety days, and inbox captures waiting at least fourteen days. Full
+`open` is a deprecated alias for `review --short`, kept for existing routines.
+It is a view with only its legacy options, `--tag` and `--json`; it takes no
+`--limit`. For a capped list, run `neb review --short --limit <N>`. Both raise
+hypotheses created at least fourteen days ago with no references, seeds
+untouched for at least ninety days, and inbox captures waiting at least
+fourteen days. Full
 `review` also reports hypotheses untouched for thirty days by default and
 unconfirmed kills; `--since` overrides the stale-hypothesis and untouched-seed
 thresholds.

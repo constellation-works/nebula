@@ -695,7 +695,9 @@ pub(crate) enum Command {
     },
 
     /// Deprecated alias for `review --short`, kept for one release so
-    /// existing routines keep working. Hidden from `--help`.
+    /// existing routines keep working. It is a view with only its legacy
+    /// options (`--tag`, `--json`) and no `--limit`; for a capped list, use
+    /// `neb review --short --limit <N>`. Hidden from `--help`.
     #[command(hide = true)]
     Open {
         /// Only nodes carrying this tag. Repeat to require every one.
