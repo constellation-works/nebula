@@ -52,6 +52,26 @@ pub(crate) struct Cli {
 }
 
 impl Cli {
+    /// The clap tree for surfaces that list options.
+    ///
+    /// Clap propagates global arguments into every subcommand, including
+    /// verbs that reject them. Hide those inherited copies from help and
+    /// shell completions while keeping the parser's command tree untouched.
+    pub(crate) fn command_for_surfaces() -> clap::Command {
+        let mut command = <Self as clap::CommandFactory>::command();
+        command.build();
+
+        command = command.mut_subcommands(|subcommand| match subcommand.get_name() {
+            "triage" => subcommand.mut_arg("json", |arg| arg.hide(true)),
+            "completions" => subcommand
+                .mut_arg("root", |arg| arg.hide(true))
+                .mut_arg("json", |arg| arg.hide(true)),
+            _ => subcommand,
+        });
+
+        command
+    }
+
     /// What this process records as the holder of any lock it takes:
     /// `neb edit a-node`, `neb capture`. The verb and the one node or entry
     /// it names, never the text it was given, which may be private and
