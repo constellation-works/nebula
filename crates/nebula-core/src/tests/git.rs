@@ -1,5 +1,10 @@
 //! Unit tests for `git`.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "Git discovery fixtures create .git entries and use their physical paths"
+)]
+
 use crate::error::Error;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};

@@ -1,6 +1,11 @@
 //! Where a verb's text comes from when it is not on the command line: the
 //! editor `neb edit` opens, and standard input for the `-` spelling.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the editor adapter owns the editor environment, its scratch file and its foreground terminal child"
+)]
+
 use super::failure::{EditorError, Failure};
 use nebula_core::{Corpus, Error, ops};
 use std::process::Command as ProcessCommand;

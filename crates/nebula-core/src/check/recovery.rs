@@ -3,6 +3,7 @@
 
 use crate::config;
 use crate::error::{Error, Result};
+use crate::fs_impl::read_directory;
 use crate::pending::{self, PENDING_FILE, PendingWrite};
 use crate::store::Corpus;
 use crate::store::GITIGNORE_FILE;
@@ -137,7 +138,7 @@ fn pending_write(corpus: &Corpus, r: &mut Report) -> Result<()> {
 
 /// The names in `dir` that end `.tmp`, sorted. None when `dir` is not there.
 fn temporaries(dir: &Path) -> Result<Vec<OsString>> {
-    let entries = match std::fs::read_dir(dir) {
+    let entries = match read_directory(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(Error::io_at("reading", dir, error)),

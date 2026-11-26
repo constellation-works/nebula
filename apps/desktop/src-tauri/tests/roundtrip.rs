@@ -1,3 +1,7 @@
+#![expect(
+    clippy::disallowed_methods,
+    reason = "integration fixtures plant and inspect files and resolve Locations from the isolated environment"
+)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 //! `capture` followed by `inbox`, through a temporary corpus, using the same
@@ -236,10 +240,6 @@ fn a_missing_root_is_an_error_naming_the_path() {
 /// with `nodes/` and no `config.yaml` is the missing-config error, never a
 /// corpus quietly stamped with a config it did not have.
 #[test]
-#[allow(
-    clippy::disallowed_methods,
-    reason = "the fixture plants a config-less corpus directly; the code under test only reads"
-)]
 fn opening_a_configless_corpus_errors_and_creates_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("corpus");

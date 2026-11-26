@@ -1,13 +1,12 @@
-//! The one way nebula puts bytes on disk.
+//! Filesystem access and the one way nebula puts bytes on disk.
 //!
 //! Everything nebula keeps — nodes, the inbox, `config.yaml`, `.gitignore`,
 //! the lock, `~/.config/nebula`, the desktop's `settings.json` — is created
 //! and written through this module, so the steps that make a write durable and private
-//! cannot drift between copies (STD-03 §R5). `clippy.toml` refuses
-//! `std::fs::write` and `std::fs::create_dir_all` everywhere else, which is
-//! what keeps this the only copy.
+//! cannot drift between copies (STD-03 §R5). `clippy.toml` directs callers
+//! here for filesystem I/O and names the helpers to use.
 //!
-//! Three guarantees, all here and nowhere else:
+//! The adapter provides four guarantees.
 //!
 //! - **Durable.** A file is replaced whole: written to a temporary sibling,
 //!   flushed with `fsync`, renamed over the target, and then the directory
@@ -33,8 +32,14 @@
 //! On platforms without Unix modes the modes are not set and directories are
 //! not flushed; the rename is still atomic.
 
+#![expect(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "this adapter owns file descriptors, metadata, directory iteration and durable writes"
+)]
+
 use crate::error::{Error, Result};
-use std::fs::{File, OpenOptions};
+use std::fs::{DirEntry, File, Metadata, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -238,6 +243,21 @@ fn require_regular(path: &Path, file_type: std::fs::FileType) -> Result<()> {
     }
 }
 
+/// Inspect a path as supplied, following its final component only when requested.
+pub(crate) fn metadata(path: &Path, links: Links) -> std::io::Result<Metadata> {
+    match links {
+        Links::Refuse => std::fs::symlink_metadata(path),
+        Links::Follow => std::fs::metadata(path),
+    }
+}
+
+/// Stream a directory's entries, keeping open errors and entry errors separate.
+pub(crate) fn read_directory(
+    path: &Path,
+) -> std::io::Result<impl Iterator<Item = std::io::Result<DirEntry>>> {
+    std::fs::read_dir(path)
+}
+
 /// Open `path` with `options`, provided it is a regular file, or one
 /// `options` creates.
 ///
@@ -267,11 +287,7 @@ pub(crate) fn open_regular(
     links: Links,
     action: &'static str,
 ) -> Result<File> {
-    let judge = |path: &Path| match links {
-        Links::Refuse => std::fs::symlink_metadata(path),
-        Links::Follow => std::fs::metadata(path),
-    };
-    match judge(path) {
+    match metadata(path, links) {
         Ok(metadata) => require_regular(path, metadata.file_type())?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(Error::io_at("inspecting", path, error)),
@@ -286,7 +302,7 @@ pub(crate) fn open_regular(
         options.custom_flags(no_follow | libc::O_NONBLOCK);
     }
     let file = options.open(path).map_err(|error| {
-        judge(path)
+        metadata(path, links)
             .ok()
             .and_then(|metadata| require_regular(path, metadata.file_type()).err())
             .unwrap_or_else(|| Error::io_at(action, path, error))
@@ -402,7 +418,7 @@ pub(crate) fn read_regular_bytes(path: &Path, links: Links) -> Result<Option<Vec
 /// [`Error::NotRegularFile`] when something else is. Judged without following
 /// a symlink, and without opening anything.
 pub(crate) fn regular_file_at(path: &Path) -> Result<bool> {
-    match std::fs::symlink_metadata(path) {
+    match metadata(path, Links::Refuse) {
         Ok(metadata) => require_regular(path, metadata.file_type()).map(|()| true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(Error::io_at("inspecting", path, error)),

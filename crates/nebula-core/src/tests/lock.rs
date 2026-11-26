@@ -1,5 +1,11 @@
 //! Unit tests for `lock`.
 
+#![expect(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "lock fixtures hold and inspect file descriptors and plant invalid lock entries"
+)]
+
 use crate::error::{Error, Result};
 use crate::fs_impl::{Links, open_regular, overwrite_in_place, private_open_options, read_capped};
 use fs4::{FileExt, TryLockError};

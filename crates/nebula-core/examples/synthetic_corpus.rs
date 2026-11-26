@@ -28,6 +28,11 @@
 //!
 //! It prints nothing. A failure is the error `main` returns.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the synthetic corpus tool resolves its environment and manages its generated fixture"
+)]
+
 use nebula_core::fs::{
     create_private_dir_all, create_private_new, private_open_options, write_private_atomic,
 };

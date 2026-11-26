@@ -1,7 +1,8 @@
 //! Unit tests for `fs`.
 
-#![allow(
+#![expect(
     clippy::disallowed_methods,
+    clippy::disallowed_types,
     reason = "fixtures are written directly so the helper under test is the only thing exercised"
 )]
 

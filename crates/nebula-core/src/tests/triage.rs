@@ -1,6 +1,6 @@
 //! Unit tests for `triage`.
 
-#![allow(
+#![expect(
     clippy::disallowed_methods,
     reason = "fixtures hand-write inbox month files, not nebula state"
 )]

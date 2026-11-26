@@ -1,8 +1,8 @@
 //! Unit tests for `settings`.
 
-#![allow(
+#![expect(
     clippy::disallowed_methods,
-    reason = "fixtures are planted directly, beside the settings code under test"
+    reason = "settings fixtures construct and inspect files and resolve the guarded test child environment"
 )]
 
 use crate::fail_open;

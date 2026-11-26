@@ -1,6 +1,6 @@
 //! Unit tests for `reference.rs` (STD-02 §R19).
 
-#![allow(
+#![expect(
     clippy::disallowed_methods,
     reason = "fixtures plant an Observatory tree directly"
 )]

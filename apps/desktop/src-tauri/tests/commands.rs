@@ -1,3 +1,7 @@
+#![expect(
+    clippy::disallowed_methods,
+    reason = "integration fixtures inspect their files and resolve Locations from the isolated environment"
+)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 //! The IPC contract where the webview meets it: the app's own command table,

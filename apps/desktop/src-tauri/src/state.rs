@@ -1,5 +1,10 @@
 //! What the app holds between commands.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "desktop composition reads the process environment and working directory to build Locations"
+)]
+
 use crate::error::DesktopError;
 use crate::{session, settings};
 use nebula_core::{Corpus, Locations};

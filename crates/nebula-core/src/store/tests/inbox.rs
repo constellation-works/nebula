@@ -4,7 +4,7 @@
 //! capture through [`Corpus::capture_at`] at fixed stamps: every run takes
 //! the same ids, and no run depends on where the wall clock is.
 
-#![allow(
+#![expect(
     clippy::disallowed_methods,
     reason = "fixtures are planted directly, beside the helper under test"
 )]

@@ -1,6 +1,6 @@
 //! Unit tests for `pending`.
 
-#![allow(
+#![expect(
     clippy::disallowed_methods,
     reason = "fixtures read the corpus back directly, beside the code under test"
 )]

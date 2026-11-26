@@ -5,7 +5,7 @@
 use super::Corpus;
 use crate::config;
 use crate::error::{Error, Result};
-use crate::fs_impl::{Links, read_regular_bytes, write_private_atomic};
+use crate::fs_impl::{Links, metadata, read_regular_bytes, write_private_atomic};
 use crate::git::{self, GitAt, GitOutput};
 use crate::lock::LOCK_FILE;
 use crate::pending::PENDING_FILE;
@@ -195,7 +195,7 @@ pub(crate) fn ignore_rules() -> [String; 3] {
 /// [`Error::NotRegularFile`] rather than read.
 pub(crate) fn ensure_lock_ignored(root: &Path) -> Result<bool> {
     let path = root.join(GITIGNORE_FILE);
-    let is_symlink = match std::fs::symlink_metadata(&path) {
+    let is_symlink = match metadata(&path, Links::Refuse) {
         Ok(metadata) => metadata.file_type().is_symlink(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
         Err(error) => return Err(Error::io_at("inspecting", &path, error)),
