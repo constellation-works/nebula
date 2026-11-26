@@ -237,34 +237,45 @@ fn tag_edits_and_config_setters_still_honor_no_commit() {
     c.run(&["tag", &id, "--add", "chem"]).assert_ok();
     assert_eq!(log(&c.root).len(), n + 1, "without the flag it commits");
 
-    // Configuration setters keep the flag in both positions.
+    // The machine-only Observatory root setter works without the flag. Since
+    // it never commits corpus changes, both flag placements are refused
+    // before changing the configured setting.
     let n = log(&c.root).len();
-    c.run(&[
-        "config",
-        "observatory-root",
-        "/tmp/observatory",
-        "--no-commit",
-    ])
-    .assert_ok();
+    let observatory = c.workdir().join("observatory");
+    let other_observatory = c.workdir().join("other-observatory");
+    let third_observatory = c.workdir().join("third-observatory");
+    for path in [&observatory, &other_observatory, &third_observatory] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    let observatory = observatory.to_string_lossy().into_owned();
+    let other_observatory = other_observatory.to_string_lossy().into_owned();
+    let third_observatory = third_observatory.to_string_lossy().into_owned();
+    c.run(&["config", "observatory-root", &observatory])
+        .assert_ok();
     assert_eq!(
         log(&c.root).len(),
         n,
         "machine setting commits nothing either way"
     );
-    let run = c
-        .run(&[
+    c.run(&["config", "observatory-root"])
+        .assert_ok()
+        .says(&observatory);
+    for args in [
+        vec![
+            "config",
+            "observatory-root",
+            &other_observatory,
+            "--no-commit",
+        ],
+        vec![
             "--no-commit",
             "config",
             "observatory-root",
-            "/tmp/other-observatory",
-            "--json",
-        ])
-        .assert_ok();
-    assert!(
-        run.stderr().contains(PRE_VERB_WARNING),
-        "pre-verb setter warns: {}",
-        run.stderr()
-    );
+            &third_observatory,
+        ],
+    ] {
+        assert_observatory_setter_no_commit_refused(&c, &args, &observatory);
+    }
 
     // Dropping the legacy key is a corpus write, committed unless skipped.
     with_legacy_observatory_root(&c);
@@ -301,6 +312,21 @@ fn tag_edits_and_config_setters_still_honor_no_commit() {
         run.stderr()
     );
     assert_eq!(log(&c.root).len(), n, "pre-verb setter --no-commit skips");
+}
+
+fn assert_observatory_setter_no_commit_refused(c: &Corpus, args: &[&str], setting: &str) {
+    let refused = assert_usage_error(c, args, "usage");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("`config observatory-root` without `--drop-legacy`"),
+        "neb {}: {refused}",
+        args.join(" ")
+    );
+    c.run(&["config", "observatory-root"])
+        .assert_ok()
+        .says(setting);
 }
 
 #[test]
