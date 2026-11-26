@@ -92,9 +92,7 @@ pub enum ObservatorySource {
     Unset,
 }
 
-/// The environment variable that names the Observatory checkout, ahead of
-/// every stored setting.
-pub const OBSERVATORY_ROOT_ENV: &str = "OBSERVATORY_ROOT";
+pub use crate::locations::OBSERVATORY_ROOT_ENV;
 
 impl ObservatoryRoot {
     /// The effective root from each setting that could name one: the

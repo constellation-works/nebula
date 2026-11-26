@@ -55,7 +55,10 @@ pub(super) fn check_observatory_reference(
             Severity::Warn,
             Rule::ObservatoryReference,
             node,
-            format!("reference `{id}` names Observatory record `{record}` but no observatory root is set (`neb config observatory-root <DIR>` or $OBSERVATORY_ROOT)"),
+            format!(
+                "reference `{id}` names Observatory record `{record}` but no observatory root is set (`neb config observatory-root <DIR>` or ${})",
+                crate::config::OBSERVATORY_ROOT_ENV,
+            ),
         ),
         ObservatoryState::Root(root) => match resolve_observatory(root, record) {
             Ok(None) => r.push(

@@ -141,7 +141,11 @@ pub use graph::{
     ReviewItem, ReviewReport, ReviewRule, SEED_DAYS, TagCount, TagCounts, Touched, Trace, TraceHop,
     TraceNode, Via,
 };
-pub use locations::{Locations, WriteIntent};
+pub use locations::{
+    ENV_VARS as CORE_ENV_VARS, EnvVar, GIT_CEILING_DIRECTORIES_ENV, HOME_ENV, Locations,
+    NEBULA_READ_ONLY_ENV, NEBULA_ROOT_ENV, ORBIT_RUN_ID_ENV, ORBIT_TASK_ID_ENV, PWD_ENV,
+    WriteIntent, XDG_STATE_HOME_ENV,
+};
 pub use lock::{CorpusLock, LOCK_FILE, LOCK_WAIT};
 pub use lock_holder::LockHolder;
 pub use migrate::{MigrationReport, NodeMigration};

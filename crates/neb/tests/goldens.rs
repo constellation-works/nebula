@@ -21,6 +21,7 @@ mod support;
 
 const HELP_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/goldens/help");
 const JSON_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/goldens/json");
+const README_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md");
 
 #[derive(Clone, Copy)]
 enum Setup {
@@ -640,4 +641,28 @@ fn help_tree_has_no_tracker_or_real_record_ids() {
             );
         }
     }
+}
+
+#[test]
+fn readme_env_table_matches_registry() {
+    let path = Path::new(README_PATH);
+    let readme = std::fs::read_to_string(path).unwrap_or_else(|err| {
+        panic!("reading {}: {err}", path.display());
+    });
+    let actual = neb::env::readme_table();
+    if updating() {
+        let updated = neb::env::replace_readme_table(&readme, &actual)
+            .unwrap_or_else(|err| panic!("updating {}: {err}", path.display()));
+        if updated != readme {
+            std::fs::write(path, updated).expect("writing README.md");
+        }
+        return;
+    }
+    let expected = neb::env::extract_readme_table(&readme)
+        .unwrap_or_else(|err| panic!("reading env-var table from {}: {err}", path.display()));
+    assert!(
+        expected.as_bytes() == actual.as_bytes(),
+        "README.md environment-variable table differs; run NEB_UPDATE_GOLDENS=1 cargo test -p neb --test goldens (or make goldens UPDATE=1)\n{}",
+        diff(expected, &actual)
+    );
 }

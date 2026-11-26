@@ -42,7 +42,8 @@ use std::io::{self, ErrorKind, Write};
 use std::sync::{Mutex, PoisonError};
 
 pub(crate) use terminal::{
-    Role, Stream, bold, bold_if, colours, paint, paint_if, stdin_on_terminal, stdout_on_terminal,
+    ENV_VARS as TERMINAL_ENV_VARS, Role, Stream, bold, bold_if, colours, paint, paint_if,
+    stdin_on_terminal, stdout_on_terminal,
 };
 
 /// Write to stdout, formatted as `print!` formats.

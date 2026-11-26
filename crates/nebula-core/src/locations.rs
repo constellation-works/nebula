@@ -13,24 +13,146 @@
 //!
 //! [`Corpus`]: crate::Corpus
 
-use crate::config::OBSERVATORY_ROOT_ENV;
 use crate::error::{Error, Result};
-use crate::git::{CEILING_ENV, GitAt};
+use crate::git::GitAt;
 use crate::store::Corpus;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
-/// The home directory: machine settings, `~/.nebula` and kept edits.
-const HOME_ENV: &str = "HOME";
-/// The shell's name for the working directory.
-const PWD_ENV: &str = "PWD";
-/// A corpus root named for this shell or process.
-const NEBULA_ROOT_ENV: &str = "NEBULA_ROOT";
-/// Where the XDG base-directory rules put state: kept edits go under it.
-const XDG_STATE_HOME_ENV: &str = "XDG_STATE_HOME";
-const ORBIT_RUN_ID_ENV: &str = "ORBIT_RUN_ID";
-const ORBIT_TASK_ID_ENV: &str = "ORBIT_TASK_ID";
-const NEBULA_READ_ONLY_ENV: &str = "NEBULA_READ_ONLY";
+/// One environment variable read by nebula, documented once for code and
+/// usage docs (STD-01 §R25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnvVar {
+    /// Variable name in the process environment.
+    pub name: &'static str,
+    /// What it controls and how empty or invalid values behave.
+    pub meaning: &'static str,
+    /// Behavior when unset (or empty, where empty counts as unset).
+    pub default: &'static str,
+    /// CLI flag that overrides this variable, if any.
+    pub overridden_by: Option<&'static str>,
+}
+
+/// Home directory used for `~/.config/nebula` machine settings, the `~/.nebula` default corpus, and the `~/.local/state/nebula/edits` kept-edits fallback.
+///
+/// Meaning: locates machine-local settings and default user directories; unset or non-UTF-8 fails when needed.
+/// Default: none (required when resolving machine settings, default root, or kept-edits fallback).
+/// Overridden flag: none.
+pub const HOME_ENV: &str = "HOME";
+
+/// Shell's logical working directory spelling, used when absolute, free of `.`/`..`, and matching the OS working directory by identity so symlinked corpora keep their typed path.
+///
+/// Meaning: preserves symlink spellings during working-directory corpus discovery.
+/// Default: falls back to the OS current working directory.
+/// Overridden flag: none (`--root` skips working-directory discovery).
+pub const PWD_ENV: &str = "PWD";
+
+/// Corpus root directory path for this shell or process.
+///
+/// Meaning: selects the corpus root ahead of working-directory discovery; an empty value counts as unset.
+/// Default: nearest corpus at or above the working directory, else `~/.config/nebula/root`, else `~/.nebula`.
+/// Overridden flag: `--root <DIR>`.
+pub const NEBULA_ROOT_ENV: &str = "NEBULA_ROOT";
+
+/// Path to the Observatory checkout for resolving `observatory` references (`cite --kind observatory`, `handoff`, `check`).
+///
+/// Meaning: names the Observatory checkout ahead of any stored setting; an empty value counts as unset.
+/// Default: `~/.config/nebula/observatory-root`, else legacy `observatory_root` in `config.yaml`, else unset.
+/// Overridden flag: none (`neb config observatory-root <DIR>` sets only the machine fallback).
+pub const OBSERVATORY_ROOT_ENV: &str = "OBSERVATORY_ROOT";
+
+/// Base state directory where refused `neb edit` text is saved under `$XDG_STATE_HOME/nebula/edits`; relative paths are ignored.
+///
+/// Meaning: overrides the XDG state root for preserved edits when set to an absolute path.
+/// Default: `$HOME/.local/state`.
+/// Overridden flag: none.
+pub const XDG_STATE_HOME_ENV: &str = "XDG_STATE_HOME";
+
+/// Colon-separated directories where `git` repository discovery stops, applied both to `neb`'s repository check and passed to supervised `git` child processes.
+///
+/// Meaning: stops parent `.git` discovery at matching ancestors.
+/// Default: unset (no discovery ceiling).
+/// Overridden flag: none.
+pub const GIT_CEILING_DIRECTORIES_ENV: &str = "GIT_CEILING_DIRECTORIES";
+
+/// Orbit run identifier recorded as provenance on `new`, `promote`, `cite`, and `handoff`.
+///
+/// Meaning: supplies missing `origin.run` provenance; when non-empty, authored writes require explicit `--by` and `sharpen --confirm` is refused. Empty counts as unset; non-UTF-8 is refused.
+/// Default: unset (no run provenance; human-authored defaults allowed).
+/// Overridden flag: `--run <RUN>` for provenance; the write gate has no flag override.
+pub const ORBIT_RUN_ID_ENV: &str = "ORBIT_RUN_ID";
+
+/// Orbit task identifier recorded as provenance on `new`, `promote`, `cite`, and `handoff`.
+///
+/// Meaning: supplies missing `origin.task` provenance; empty counts as unset, and non-UTF-8 is refused.
+/// Default: unset (no task provenance).
+/// Overridden flag: `--task <TASK>`.
+pub const ORBIT_TASK_ID_ENV: &str = "ORBIT_TASK_ID";
+
+/// Read-only guard: set to `1` to refuse all corpus and machine-setting writes while keeping reads available.
+///
+/// Meaning: refuses every mutating command when `1`; any other non-empty value is refused on startup.
+/// Default: unset or empty (writes enabled).
+/// Overridden flag: none.
+pub const NEBULA_READ_ONLY_ENV: &str = "NEBULA_READ_ONLY";
+
+/// Registry of every environment variable read by `nebula-core` via [`Locations`].
+pub const ENV_VARS: &[EnvVar] = &[
+    EnvVar {
+        name: NEBULA_ROOT_ENV,
+        meaning: "Corpus root directory path ahead of working-directory discovery; empty counts as unset.",
+        default: "Nearest corpus above cwd, else `~/.config/nebula/root`, else `~/.nebula`",
+        overridden_by: Some("--root <DIR>"),
+    },
+    EnvVar {
+        name: OBSERVATORY_ROOT_ENV,
+        meaning: "Path to the Observatory checkout for resolving `observatory` references; empty counts as unset.",
+        default: "`~/.config/nebula/observatory-root`, else legacy `config.yaml` key, else unset",
+        overridden_by: None,
+    },
+    EnvVar {
+        name: ORBIT_TASK_ID_ENV,
+        meaning: "Orbit task identifier recorded as `origin.task` on `new`, `promote`, `cite`, and `handoff`; empty counts as unset.",
+        default: "Unset (no task provenance)",
+        overridden_by: Some("--task <TASK>"),
+    },
+    EnvVar {
+        name: ORBIT_RUN_ID_ENV,
+        meaning: "Orbit run identifier recorded as `origin.run`; when non-empty, authored writes require `--by` and `sharpen --confirm` is refused.",
+        default: "Unset (no run provenance)",
+        overridden_by: Some("--run <RUN>"),
+    },
+    EnvVar {
+        name: NEBULA_READ_ONLY_ENV,
+        meaning: "Set to `1` to refuse all corpus and machine-setting writes while keeping reads available; other non-empty values are refused.",
+        default: "Unset or empty (writes enabled)",
+        overridden_by: None,
+    },
+    EnvVar {
+        name: GIT_CEILING_DIRECTORIES_ENV,
+        meaning: "Colon-separated directories where `git` repository discovery stops for both `neb` and supervised `git` children.",
+        default: "Unset (no discovery ceiling)",
+        overridden_by: None,
+    },
+    EnvVar {
+        name: HOME_ENV,
+        meaning: "Home directory for `~/.config/nebula` settings, `~/.nebula` default corpus, and `~/.local/state/nebula/edits`.",
+        default: "None (required when machine paths are needed)",
+        overridden_by: None,
+    },
+    EnvVar {
+        name: PWD_ENV,
+        meaning: "Shell's logical working directory spelling, used when absolute, clean, and matching the OS cwd by identity.",
+        default: "OS current working directory",
+        overridden_by: None,
+    },
+    EnvVar {
+        name: XDG_STATE_HOME_ENV,
+        meaning: "Base state directory for kept edits (`$XDG_STATE_HOME/nebula/edits`); relative paths are ignored.",
+        default: "`$HOME/.local/state`",
+        overridden_by: None,
+    },
+];
 
 /// The kind of write being checked at the one resolved-environment gate.
 #[derive(Debug, Clone, Copy)]
@@ -98,7 +220,7 @@ impl Locations {
             nebula_root: read(NEBULA_ROOT_ENV),
             observatory_root: read(OBSERVATORY_ROOT_ENV),
             xdg_state_home: read(XDG_STATE_HOME_ENV),
-            git_ceiling_directories: read(CEILING_ENV),
+            git_ceiling_directories: read(GIT_CEILING_DIRECTORIES_ENV),
             orbit_run_id: read(ORBIT_RUN_ID_ENV),
             orbit_task_id: read(ORBIT_TASK_ID_ENV),
             nebula_read_only: read(NEBULA_READ_ONLY_ENV),
