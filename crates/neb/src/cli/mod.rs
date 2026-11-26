@@ -60,7 +60,22 @@ where
 {
     let argv: Vec<std::ffi::OsString> = argv.into_iter().map(Into::into).collect();
     let mut cmd = Cli::command();
-    let matches = cmd.try_get_matches_from_mut(&argv)?;
+    let matches = match cmd.try_get_matches_from_mut(&argv) {
+        Ok(matches) => matches,
+        Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp => {
+            if let Some(target) = filtered_help_target(&argv) {
+                let mut surfaces = Cli::command_for_surfaces();
+                let help_argv = [argv[0].clone(), "help".into(), target.into()];
+                if let Err(help) = surfaces.try_get_matches_from_mut(help_argv)
+                    && help.kind() == clap::error::ErrorKind::DisplayHelp
+                {
+                    return Err(help);
+                }
+            }
+            return Err(error);
+        }
+        Err(error) => return Err(error),
+    };
     cmd.build();
     if let Some(conflict) = global_conflict(&cmd, &matches) {
         return Err(conflict.error(&argv));
@@ -71,6 +86,61 @@ where
         .collect::<Vec<_>>()
         .join(" ");
     Ok(cli)
+}
+
+/// Render the two command help pages whose inherited global options are
+/// refused. Parsing still uses the untouched command tree so hidden flags
+/// continue to reach their existing usage-error paths.
+fn filtered_help_target(argv: &[std::ffi::OsString]) -> Option<&'static str> {
+    let words: Vec<_> = argv
+        .iter()
+        .skip(1)
+        .map(|word| word.to_string_lossy().into_owned())
+        .collect();
+    let mut index = 0;
+    let command = loop {
+        let word = words.get(index)?;
+        if word == "--root" {
+            index += 2;
+            continue;
+        }
+        if word.starts_with("--root=") || word == "--json" {
+            index += 1;
+            continue;
+        }
+        if word.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        break word.as_str();
+    };
+
+    let command = if command == "help" {
+        let mut target_index = index + 1;
+        loop {
+            let word = words.get(target_index)?;
+            if word == "--root" {
+                target_index += 2;
+                continue;
+            }
+            if word.starts_with("--root=") || word == "--json" || word == "--help" || word == "-h" {
+                target_index += 1;
+                continue;
+            }
+            break match word.as_str() {
+                "triage" => "triage",
+                "completions" => "completions",
+                _ => return None,
+            };
+        }
+    } else {
+        match command {
+            "triage" => "triage",
+            "completions" => "completions",
+            _ => return None,
+        }
+    };
+    Some(command)
 }
 
 /// A verb's argument and a global flag it declares a conflict with, both

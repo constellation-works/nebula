@@ -6,7 +6,6 @@ use crate::cli::failure::shell_word;
 use crate::cli::{Invocation, Outcome};
 use crate::output::{self, errln, out, outln};
 use crate::render;
-use clap::CommandFactory;
 use nebula_core::verb;
 use nebula_core::{Corpus, Severity};
 use std::io::Write;
@@ -215,7 +214,7 @@ pub(in crate::cli) fn completions(cx: Invocation<'_>, shell: clap_complete::Shel
     // Rendered whole first: `generate` panics on a failed write, and
     // the layer, not clap, decides what a closed stdout means.
     let mut script = Vec::new();
-    clap_complete::generate(shell, &mut Cli::command(), "neb", &mut script);
+    clap_complete::generate(shell, &mut Cli::command_for_surfaces(), "neb", &mut script);
     output::stdout()
         .write_all(&script)
         .map_err(output::StdoutFailed::from)?;

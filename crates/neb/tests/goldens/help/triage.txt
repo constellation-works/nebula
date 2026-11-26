@@ -13,9 +13,6 @@ Options:
       --root <DIR>
           Corpus location. Defaults to `$NEBULA_ROOT`, else the corpus the current directory is in, else `~/.config/nebula/root`, else `~/.nebula`
 
-      --json
-          Emit JSON instead of text, for scripts and agents
-
       --no-commit
           Skip the commit this once, where `neb config commit on` would make one
 
