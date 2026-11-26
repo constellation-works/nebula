@@ -821,6 +821,27 @@ impl Command {
         }
     }
 
+    /// The label for a command shape where `--no-commit` cannot skip a
+    /// corpus commit: the read-only shapes above, plus setting only the
+    /// machine-local Observatory root without dropping the legacy corpus
+    /// key.
+    pub(crate) fn no_commit_refusal_label(&self) -> Option<&'static str> {
+        if matches!(
+            self,
+            Self::Config {
+                setting: ConfigSetting::ObservatoryRoot {
+                    dir: Some(_),
+                    drop_legacy: false,
+                    ..
+                },
+            }
+        ) {
+            Some("`config observatory-root` without `--drop-legacy`")
+        } else {
+            self.read_only_label()
+        }
+    }
+
     /// Whether `--no-commit` was written after a read-only shape, where clap
     /// still parses it because the mixed verb flattens [`CommitArg`] for its
     /// writes. The dispatch refuses it before any corpus operation (STD-01
@@ -908,6 +929,22 @@ impl Command {
             | Self::Review { .. }
             | Self::Open { .. } => None,
         }
+    }
+
+    /// Whether `--no-commit` was written after a shape for which it has no
+    /// effect, including the machine-only Observatory root setter.
+    pub(crate) fn no_commit_refused_after_verb(&self) -> bool {
+        self.read_only_no_commit()
+            || matches!(
+                self,
+                Self::Config {
+                    setting: ConfigSetting::ObservatoryRoot {
+                        dir: Some(_),
+                        drop_legacy: false,
+                        commit,
+                    },
+                } if commit.no_commit
+            )
     }
 }
 

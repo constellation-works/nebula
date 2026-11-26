@@ -222,18 +222,17 @@ fn run(cli: Cli, locations: &Locations) -> Outcome {
     let root = cli.root.clone();
     let json = cli.json;
     let offered = cli.command.commit_arg();
-    if let Some(label) = cli.command.read_only_label() {
-        // A read-only shape of a mixed verb never commits, so either
-        // spelling of the flag has nothing to skip and is refused before any
-        // corpus operation (STD-01 §R28). Clap still parses the post-verb
-        // spelling because the verb flattens `CommitArg` for its writes.
-        // The subject names the read form, so a setter that does take the
-        // flag is never described as never committing.
-        let subject = match label {
+    if let Some(subject) = cli.command.no_commit_refusal_label() {
+        // These shapes never commit corpus changes, so either spelling of
+        // the flag has nothing to skip and is refused before any operation
+        // (STD-01 §R28). Clap still parses the post-verb spelling because
+        // mixed verbs flatten `CommitArg` for their writes.
+        let subject = match subject {
             "config commit" => "`config commit` without `on` or `off`",
             "config observatory-root" => {
                 "`config observatory-root` without `DIR` or `--drop-legacy`"
             }
+            "`config observatory-root` without `--drop-legacy`" => subject,
             _ => "`tag list`",
         };
         if cli.no_commit {
@@ -241,7 +240,7 @@ fn run(cli: Cli, locations: &Locations) -> Outcome {
                 "{subject} never commits, so `--no-commit` before it has nothing to skip; drop it"
             )));
         }
-        if cli.command.read_only_no_commit() {
+        if cli.command.no_commit_refused_after_verb() {
             return Err(Failure::say(format!(
                 "{subject} never commits, so `--no-commit` has nothing to skip; drop it"
             )));
