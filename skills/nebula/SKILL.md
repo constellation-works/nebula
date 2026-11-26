@@ -86,7 +86,8 @@ is the one thing this skill forbids outright.
   and `handoff`.
 - Read-only corpus commands: `check`, `inbox`, `show`, `log`, `list`, `near`,
   `trace`, `impact`, `graph`, `open`, and `review` (including `review
-  --short`), plus `tag list`.
+  --short`), plus `tag list`. `open` is a deprecated view that takes only
+  `--tag`; a capped quick glance is `review --short --limit <N>`.
 - Every corpus command listed here emits JSON on stdout under `--json`.
   `completions` generates shell scripts and is not a corpus command.
 - `neb triage` is the human's interactive loop over the inbox, a key per

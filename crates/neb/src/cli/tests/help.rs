@@ -133,7 +133,8 @@ fn help_sections_are_in_lifecycle_order() {
 }
 
 /// `open` is a deprecated alias for `review --short`: it still parses,
-/// but `--help` no longer offers it.
+/// but `--help` no longer offers it. It keeps only its legacy `--tag`; a
+/// capped list is `review --short --limit`, so `open` takes no `--limit`.
 #[test]
 fn the_deprecated_open_alias_is_hidden() {
     let open = Cli::command()
@@ -146,6 +147,10 @@ fn the_deprecated_open_alias_is_hidden() {
         parse_cli(&["open", "--tag", "physics"]).map(|c| c.command),
         Ok(Command::Open { tags }) if tags == ["physics"]
     ));
+    assert!(
+        parse_cli(&["open", "--limit", "1"]).is_err(),
+        "`open` takes no `--limit`; a capped list is `review --short --limit`"
+    );
 }
 
 /// The variant order mirrors the template's section order, so a command
