@@ -42,7 +42,8 @@ Query:
 
 Maintenance:
   review       The weekly maintenance report: stale hypotheses, untouched seeds,
-               nodes with no references, and inbox entries waiting too long
+               nodes with no references, unconfirmed agent-authored kills, and
+               inbox entries waiting too long
 
 Options:
       --root <DIR>

@@ -142,8 +142,8 @@ pub struct ReviewItem {
     pub reason: String,
 }
 
-/// Hypotheses gone quiet, seeds gone cold, nodes nobody has situated, and
-/// inbox captures rotting unprocessed.
+/// Hypotheses gone quiet, seeds gone cold, nodes nobody has situated, kill
+/// conditions no human has confirmed, and inbox captures rotting unprocessed.
 ///
 /// Read-only by design. This walks a graph and returns findings; it never
 /// edits a node, an inbox entry, or the config. The judgement calls (kill
