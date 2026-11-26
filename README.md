@@ -32,18 +32,31 @@ back, while a lone `nodes/` falls through), else the path in
 the current directory, so `neb capture` can create one only at an explicit or
 configured root, and it says so when it does.
 
-`ORBIT_TASK_ID` and `ORBIT_RUN_ID` supply missing provenance for `new`,
-`promote`, `cite` and `handoff`; explicit `--task` and `--run` values win.
-When `ORBIT_RUN_ID` is nonempty, writes of new words require an explicit
-`--by`, and `sharpen --confirm` is reserved for a human outside the run.
-Set `NEBULA_READ_ONLY=1` to refuse all corpus writes while keeping reads
-available. An empty or unset value leaves writes enabled; other values are
-refused.
-
 ```
 nebula   = the CLI, checker and desktop app           (this repo)
 corpus   = nodes/ and inbox/                          (elsewhere, private)
 ```
+
+## Environment variables
+
+<!-- env-vars:begin -->
+| Variable | Meaning | Default | Overridden by |
+| --- | --- | --- | --- |
+| `NEBULA_ROOT` | Corpus root directory path ahead of working-directory discovery; empty counts as unset. | Nearest corpus above cwd, else `~/.config/nebula/root`, else `~/.nebula` | `--root <DIR>` |
+| `OBSERVATORY_ROOT` | Path to the Observatory checkout for resolving `observatory` references; empty counts as unset. | `~/.config/nebula/observatory-root`, else legacy `config.yaml` key, else unset | - |
+| `ORBIT_TASK_ID` | Orbit task identifier recorded as `origin.task` on `new`, `promote`, `cite`, and `handoff`; empty counts as unset. | Unset (no task provenance) | `--task <TASK>` |
+| `ORBIT_RUN_ID` | Orbit run identifier recorded as `origin.run`; when non-empty, authored writes require `--by` and `sharpen --confirm` is refused. | Unset (no run provenance) | `--run <RUN>` |
+| `NEBULA_READ_ONLY` | Set to `1` to refuse all corpus and machine-setting writes while keeping reads available; other non-empty values are refused. | Unset or empty (writes enabled) | - |
+| `GIT_CEILING_DIRECTORIES` | Colon-separated directories where `git` repository discovery stops for both `neb` and supervised `git` children. | Unset (no discovery ceiling) | - |
+| `HOME` | Home directory for `~/.config/nebula` settings, `~/.nebula` default corpus, and `~/.local/state/nebula/edits`. | None (required when machine paths are needed) | - |
+| `PWD` | Shell's logical working directory spelling, used when absolute, clean, and matching the OS cwd by identity. | OS current working directory | - |
+| `XDG_STATE_HOME` | Base state directory for kept edits (`$XDG_STATE_HOME/nebula/edits`); relative paths are ignored. | `$HOME/.local/state` | - |
+| `NO_COLOR` | Disables ANSI colour output on stdout and stderr when non-empty. | Unset or empty (colour enabled on terminals) | - |
+| `TERM` | Terminal type; `dumb` disables ANSI colour output on stdout and stderr. | Unset or non-`dumb` (colour enabled on terminals) | - |
+| `VISUAL` | Shell-quoted editor command for `neb edit`, preferred over `EDITOR`; empty counts as unset. | Falls back to `EDITOR` | - |
+| `EDITOR` | Fallback shell-quoted editor command for `neb edit` when `VISUAL` is unset or empty. | None (`neb edit` refuses if both are unset) | - |
+| `NEBULA_TEST_GIT_DEADLINE_MS` | Debug builds only: supervised `git` deadline in ms for timeout tests; non-integers are ignored. | 30000 ms (120000 ms for `git commit`) | - |
+<!-- env-vars:end -->
 
 ## Tags
 

@@ -14,9 +14,40 @@
 //! There is no width here: `neb` never truncates or wraps to fit a terminal,
 //! so it has no use for one (§R15).
 
+use nebula_core::EnvVar;
 use std::ffi::OsString;
 use std::io::{self, IsTerminal};
 use std::sync::OnceLock;
+
+/// Disable ANSI colour output on stdout and stderr when set to any non-empty value.
+///
+/// Meaning: suppresses colour escapes across CLI output; an empty value has no effect.
+/// Default: unset or empty (colour enabled on terminals).
+/// Overridden flag: none (`--json` emits uncoloured JSON).
+pub(crate) const NO_COLOR_ENV: &str = "NO_COLOR";
+
+/// Terminal type name; `dumb` disables ANSI colour output on stdout and stderr.
+///
+/// Meaning: turns off colour escapes when set to `dumb`.
+/// Default: unset or any non-`dumb` value (colour enabled on terminals).
+/// Overridden flag: none (`--json` emits uncoloured JSON).
+pub(crate) const TERM_ENV: &str = "TERM";
+
+/// Environment variables owned by the terminal colour gate.
+pub(crate) const ENV_VARS: &[EnvVar] = &[
+    EnvVar {
+        name: NO_COLOR_ENV,
+        meaning: "Disables ANSI colour output on stdout and stderr when non-empty.",
+        default: "Unset or empty (colour enabled on terminals)",
+        overridden_by: None,
+    },
+    EnvVar {
+        name: TERM_ENV,
+        meaning: "Terminal type; `dumb` disables ANSI colour output on stdout and stderr.",
+        default: "Unset or non-`dumb` (colour enabled on terminals)",
+        overridden_by: None,
+    },
+];
 
 /// A stream that text is painted for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,8 +85,8 @@ impl Terminal {
     pub(crate) fn from_env(var: impl Fn(&str) -> Option<OsString>, ttys: Ttys) -> Self {
         Self {
             ttys,
-            no_color: var("NO_COLOR").is_some_and(|v| !v.is_empty()),
-            dumb: var("TERM").is_some_and(|v| v == "dumb"),
+            no_color: var(NO_COLOR_ENV).is_some_and(|v| !v.is_empty()),
+            dumb: var(TERM_ENV).is_some_and(|v| v == "dumb"),
         }
     }
 

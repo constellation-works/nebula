@@ -77,9 +77,7 @@ pub(crate) const REPOSITORY_ENV: [&str; 15] = [
     "GIT_COMMON_DIR",
 ];
 
-/// The variable that stops git's repository discovery, which
-/// [`crate::Locations`] carries and every git child is given.
-pub(crate) const CEILING_ENV: &str = "GIT_CEILING_DIRECTORIES";
+pub(crate) use crate::locations::GIT_CEILING_DIRECTORIES_ENV as CEILING_ENV;
 
 /// Where a git command runs: the corpus root it is pointed at, and the
 /// `GIT_CEILING_DIRECTORIES` value the surface resolved, which

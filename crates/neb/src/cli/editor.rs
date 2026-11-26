@@ -57,7 +57,7 @@ pub(super) struct Edited {
 pub(super) fn edit_body(body: &str) -> std::result::Result<Edited, Failure> {
     use std::io::Write;
 
-    let editor = ["VISUAL", "EDITOR"]
+    let editor = [crate::env::VISUAL_ENV, crate::env::EDITOR_ENV]
         .into_iter()
         .find_map(|name| std::env::var_os(name).filter(|value| !value.is_empty()))
         .ok_or(EditorError::NotConfigured)?;

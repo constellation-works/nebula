@@ -194,7 +194,7 @@ pub(crate) fn main() -> ExitCode {
 /// thread, which the guard covers. Never read by a release build.
 #[cfg(debug_assertions)]
 fn test_git_deadline() -> Option<nebula_core::GitDeadlineOverride> {
-    let ms = std::env::var("NEBULA_TEST_GIT_DEADLINE_MS")
+    let ms = std::env::var(crate::env::NEBULA_TEST_GIT_DEADLINE_MS_ENV)
         .ok()?
         .parse()
         .ok()?;

@@ -4,6 +4,7 @@
 
 #![allow(unused_imports)]
 
+mod env;
 mod output;
 mod output_terminal;
 mod render;
